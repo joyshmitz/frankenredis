@@ -44,14 +44,32 @@
       "expect": { "kind": "integer", "value": 0 }
     },
     {
+      "name": "pfcount_hll1_has_four",
+      "now_ms": 10,
+      "argv": ["PFCOUNT", "hll1"],
+      "expect": { "kind": "integer", "value": 4 }
+    },
+    {
       "name": "pfadd_second_set",
       "now_ms": 20,
       "argv": ["PFADD", "hll2", "x", "y", "z"],
       "expect": { "kind": "integer", "value": 1 }
     },
     {
-      "name": "pfcount_multiple_keys_union",
+      "name": "pfcount_hll2_has_three",
       "now_ms": 21,
+      "argv": ["PFCOUNT", "hll2"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "pfcount_multiple_keys_union_count",
+      "now_ms": 22,
+      "argv": ["PFCOUNT", "hll1", "hll2"],
+      "expect": { "kind": "integer", "value": 7 }
+    },
+    {
+      "name": "pfcount_multiple_keys_empty_union",
+      "now_ms": 23,
       "argv": ["PFCOUNT", "hll_empty", "nonexistent"],
       "expect": { "kind": "integer", "value": 0 }
     },
@@ -74,6 +92,12 @@
       "expect": { "kind": "integer", "value": 0 }
     },
     {
+      "name": "pfcount_merged_has_seven",
+      "now_ms": 31,
+      "argv": ["PFCOUNT", "merged"],
+      "expect": { "kind": "integer", "value": 7 }
+    },
+    {
       "name": "pfmerge_nonexistent_sources",
       "now_ms": 33,
       "argv": ["PFMERGE", "merged_none", "nosuch1", "nosuch2"],
@@ -84,6 +108,24 @@
       "now_ms": 34,
       "argv": ["PFCOUNT", "merged_none"],
       "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pfmerge_into_existing",
+      "now_ms": 35,
+      "argv": ["PFADD", "hll3", "m", "n"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pfmerge_overwrites_dest",
+      "now_ms": 36,
+      "argv": ["PFMERGE", "hll3", "hll1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "pfcount_merged_into_existing",
+      "now_ms": 37,
+      "argv": ["PFCOUNT", "hll3"],
+      "expect": { "kind": "integer", "value": 6 }
     },
     {
       "name": "pfadd_wrong_type_error",

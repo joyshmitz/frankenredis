@@ -5830,7 +5830,9 @@ fn sintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     }
     let numkeys_val = parse_i64_arg(&argv[1])?;
     if numkeys_val <= 0 {
-        return Err(CommandError::SyntaxError);
+        return Ok(RespFrame::Error(
+            "ERR numkeys can't be non-positive value".to_string(),
+        ));
     }
     let numkeys = numkeys_val as usize;
     let keys_end = 2 + numkeys;
@@ -6037,7 +6039,9 @@ fn lmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     }
     let numkeys_val = parse_i64_arg(&argv[1])?;
     if numkeys_val <= 0 {
-        return Err(CommandError::SyntaxError);
+        return Ok(RespFrame::Error(
+            "ERR numkeys can't be non-positive value".to_string(),
+        ));
     }
     let numkeys = numkeys_val as usize;
     let keys_end = 2 + numkeys;
@@ -6107,7 +6111,9 @@ fn zmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     }
     let numkeys_val = parse_i64_arg(&argv[1])?;
     if numkeys_val <= 0 {
-        return Err(CommandError::SyntaxError);
+        return Ok(RespFrame::Error(
+            "ERR numkeys can't be non-positive value".to_string(),
+        ));
     }
     let numkeys = numkeys_val as usize;
     let keys_end = 2 + numkeys;
@@ -8059,8 +8065,14 @@ fn zintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     if argv.len() < 3 {
         return Err(CommandError::WrongArity("ZINTERCARD"));
     }
-    let numkeys = parse_i64_arg(&argv[1])? as usize;
-    if numkeys == 0 || argv.len() < 2 + numkeys {
+    let numkeys_val = parse_i64_arg(&argv[1])?;
+    if numkeys_val <= 0 {
+        return Ok(RespFrame::Error(
+            "ERR numkeys can't be non-positive value".to_string(),
+        ));
+    }
+    let numkeys = numkeys_val as usize;
+    if argv.len() < 2 + numkeys {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
     let mut limit: u64 = 0;
@@ -8685,7 +8697,9 @@ fn blmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     let _timeout = parse_blocking_timeout(&argv[1])?;
     let numkeys_val = parse_i64_arg(&argv[2])?;
     if numkeys_val <= 0 {
-        return Err(CommandError::SyntaxError);
+        return Ok(RespFrame::Error(
+            "ERR numkeys can't be non-positive value".to_string(),
+        ));
     }
     let numkeys = numkeys_val as usize;
     if argv.len() < 3 + numkeys + 1 {
@@ -8814,7 +8828,9 @@ fn bzmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     let _timeout = parse_blocking_timeout(&argv[1])?;
     let numkeys_val = parse_i64_arg(&argv[2])?;
     if numkeys_val <= 0 {
-        return Err(CommandError::SyntaxError);
+        return Ok(RespFrame::Error(
+            "ERR numkeys can't be non-positive value".to_string(),
+        ));
     }
     let numkeys = numkeys_val as usize;
     if argv.len() < 3 + numkeys + 1 {

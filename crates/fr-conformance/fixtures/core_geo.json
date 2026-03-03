@@ -83,6 +83,320 @@
       "now_ms": 0,
       "argv": ["GEOADD", "geo", "NX", "XX", "13.0", "38.0", "bad"],
       "expect": { "kind": "error", "value": "ERR syntax error" }
+    },
+
+    {
+      "name": "geopos_existing_members",
+      "now_ms": 100,
+      "argv": ["GEOPOS", "geo", "Catania"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "15.087267458438873" },
+              { "kind": "bulk", "value": "37.50266842333162" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "geopos_missing_member",
+      "now_ms": 100,
+      "argv": ["GEOPOS", "geo", "Missing"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "null_array" }
+        ]
+      }
+    },
+    {
+      "name": "geopos_missing_key",
+      "now_ms": 100,
+      "argv": ["GEOPOS", "nokey", "X"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "null_array" }
+        ]
+      }
+    },
+    {
+      "name": "geopos_multiple_mixed",
+      "now_ms": 100,
+      "argv": ["GEOPOS", "geo", "Catania", "Missing", "Palermo"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "15.087267458438873" },
+              { "kind": "bulk", "value": "37.50266842333162" }
+            ]
+          },
+          { "kind": "null_array" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "13.36200088262558" },
+              { "kind": "bulk", "value": "38.11499875684124" }
+            ]
+          }
+        ]
+      }
+    },
+
+    {
+      "name": "geodist_meters_default",
+      "now_ms": 100,
+      "argv": ["GEODIST", "geo", "Palermo", "Catania"],
+      "expect": { "kind": "bulk", "value": "166200.2393" }
+    },
+    {
+      "name": "geodist_miles",
+      "now_ms": 100,
+      "argv": ["GEODIST", "geo", "Palermo", "Catania", "mi"],
+      "expect": { "kind": "bulk", "value": "103.2723" }
+    },
+    {
+      "name": "geodist_feet",
+      "now_ms": 100,
+      "argv": ["GEODIST", "geo", "Palermo", "Catania", "ft"],
+      "expect": { "kind": "bulk", "value": "545276.3757" }
+    },
+    {
+      "name": "geodist_nonexistent_key",
+      "now_ms": 100,
+      "argv": ["GEODIST", "nokey", "A", "B"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+
+    {
+      "name": "geoadd_seed_geo2",
+      "now_ms": 200,
+      "argv": ["GEOADD", "geo2", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669", "Catania", "2.349014", "48.864716", "Paris"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "georadius_basic",
+      "now_ms": 200,
+      "argv": ["GEORADIUS", "geo2", "15", "37", "200", "km", "ASC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Catania" },
+          { "kind": "bulk", "value": "Palermo" }
+        ]
+      }
+    },
+    {
+      "name": "georadius_count_1",
+      "now_ms": 200,
+      "argv": ["GEORADIUS", "geo2", "15", "37", "200", "km", "ASC", "COUNT", "1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Catania" }
+        ]
+      }
+    },
+    {
+      "name": "georadius_desc",
+      "now_ms": 200,
+      "argv": ["GEORADIUS", "geo2", "15", "37", "200", "km", "DESC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Palermo" },
+          { "kind": "bulk", "value": "Catania" }
+        ]
+      }
+    },
+    {
+      "name": "georadius_no_match",
+      "now_ms": 200,
+      "argv": ["GEORADIUS", "geo2", "0", "0", "1", "km"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "georadius_nonexistent_key",
+      "now_ms": 200,
+      "argv": ["GEORADIUS", "nokey", "15", "37", "200", "km"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "georadius_wrong_arity",
+      "now_ms": 200,
+      "argv": ["GEORADIUS", "geo2"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'GEORADIUS' command" }
+    },
+
+    {
+      "name": "georadiusbymember_basic",
+      "now_ms": 200,
+      "argv": ["GEORADIUSBYMEMBER", "geo2", "Palermo", "200", "km", "ASC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Palermo" },
+          { "kind": "bulk", "value": "Catania" }
+        ]
+      }
+    },
+    {
+      "name": "georadiusbymember_missing_member",
+      "now_ms": 200,
+      "argv": ["GEORADIUSBYMEMBER", "geo2", "Missing", "200", "km"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+
+    {
+      "name": "geosearch_fromlonlat_byradius",
+      "now_ms": 200,
+      "argv": ["GEOSEARCH", "geo2", "FROMLONLAT", "15", "37", "BYRADIUS", "200", "km", "ASC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Catania" },
+          { "kind": "bulk", "value": "Palermo" }
+        ]
+      }
+    },
+    {
+      "name": "geosearch_frommember_byradius",
+      "now_ms": 200,
+      "argv": ["GEOSEARCH", "geo2", "FROMMEMBER", "Palermo", "BYRADIUS", "200", "km", "ASC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Palermo" },
+          { "kind": "bulk", "value": "Catania" }
+        ]
+      }
+    },
+    {
+      "name": "geosearch_fromlonlat_byradius_count",
+      "now_ms": 200,
+      "argv": ["GEOSEARCH", "geo2", "FROMLONLAT", "15", "37", "BYRADIUS", "200", "km", "ASC", "COUNT", "1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Catania" }
+        ]
+      }
+    },
+    {
+      "name": "geosearch_fromlonlat_bybox",
+      "now_ms": 200,
+      "argv": ["GEOSEARCH", "geo2", "FROMLONLAT", "15", "37", "BYBOX", "400", "400", "km", "ASC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Catania" },
+          { "kind": "bulk", "value": "Palermo" }
+        ]
+      }
+    },
+    {
+      "name": "geosearch_no_center_error",
+      "now_ms": 200,
+      "argv": ["GEOSEARCH", "geo2", "BYRADIUS", "100", "km"],
+      "expect": { "kind": "error", "value": "ERR exactly one of FROMMEMBER or FROMLONLAT must be provided" }
+    },
+    {
+      "name": "geosearch_no_shape_error",
+      "now_ms": 200,
+      "argv": ["GEOSEARCH", "geo2", "FROMLONLAT", "15", "37"],
+      "expect": { "kind": "error", "value": "ERR exactly one of BYRADIUS or BYBOX must be provided" }
+    },
+    {
+      "name": "geosearch_nonexistent_key",
+      "now_ms": 200,
+      "argv": ["GEOSEARCH", "nokey", "FROMLONLAT", "15", "37", "BYRADIUS", "100", "km"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+
+    {
+      "name": "geosearchstore_basic",
+      "now_ms": 300,
+      "argv": ["GEOSEARCHSTORE", "geo_dest", "geo2", "FROMLONLAT", "15", "37", "BYRADIUS", "200", "km"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "geosearchstore_verify_dest_type",
+      "now_ms": 300,
+      "argv": ["TYPE", "geo_dest"],
+      "expect": { "kind": "simple", "value": "zset" }
+    },
+    {
+      "name": "geosearchstore_verify_dest_card",
+      "now_ms": 300,
+      "argv": ["ZCARD", "geo_dest"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+
+    {
+      "name": "geoadd_latitude_out_of_range",
+      "now_ms": 400,
+      "argv": ["GEOADD", "geo3", "0", "86", "Bad"],
+      "expect": { "kind": "error", "value": "ERR invalid longitude,latitude pair 0.000000,86.000000" }
+    },
+    {
+      "name": "geoadd_negative_longitude",
+      "now_ms": 400,
+      "argv": ["GEOADD", "geo3", "-73.935242", "40.730610", "NYC"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "geopos_negative_coords",
+      "now_ms": 400,
+      "argv": ["GEOPOS", "geo3", "NYC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "-73.93524438142776" },
+              { "kind": "bulk", "value": "40.73061047253818" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "geodist_same_member",
+      "now_ms": 400,
+      "argv": ["GEODIST", "geo3", "NYC", "NYC", "km"],
+      "expect": { "kind": "bulk", "value": "0.0000" }
+    },
+    {
+      "name": "geoadd_wrong_arity_no_members",
+      "now_ms": 400,
+      "argv": ["GEOADD", "geo3"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'GEOADD' command" }
+    },
+    {
+      "name": "geohash_wrong_arity",
+      "now_ms": 400,
+      "argv": ["GEOHASH"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'GEOHASH' command" }
     }
   ]
 }

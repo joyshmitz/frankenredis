@@ -414,6 +414,31 @@
           { "kind": "bulk", "value": "d" }
         ]
       }
+    },
+
+    {
+      "name": "zintercard_negative_numkeys",
+      "now_ms": 100,
+      "argv": ["ZINTERCARD", "-1", "z1"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "zintercard_zero_numkeys",
+      "now_ms": 100,
+      "argv": ["ZINTERCARD", "0", "z1"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "zmpop_negative_numkeys",
+      "now_ms": 100,
+      "argv": ["ZMPOP", "-1", "z1", "MIN"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "bzmpop_negative_numkeys",
+      "now_ms": 100,
+      "argv": ["BZMPOP", "0", "-1", "z1", "MIN"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
     }
   ]
 }

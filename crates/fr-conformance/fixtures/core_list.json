@@ -387,6 +387,25 @@
       "now_ms": 0,
       "argv": ["LPUSH", "strkey2", "a"],
       "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+
+    {
+      "name": "lmpop_negative_numkeys",
+      "now_ms": 100,
+      "argv": ["LMPOP", "-1", "mylist", "LEFT"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "lmpop_zero_numkeys",
+      "now_ms": 100,
+      "argv": ["LMPOP", "0", "mylist", "LEFT"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "blmpop_negative_numkeys",
+      "now_ms": 100,
+      "argv": ["BLMPOP", "0", "-1", "mylist", "LEFT"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
     }
   ]
 }
