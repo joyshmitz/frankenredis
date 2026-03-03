@@ -243,6 +243,192 @@
         "kind": "error",
         "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
       }
+    },
+
+    {
+      "name": "bitfield_set_u8",
+      "now_ms": 100,
+      "argv": ["BITFIELD", "bf1", "SET", "u8", "0", "200"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_get_u8",
+      "now_ms": 101,
+      "argv": ["BITFIELD", "bf1", "GET", "u8", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 200 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_set_i8",
+      "now_ms": 102,
+      "argv": ["BITFIELD", "bf2", "SET", "i8", "0", "-100"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_get_i8",
+      "now_ms": 103,
+      "argv": ["BITFIELD", "bf2", "GET", "i8", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": -100 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_incrby",
+      "now_ms": 104,
+      "argv": ["BITFIELD", "bf1", "INCRBY", "u8", "0", "10"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 210 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_multiple_ops",
+      "now_ms": 105,
+      "argv": ["BITFIELD", "bf3", "SET", "u8", "0", "100", "GET", "u8", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 },
+          { "kind": "integer", "value": 100 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_get_missing_key",
+      "now_ms": 106,
+      "argv": ["BITFIELD", "nokey", "GET", "u8", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_wrong_arity",
+      "now_ms": 107,
+      "argv": ["BITFIELD"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'BITFIELD' command"
+      }
+    },
+
+    {
+      "name": "bitpos_with_range",
+      "now_ms": 200,
+      "argv": ["BITPOS", "bckey", "1", "1"],
+      "expect": { "kind": "integer", "value": 9 }
+    },
+    {
+      "name": "bitpos_with_range_start_end",
+      "now_ms": 201,
+      "argv": ["BITPOS", "bckey", "0", "0", "0"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "bitpos_wrong_arity",
+      "now_ms": 202,
+      "argv": ["BITPOS"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'BITPOS' command"
+      }
+    },
+
+    {
+      "name": "bitcount_range_entire",
+      "now_ms": 300,
+      "argv": ["BITCOUNT", "bckey", "0", "-1"],
+      "expect": { "kind": "integer", "value": 26 }
+    },
+    {
+      "name": "bitcount_range_out_of_bounds",
+      "now_ms": 301,
+      "argv": ["BITCOUNT", "bckey", "100", "200"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "bitop_and_missing_key",
+      "now_ms": 400,
+      "argv": ["BITOP", "AND", "bo_dest2", "bo1", "nokey"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "bitop_and_missing_key_result",
+      "now_ms": 401,
+      "argv": ["BITCOUNT", "bo_dest2"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "bitop_or_missing_key",
+      "now_ms": 402,
+      "argv": ["BITOP", "OR", "bo_dest3", "bo1", "nokey"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "bitop_or_missing_key_result",
+      "now_ms": 403,
+      "argv": ["GET", "bo_dest3"],
+      "expect": { "kind": "bulk", "value": "abc" }
+    },
+
+    {
+      "name": "setbit_negative_offset_error",
+      "now_ms": 500,
+      "argv": ["SETBIT", "bm_err2", "-1", "1"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "getbit_negative_offset_error",
+      "now_ms": 501,
+      "argv": ["GETBIT", "bm_err2", "-1"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "setbit_non_integer_offset",
+      "now_ms": 502,
+      "argv": ["SETBIT", "bm_err3", "abc", "1"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+
+    {
+      "name": "bitop_invalid_operation",
+      "now_ms": 600,
+      "argv": ["BITOP", "NAND", "dest", "bo1"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
     }
   ]
 }

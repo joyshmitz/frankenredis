@@ -2325,8 +2325,7 @@ fn zrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         let start = parse_i64_arg(&argv[2])?;
         let stop = parse_i64_arg(&argv[3])?;
         if rev {
-            let mut pairs = store.zrange_withscores(&argv[1], start, stop, now_ms)?;
-            pairs.reverse();
+            let pairs = store.zrevrange_withscores(&argv[1], start, stop, now_ms)?;
             zrange_emit(pairs, withscores)
         } else if withscores {
             let pairs = store.zrange_withscores(&argv[1], start, stop, now_ms)?;
@@ -4572,9 +4571,7 @@ fn zrangestore_cmd(
         let start = parse_i64_arg(&argv[3])?;
         let stop = parse_i64_arg(&argv[4])?;
         if rev {
-            let mut result = store.zrange_withscores(src, start, stop, now_ms)?;
-            result.reverse();
-            result
+            store.zrevrange_withscores(src, start, stop, now_ms)?
         } else {
             store.zrange_withscores(src, start, stop, now_ms)?
         }
@@ -6187,6 +6184,15 @@ fn bitop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     let op = &argv[1];
     let dest = &argv[2];
     let keys: Vec<&[u8]> = argv[3..].iter().map(|v| v.as_slice()).collect();
+
+    // Validate operation
+    let is_valid_op = eq_ascii_command(op, b"AND")
+        || eq_ascii_command(op, b"OR")
+        || eq_ascii_command(op, b"XOR")
+        || eq_ascii_command(op, b"NOT");
+    if !is_valid_op {
+        return Err(CommandError::SyntaxError);
+    }
 
     if eq_ascii_command(op, b"NOT") && keys.len() != 1 {
         return Ok(RespFrame::Error(

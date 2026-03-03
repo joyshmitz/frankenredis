@@ -485,6 +485,236 @@
       "now_ms": 900,
       "argv": ["SINTERSTORE", "dst"],
       "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SINTERSTORE' command" }
+    },
+
+    {
+      "name": "store_verify_setup_a",
+      "now_ms": 1000,
+      "argv": ["SADD", "sv_a", "1", "2", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "store_verify_setup_b",
+      "now_ms": 1000,
+      "argv": ["SADD", "sv_b", "2", "3", "4"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "sinterstore_verify",
+      "now_ms": 1000,
+      "argv": ["SINTERSTORE", "sv_inter", "sv_a", "sv_b"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "sinterstore_verify_members",
+      "now_ms": 1000,
+      "argv": ["SMEMBERS", "sv_inter"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "2" },
+          { "kind": "bulk", "value": "3" }
+        ]
+      }
+    },
+    {
+      "name": "sunionstore_verify",
+      "now_ms": 1010,
+      "argv": ["SUNIONSTORE", "sv_union", "sv_a", "sv_b"],
+      "expect": { "kind": "integer", "value": 4 }
+    },
+    {
+      "name": "sunionstore_verify_members",
+      "now_ms": 1010,
+      "argv": ["SMEMBERS", "sv_union"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "1" },
+          { "kind": "bulk", "value": "2" },
+          { "kind": "bulk", "value": "3" },
+          { "kind": "bulk", "value": "4" }
+        ]
+      }
+    },
+    {
+      "name": "sdiffstore_verify",
+      "now_ms": 1020,
+      "argv": ["SDIFFSTORE", "sv_diff", "sv_a", "sv_b"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "sdiffstore_verify_members",
+      "now_ms": 1020,
+      "argv": ["SMEMBERS", "sv_diff"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "bulk", "value": "1" }]
+      }
+    },
+
+    {
+      "name": "three_way_setup_c",
+      "now_ms": 1100,
+      "argv": ["SADD", "sv_c", "3", "4", "5"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "sdiff_three_sets",
+      "now_ms": 1100,
+      "argv": ["SDIFF", "sv_a", "sv_b", "sv_c"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "bulk", "value": "1" }]
+      }
+    },
+    {
+      "name": "sunion_three_sets",
+      "now_ms": 1100,
+      "argv": ["SUNION", "sv_a", "sv_b", "sv_c"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "1" },
+          { "kind": "bulk", "value": "2" },
+          { "kind": "bulk", "value": "3" },
+          { "kind": "bulk", "value": "4" },
+          { "kind": "bulk", "value": "5" }
+        ]
+      }
+    },
+    {
+      "name": "sinter_three_sets",
+      "now_ms": 1100,
+      "argv": ["SINTER", "sv_a", "sv_b", "sv_c"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "bulk", "value": "3" }]
+      }
+    },
+
+    {
+      "name": "sinterstore_empty_input",
+      "now_ms": 1200,
+      "argv": ["SINTERSTORE", "sv_empty_dst", "nokey_set", "sv_a"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "sintercard_nokey",
+      "now_ms": 1210,
+      "argv": ["SINTERCARD", "2", "nokey_set", "sv_a"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "sintercard_single_key",
+      "now_ms": 1210,
+      "argv": ["SINTERCARD", "1", "sv_a"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+
+    {
+      "name": "smove_wrongtype_setup",
+      "now_ms": 1300,
+      "argv": ["SET", "sv_str", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "smove_wrongtype_dst",
+      "now_ms": 1300,
+      "argv": ["SMOVE", "sv_a", "sv_str", "1"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "smove_wrongtype_src",
+      "now_ms": 1300,
+      "argv": ["SMOVE", "sv_str", "sv_a", "x"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+
+    {
+      "name": "spop_count_setup",
+      "now_ms": 1400,
+      "argv": ["SADD", "spop_c", "a", "b", "c", "d", "e"],
+      "expect": { "kind": "integer", "value": 5 }
+    },
+    {
+      "name": "spop_count_0",
+      "now_ms": 1400,
+      "argv": ["SPOP", "spop_c", "0"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "spop_count_0_no_change",
+      "now_ms": 1400,
+      "argv": ["SCARD", "spop_c"],
+      "expect": { "kind": "integer", "value": 5 }
+    },
+    {
+      "name": "spop_count_missing_key",
+      "now_ms": 1410,
+      "argv": ["SPOP", "spop_nokey", "3"],
+      "expect": { "kind": "array", "value": [] }
+    },
+
+    {
+      "name": "smismember_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SMISMEMBER", "k"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SMISMEMBER' command" }
+    },
+    {
+      "name": "sintercard_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SINTERCARD"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SINTERCARD' command" }
+    },
+    {
+      "name": "sunionstore_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SUNIONSTORE", "dst"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SUNIONSTORE' command" }
+    },
+    {
+      "name": "sdiffstore_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SDIFFSTORE", "dst"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SDIFFSTORE' command" }
+    },
+    {
+      "name": "smove_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SMOVE", "a"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SMOVE' command" }
+    },
+    {
+      "name": "sinter_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SINTER"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SINTER' command" }
+    },
+    {
+      "name": "sunion_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SUNION"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SUNION' command" }
+    },
+    {
+      "name": "sdiff_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SDIFF"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SDIFF' command" }
+    },
+    {
+      "name": "sscan_wrong_arity",
+      "now_ms": 1500,
+      "argv": ["SSCAN", "k"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SSCAN' command" }
     }
   ]
 }

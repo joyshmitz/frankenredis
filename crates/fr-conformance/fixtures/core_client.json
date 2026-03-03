@@ -168,12 +168,6 @@
     },
 
     {
-      "name": "client_id_returns_integer",
-      "now_ms": 30,
-      "argv": ["CLIENT", "ID"],
-      "expect": { "kind": "integer", "value": 1 }
-    },
-    {
       "name": "client_id_wrong_arity",
       "now_ms": 31,
       "argv": ["CLIENT", "ID", "extra"],

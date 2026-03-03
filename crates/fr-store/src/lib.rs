@@ -3102,6 +3102,37 @@ impl Store {
         }
     }
 
+    pub fn zrevrange_withscores(
+        &mut self,
+        key: &[u8],
+        start: i64,
+        stop: i64,
+        now_ms: u64,
+    ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
+        self.drop_if_expired(key, now_ms);
+        match self.entries.get(key) {
+            Some(entry) => match &entry.value {
+                Value::SortedSet(zs) => {
+                    let mut sorted = sorted_members_asc(zs);
+                    sorted.reverse();
+                    let len = sorted.len() as i64;
+                    let s = normalize_index(start, len);
+                    let e = normalize_index(stop, len);
+                    if s > e || s >= sorted.len() {
+                        return Ok(Vec::new());
+                    }
+                    let end = (e + 1).min(sorted.len());
+                    Ok(sorted[s..end]
+                        .iter()
+                        .map(|(score, m)| (m.clone(), *score))
+                        .collect())
+                }
+                _ => Err(StoreError::WrongType),
+            },
+            None => Ok(Vec::new()),
+        }
+    }
+
     pub fn zrevrangebyscore(
         &mut self,
         key: &[u8],

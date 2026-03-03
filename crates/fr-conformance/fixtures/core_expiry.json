@@ -333,6 +333,410 @@
       "now_ms": 50007,
       "argv": ["EXPIRE", "nxkey", "100", "LT"],
       "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "pexpire_nx_setup",
+      "now_ms": 60000,
+      "argv": ["SET", "pexnx", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "pexpire_nx_no_existing_expiry",
+      "now_ms": 60000,
+      "argv": ["PEXPIRE", "pexnx", "5000", "NX"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpire_nx_already_has_expiry",
+      "now_ms": 60001,
+      "argv": ["PEXPIRE", "pexnx", "10000", "NX"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pexpire_xx_has_expiry",
+      "now_ms": 60002,
+      "argv": ["PEXPIRE", "pexnx", "8000", "XX"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpire_gt_longer",
+      "now_ms": 60003,
+      "argv": ["PEXPIRE", "pexnx", "20000", "GT"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpire_gt_shorter_rejected",
+      "now_ms": 60004,
+      "argv": ["PEXPIRE", "pexnx", "1000", "GT"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pexpire_lt_shorter",
+      "now_ms": 60005,
+      "argv": ["PEXPIRE", "pexnx", "3000", "LT"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpire_lt_longer_rejected",
+      "now_ms": 60006,
+      "argv": ["PEXPIRE", "pexnx", "50000", "LT"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pexpire_missing_key",
+      "now_ms": 60010,
+      "argv": ["PEXPIRE", "pex_nokey", "5000"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pexpire_wrong_arity",
+      "now_ms": 60010,
+      "argv": ["PEXPIRE", "k"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'PEXPIRE' command" }
+    },
+
+    {
+      "name": "expireat_nx_setup",
+      "now_ms": 70000,
+      "argv": ["SET", "eatnx", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "expireat_nx_no_existing_expiry",
+      "now_ms": 70000,
+      "argv": ["EXPIREAT", "eatnx", "100", "NX"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "expireat_nx_already_has_expiry",
+      "now_ms": 70001,
+      "argv": ["EXPIREAT", "eatnx", "200", "NX"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "expireat_xx_has_expiry",
+      "now_ms": 70002,
+      "argv": ["EXPIREAT", "eatnx", "150", "XX"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "expireat_gt_longer",
+      "now_ms": 70003,
+      "argv": ["EXPIREAT", "eatnx", "300", "GT"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "expireat_gt_shorter_rejected",
+      "now_ms": 70004,
+      "argv": ["EXPIREAT", "eatnx", "50", "GT"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "expireat_lt_shorter",
+      "now_ms": 70005,
+      "argv": ["EXPIREAT", "eatnx", "200", "LT"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "expireat_lt_longer_rejected",
+      "now_ms": 70006,
+      "argv": ["EXPIREAT", "eatnx", "500", "LT"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "expireat_missing_key",
+      "now_ms": 70010,
+      "argv": ["EXPIREAT", "eat_nokey", "100"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "expireat_wrong_arity",
+      "now_ms": 70010,
+      "argv": ["EXPIREAT", "k"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'EXPIREAT' command" }
+    },
+
+    {
+      "name": "pexpireat_nx_setup",
+      "now_ms": 80000,
+      "argv": ["SET", "peatnx", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "pexpireat_nx_no_existing_expiry",
+      "now_ms": 80000,
+      "argv": ["PEXPIREAT", "peatnx", "100000", "NX"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpireat_nx_already_has_expiry",
+      "now_ms": 80001,
+      "argv": ["PEXPIREAT", "peatnx", "200000", "NX"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pexpireat_xx_has_expiry",
+      "now_ms": 80002,
+      "argv": ["PEXPIREAT", "peatnx", "150000", "XX"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpireat_gt_longer",
+      "now_ms": 80003,
+      "argv": ["PEXPIREAT", "peatnx", "300000", "GT"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpireat_gt_shorter_rejected",
+      "now_ms": 80004,
+      "argv": ["PEXPIREAT", "peatnx", "50000", "GT"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pexpireat_lt_shorter",
+      "now_ms": 80005,
+      "argv": ["PEXPIREAT", "peatnx", "200000", "LT"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpireat_lt_longer_rejected",
+      "now_ms": 80006,
+      "argv": ["PEXPIREAT", "peatnx", "500000", "LT"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pexpireat_missing_key",
+      "now_ms": 80010,
+      "argv": ["PEXPIREAT", "peat_nokey", "100000"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "pexpireat_wrong_arity",
+      "now_ms": 80010,
+      "argv": ["PEXPIREAT", "k"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'PEXPIREAT' command" }
+    },
+
+    {
+      "name": "getex_px_setup",
+      "now_ms": 90000,
+      "argv": ["SET", "gex_px", "hello"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "getex_px",
+      "now_ms": 90000,
+      "argv": ["GETEX", "gex_px", "PX", "5000"],
+      "expect": { "kind": "bulk", "value": "hello" }
+    },
+    {
+      "name": "getex_px_verify_pttl",
+      "now_ms": 90000,
+      "argv": ["PTTL", "gex_px"],
+      "expect": { "kind": "integer", "value": 5000 }
+    },
+    {
+      "name": "getex_exat_setup",
+      "now_ms": 90100,
+      "argv": ["SET", "gex_exat", "world"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "getex_exat",
+      "now_ms": 90100,
+      "argv": ["GETEX", "gex_exat", "EXAT", "200"],
+      "expect": { "kind": "bulk", "value": "world" }
+    },
+    {
+      "name": "getex_exat_verify_expiretime",
+      "now_ms": 90100,
+      "argv": ["EXPIRETIME", "gex_exat"],
+      "expect": { "kind": "integer", "value": 200 }
+    },
+    {
+      "name": "getex_pxat_setup",
+      "now_ms": 90200,
+      "argv": ["SET", "gex_pxat", "test"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "getex_pxat",
+      "now_ms": 90200,
+      "argv": ["GETEX", "gex_pxat", "PXAT", "200000"],
+      "expect": { "kind": "bulk", "value": "test" }
+    },
+    {
+      "name": "getex_pxat_verify_pexpiretime",
+      "now_ms": 90200,
+      "argv": ["PEXPIRETIME", "gex_pxat"],
+      "expect": { "kind": "integer", "value": 200000 }
+    },
+    {
+      "name": "getex_no_option_setup",
+      "now_ms": 90300,
+      "argv": ["SET", "gex_noop", "data"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "getex_no_option",
+      "now_ms": 90300,
+      "argv": ["GETEX", "gex_noop"],
+      "expect": { "kind": "bulk", "value": "data" }
+    },
+    {
+      "name": "getex_no_option_verify_no_expiry",
+      "now_ms": 90300,
+      "argv": ["TTL", "gex_noop"],
+      "expect": { "kind": "integer", "value": -1 }
+    },
+    {
+      "name": "getex_missing_key",
+      "now_ms": 90400,
+      "argv": ["GETEX", "gex_nokey", "EX", "10"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "getex_wrong_arity",
+      "now_ms": 90400,
+      "argv": ["GETEX"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'GETEX' command" }
+    },
+
+    {
+      "name": "set_keepttl_setup",
+      "now_ms": 100000,
+      "argv": ["SET", "skt", "val1", "EX", "60"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "set_keepttl_verify_initial_ttl",
+      "now_ms": 100000,
+      "argv": ["TTL", "skt"],
+      "expect": { "kind": "integer", "value": 60 }
+    },
+    {
+      "name": "set_keepttl_overwrite",
+      "now_ms": 100000,
+      "argv": ["SET", "skt", "val2", "KEEPTTL"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "set_keepttl_ttl_preserved",
+      "now_ms": 100000,
+      "argv": ["TTL", "skt"],
+      "expect": { "kind": "integer", "value": 60 }
+    },
+    {
+      "name": "set_keepttl_value_updated",
+      "now_ms": 100000,
+      "argv": ["GET", "skt"],
+      "expect": { "kind": "bulk", "value": "val2" }
+    },
+    {
+      "name": "set_keepttl_no_existing_ttl_setup",
+      "now_ms": 100100,
+      "argv": ["SET", "skt2", "val1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "set_keepttl_no_existing_ttl",
+      "now_ms": 100100,
+      "argv": ["SET", "skt2", "val2", "KEEPTTL"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "set_keepttl_no_existing_ttl_verify",
+      "now_ms": 100100,
+      "argv": ["TTL", "skt2"],
+      "expect": { "kind": "integer", "value": -1 }
+    },
+
+    {
+      "name": "set_exat_setup",
+      "now_ms": 110000,
+      "argv": ["SET", "sexat", "val", "EXAT", "200"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "set_exat_verify_expiretime",
+      "now_ms": 110000,
+      "argv": ["EXPIRETIME", "sexat"],
+      "expect": { "kind": "integer", "value": 200 }
+    },
+    {
+      "name": "set_pxat_setup",
+      "now_ms": 110100,
+      "argv": ["SET", "spxat", "val", "PXAT", "300000"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "set_pxat_verify_pexpiretime",
+      "now_ms": 110100,
+      "argv": ["PEXPIRETIME", "spxat"],
+      "expect": { "kind": "integer", "value": 300000 }
+    },
+
+    {
+      "name": "expireat_past_timestamp_setup",
+      "now_ms": 120000,
+      "argv": ["SET", "past_k", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "expireat_past_timestamp",
+      "now_ms": 120000,
+      "argv": ["EXPIREAT", "past_k", "1"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "expireat_past_key_gone",
+      "now_ms": 120001,
+      "argv": ["GET", "past_k"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "pexpireat_past_setup",
+      "now_ms": 130000,
+      "argv": ["SET", "ppast_k", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "pexpireat_past_timestamp",
+      "now_ms": 130000,
+      "argv": ["PEXPIREAT", "ppast_k", "1"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "pexpireat_past_key_gone",
+      "now_ms": 130001,
+      "argv": ["GET", "ppast_k"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+
+    {
+      "name": "expire_xx_no_expiry_setup",
+      "now_ms": 140000,
+      "argv": ["SET", "exx_noe", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "expire_xx_no_existing_expiry_fails",
+      "now_ms": 140000,
+      "argv": ["EXPIRE", "exx_noe", "10", "XX"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "expire_nx_missing_key",
+      "now_ms": 140010,
+      "argv": ["EXPIRE", "exx_nokey", "10", "NX"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "expire_xx_missing_key",
+      "now_ms": 140010,
+      "argv": ["EXPIRE", "exx_nokey", "10", "XX"],
+      "expect": { "kind": "integer", "value": 0 }
     }
   ]
 }

@@ -439,6 +439,343 @@
       "now_ms": 100,
       "argv": ["BZMPOP", "0", "-1", "z1", "MIN"],
       "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+
+    {
+      "name": "zunionstore_weights_setup1",
+      "now_ms": 200,
+      "argv": ["ZADD", "zw1", "1", "a", "2", "b"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "zunionstore_weights_setup2",
+      "now_ms": 200,
+      "argv": ["ZADD", "zw2", "3", "b", "4", "c"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "zunionstore_with_weights",
+      "now_ms": 200,
+      "argv": ["ZUNIONSTORE", "zw_dst", "2", "zw1", "zw2", "WEIGHTS", "2", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zunionstore_weights_verify_a",
+      "now_ms": 200,
+      "argv": ["ZSCORE", "zw_dst", "a"],
+      "expect": { "kind": "bulk", "value": "2" }
+    },
+    {
+      "name": "zunionstore_weights_verify_b",
+      "now_ms": 200,
+      "argv": ["ZSCORE", "zw_dst", "b"],
+      "expect": { "kind": "bulk", "value": "13" }
+    },
+    {
+      "name": "zunionstore_weights_verify_c",
+      "now_ms": 200,
+      "argv": ["ZSCORE", "zw_dst", "c"],
+      "expect": { "kind": "bulk", "value": "12" }
+    },
+
+    {
+      "name": "zinterstore_with_weights",
+      "now_ms": 300,
+      "argv": ["ZINTERSTORE", "ziw_dst", "2", "zw1", "zw2", "WEIGHTS", "2", "3"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "zinterstore_weights_verify_b",
+      "now_ms": 300,
+      "argv": ["ZSCORE", "ziw_dst", "b"],
+      "expect": { "kind": "bulk", "value": "13" }
+    },
+
+    {
+      "name": "zunionstore_aggregate_min",
+      "now_ms": 400,
+      "argv": ["ZUNIONSTORE", "za_min", "2", "zw1", "zw2", "AGGREGATE", "MIN"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zunionstore_aggregate_min_verify_b",
+      "now_ms": 400,
+      "argv": ["ZSCORE", "za_min", "b"],
+      "expect": { "kind": "bulk", "value": "2" }
+    },
+    {
+      "name": "zunionstore_aggregate_max",
+      "now_ms": 400,
+      "argv": ["ZUNIONSTORE", "za_max", "2", "zw1", "zw2", "AGGREGATE", "MAX"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zunionstore_aggregate_max_verify_b",
+      "now_ms": 400,
+      "argv": ["ZSCORE", "za_max", "b"],
+      "expect": { "kind": "bulk", "value": "3" }
+    },
+
+    {
+      "name": "zunionstore_nonexistent_source",
+      "now_ms": 500,
+      "argv": ["ZUNIONSTORE", "zu_ne", "2", "zw1", "nokey"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "zinterstore_nonexistent_source",
+      "now_ms": 500,
+      "argv": ["ZINTERSTORE", "zi_ne", "2", "zw1", "nokey"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "zdiff_basic",
+      "now_ms": 600,
+      "argv": ["ZDIFF", "2", "zw1", "zw2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" }
+        ]
+      }
+    },
+    {
+      "name": "zdiff_withscores",
+      "now_ms": 600,
+      "argv": ["ZDIFF", "2", "zw1", "zw2", "WITHSCORES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "1" }
+        ]
+      }
+    },
+
+    {
+      "name": "zunion_basic",
+      "now_ms": 700,
+      "argv": ["ZUNION", "2", "zw1", "zw2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "b" }
+        ]
+      }
+    },
+
+    {
+      "name": "zinter_basic",
+      "now_ms": 800,
+      "argv": ["ZINTER", "2", "zw1", "zw2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "b" }
+        ]
+      }
+    },
+    {
+      "name": "zinter_withscores",
+      "now_ms": 800,
+      "argv": ["ZINTER", "2", "zw1", "zw2", "WITHSCORES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "5" }
+        ]
+      }
+    },
+
+    {
+      "name": "zpopmin_with_count_setup",
+      "now_ms": 900,
+      "argv": ["ZADD", "zpop2", "1", "x", "2", "y", "3", "z"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zpopmin_with_count",
+      "now_ms": 900,
+      "argv": ["ZPOPMIN", "zpop2", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "x" },
+          { "kind": "bulk", "value": "1" },
+          { "kind": "bulk", "value": "y" },
+          { "kind": "bulk", "value": "2" }
+        ]
+      }
+    },
+    {
+      "name": "zpopmax_with_count",
+      "now_ms": 900,
+      "argv": ["ZPOPMAX", "zpop2", "5"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "z" },
+          { "kind": "bulk", "value": "3" }
+        ]
+      }
+    },
+
+    {
+      "name": "zrangestore_setup",
+      "now_ms": 1000,
+      "argv": ["ZADD", "zrs", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e"],
+      "expect": { "kind": "integer", "value": 5 }
+    },
+    {
+      "name": "zrangestore_by_rank",
+      "now_ms": 1000,
+      "argv": ["ZRANGESTORE", "zrs_dst", "zrs", "1", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zrangestore_verify",
+      "now_ms": 1000,
+      "argv": ["ZRANGE", "zrs_dst", "0", "-1", "WITHSCORES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "2" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "3" },
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "4" }
+        ]
+      }
+    },
+
+    {
+      "name": "zrange_withscores",
+      "now_ms": 1100,
+      "argv": ["ZRANGE", "zrs", "0", "2", "WITHSCORES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "1" },
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "2" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "3" }
+        ]
+      }
+    },
+    {
+      "name": "zrange_rev",
+      "now_ms": 1100,
+      "argv": ["ZRANGE", "zrs", "0", "2", "REV"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "e" },
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "c" }
+        ]
+      }
+    },
+    {
+      "name": "zrange_byscore",
+      "now_ms": 1100,
+      "argv": ["ZRANGE", "zrs", "2", "4", "BYSCORE"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "d" }
+        ]
+      }
+    },
+    {
+      "name": "zrange_byscore_limit",
+      "now_ms": 1100,
+      "argv": ["ZRANGE", "zrs", "1", "+inf", "BYSCORE", "LIMIT", "1", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "c" }
+        ]
+      }
+    },
+
+    {
+      "name": "zrangebyscore_withscores",
+      "now_ms": 1200,
+      "argv": ["ZRANGEBYSCORE", "zrs", "1", "3", "WITHSCORES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "1" },
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "2" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "3" }
+        ]
+      }
+    },
+    {
+      "name": "zrangebyscore_limit",
+      "now_ms": 1200,
+      "argv": ["ZRANGEBYSCORE", "zrs", "-inf", "+inf", "LIMIT", "1", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "c" }
+        ]
+      }
+    },
+
+    {
+      "name": "zscan_setup",
+      "now_ms": 1300,
+      "argv": ["ZADD", "zscan_z", "1", "alpha", "2", "beta", "3", "gamma"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zscan_full",
+      "now_ms": 1300,
+      "argv": ["ZSCAN", "zscan_z", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "0" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "alpha" },
+              { "kind": "bulk", "value": "1" },
+              { "kind": "bulk", "value": "beta" },
+              { "kind": "bulk", "value": "2" },
+              { "kind": "bulk", "value": "gamma" },
+              { "kind": "bulk", "value": "3" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "zscan_missing_key",
+      "now_ms": 1300,
+      "argv": ["ZSCAN", "nokey", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "0" },
+          { "kind": "array", "value": [] }
+        ]
+      }
     }
   ]
 }
