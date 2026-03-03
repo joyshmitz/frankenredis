@@ -219,6 +219,185 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'FLUSHDB' command"
       }
+    },
+
+    {
+      "name": "hello_resp2",
+      "now_ms": 100,
+      "argv": ["HELLO", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "server" },
+          { "kind": "bulk", "value": "frankenredis" },
+          { "kind": "bulk", "value": "version" },
+          { "kind": "bulk", "value": "0.1.0" },
+          { "kind": "bulk", "value": "proto" },
+          { "kind": "integer", "value": 2 }
+        ]
+      }
+    },
+    {
+      "name": "hello_resp3",
+      "now_ms": 101,
+      "argv": ["HELLO", "3"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "server" },
+          { "kind": "bulk", "value": "frankenredis" },
+          { "kind": "bulk", "value": "version" },
+          { "kind": "bulk", "value": "0.1.0" },
+          { "kind": "bulk", "value": "proto" },
+          { "kind": "integer", "value": 3 }
+        ]
+      }
+    },
+    {
+      "name": "hello_unsupported_version",
+      "now_ms": 102,
+      "argv": ["HELLO", "4"],
+      "expect": {
+        "kind": "error",
+        "value": "NOPROTO unsupported protocol version '4'"
+      }
+    },
+    {
+      "name": "hello_version_1_unsupported",
+      "now_ms": 103,
+      "argv": ["HELLO", "1"],
+      "expect": {
+        "kind": "error",
+        "value": "NOPROTO unsupported protocol version '1'"
+      }
+    },
+    {
+      "name": "hello_wrong_arity",
+      "now_ms": 104,
+      "argv": ["HELLO"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'HELLO' command"
+      }
+    },
+
+    {
+      "name": "quit_returns_ok",
+      "now_ms": 110,
+      "argv": ["QUIT"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "readonly_returns_ok",
+      "now_ms": 120,
+      "argv": ["READONLY"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "readwrite_returns_ok",
+      "now_ms": 121,
+      "argv": ["READWRITE"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "select_negative_db",
+      "now_ms": 130,
+      "argv": ["SELECT", "-1"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR DB index is out of range"
+      }
+    },
+    {
+      "name": "select_large_db",
+      "now_ms": 131,
+      "argv": ["SELECT", "16"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR DB index is out of range"
+      }
+    },
+
+    {
+      "name": "flushall_returns_ok",
+      "now_ms": 140,
+      "argv": ["FLUSHALL"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "flushall_async_returns_ok",
+      "now_ms": 141,
+      "argv": ["FLUSHALL", "ASYNC"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "flushall_setup_key",
+      "now_ms": 142,
+      "argv": ["SET", "flushtest", "value"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "flushall_verify_setup",
+      "now_ms": 143,
+      "argv": ["GET", "flushtest"],
+      "expect": { "kind": "bulk", "value": "value" }
+    },
+    {
+      "name": "flushall_clears_data",
+      "now_ms": 144,
+      "argv": ["FLUSHALL"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "flushall_verify_cleared",
+      "now_ms": 145,
+      "argv": ["GET", "flushtest"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "dbsize_after_flushall",
+      "now_ms": 146,
+      "argv": ["DBSIZE"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "time_large_millis",
+      "now_ms": 1678901234567,
+      "argv": ["TIME"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "1678901234" },
+          { "kind": "bulk", "value": "567000" }
+        ]
+      }
+    },
+
+    {
+      "name": "randomkey_wrong_arity",
+      "now_ms": 200,
+      "argv": ["RANDOMKEY", "extra"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'RANDOMKEY' command"
+      }
+    },
+
+    {
+      "name": "echo_binary_safe",
+      "now_ms": 210,
+      "argv": ["ECHO", "hello world 123!@#"],
+      "expect": { "kind": "bulk", "value": "hello world 123!@#" }
+    },
+
+    {
+      "name": "ping_binary_message",
+      "now_ms": 220,
+      "argv": ["PING", "test 123"],
+      "expect": { "kind": "bulk", "value": "test 123" }
     }
   ]
 }

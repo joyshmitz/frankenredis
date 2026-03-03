@@ -165,6 +165,158 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
       }
+    },
+
+    {
+      "name": "client_id_returns_integer",
+      "now_ms": 30,
+      "argv": ["CLIENT", "ID"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "client_id_wrong_arity",
+      "now_ms": 31,
+      "argv": ["CLIENT", "ID", "extra"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'CLIENT' command"
+      }
+    },
+
+    {
+      "name": "client_setname_for_list_test",
+      "now_ms": 40,
+      "argv": ["CLIENT", "SETNAME", "testconn"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_getname_after_list_setup",
+      "now_ms": 41,
+      "argv": ["CLIENT", "GETNAME"],
+      "expect": { "kind": "bulk", "value": "testconn" }
+    },
+
+    {
+      "name": "client_no_evict_wrong_arity",
+      "now_ms": 50,
+      "argv": ["CLIENT", "NO-EVICT"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'CLIENT' command"
+      }
+    },
+    {
+      "name": "client_no_touch_wrong_arity",
+      "now_ms": 51,
+      "argv": ["CLIENT", "NO-TOUCH"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'CLIENT' command"
+      }
+    },
+    {
+      "name": "client_no_touch_invalid_arg",
+      "now_ms": 52,
+      "argv": ["CLIENT", "NO-TOUCH", "MAYBE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR argument must be 'on' or 'off'"
+      }
+    },
+    {
+      "name": "client_reply_wrong_arity",
+      "now_ms": 53,
+      "argv": ["CLIENT", "REPLY"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'CLIENT' command"
+      }
+    },
+
+    {
+      "name": "client_unpause_wrong_arity",
+      "now_ms": 60,
+      "argv": ["CLIENT", "UNPAUSE", "extra"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'CLIENT' command"
+      }
+    },
+    {
+      "name": "client_pause_invalid_timeout",
+      "now_ms": 61,
+      "argv": ["CLIENT", "PAUSE", "notanumber"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "client_pause_with_write",
+      "now_ms": 62,
+      "argv": ["CLIENT", "PAUSE", "1000", "WRITE"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_pause_with_all",
+      "now_ms": 63,
+      "argv": ["CLIENT", "PAUSE", "500", "ALL"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "client_caching_wrong_arity",
+      "now_ms": 70,
+      "argv": ["CLIENT", "CACHING"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'CLIENT' command"
+      }
+    },
+    {
+      "name": "client_caching_no",
+      "now_ms": 71,
+      "argv": ["CLIENT", "CACHING", "NO"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "client_tracking_off",
+      "now_ms": 80,
+      "argv": ["CLIENT", "TRACKING", "OFF"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "client_kill_addr",
+      "now_ms": 90,
+      "argv": ["CLIENT", "KILL", "127.0.0.1:12345"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "client_setname_clear_for_reset_test",
+      "now_ms": 95,
+      "argv": ["CLIENT", "SETNAME", "preresetname"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_getname_before_reset",
+      "now_ms": 96,
+      "argv": ["CLIENT", "GETNAME"],
+      "expect": { "kind": "bulk", "value": "preresetname" }
+    },
+    {
+      "name": "reset_clears_client_name",
+      "now_ms": 97,
+      "argv": ["RESET"],
+      "expect": { "kind": "simple", "value": "RESET" }
+    },
+    {
+      "name": "client_getname_after_reset",
+      "now_ms": 98,
+      "argv": ["CLIENT", "GETNAME"],
+      "expect": { "kind": "bulk", "value": null }
     }
   ]
 }

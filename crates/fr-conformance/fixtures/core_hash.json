@@ -205,6 +205,300 @@
       "now_ms": 0,
       "argv": ["HSET", "strkey", "f", "v"],
       "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+
+    {
+      "name": "hexists_missing_key",
+      "now_ms": 100,
+      "argv": ["HEXISTS", "nokey", "field"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "hstrlen_missing_key",
+      "now_ms": 101,
+      "argv": ["HSTRLEN", "nokey", "field"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "hmget_missing_key",
+      "now_ms": 102,
+      "argv": ["HMGET", "nokey", "a", "b"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": null },
+          { "kind": "bulk", "value": null }
+        ]
+      }
+    },
+
+    {
+      "name": "hdel_multiple_setup",
+      "now_ms": 200,
+      "argv": ["HSET", "hdm", "a", "1", "b", "2", "c", "3", "d", "4"],
+      "expect": { "kind": "integer", "value": 4 }
+    },
+    {
+      "name": "hdel_multiple_fields",
+      "now_ms": 201,
+      "argv": ["HDEL", "hdm", "a", "c", "z"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "hlen_after_hdel_multiple",
+      "now_ms": 202,
+      "argv": ["HLEN", "hdm"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "hdel_missing_key",
+      "now_ms": 203,
+      "argv": ["HDEL", "nokey", "field"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "hgetall_setup",
+      "now_ms": 300,
+      "argv": ["HSET", "hga2", "name", "alice", "age", "30"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "hgetall_result",
+      "now_ms": 301,
+      "argv": ["HGETALL", "hga2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "age" },
+          { "kind": "bulk", "value": "30" },
+          { "kind": "bulk", "value": "name" },
+          { "kind": "bulk", "value": "alice" }
+        ]
+      }
+    },
+    {
+      "name": "hkeys_setup",
+      "now_ms": 310,
+      "argv": ["HSET", "hk2", "x", "1", "y", "2", "z", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "hkeys_result",
+      "now_ms": 311,
+      "argv": ["HKEYS", "hk2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "x" },
+          { "kind": "bulk", "value": "y" },
+          { "kind": "bulk", "value": "z" }
+        ]
+      }
+    },
+    {
+      "name": "hvals_result",
+      "now_ms": 312,
+      "argv": ["HVALS", "hk2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "1" },
+          { "kind": "bulk", "value": "2" },
+          { "kind": "bulk", "value": "3" }
+        ]
+      }
+    },
+
+    {
+      "name": "hrandfield_setup_single",
+      "now_ms": 400,
+      "argv": ["HSET", "hrand1", "only_field", "only_value"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hrandfield_single_element",
+      "now_ms": 401,
+      "argv": ["HRANDFIELD", "hrand1"],
+      "expect": { "kind": "bulk", "value": "only_field" }
+    },
+    {
+      "name": "hrandfield_missing_key",
+      "now_ms": 402,
+      "argv": ["HRANDFIELD", "nokey"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "hrandfield_count_positive",
+      "now_ms": 403,
+      "argv": ["HRANDFIELD", "hrand1", "5"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "only_field" }
+        ]
+      }
+    },
+    {
+      "name": "hrandfield_count_zero",
+      "now_ms": 404,
+      "argv": ["HRANDFIELD", "hrand1", "0"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "hrandfield_count_negative",
+      "now_ms": 405,
+      "argv": ["HRANDFIELD", "hrand1", "-3"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "only_field" },
+          { "kind": "bulk", "value": "only_field" },
+          { "kind": "bulk", "value": "only_field" }
+        ]
+      }
+    },
+    {
+      "name": "hrandfield_withvalues",
+      "now_ms": 406,
+      "argv": ["HRANDFIELD", "hrand1", "1", "WITHVALUES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "only_field" },
+          { "kind": "bulk", "value": "only_value" }
+        ]
+      }
+    },
+    {
+      "name": "hrandfield_missing_key_with_count",
+      "now_ms": 407,
+      "argv": ["HRANDFIELD", "nokey", "5"],
+      "expect": { "kind": "array", "value": [] }
+    },
+
+    {
+      "name": "hscan_setup",
+      "now_ms": 500,
+      "argv": ["HSET", "hscan_h", "alpha", "1", "beta", "2", "gamma", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "hscan_full",
+      "now_ms": 501,
+      "argv": ["HSCAN", "hscan_h", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "0" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "alpha" },
+              { "kind": "bulk", "value": "1" },
+              { "kind": "bulk", "value": "beta" },
+              { "kind": "bulk", "value": "2" },
+              { "kind": "bulk", "value": "gamma" },
+              { "kind": "bulk", "value": "3" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "hscan_missing_key",
+      "now_ms": 502,
+      "argv": ["HSCAN", "nokey", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "0" },
+          { "kind": "array", "value": [] }
+        ]
+      }
+    },
+    {
+      "name": "hscan_with_match",
+      "now_ms": 503,
+      "argv": ["HSCAN", "hscan_h", "0", "MATCH", "a*"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "0" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "alpha" },
+              { "kind": "bulk", "value": "1" }
+            ]
+          }
+        ]
+      }
+    },
+
+    {
+      "name": "hincrby_negative",
+      "now_ms": 600,
+      "argv": ["HINCRBY", "h2", "counter", "-3"],
+      "expect": { "kind": "integer", "value": 5 }
+    },
+    {
+      "name": "hincrby_missing_key",
+      "now_ms": 601,
+      "argv": ["HINCRBY", "nokey", "field", "10"],
+      "expect": { "kind": "integer", "value": 10 }
+    },
+    {
+      "name": "hincrbyfloat_missing_key",
+      "now_ms": 602,
+      "argv": ["HINCRBYFLOAT", "nokey2", "field", "1.5"],
+      "expect": { "kind": "bulk", "value": "1.5" }
+    },
+
+    {
+      "name": "hset_wrong_arity",
+      "now_ms": 700,
+      "argv": ["HSET", "key"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'HSET' command"
+      }
+    },
+    {
+      "name": "hget_wrong_arity",
+      "now_ms": 701,
+      "argv": ["HGET"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'HGET' command"
+      }
+    },
+    {
+      "name": "hdel_wrong_arity",
+      "now_ms": 702,
+      "argv": ["HDEL"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'HDEL' command"
+      }
+    },
+    {
+      "name": "hmget_wrong_arity",
+      "now_ms": 703,
+      "argv": ["HMGET"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'HMGET' command"
+      }
+    },
+    {
+      "name": "hrandfield_wrong_arity",
+      "now_ms": 704,
+      "argv": ["HRANDFIELD"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'HRANDFIELD' command"
+      }
     }
   ]
 }
