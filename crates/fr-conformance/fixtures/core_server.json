@@ -99,6 +99,70 @@
       "now_ms": 10000,
       "argv": ["RESET"],
       "expect": { "kind": "simple", "value": "RESET" }
+    },
+    {
+      "name": "command_count_matches_table_size",
+      "now_ms": 11000,
+      "argv": ["COMMAND", "COUNT"],
+      "expect": { "kind": "integer", "value": 229 }
+    },
+    {
+      "name": "command_info_single_known_entry",
+      "now_ms": 11001,
+      "argv": ["COMMAND", "INFO", "COMMAND"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "command" },
+              { "kind": "integer", "value": -1 },
+              {
+                "kind": "array",
+                "value": [
+                  { "kind": "simple", "value": "fast" }
+                ]
+              },
+              { "kind": "integer", "value": 0 },
+              { "kind": "integer", "value": 0 },
+              { "kind": "integer", "value": 0 }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "command_info_unknown_yields_null_entry",
+      "now_ms": 11002,
+      "argv": ["COMMAND", "INFO", "NO_SUCH_COMMAND"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": null }
+        ]
+      }
+    },
+    {
+      "name": "command_getkeys_returns_empty_array",
+      "now_ms": 11003,
+      "argv": ["COMMAND", "GETKEYS"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "command_docs_returns_empty_array",
+      "now_ms": 11004,
+      "argv": ["COMMAND", "DOCS"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "command_unknown_subcommand_errors",
+      "now_ms": 11005,
+      "argv": ["COMMAND", "BOGUS"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown subcommand or wrong number of arguments for 'command|BOGUS'"
+      }
     }
   ]
 }
