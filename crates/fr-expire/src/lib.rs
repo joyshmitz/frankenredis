@@ -66,4 +66,22 @@ mod tests {
         assert_eq!(decision.remaining_ms, i64::MAX);
         assert!(!decision.should_evict);
     }
+
+    #[test]
+    fn subtraction_can_land_exactly_on_i64_max_boundary() {
+        let now_ms = 5_u64;
+        let deadline = (i64::MAX as u64) + now_ms;
+        let decision = evaluate_expiry(now_ms, Some(deadline));
+        assert_eq!(decision.remaining_ms, i64::MAX);
+        assert!(!decision.should_evict);
+    }
+
+    #[test]
+    fn subtraction_above_i64_max_boundary_clamps() {
+        let now_ms = 5_u64;
+        let deadline = (i64::MAX as u64) + now_ms + 1;
+        let decision = evaluate_expiry(now_ms, Some(deadline));
+        assert_eq!(decision.remaining_ms, i64::MAX);
+        assert!(!decision.should_evict);
+    }
 }
