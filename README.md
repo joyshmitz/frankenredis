@@ -29,10 +29,10 @@ This project uses four pervasive disciplines:
 - legacy oracle cloned at `/data/projects/frankenredis/legacy_redis_code/redis`
 - first executable vertical slice landed:
   - RESP parser/encoder
-  - bootstrap command router (`PING`, `ECHO`, `SET`, `GET`, `DEL`, `INCR`, `EXPIRE`, `PTTL`)
+  - broad command surface across strings, hashes, lists, sets, sorted sets, streams, geo, pub/sub, and server control paths
   - in-memory store + TTL semantics
-  - strict compatibility gate + evidence ledger scaffold
-  - fixture-driven conformance harness (`core_strings`, `core_errors`, `protocol_negative`, `persist_replay`)
+  - strict/hardened compatibility gate + evidence ledger scaffold
+  - fixture-driven conformance harness (`core_*` families + phase2c packet suites)
 - baseline and proof artifacts added:
   - `baselines/round1_conformance_baseline.json`
   - `baselines/round1_conformance_strace.txt`
@@ -50,6 +50,16 @@ This project uses four pervasive disciplines:
 ## Architecture Direction
 
 RESP parser -> command router -> data engine -> persistence -> replication
+
+## Concrete Execution Path (Current Code)
+
+1. RESP parsing/encoding lives in `crates/fr-protocol/src/lib.rs` via `parse_frame` and `RespFrame::to_bytes`.
+2. Runtime ingress starts at `Runtime::execute_bytes` (`crates/fr-runtime/src/lib.rs`), which parses wire bytes and emits fail-closed evidence on protocol errors.
+3. `Runtime::execute_frame` performs preflight policy checks, handles special runtime commands (auth, acl, config, cluster, transaction, persistence controls), enforces auth/maxmemory gates, and runs active-expire before general dispatch.
+4. General command dispatch flows through `fr_command::dispatch_argv` (`crates/fr-command/src/lib.rs`) into command handlers that mutate/read `Store` with deterministic `now_ms` semantics.
+5. Expiration semantics are centralized in store + `fr-expire` (`evaluate_expiry`), preserving Redis-visible `TTL/PTTL` return contracts (`-2`, `-1`, positive remaining lifetime).
+6. Successful write dispatch captures persistence/replication signals in runtime (`capture_aof_record`), appending `fr-persist::AofRecord` entries and advancing replication offsets.
+7. Conformance execution is driven by `fr-conformance::run_fixture`, which instantiates strict or hardened runtime modes and validates both reply parity and threat/evidence expectations.
 
 ## Compatibility and Security Stance
 
@@ -90,13 +100,16 @@ These four docs are now the canonical porting-to-rust workflow for this repo.
 ## Validation Commands
 
 ```bash
-cargo fmt --check
-cargo check --all-targets
-cargo clippy --all-targets -- -D warnings
-cargo test --workspace
-cargo test -p fr-conformance -- --nocapture
-cargo run -p fr-conformance --bin phase2c_schema_gate -- --optimization-gate
-cargo bench
+# Offloaded (recommended in multi-agent sessions)
+rch exec -- cargo fmt --check
+rch exec -- cargo check --workspace --all-targets
+rch exec -- cargo clippy --workspace --all-targets -- -D warnings
+rch exec -- cargo test --workspace
+rch exec -- cargo test -p fr-conformance -- --nocapture
+rch exec -- cargo run -p fr-conformance --bin phase2c_schema_gate -- --optimization-gate
+rch exec -- cargo bench
+
+# If rch is unavailable, run the same commands with plain cargo.
 ```
 
 ## License
