@@ -3064,9 +3064,9 @@ mod tests {
                 RespFrame::BulkString(Some(
                     b"CLUSTER subcommand dispatch scaffold (FR-P2C-007 D1).".to_vec(),
                 )),
-                RespFrame::BulkString(
-                    Some(b"Supported subcommands in this stage: HELP.".to_vec(),)
-                ),
+                RespFrame::BulkString(Some(
+                    b"Supported subcommands in this stage: HELP, INFO, MYID, SLOTS, SHARDS, NODES, KEYSLOT, GETKEYSINSLOT, COUNTKEYSINSLOT, RESET.".to_vec(),
+                )),
             ]))
         );
 

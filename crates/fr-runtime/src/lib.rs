@@ -397,6 +397,7 @@ enum RuntimeSpecialCommand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ClusterSubcommand {
     Help,
+    Dispatch,
     Unknown,
 }
 
@@ -556,6 +557,18 @@ fn classify_cluster_subcommand(cmd: &[u8]) -> Result<ClusterSubcommand, CommandE
     if cmd.len() == 4 && eq_ascii_token(cmd, b"HELP") {
         return Ok(ClusterSubcommand::Help);
     }
+    if (cmd.len() == 4 && (eq_ascii_token(cmd, b"INFO") || eq_ascii_token(cmd, b"MYID")))
+        || (cmd.len() == 5
+            && (eq_ascii_token(cmd, b"SLOTS")
+                || eq_ascii_token(cmd, b"NODES")
+                || eq_ascii_token(cmd, b"RESET")))
+        || (cmd.len() == 6 && eq_ascii_token(cmd, b"SHARDS"))
+        || (cmd.len() == 7 && eq_ascii_token(cmd, b"KEYSLOT"))
+        || (cmd.len() == 13 && eq_ascii_token(cmd, b"GETKEYSINSLOT"))
+        || (cmd.len() == 15 && eq_ascii_token(cmd, b"COUNTKEYSINSLOT"))
+    {
+        return Ok(ClusterSubcommand::Dispatch);
+    }
     if std::str::from_utf8(cmd).is_err() {
         return Err(CommandError::InvalidUtf8Argument);
     }
@@ -567,6 +580,17 @@ fn classify_cluster_subcommand_linear(cmd: &[u8]) -> Result<ClusterSubcommand, C
     let subcommand = std::str::from_utf8(cmd).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if subcommand.eq_ignore_ascii_case("HELP") {
         Ok(ClusterSubcommand::Help)
+    } else if subcommand.eq_ignore_ascii_case("INFO")
+        || subcommand.eq_ignore_ascii_case("MYID")
+        || subcommand.eq_ignore_ascii_case("SLOTS")
+        || subcommand.eq_ignore_ascii_case("SHARDS")
+        || subcommand.eq_ignore_ascii_case("NODES")
+        || subcommand.eq_ignore_ascii_case("KEYSLOT")
+        || subcommand.eq_ignore_ascii_case("GETKEYSINSLOT")
+        || subcommand.eq_ignore_ascii_case("COUNTKEYSINSLOT")
+        || subcommand.eq_ignore_ascii_case("RESET")
+    {
+        Ok(ClusterSubcommand::Dispatch)
     } else {
         Ok(ClusterSubcommand::Unknown)
     }
@@ -1142,7 +1166,9 @@ impl Runtime {
             Some(RuntimeSpecialCommand::Asking) => return self.handle_asking_command(&argv),
             Some(RuntimeSpecialCommand::Readonly) => return self.handle_readonly_command(&argv),
             Some(RuntimeSpecialCommand::Readwrite) => return self.handle_readwrite_command(&argv),
-            Some(RuntimeSpecialCommand::Cluster) => return self.handle_cluster_command(&argv),
+            Some(RuntimeSpecialCommand::Cluster) => {
+                return self.handle_cluster_command(&argv, now_ms);
+            }
             Some(RuntimeSpecialCommand::Wait) => return self.handle_wait_command(&argv),
             Some(RuntimeSpecialCommand::Waitaof) => return self.handle_waitaof_command(&argv),
             Some(RuntimeSpecialCommand::Multi) => return self.handle_multi_command(),
@@ -2168,7 +2194,7 @@ impl Runtime {
         RespFrame::SimpleString("OK".to_string())
     }
 
-    fn handle_cluster_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+    fn handle_cluster_command(&mut self, argv: &[Vec<u8>], now_ms: u64) -> RespFrame {
         if argv.len() < 2 {
             return command_error_to_resp(CommandError::WrongArity("CLUSTER"));
         }
@@ -2184,8 +2210,17 @@ impl Runtime {
             return RespFrame::Array(Some(vec![
                 hello_bulk("CLUSTER HELP"),
                 hello_bulk("CLUSTER subcommand dispatch scaffold (FR-P2C-007 D1)."),
-                hello_bulk("Supported subcommands in this stage: HELP."),
+                hello_bulk(
+                    "Supported subcommands in this stage: HELP, INFO, MYID, SLOTS, SHARDS, NODES, KEYSLOT, GETKEYSINSLOT, COUNTKEYSINSLOT, RESET.",
+                ),
             ]));
+        }
+
+        if subcommand == ClusterSubcommand::Dispatch {
+            return match dispatch_argv(argv, &mut self.store, now_ms) {
+                Ok(reply) => reply,
+                Err(err) => command_error_to_resp(err),
+            };
         }
 
         RespFrame::Error(CLUSTER_UNKNOWN_SUBCOMMAND_ERROR.to_string())
@@ -3456,12 +3491,17 @@ mod tests {
             b"HELP",
             b"help",
             b"HeLp",
+            b"INFO",
+            b"MYID",
             b"NOPE",
             b"SLOTS",
+            b"RESET",
             b"NODES",
+            b"KEYSLOT",
+            b"GETKEYSINSLOT",
+            b"COUNTKEYSINSLOT",
             b"SETSLOT",
             b"FAILOVER",
-            b"myid",
             &[0xFF],
         ];
         for sample in samples {
@@ -3483,13 +3523,18 @@ mod tests {
             b"HELP",
             b"help",
             b"HeLp",
+            b"INFO",
+            b"MYID",
             b"HELP",
             b"NOPE",
             b"SLOTS",
+            b"RESET",
             b"NODES",
+            b"KEYSLOT",
+            b"GETKEYSINSLOT",
+            b"COUNTKEYSINSLOT",
             b"SETSLOT",
             b"FAILOVER",
-            b"myid",
             &[0xFF],
         ];
 
@@ -3497,6 +3542,7 @@ mod tests {
         let total_lookups = rounds.saturating_mul(workload.len());
 
         let mut linear_help_hits = 0usize;
+        let mut linear_dispatch_hits = 0usize;
         let mut linear_invalid_utf8 = 0usize;
         let linear_start = Instant::now();
         for _ in 0..rounds {
@@ -3504,6 +3550,9 @@ mod tests {
                 match classify_cluster_subcommand_linear(cmd) {
                     Ok(ClusterSubcommand::Help) => {
                         linear_help_hits = linear_help_hits.saturating_add(1)
+                    }
+                    Ok(ClusterSubcommand::Dispatch) => {
+                        linear_dispatch_hits = linear_dispatch_hits.saturating_add(1)
                     }
                     Ok(ClusterSubcommand::Unknown) => {}
                     Err(CommandError::InvalidUtf8Argument) => {
@@ -3516,6 +3565,7 @@ mod tests {
         let linear_ns = linear_start.elapsed().as_nanos();
 
         let mut optimized_help_hits = 0usize;
+        let mut optimized_dispatch_hits = 0usize;
         let mut optimized_invalid_utf8 = 0usize;
         let optimized_start = Instant::now();
         for _ in 0..rounds {
@@ -3523,6 +3573,9 @@ mod tests {
                 match classify_cluster_subcommand(cmd) {
                     Ok(ClusterSubcommand::Help) => {
                         optimized_help_hits = optimized_help_hits.saturating_add(1)
+                    }
+                    Ok(ClusterSubcommand::Dispatch) => {
+                        optimized_dispatch_hits = optimized_dispatch_hits.saturating_add(1)
                     }
                     Ok(ClusterSubcommand::Unknown) => {}
                     Err(CommandError::InvalidUtf8Argument) => {
@@ -3535,6 +3588,7 @@ mod tests {
         let optimized_ns = optimized_start.elapsed().as_nanos();
 
         assert_eq!(linear_help_hits, optimized_help_hits);
+        assert_eq!(linear_dispatch_hits, optimized_dispatch_hits);
         assert_eq!(linear_invalid_utf8, optimized_invalid_utf8);
         assert!(total_lookups > 0);
 
@@ -3649,11 +3703,61 @@ mod tests {
                 RespFrame::BulkString(Some(
                     b"CLUSTER subcommand dispatch scaffold (FR-P2C-007 D1).".to_vec(),
                 )),
-                RespFrame::BulkString(
-                    Some(b"Supported subcommands in this stage: HELP.".to_vec(),)
-                ),
+                RespFrame::BulkString(Some(
+                    b"Supported subcommands in this stage: HELP, INFO, MYID, SLOTS, SHARDS, NODES, KEYSLOT, GETKEYSINSLOT, COUNTKEYSINSLOT, RESET.".to_vec(),
+                )),
             ]))
         );
+
+        let info = rt.execute_frame(command(&[b"CLUSTER", b"INFO"]), 0);
+        assert_eq!(
+            info,
+            RespFrame::BulkString(Some(
+                b"cluster_enabled:0\r\n\
+                  cluster_state:ok\r\n\
+                  cluster_slots_assigned:0\r\n\
+                  cluster_slots_ok:0\r\n\
+                  cluster_slots_pfail:0\r\n\
+                  cluster_slots_fail:0\r\n\
+                  cluster_known_nodes:0\r\n\
+                  cluster_size:0\r\n\
+                  cluster_current_epoch:0\r\n\
+                  cluster_my_epoch:0\r\n\
+                  cluster_stats_messages_sent:0\r\n\
+                  cluster_stats_messages_received:0\r\n\
+                  total_cluster_links_buffer_limit_exceeded:0\r\n"
+                    .to_vec(),
+            ))
+        );
+
+        let myid = rt.execute_frame(command(&[b"CLUSTER", b"MYID"]), 0);
+        assert_eq!(
+            myid,
+            RespFrame::BulkString(Some(b"0000000000000000000000000000000000000000".to_vec(),))
+        );
+
+        let slots = rt.execute_frame(command(&[b"CLUSTER", b"SLOTS"]), 0);
+        assert_eq!(slots, RespFrame::Array(Some(Vec::new())));
+
+        let shards = rt.execute_frame(command(&[b"CLUSTER", b"SHARDS"]), 0);
+        assert_eq!(shards, RespFrame::Array(Some(Vec::new())));
+
+        let nodes = rt.execute_frame(command(&[b"CLUSTER", b"NODES"]), 0);
+        assert_eq!(nodes, RespFrame::BulkString(Some(Vec::new())));
+
+        let keyslot = rt.execute_frame(command(&[b"CLUSTER", b"KEYSLOT", b"foo"]), 0);
+        assert_eq!(keyslot, RespFrame::Integer(12182));
+
+        let getkeysinslot =
+            rt.execute_frame(command(&[b"CLUSTER", b"GETKEYSINSLOT", b"12182", b"10"]), 0);
+        assert_eq!(getkeysinslot, RespFrame::Array(Some(Vec::new())));
+
+        let countkeysinslot =
+            rt.execute_frame(command(&[b"CLUSTER", b"COUNTKEYSINSLOT", b"12182"]), 0);
+        assert_eq!(countkeysinslot, RespFrame::Integer(0));
+
+        let reset = rt.execute_frame(command(&[b"CLUSTER", b"RESET"]), 0);
+        assert_eq!(reset, RespFrame::SimpleString("OK".to_string()));
 
         let unknown = rt.execute_frame(command(&[b"CLUSTER", b"NOPE"]), 0);
         assert_eq!(
