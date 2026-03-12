@@ -596,8 +596,20 @@
       }
     },
     {
-      "name": "object_encoding_missing_key",
+      "name": "object_encoding_setup_stream",
       "now_ms": 13012,
+      "argv": ["XADD", "obj_stream", "1-0", "field", "value"],
+      "expect": { "kind": "bulk", "value": "1-0" }
+    },
+    {
+      "name": "object_encoding_stream",
+      "now_ms": 13012,
+      "argv": ["OBJECT", "ENCODING", "obj_stream"],
+      "expect": { "kind": "bulk", "value": "stream" }
+    },
+    {
+      "name": "object_encoding_missing_key",
+      "now_ms": 13013,
       "argv": [
         "OBJECT",
         "ENCODING",
@@ -2262,6 +2274,90 @@
         "kind": "bulk",
         "value": "# Memory\r\nused_memory:0\r\nused_memory_human:0B\r\nused_memory_rss:0\r\nused_memory_rss_human:0B\r\nused_memory_peak:0\r\nused_memory_peak_human:0B\r\nused_memory_peak_perc:0.00%\r\nused_memory_overhead:0\r\nused_memory_startup:0\r\nused_memory_dataset:0\r\nused_memory_dataset_perc:0.00%\r\nmaxmemory:0\r\nmaxmemory_human:0B\r\nmaxmemory_policy:noeviction\r\nmem_fragmentation_ratio:1.00\r\nmem_allocator:rust-alloc\r\nactive_defrag_running:0\r\nlazyfree_pending_objects:0\r\nlazyfreed_objects:0\r\n\r\n"
       }
+    },
+    {
+      "name": "object_encoding_setup_raw_string",
+      "now_ms": 30000,
+      "argv": ["SET", "obj_raw", "this-string-is-longer-than-44-bytes-so-it-should-be-raw-encoding"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_raw_string",
+      "now_ms": 30000,
+      "argv": ["OBJECT", "ENCODING", "obj_raw"],
+      "expect": { "kind": "bulk", "value": "raw" }
+    },
+    {
+      "name": "object_encoding_setup_embstr",
+      "now_ms": 30000,
+      "argv": ["SET", "obj_emb", "short"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_embstr",
+      "now_ms": 30000,
+      "argv": ["OBJECT", "ENCODING", "obj_emb"],
+      "expect": { "kind": "bulk", "value": "embstr" }
+    },
+    {
+      "name": "object_encoding_setup_intset",
+      "now_ms": 30000,
+      "argv": ["SADD", "obj_intset", "1", "2", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "object_encoding_intset",
+      "now_ms": 30000,
+      "argv": ["OBJECT", "ENCODING", "obj_intset"],
+      "expect": { "kind": "bulk", "value": "intset" }
+    },
+    {
+      "name": "object_encoding_setup_set_listpack",
+      "now_ms": 30000,
+      "argv": ["SADD", "obj_setlp", "a", "b", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "object_encoding_set_listpack",
+      "now_ms": 30000,
+      "argv": ["OBJECT", "ENCODING", "obj_setlp"],
+      "expect": { "kind": "bulk", "value": "listpack" }
+    },
+    {
+      "name": "object_encoding_setup_quicklist",
+      "now_ms": 30000,
+      "argv": ["RPUSH", "obj_ql", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak", "al", "am", "an", "ao", "ap", "aq", "ar", "as", "at", "au", "av", "aw", "ax", "ay", "az", "ba", "bb", "bc", "bd", "be", "bf", "bg", "bh", "bi", "bj", "bk", "bl", "bm", "bn", "bo", "bp", "bq", "br", "bs", "bt", "bu", "bv", "bw", "bx", "by", "bz", "ca", "cb", "cc", "cd", "ce", "cf", "cg", "ch", "ci", "cj", "ck", "cl", "cm", "cn", "co", "cp", "cq", "cr", "cs", "ct", "cu", "cv", "cw", "cx", "cy", "cz", "da", "db", "dc", "dd", "de", "df", "dg", "dh", "di", "dj", "dk", "dl", "dm", "dn", "do", "dp", "dq", "dr", "ds", "dt", "du", "dv", "dw", "dx", "dy", "dz"],
+      "expect": { "kind": "integer", "value": 130 }
+    },
+    {
+      "name": "object_encoding_quicklist",
+      "now_ms": 30000,
+      "argv": ["OBJECT", "ENCODING", "obj_ql"],
+      "expect": { "kind": "bulk", "value": "quicklist" }
+    },
+    {
+      "name": "object_encoding_setup_skiplist",
+      "now_ms": 30000,
+      "argv": ["ZADD", "obj_sl", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e", "6", "f", "7", "g", "8", "h", "9", "i", "10", "j", "11", "k", "12", "l", "13", "m", "14", "n", "15", "o", "16", "p", "17", "q", "18", "r", "19", "s", "20", "t", "21", "u", "22", "v", "23", "w", "24", "x", "25", "y", "26", "z", "27", "aa", "28", "ab", "29", "ac", "30", "ad", "31", "ae", "32", "af", "33", "ag", "34", "ah", "35", "ai", "36", "aj", "37", "ak", "38", "al", "39", "am", "40", "an", "41", "ao", "42", "ap", "43", "aq", "44", "ar", "45", "as", "46", "at", "47", "au", "48", "av", "49", "aw", "50", "ax", "51", "ay", "52", "az", "53", "ba", "54", "bb", "55", "bc", "56", "bd", "57", "be", "58", "bf", "59", "bg", "60", "bh", "61", "bi", "62", "bj", "63", "bk", "64", "bl", "65", "bm", "66", "bn", "67", "bo", "68", "bp", "69", "bq", "70", "br", "71", "bs", "72", "bt", "73", "bu", "74", "bv", "75", "bw", "76", "bx", "77", "by", "78", "bz", "79", "ca", "80", "cb", "81", "cc", "82", "cd", "83", "ce", "84", "cf", "85", "cg", "86", "ch", "87", "ci", "88", "cj", "89", "ck", "90", "cl", "91", "cm", "92", "cn", "93", "co", "94", "cp", "95", "cq", "96", "cr", "97", "cs", "98", "ct", "99", "cu", "100", "cv", "101", "cw", "102", "cx", "103", "cy", "104", "cz", "105", "da", "106", "db", "107", "dc", "108", "dd", "109", "de", "110", "df", "111", "dg", "112", "dh", "113", "di", "114", "dj", "115", "dk", "116", "dl", "117", "dm", "118", "dn", "119", "do", "120", "dp", "121", "dq", "122", "dr", "123", "ds", "124", "dt", "125", "du", "126", "dv", "127", "dw", "128", "dx", "129", "dy"],
+      "expect": { "kind": "integer", "value": 129 }
+    },
+    {
+      "name": "object_encoding_skiplist",
+      "now_ms": 30000,
+      "argv": ["OBJECT", "ENCODING", "obj_sl"],
+      "expect": { "kind": "bulk", "value": "skiplist" }
+    },
+    {
+      "name": "object_encoding_setup_hashtable_hash",
+      "now_ms": 30000,
+      "argv": ["HSET", "obj_ht", "f001", "v", "f002", "v", "f003", "v", "f004", "v", "f005", "v", "f006", "v", "f007", "v", "f008", "v", "f009", "v", "f010", "v", "f011", "v", "f012", "v", "f013", "v", "f014", "v", "f015", "v", "f016", "v", "f017", "v", "f018", "v", "f019", "v", "f020", "v", "f021", "v", "f022", "v", "f023", "v", "f024", "v", "f025", "v", "f026", "v", "f027", "v", "f028", "v", "f029", "v", "f030", "v", "f031", "v", "f032", "v", "f033", "v", "f034", "v", "f035", "v", "f036", "v", "f037", "v", "f038", "v", "f039", "v", "f040", "v", "f041", "v", "f042", "v", "f043", "v", "f044", "v", "f045", "v", "f046", "v", "f047", "v", "f048", "v", "f049", "v", "f050", "v", "f051", "v", "f052", "v", "f053", "v", "f054", "v", "f055", "v", "f056", "v", "f057", "v", "f058", "v", "f059", "v", "f060", "v", "f061", "v", "f062", "v", "f063", "v", "f064", "v", "f065", "v", "f066", "v", "f067", "v", "f068", "v", "f069", "v", "f070", "v", "f071", "v", "f072", "v", "f073", "v", "f074", "v", "f075", "v", "f076", "v", "f077", "v", "f078", "v", "f079", "v", "f080", "v", "f081", "v", "f082", "v", "f083", "v", "f084", "v", "f085", "v", "f086", "v", "f087", "v", "f088", "v", "f089", "v", "f090", "v", "f091", "v", "f092", "v", "f093", "v", "f094", "v", "f095", "v", "f096", "v", "f097", "v", "f098", "v", "f099", "v", "f100", "v", "f101", "v", "f102", "v", "f103", "v", "f104", "v", "f105", "v", "f106", "v", "f107", "v", "f108", "v", "f109", "v", "f110", "v", "f111", "v", "f112", "v", "f113", "v", "f114", "v", "f115", "v", "f116", "v", "f117", "v", "f118", "v", "f119", "v", "f120", "v", "f121", "v", "f122", "v", "f123", "v", "f124", "v", "f125", "v", "f126", "v", "f127", "v", "f128", "v", "f129", "v"],
+      "expect": { "kind": "integer", "value": 129 }
+    },
+    {
+      "name": "object_encoding_hashtable_hash",
+      "now_ms": 30000,
+      "argv": ["OBJECT", "ENCODING", "obj_ht"],
+      "expect": { "kind": "bulk", "value": "hashtable" }
     }
   ]
 }
