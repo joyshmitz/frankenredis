@@ -2748,7 +2748,7 @@ fn geo_search_reply(
 }
 
 /// Parse optional flags WITHCOORD, WITHDIST, WITHHASH, COUNT N [ANY], ASC, DESC from argv starting
-/// at `start`. Returns (withcoord, withdist, withhash, count, any, asc, to_meter, store_key).
+/// at `start`. STORE/STOREDIST key pairs are consumed and skipped (they are handled by callers).
 #[allow(clippy::type_complexity)]
 fn parse_geo_search_flags(
     argv: &[Vec<u8>],
@@ -2786,9 +2786,18 @@ fn parse_geo_search_flags(
             asc = true;
         } else if eq_ascii_command(&argv[i], b"DESC") {
             asc = false;
-        } else if eq_ascii_command(&argv[i], b"STORE") || eq_ascii_command(&argv[i], b"STOREDIST") {
-            // Skip STORE/STOREDIST key for GEORADIUS (not supported in read-only mode)
+        } else if eq_ascii_command(&argv[i], b"STORE") {
+            // Skip STORE key (consumed by georadius/georadiusbymember callers)
             i += 1;
+        } else if eq_ascii_command(&argv[i], b"STOREDIST") {
+            // In GEORADIUS context, STOREDIST has a key arg; in GEOSEARCHSTORE context it's standalone.
+            // Peek ahead: if next arg doesn't look like a known flag/unit, consume it as a key.
+            if i + 1 < argv.len()
+                && !is_geo_flag(&argv[i + 1])
+                && geo_unit_to_meters(&argv[i + 1]).is_none()
+            {
+                i += 1; // skip the key
+            }
         } else if let Some(m) = geo_unit_to_meters(&argv[i]) {
             to_meter = m;
         } else {
@@ -2799,8 +2808,73 @@ fn parse_geo_search_flags(
     Ok((withcoord, withdist, withhash, count, any, asc, to_meter))
 }
 
+/// Check whether a byte slice is a recognized geo search flag keyword.
+fn is_geo_flag(arg: &[u8]) -> bool {
+    eq_ascii_command(arg, b"WITHCOORD")
+        || eq_ascii_command(arg, b"WITHDIST")
+        || eq_ascii_command(arg, b"WITHHASH")
+        || eq_ascii_command(arg, b"COUNT")
+        || eq_ascii_command(arg, b"ANY")
+        || eq_ascii_command(arg, b"ASC")
+        || eq_ascii_command(arg, b"DESC")
+        || eq_ascii_command(arg, b"STORE")
+        || eq_ascii_command(arg, b"STOREDIST")
+}
+
+/// Extract STORE/STOREDIST destination key from GEORADIUS/GEORADIUSBYMEMBER argv.
+/// Returns (store_key, is_storedist).
+fn extract_geo_store(argv: &[Vec<u8>], start: usize) -> (Option<Vec<u8>>, bool) {
+    let mut store_key: Option<Vec<u8>> = None;
+    let mut storedist = false;
+    let mut i = start;
+    while i < argv.len() {
+        if eq_ascii_command(&argv[i], b"STOREDIST") && i + 1 < argv.len() {
+            store_key = Some(argv[i + 1].clone());
+            storedist = true;
+            i += 2;
+        } else if eq_ascii_command(&argv[i], b"STORE") && i + 1 < argv.len() {
+            store_key = Some(argv[i + 1].clone());
+            storedist = false;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    (store_key, storedist)
+}
+
+/// Store geo search results into a destination sorted set. With `storedist`, scores are
+/// distances in `unit_mult`; otherwise scores are geohash values.
+fn geo_store_results(
+    store: &mut Store,
+    dest: &Vec<u8>,
+    results: &[(Vec<u8>, f64, f64, f64, f64)],
+    unit_mult: f64,
+    storedist: bool,
+    now_ms: u64,
+) -> Result<RespFrame, CommandError> {
+    let count_result = results.len() as i64;
+    if results.is_empty() {
+        store.del(std::slice::from_ref(dest), now_ms);
+    } else {
+        let pairs: Vec<(f64, Vec<u8>)> = results
+            .iter()
+            .map(|(member, score, dist, _, _)| {
+                if storedist {
+                    (*dist / unit_mult, member.clone())
+                } else {
+                    (*score, member.clone())
+                }
+            })
+            .collect();
+        store.del(std::slice::from_ref(dest), now_ms);
+        store.zadd(dest, &pairs, now_ms)?;
+    }
+    Ok(RespFrame::Integer(count_result))
+}
+
 fn georadius(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
-    // GEORADIUS key longitude latitude radius m|km|ft|mi [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC]
+    // GEORADIUS key longitude latitude radius m|km|ft|mi [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]
     if argv.len() < 6 {
         return Err(CommandError::WrongArity("GEORADIUS"));
     }
@@ -2827,12 +2901,17 @@ fn georadius(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     let radius_m = radius * unit_mult;
     let (withcoord, withdist, withhash, count, _any, asc, _) =
         parse_geo_search_flags(argv, 6, unit_mult)?;
+    let (store_key, storedist) = extract_geo_store(argv, 6);
     let results = geo_search_core(
         store, &argv[1], center_lon, center_lat, radius_m, count, asc, now_ms,
     )?;
-    Ok(geo_search_reply(
-        &results, withcoord, withdist, withhash, unit_mult,
-    ))
+    if let Some(dest) = store_key {
+        geo_store_results(store, &dest, &results, unit_mult, storedist, now_ms)
+    } else {
+        Ok(geo_search_reply(
+            &results, withcoord, withdist, withhash, unit_mult,
+        ))
+    }
 }
 
 fn georadiusbymember(
@@ -2840,7 +2919,7 @@ fn georadiusbymember(
     store: &mut Store,
     now_ms: u64,
 ) -> Result<RespFrame, CommandError> {
-    // GEORADIUSBYMEMBER key member radius m|km|ft|mi [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC]
+    // GEORADIUSBYMEMBER key member radius m|km|ft|mi [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]
     if argv.len() < 5 {
         return Err(CommandError::WrongArity("GEORADIUSBYMEMBER"));
     }
@@ -2866,12 +2945,17 @@ fn georadiusbymember(
     let radius_m = radius * unit_mult;
     let (withcoord, withdist, withhash, count, _any, asc, _) =
         parse_geo_search_flags(argv, 5, unit_mult)?;
+    let (store_key, storedist) = extract_geo_store(argv, 5);
     let results = geo_search_core(
         store, &argv[1], center_lon, center_lat, radius_m, count, asc, now_ms,
     )?;
-    Ok(geo_search_reply(
-        &results, withcoord, withdist, withhash, unit_mult,
-    ))
+    if let Some(dest) = store_key {
+        geo_store_results(store, &dest, &results, unit_mult, storedist, now_ms)
+    } else {
+        Ok(geo_search_reply(
+            &results, withcoord, withdist, withhash, unit_mult,
+        ))
+    }
 }
 
 fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
@@ -3227,26 +3311,7 @@ fn geosearchstore(
         ));
     };
 
-    // Store results in destination key as sorted set
-    let count_result = results.len() as i64;
-    if results.is_empty() {
-        store.del(std::slice::from_ref(&dest), now_ms);
-    } else {
-        let pairs: Vec<(f64, Vec<u8>)> = results
-            .iter()
-            .map(|(member, score, dist, _, _)| {
-                if storedist {
-                    (*dist / unit_mult, member.clone())
-                } else {
-                    (*score, member.clone())
-                }
-            })
-            .collect();
-        // Delete existing key and re-add
-        store.del(std::slice::from_ref(&dest), now_ms);
-        store.zadd(&dest, &pairs, now_ms)?;
-    }
-    Ok(RespFrame::Integer(count_result))
+    geo_store_results(store, &dest, &results, unit_mult, storedist, now_ms)
 }
 
 fn parse_stream_id(arg: &[u8]) -> Result<StreamId, RespFrame> {

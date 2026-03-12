@@ -1641,6 +1641,274 @@
         "kind": "error",
         "value": "ERR exactly one of BYRADIUS or BYBOX must be provided"
       }
+    },
+    {
+      "name": "georadius_store_setup",
+      "now_ms": 100,
+      "argv": [
+        "GEOADD",
+        "geo_store_src",
+        "13.361389",
+        "38.115556",
+        "Palermo",
+        "15.087269",
+        "37.502669",
+        "Catania",
+        "2.349014",
+        "48.864716",
+        "Paris"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
+    },
+    {
+      "name": "georadius_store_basic",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUS",
+        "geo_store_src",
+        "15",
+        "37",
+        "200",
+        "km",
+        "STORE",
+        "gr_store_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "georadius_store_verify_type",
+      "now_ms": 100,
+      "argv": [
+        "TYPE",
+        "gr_store_dest"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "zset"
+      }
+    },
+    {
+      "name": "georadius_store_verify_card",
+      "now_ms": 100,
+      "argv": [
+        "ZCARD",
+        "gr_store_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "georadius_storedist_basic",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUS",
+        "geo_store_src",
+        "15",
+        "37",
+        "200",
+        "km",
+        "ASC",
+        "STOREDIST",
+        "gr_storedist_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "georadius_storedist_verify_type",
+      "now_ms": 100,
+      "argv": [
+        "TYPE",
+        "gr_storedist_dest"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "zset"
+      }
+    },
+    {
+      "name": "georadius_storedist_verify_scores_are_distances",
+      "now_ms": 100,
+      "argv": [
+        "ZRANGEBYSCORE",
+        "gr_storedist_dest",
+        "0",
+        "200"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind": "bulk", "value": "Catania"},
+          {"kind": "bulk", "value": "Palermo"}
+        ]
+      }
+    },
+    {
+      "name": "georadius_store_no_match_deletes_dest",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUS",
+        "geo_store_src",
+        "0",
+        "0",
+        "1",
+        "km",
+        "STORE",
+        "gr_store_empty"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "georadius_store_nonexistent_key",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUS",
+        "nonexistent_geo_key",
+        "0",
+        "0",
+        "100",
+        "km",
+        "STORE",
+        "gr_store_nokey"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "georadius_store_with_count",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUS",
+        "geo_store_src",
+        "15",
+        "37",
+        "200",
+        "km",
+        "COUNT",
+        "1",
+        "ASC",
+        "STORE",
+        "gr_store_count1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "georadius_store_count1_verify",
+      "now_ms": 100,
+      "argv": [
+        "ZCARD",
+        "gr_store_count1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "georadiusbymember_store_basic",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUSBYMEMBER",
+        "geo_store_src",
+        "Palermo",
+        "200",
+        "km",
+        "STORE",
+        "grbm_store_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "georadiusbymember_store_verify_card",
+      "now_ms": 100,
+      "argv": [
+        "ZCARD",
+        "grbm_store_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "georadiusbymember_storedist_basic",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUSBYMEMBER",
+        "geo_store_src",
+        "Palermo",
+        "200",
+        "km",
+        "STOREDIST",
+        "grbm_storedist_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "georadiusbymember_storedist_verify_type",
+      "now_ms": 100,
+      "argv": [
+        "TYPE",
+        "grbm_storedist_dest"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "zset"
+      }
+    },
+    {
+      "name": "georadius_store_all_with_large_radius",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUS",
+        "geo_store_src",
+        "10",
+        "40",
+        "2000",
+        "km",
+        "STORE",
+        "gr_store_all"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
+    },
+    {
+      "name": "georadius_store_all_verify",
+      "now_ms": 100,
+      "argv": [
+        "ZCARD",
+        "gr_store_all"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     }
   ]
 }
