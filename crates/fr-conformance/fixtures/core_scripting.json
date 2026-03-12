@@ -2134,6 +2134,136 @@
         "kind": "bulk",
         "value": "      42"
       }
+    },
+    {
+      "name": "eval_xpcall_success",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local ok, val = xpcall(function() return 42 end, function(e) return e end)\nif ok then return val else return 0 end",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 42
+      }
+    },
+    {
+      "name": "eval_xpcall_error_with_handler",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local ok, val = xpcall(function() error('boom') end, function(e) return 'caught: ' .. tostring(e) end)\nreturn val",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "caught: boom"
+      }
+    },
+    {
+      "name": "eval_math_pi",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return math.floor(math.pi * 100)",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 314
+      }
+    },
+    {
+      "name": "eval_math_sin_zero",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return math.floor(math.sin(0) * 1000)",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "eval_math_cos_zero",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return math.floor(math.cos(0) * 1000)",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1000
+      }
+    },
+    {
+      "name": "eval_math_abs_negative",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return math.abs(-42)",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 42
+      }
+    },
+    {
+      "name": "eval_math_max",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return math.max(3, 7, 2, 9, 1)",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 9
+      }
+    },
+    {
+      "name": "eval_math_min",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return math.min(3, 7, 2, 9, 1)",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "eval_math_sqrt",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return math.sqrt(144)",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 12
+      }
+    },
+    {
+      "name": "eval_math_pow",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return math.pow(2, 10)",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1024
+      }
     }
   ]
 }

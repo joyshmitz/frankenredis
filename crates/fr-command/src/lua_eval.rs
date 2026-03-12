@@ -1350,14 +1350,15 @@ impl<'a> LuaState<'a> {
             "getmetatable",
             "assert",
             "print",
+            "xpcall",
         ] {
             globals.insert(name.to_string(), LuaValue::RustFunction(name.to_string()));
         }
         // Math library
         let mut math_table = LuaTable::new();
         for name in &[
-            "floor", "ceil", "abs", "max", "min", "sqrt", "huge", "random", "fmod", "log", "exp",
-            "pow",
+            "floor", "ceil", "abs", "max", "min", "sqrt", "huge", "random", "randomseed", "fmod",
+            "log", "exp", "pow", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
         ] {
             math_table.set(
                 LuaValue::Str(name.as_bytes().to_vec()),
@@ -2180,6 +2181,38 @@ impl<'a> LuaState<'a> {
                     Err(msg) => Ok(vec![LuaValue::Bool(false), LuaValue::Str(msg.into_bytes())]),
                 }
             }
+            "xpcall" => {
+                // xpcall(f, msgh, ...) — like pcall but with error handler
+                let func = args.first().cloned().unwrap_or(LuaValue::Nil);
+                let err_handler = args.get(1).cloned().unwrap_or(LuaValue::Nil);
+                let mut call_args_vec = args.get(2..).unwrap_or(&[]).to_vec();
+                match self.call_function(&func, &mut call_args_vec, env, &mut Vec::new()) {
+                    Ok(mut vals) => {
+                        vals.insert(0, LuaValue::Bool(true));
+                        Ok(vals)
+                    }
+                    Err(msg) => {
+                        // Call error handler with the error message
+                        let err_val = LuaValue::Str(msg.into_bytes());
+                        let mut handler_args = vec![err_val.clone()];
+                        match self.call_function(
+                            &err_handler,
+                            &mut handler_args,
+                            env,
+                            &mut Vec::new(),
+                        ) {
+                            Ok(handler_results) => {
+                                let transformed = handler_results
+                                    .into_iter()
+                                    .next()
+                                    .unwrap_or(err_val);
+                                Ok(vec![LuaValue::Bool(false), transformed])
+                            }
+                            Err(_) => Ok(vec![LuaValue::Bool(false), err_val]),
+                        }
+                    }
+                }
+            }
             "pairs" => {
                 let table = args.first().cloned().unwrap_or(LuaValue::Nil);
                 // Return next, table, nil
@@ -2436,6 +2469,39 @@ impl<'a> LuaState<'a> {
                 let a = args.first().and_then(|v| v.to_number()).unwrap_or(0.0);
                 let b = args.get(1).and_then(|v| v.to_number()).unwrap_or(0.0);
                 Ok(vec![LuaValue::Number(a.powf(b))])
+            }
+            "math.sin" => {
+                let n = args.first().and_then(|v| v.to_number()).unwrap_or(0.0);
+                Ok(vec![LuaValue::Number(n.sin())])
+            }
+            "math.cos" => {
+                let n = args.first().and_then(|v| v.to_number()).unwrap_or(0.0);
+                Ok(vec![LuaValue::Number(n.cos())])
+            }
+            "math.tan" => {
+                let n = args.first().and_then(|v| v.to_number()).unwrap_or(0.0);
+                Ok(vec![LuaValue::Number(n.tan())])
+            }
+            "math.asin" => {
+                let n = args.first().and_then(|v| v.to_number()).unwrap_or(0.0);
+                Ok(vec![LuaValue::Number(n.asin())])
+            }
+            "math.acos" => {
+                let n = args.first().and_then(|v| v.to_number()).unwrap_or(0.0);
+                Ok(vec![LuaValue::Number(n.acos())])
+            }
+            "math.atan" => {
+                let n = args.first().and_then(|v| v.to_number()).unwrap_or(0.0);
+                Ok(vec![LuaValue::Number(n.atan())])
+            }
+            "math.atan2" => {
+                let y = args.first().and_then(|v| v.to_number()).unwrap_or(0.0);
+                let x = args.get(1).and_then(|v| v.to_number()).unwrap_or(1.0);
+                Ok(vec![LuaValue::Number(y.atan2(x))])
+            }
+            "math.randomseed" => {
+                // Seed is ignored — we use deterministic random for Redis scripting
+                Ok(vec![LuaValue::Nil])
             }
             // ── String library ──────────────────────────────────────────
             "string.len" => {
