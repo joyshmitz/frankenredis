@@ -3163,6 +3163,1103 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'XREADGROUP' command"
       }
+    },
+    {
+      "name": "xsetid_setup_stream",
+      "now_ms": 300,
+      "argv": [
+        "XADD",
+        "xsid1",
+        "1-1",
+        "f",
+        "v"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-1"
+      }
+    },
+    {
+      "name": "xsetid_set_higher",
+      "now_ms": 300,
+      "argv": [
+        "XSETID",
+        "xsid1",
+        "5-0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "xsetid_verify_auto_id",
+      "now_ms": 300,
+      "argv": [
+        "XADD",
+        "xsid1",
+        "*",
+        "g",
+        "w"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "5-1"
+      }
+    },
+    {
+      "name": "xsetid_wrong_arity",
+      "now_ms": 300,
+      "argv": [
+        "XSETID"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XSETID' command"
+      }
+    },
+    {
+      "name": "xsetid_nonexistent_stream",
+      "now_ms": 300,
+      "argv": [
+        "XSETID",
+        "nosuchxsid",
+        "1-1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "xpending_setup_add1",
+      "now_ms": 400,
+      "argv": [
+        "XADD",
+        "xpend",
+        "1-1",
+        "msg",
+        "hello"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-1"
+      }
+    },
+    {
+      "name": "xpending_setup_add2",
+      "now_ms": 400,
+      "argv": [
+        "XADD",
+        "xpend",
+        "2-1",
+        "msg",
+        "world"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "2-1"
+      }
+    },
+    {
+      "name": "xpending_setup_add3",
+      "now_ms": 400,
+      "argv": [
+        "XADD",
+        "xpend",
+        "3-1",
+        "msg",
+        "foo"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "3-1"
+      }
+    },
+    {
+      "name": "xpending_setup_group",
+      "now_ms": 400,
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "xpend",
+        "grp1",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "xpending_setup_read_alice",
+      "now_ms": 400,
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "grp1",
+        "alice",
+        "COUNT",
+        "2",
+        "STREAMS",
+        "xpend",
+        ">"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "xpend"
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "array",
+                    "value": [
+                      {
+                        "kind": "bulk",
+                        "value": "1-1"
+                      },
+                      {
+                        "kind": "array",
+                        "value": [
+                          {
+                            "kind": "bulk",
+                            "value": "msg"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "hello"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "array",
+                    "value": [
+                      {
+                        "kind": "bulk",
+                        "value": "2-1"
+                      },
+                      {
+                        "kind": "array",
+                        "value": [
+                          {
+                            "kind": "bulk",
+                            "value": "msg"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "world"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xpending_setup_read_bob",
+      "now_ms": 401,
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "grp1",
+        "bob",
+        "COUNT",
+        "1",
+        "STREAMS",
+        "xpend",
+        ">"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "xpend"
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "array",
+                    "value": [
+                      {
+                        "kind": "bulk",
+                        "value": "3-1"
+                      },
+                      {
+                        "kind": "array",
+                        "value": [
+                          {
+                            "kind": "bulk",
+                            "value": "msg"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "foo"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xpending_summary",
+      "now_ms": 402,
+      "argv": [
+        "XPENDING",
+        "xpend",
+        "grp1"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "integer",
+            "value": 3
+          },
+          {
+            "kind": "bulk",
+            "value": "1-1"
+          },
+          {
+            "kind": "bulk",
+            "value": "3-1"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "alice"
+                  },
+                  {
+                    "kind": "integer",
+                    "value": 2
+                  }
+                ]
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "bob"
+                  },
+                  {
+                    "kind": "integer",
+                    "value": 1
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xpending_detail_all",
+      "now_ms": 403,
+      "argv": [
+        "XPENDING",
+        "xpend",
+        "grp1",
+        "-",
+        "+",
+        "10"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "1-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "alice"
+              },
+              {
+                "kind": "integer",
+                "value": 3
+              },
+              {
+                "kind": "integer",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "2-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "alice"
+              },
+              {
+                "kind": "integer",
+                "value": 3
+              },
+              {
+                "kind": "integer",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "3-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "bob"
+              },
+              {
+                "kind": "integer",
+                "value": 2
+              },
+              {
+                "kind": "integer",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xpending_detail_limit",
+      "now_ms": 403,
+      "argv": [
+        "XPENDING",
+        "xpend",
+        "grp1",
+        "-",
+        "+",
+        "1"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "1-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "alice"
+              },
+              {
+                "kind": "integer",
+                "value": 3
+              },
+              {
+                "kind": "integer",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xpending_detail_consumer",
+      "now_ms": 403,
+      "argv": [
+        "XPENDING",
+        "xpend",
+        "grp1",
+        "-",
+        "+",
+        "10",
+        "bob"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "3-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "bob"
+              },
+              {
+                "kind": "integer",
+                "value": 2
+              },
+              {
+                "kind": "integer",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xpending_nogroup_setup",
+      "now_ms": 403,
+      "argv": [
+        "XADD",
+        "xpend_ng",
+        "1-1",
+        "a",
+        "b"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-1"
+      }
+    },
+    {
+      "name": "xpending_nogroup",
+      "now_ms": 403,
+      "argv": [
+        "XPENDING",
+        "xpend_ng",
+        "nosuchgroup"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "NOGROUP No such consumer group 'nosuchgroup' for key name 'xpend_ng'"
+      }
+    },
+    {
+      "name": "xack_one",
+      "now_ms": 404,
+      "argv": [
+        "XACK",
+        "xpend",
+        "grp1",
+        "1-1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "xack_verify_pending_reduced",
+      "now_ms": 405,
+      "argv": [
+        "XPENDING",
+        "xpend",
+        "grp1"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "integer",
+            "value": 2
+          },
+          {
+            "kind": "bulk",
+            "value": "2-1"
+          },
+          {
+            "kind": "bulk",
+            "value": "3-1"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "alice"
+                  },
+                  {
+                    "kind": "integer",
+                    "value": 1
+                  }
+                ]
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "bob"
+                  },
+                  {
+                    "kind": "integer",
+                    "value": 1
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xack_already_acked",
+      "now_ms": 405,
+      "argv": [
+        "XACK",
+        "xpend",
+        "grp1",
+        "1-1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "xack_nonexistent_id",
+      "now_ms": 405,
+      "argv": [
+        "XACK",
+        "xpend",
+        "grp1",
+        "999-999"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "xclaim_basic",
+      "now_ms": 500,
+      "argv": [
+        "XCLAIM",
+        "xpend",
+        "grp1",
+        "charlie",
+        "0",
+        "2-1"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "2-1"
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "msg"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "world"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xclaim_verify_owner",
+      "now_ms": 501,
+      "argv": [
+        "XPENDING",
+        "xpend",
+        "grp1",
+        "2-1",
+        "2-1",
+        "10"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "2-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "charlie"
+              },
+              {
+                "kind": "integer",
+                "value": 1
+              },
+              {
+                "kind": "integer",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xclaim_justid",
+      "now_ms": 502,
+      "argv": [
+        "XCLAIM",
+        "xpend",
+        "grp1",
+        "charlie",
+        "0",
+        "3-1",
+        "JUSTID"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "3-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "xclaim_force_setup",
+      "now_ms": 503,
+      "argv": [
+        "XADD",
+        "xpend",
+        "4-1",
+        "msg",
+        "extra"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "4-1"
+      }
+    },
+    {
+      "name": "xclaim_force",
+      "now_ms": 503,
+      "argv": [
+        "XCLAIM",
+        "xpend",
+        "grp1",
+        "charlie",
+        "0",
+        "4-1",
+        "FORCE"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "4-1"
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "msg"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "extra"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xclaim_wrong_arity",
+      "now_ms": 504,
+      "argv": [
+        "XCLAIM",
+        "k",
+        "g",
+        "c"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XCLAIM' command"
+      }
+    },
+    {
+      "name": "xclaim_nogroup",
+      "now_ms": 504,
+      "argv": [
+        "XCLAIM",
+        "xpend",
+        "nosuchgrp",
+        "c",
+        "0",
+        "1-1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "NOGROUP No such consumer group 'nosuchgrp' for key name 'xpend'"
+      }
+    },
+    {
+      "name": "xautoclaim_setup_add1",
+      "now_ms": 600,
+      "argv": [
+        "XADD",
+        "xac",
+        "1-1",
+        "k",
+        "v1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-1"
+      }
+    },
+    {
+      "name": "xautoclaim_setup_add2",
+      "now_ms": 600,
+      "argv": [
+        "XADD",
+        "xac",
+        "2-1",
+        "k",
+        "v2"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "2-1"
+      }
+    },
+    {
+      "name": "xautoclaim_setup_add3",
+      "now_ms": 600,
+      "argv": [
+        "XADD",
+        "xac",
+        "3-1",
+        "k",
+        "v3"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "3-1"
+      }
+    },
+    {
+      "name": "xautoclaim_setup_group",
+      "now_ms": 600,
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "xac",
+        "acgrp",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "xautoclaim_setup_read",
+      "now_ms": 600,
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "acgrp",
+        "old",
+        "COUNT",
+        "3",
+        "STREAMS",
+        "xac",
+        ">"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "xac"
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "array",
+                    "value": [
+                      {
+                        "kind": "bulk",
+                        "value": "1-1"
+                      },
+                      {
+                        "kind": "array",
+                        "value": [
+                          {
+                            "kind": "bulk",
+                            "value": "k"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v1"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "array",
+                    "value": [
+                      {
+                        "kind": "bulk",
+                        "value": "2-1"
+                      },
+                      {
+                        "kind": "array",
+                        "value": [
+                          {
+                            "kind": "bulk",
+                            "value": "k"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v2"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "array",
+                    "value": [
+                      {
+                        "kind": "bulk",
+                        "value": "3-1"
+                      },
+                      {
+                        "kind": "array",
+                        "value": [
+                          {
+                            "kind": "bulk",
+                            "value": "k"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v3"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "xautoclaim_basic",
+      "now_ms": 700,
+      "argv": [
+        "XAUTOCLAIM",
+        "xac",
+        "acgrp",
+        "new",
+        "0",
+        "0-0",
+        "COUNT",
+        "2"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "2-1"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "1-1"
+                  },
+                  {
+                    "kind": "array",
+                    "value": [
+                      {
+                        "kind": "bulk",
+                        "value": "k"
+                      },
+                      {
+                        "kind": "bulk",
+                        "value": "v1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "2-1"
+                  },
+                  {
+                    "kind": "array",
+                    "value": [
+                      {
+                        "kind": "bulk",
+                        "value": "k"
+                      },
+                      {
+                        "kind": "bulk",
+                        "value": "v2"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "xautoclaim_justid",
+      "now_ms": 701,
+      "argv": [
+        "XAUTOCLAIM",
+        "xac",
+        "acgrp",
+        "new2",
+        "0",
+        "0-0",
+        "COUNT",
+        "10",
+        "JUSTID"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "0-0"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "1-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "2-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "3-1"
+              }
+            ]
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "xautoclaim_wrong_arity",
+      "now_ms": 702,
+      "argv": [
+        "XAUTOCLAIM",
+        "k",
+        "g",
+        "c"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XAUTOCLAIM' command"
+      }
+    },
+    {
+      "name": "xautoclaim_nogroup",
+      "now_ms": 702,
+      "argv": [
+        "XAUTOCLAIM",
+        "xac",
+        "nosuchgrp",
+        "c",
+        "0",
+        "0-0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "NOGROUP No such consumer group 'nosuchgrp' for key name 'xac'"
+      }
     }
   ]
 }
