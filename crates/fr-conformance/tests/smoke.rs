@@ -313,3 +313,11 @@ fn core_wait_conformance() {
     assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
     assert!(diff.failed.is_empty());
 }
+
+#[test]
+fn core_blocking_conformance() {
+    let cfg = HarnessConfig::default_paths();
+    let diff = run_fixture(&cfg, "core_blocking.json").expect("blocking fixture");
+    assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
+    assert!(diff.failed.is_empty());
+}

@@ -8999,9 +8999,17 @@ fn blmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
 
 /// Parse and validate a blocking command timeout. Returns an error for negative values.
 fn parse_blocking_timeout(arg: &[u8]) -> Result<f64, CommandError> {
-    let timeout = parse_f64_arg(arg)?;
+    let text = std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
+    let timeout: f64 = text.parse().map_err(|_| {
+        CommandError::Custom("ERR timeout is not a float or out of range".to_string())
+    })?;
+    if timeout.is_nan() {
+        return Err(CommandError::Custom(
+            "ERR timeout is not a float or out of range".to_string(),
+        ));
+    }
     if timeout < 0.0 {
-        return Err(CommandError::SyntaxError);
+        return Err(CommandError::Custom("ERR timeout is negative".to_string()));
     }
     Ok(timeout)
 }

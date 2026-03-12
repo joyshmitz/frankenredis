@@ -1,0 +1,812 @@
+{
+  "suite": "core_blocking",
+  "cases": [
+    {
+      "name": "blocking_flush_setup",
+      "now_ms": 0,
+      "argv": ["FLUSHDB"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "blpop_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["BLPOP"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BLPOP' command" }
+    },
+    {
+      "name": "blpop_wrong_arity_one_arg",
+      "now_ms": 0,
+      "argv": ["BLPOP", "key"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BLPOP' command" }
+    },
+    {
+      "name": "blpop_empty_key_returns_nil",
+      "now_ms": 0,
+      "argv": ["BLPOP", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "blpop_negative_timeout",
+      "now_ms": 0,
+      "argv": ["BLPOP", "key", "-1"],
+      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+    },
+    {
+      "name": "blpop_invalid_timeout",
+      "now_ms": 0,
+      "argv": ["BLPOP", "key", "abc"],
+      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+    },
+    {
+      "name": "blpop_float_timeout_ok",
+      "now_ms": 0,
+      "argv": ["BLPOP", "nokey", "1.5"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "blpop_setup_data",
+      "now_ms": 100,
+      "argv": ["RPUSH", "blist1", "a", "b", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "blpop_with_data",
+      "now_ms": 100,
+      "argv": ["BLPOP", "blist1", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "blist1" },
+          { "kind": "bulk", "value": "a" }
+        ]
+      }
+    },
+    {
+      "name": "blpop_multiple_keys_first_has_data",
+      "now_ms": 100,
+      "argv": ["BLPOP", "blist1", "nokey", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "blist1" },
+          { "kind": "bulk", "value": "b" }
+        ]
+      }
+    },
+    {
+      "name": "blpop_multiple_keys_second_has_data",
+      "now_ms": 100,
+      "argv": ["BLPOP", "nokey", "blist1", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "blist1" },
+          { "kind": "bulk", "value": "c" }
+        ]
+      }
+    },
+    {
+      "name": "blpop_multiple_keys_none_have_data",
+      "now_ms": 100,
+      "argv": ["BLPOP", "nokey1", "nokey2", "nokey3", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "blpop_wrongtype_setup",
+      "now_ms": 100,
+      "argv": ["SET", "bstr", "hello"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "blpop_wrongtype",
+      "now_ms": 100,
+      "argv": ["BLPOP", "bstr", "0"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+    {
+      "name": "blpop_case_insensitive",
+      "now_ms": 100,
+      "argv": ["blpop", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+
+    {
+      "name": "brpop_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["BRPOP"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BRPOP' command" }
+    },
+    {
+      "name": "brpop_wrong_arity_one_arg",
+      "now_ms": 0,
+      "argv": ["BRPOP", "key"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BRPOP' command" }
+    },
+    {
+      "name": "brpop_empty_key_returns_nil",
+      "now_ms": 0,
+      "argv": ["BRPOP", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "brpop_negative_timeout",
+      "now_ms": 0,
+      "argv": ["BRPOP", "key", "-1"],
+      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+    },
+    {
+      "name": "brpop_invalid_timeout",
+      "now_ms": 0,
+      "argv": ["BRPOP", "key", "abc"],
+      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+    },
+    {
+      "name": "brpop_setup_data",
+      "now_ms": 100,
+      "argv": ["RPUSH", "blist2", "x", "y", "z"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "brpop_with_data",
+      "now_ms": 100,
+      "argv": ["BRPOP", "blist2", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "blist2" },
+          { "kind": "bulk", "value": "z" }
+        ]
+      }
+    },
+    {
+      "name": "brpop_multiple_keys",
+      "now_ms": 100,
+      "argv": ["BRPOP", "nokey", "blist2", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "blist2" },
+          { "kind": "bulk", "value": "y" }
+        ]
+      }
+    },
+    {
+      "name": "brpop_wrongtype",
+      "now_ms": 100,
+      "argv": ["BRPOP", "bstr", "0"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+    {
+      "name": "brpop_case_insensitive",
+      "now_ms": 100,
+      "argv": ["brpop", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+
+    {
+      "name": "brpoplpush_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["BRPOPLPUSH"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BRPOPLPUSH' command" }
+    },
+    {
+      "name": "brpoplpush_wrong_arity_two_args",
+      "now_ms": 0,
+      "argv": ["BRPOPLPUSH", "src", "dst"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BRPOPLPUSH' command" }
+    },
+    {
+      "name": "brpoplpush_wrong_arity_extra_args",
+      "now_ms": 0,
+      "argv": ["BRPOPLPUSH", "src", "dst", "0", "extra"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BRPOPLPUSH' command" }
+    },
+    {
+      "name": "brpoplpush_negative_timeout",
+      "now_ms": 0,
+      "argv": ["BRPOPLPUSH", "src", "dst", "-1"],
+      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+    },
+    {
+      "name": "brpoplpush_invalid_timeout",
+      "now_ms": 0,
+      "argv": ["BRPOPLPUSH", "src", "dst", "abc"],
+      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+    },
+    {
+      "name": "brpoplpush_empty_source_returns_nil",
+      "now_ms": 100,
+      "argv": ["BRPOPLPUSH", "nokey", "dst", "0"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "brpoplpush_setup",
+      "now_ms": 100,
+      "argv": ["RPUSH", "bsrc", "m", "n"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "brpoplpush_with_data",
+      "now_ms": 100,
+      "argv": ["BRPOPLPUSH", "bsrc", "bdst", "0"],
+      "expect": { "kind": "bulk", "value": "n" }
+    },
+    {
+      "name": "brpoplpush_verify_dst",
+      "now_ms": 100,
+      "argv": ["LRANGE", "bdst", "0", "-1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "n" }
+        ]
+      }
+    },
+    {
+      "name": "brpoplpush_wrongtype_src",
+      "now_ms": 100,
+      "argv": ["BRPOPLPUSH", "bstr", "dst", "0"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+    {
+      "name": "brpoplpush_case_insensitive",
+      "now_ms": 100,
+      "argv": ["brpoplpush", "nokey", "dst", "0"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+
+    {
+      "name": "blmove_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["BLMOVE"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BLMOVE' command" }
+    },
+    {
+      "name": "blmove_wrong_arity_four_args",
+      "now_ms": 0,
+      "argv": ["BLMOVE", "src", "dst", "LEFT"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BLMOVE' command" }
+    },
+    {
+      "name": "blmove_wrong_arity_extra_args",
+      "now_ms": 0,
+      "argv": ["BLMOVE", "src", "dst", "LEFT", "RIGHT", "0", "extra"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BLMOVE' command" }
+    },
+    {
+      "name": "blmove_negative_timeout",
+      "now_ms": 0,
+      "argv": ["BLMOVE", "src", "dst", "LEFT", "RIGHT", "-1"],
+      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+    },
+    {
+      "name": "blmove_invalid_timeout",
+      "now_ms": 0,
+      "argv": ["BLMOVE", "src", "dst", "LEFT", "RIGHT", "abc"],
+      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+    },
+    {
+      "name": "blmove_invalid_direction_src",
+      "now_ms": 0,
+      "argv": ["BLMOVE", "src", "dst", "MIDDLE", "RIGHT", "0"],
+      "expect": { "kind": "error", "value": "ERR syntax error" }
+    },
+    {
+      "name": "blmove_invalid_direction_dst",
+      "now_ms": 0,
+      "argv": ["BLMOVE", "src", "dst", "LEFT", "MIDDLE", "0"],
+      "expect": { "kind": "error", "value": "ERR syntax error" }
+    },
+    {
+      "name": "blmove_empty_source_returns_nil",
+      "now_ms": 100,
+      "argv": ["BLMOVE", "nokey", "dst", "LEFT", "RIGHT", "0"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "blmove_setup",
+      "now_ms": 100,
+      "argv": ["RPUSH", "bmsrc", "p", "q", "r"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "blmove_left_right",
+      "now_ms": 100,
+      "argv": ["BLMOVE", "bmsrc", "bmdst", "LEFT", "RIGHT", "0"],
+      "expect": { "kind": "bulk", "value": "p" }
+    },
+    {
+      "name": "blmove_right_left",
+      "now_ms": 100,
+      "argv": ["BLMOVE", "bmsrc", "bmdst", "RIGHT", "LEFT", "0"],
+      "expect": { "kind": "bulk", "value": "r" }
+    },
+    {
+      "name": "blmove_verify_dst",
+      "now_ms": 100,
+      "argv": ["LRANGE", "bmdst", "0", "-1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "r" },
+          { "kind": "bulk", "value": "p" }
+        ]
+      }
+    },
+    {
+      "name": "blmove_wrongtype_src",
+      "now_ms": 100,
+      "argv": ["BLMOVE", "bstr", "dst", "LEFT", "RIGHT", "0"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+    {
+      "name": "blmove_case_insensitive",
+      "now_ms": 100,
+      "argv": ["blmove", "nokey", "dst", "left", "right", "0"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+
+    {
+      "name": "blmpop_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["BLMPOP"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BLMPOP' command" }
+    },
+    {
+      "name": "blmpop_wrong_arity_two_args",
+      "now_ms": 0,
+      "argv": ["BLMPOP", "0"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BLMPOP' command" }
+    },
+    {
+      "name": "blmpop_wrong_arity_three_args",
+      "now_ms": 0,
+      "argv": ["BLMPOP", "0", "1"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BLMPOP' command" }
+    },
+    {
+      "name": "blmpop_negative_timeout",
+      "now_ms": 0,
+      "argv": ["BLMPOP", "-1", "1", "key", "LEFT"],
+      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+    },
+    {
+      "name": "blmpop_invalid_timeout",
+      "now_ms": 0,
+      "argv": ["BLMPOP", "abc", "1", "key", "LEFT"],
+      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+    },
+    {
+      "name": "blmpop_negative_numkeys",
+      "now_ms": 0,
+      "argv": ["BLMPOP", "0", "-1", "key", "LEFT"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "blmpop_zero_numkeys",
+      "now_ms": 0,
+      "argv": ["BLMPOP", "0", "0", "key", "LEFT"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "blmpop_invalid_direction",
+      "now_ms": 0,
+      "argv": ["BLMPOP", "0", "1", "key", "MIDDLE"],
+      "expect": { "kind": "error", "value": "ERR syntax error" }
+    },
+    {
+      "name": "blmpop_empty_key_returns_nil",
+      "now_ms": 100,
+      "argv": ["BLMPOP", "0", "1", "nokey", "LEFT"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "blmpop_setup",
+      "now_ms": 100,
+      "argv": ["RPUSH", "bmplist", "a", "b", "c", "d"],
+      "expect": { "kind": "integer", "value": 4 }
+    },
+    {
+      "name": "blmpop_left_one",
+      "now_ms": 100,
+      "argv": ["BLMPOP", "0", "1", "bmplist", "LEFT"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bmplist" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "a" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "blmpop_right_one",
+      "now_ms": 100,
+      "argv": ["BLMPOP", "0", "1", "bmplist", "RIGHT"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bmplist" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "d" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "blmpop_left_count2",
+      "now_ms": 100,
+      "argv": ["BLMPOP", "0", "1", "bmplist", "LEFT", "COUNT", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bmplist" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "b" },
+              { "kind": "bulk", "value": "c" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "blmpop_count_zero_error",
+      "now_ms": 100,
+      "argv": ["BLMPOP", "0", "1", "key", "LEFT", "COUNT", "0"],
+      "expect": { "kind": "error", "value": "ERR COUNT value of 0 is not allowed" }
+    },
+    {
+      "name": "blmpop_multiple_keys_setup",
+      "now_ms": 100,
+      "argv": ["RPUSH", "bmplist2", "x"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "blmpop_multiple_keys_first_empty",
+      "now_ms": 100,
+      "argv": ["BLMPOP", "0", "2", "nokey", "bmplist2", "LEFT"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bmplist2" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "x" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "blmpop_float_timeout_ok",
+      "now_ms": 100,
+      "argv": ["BLMPOP", "0.5", "1", "nokey", "LEFT"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "blmpop_case_insensitive",
+      "now_ms": 100,
+      "argv": ["blmpop", "0", "1", "nokey", "LEFT"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+
+    {
+      "name": "bzpopmin_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["BZPOPMIN"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BZPOPMIN' command" }
+    },
+    {
+      "name": "bzpopmin_wrong_arity_one_arg",
+      "now_ms": 0,
+      "argv": ["BZPOPMIN", "key"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BZPOPMIN' command" }
+    },
+    {
+      "name": "bzpopmin_negative_timeout",
+      "now_ms": 0,
+      "argv": ["BZPOPMIN", "key", "-1"],
+      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+    },
+    {
+      "name": "bzpopmin_invalid_timeout",
+      "now_ms": 0,
+      "argv": ["BZPOPMIN", "key", "abc"],
+      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+    },
+    {
+      "name": "bzpopmin_empty_key_returns_nil",
+      "now_ms": 100,
+      "argv": ["BZPOPMIN", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "bzpopmin_setup",
+      "now_ms": 100,
+      "argv": ["ZADD", "bzset1", "1", "a", "2", "b", "3", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "bzpopmin_with_data",
+      "now_ms": 100,
+      "argv": ["BZPOPMIN", "bzset1", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bzset1" },
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "1" }
+        ]
+      }
+    },
+    {
+      "name": "bzpopmin_multiple_keys",
+      "now_ms": 100,
+      "argv": ["BZPOPMIN", "nokey", "bzset1", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bzset1" },
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "2" }
+        ]
+      }
+    },
+    {
+      "name": "bzpopmin_wrongtype",
+      "now_ms": 100,
+      "argv": ["BZPOPMIN", "bstr", "0"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+    {
+      "name": "bzpopmin_case_insensitive",
+      "now_ms": 100,
+      "argv": ["bzpopmin", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+
+    {
+      "name": "bzpopmax_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["BZPOPMAX"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BZPOPMAX' command" }
+    },
+    {
+      "name": "bzpopmax_wrong_arity_one_arg",
+      "now_ms": 0,
+      "argv": ["BZPOPMAX", "key"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BZPOPMAX' command" }
+    },
+    {
+      "name": "bzpopmax_negative_timeout",
+      "now_ms": 0,
+      "argv": ["BZPOPMAX", "key", "-1"],
+      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+    },
+    {
+      "name": "bzpopmax_invalid_timeout",
+      "now_ms": 0,
+      "argv": ["BZPOPMAX", "key", "abc"],
+      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+    },
+    {
+      "name": "bzpopmax_empty_key_returns_nil",
+      "now_ms": 100,
+      "argv": ["BZPOPMAX", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "bzpopmax_setup",
+      "now_ms": 100,
+      "argv": ["ZADD", "bzset2", "10", "x", "20", "y", "30", "z"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "bzpopmax_with_data",
+      "now_ms": 100,
+      "argv": ["BZPOPMAX", "bzset2", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bzset2" },
+          { "kind": "bulk", "value": "z" },
+          { "kind": "bulk", "value": "30" }
+        ]
+      }
+    },
+    {
+      "name": "bzpopmax_multiple_keys",
+      "now_ms": 100,
+      "argv": ["BZPOPMAX", "nokey", "bzset2", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bzset2" },
+          { "kind": "bulk", "value": "y" },
+          { "kind": "bulk", "value": "20" }
+        ]
+      }
+    },
+    {
+      "name": "bzpopmax_wrongtype",
+      "now_ms": 100,
+      "argv": ["BZPOPMAX", "bstr", "0"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+    {
+      "name": "bzpopmax_case_insensitive",
+      "now_ms": 100,
+      "argv": ["bzpopmax", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+
+    {
+      "name": "bzmpop_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["BZMPOP"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BZMPOP' command" }
+    },
+    {
+      "name": "bzmpop_wrong_arity_two_args",
+      "now_ms": 0,
+      "argv": ["BZMPOP", "0"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BZMPOP' command" }
+    },
+    {
+      "name": "bzmpop_wrong_arity_three_args",
+      "now_ms": 0,
+      "argv": ["BZMPOP", "0", "1"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'BZMPOP' command" }
+    },
+    {
+      "name": "bzmpop_negative_timeout",
+      "now_ms": 0,
+      "argv": ["BZMPOP", "-1", "1", "key", "MIN"],
+      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+    },
+    {
+      "name": "bzmpop_invalid_timeout",
+      "now_ms": 0,
+      "argv": ["BZMPOP", "abc", "1", "key", "MIN"],
+      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+    },
+    {
+      "name": "bzmpop_negative_numkeys",
+      "now_ms": 0,
+      "argv": ["BZMPOP", "0", "-1", "key", "MIN"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "bzmpop_zero_numkeys",
+      "now_ms": 0,
+      "argv": ["BZMPOP", "0", "0", "key", "MIN"],
+      "expect": { "kind": "error", "value": "ERR numkeys can't be non-positive value" }
+    },
+    {
+      "name": "bzmpop_invalid_direction",
+      "now_ms": 0,
+      "argv": ["BZMPOP", "0", "1", "key", "MIDDLE"],
+      "expect": { "kind": "error", "value": "ERR syntax error" }
+    },
+    {
+      "name": "bzmpop_empty_key_returns_nil",
+      "now_ms": 100,
+      "argv": ["BZMPOP", "0", "1", "nokey", "MIN"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "bzmpop_setup",
+      "now_ms": 100,
+      "argv": ["ZADD", "bzset3", "5", "a", "10", "b", "15", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "bzmpop_min_one",
+      "now_ms": 100,
+      "argv": ["BZMPOP", "0", "1", "bzset3", "MIN"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bzset3" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "a" },
+              { "kind": "bulk", "value": "5" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "bzmpop_max_one",
+      "now_ms": 100,
+      "argv": ["BZMPOP", "0", "1", "bzset3", "MAX"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bzset3" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "c" },
+              { "kind": "bulk", "value": "15" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "bzmpop_count_zero_error",
+      "now_ms": 100,
+      "argv": ["BZMPOP", "0", "1", "key", "MIN", "COUNT", "0"],
+      "expect": { "kind": "error", "value": "ERR COUNT value of 0 is not allowed" }
+    },
+    {
+      "name": "bzmpop_multiple_keys_first_empty",
+      "now_ms": 100,
+      "argv": ["BZMPOP", "0", "2", "nokey", "bzset3", "MIN"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bzset3" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "b" },
+              { "kind": "bulk", "value": "10" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "bzmpop_float_timeout_ok",
+      "now_ms": 100,
+      "argv": ["BZMPOP", "0.5", "1", "nokey", "MIN"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "bzmpop_case_insensitive",
+      "now_ms": 100,
+      "argv": ["bzmpop", "0", "1", "nokey", "MIN"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+
+    {
+      "name": "blocking_timeout_zero_is_valid",
+      "now_ms": 0,
+      "argv": ["BLPOP", "nokey", "0"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "blocking_timeout_large_is_valid",
+      "now_ms": 0,
+      "argv": ["BLPOP", "nokey", "999999"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "blocking_timeout_float_fractional",
+      "now_ms": 0,
+      "argv": ["BRPOP", "nokey", "0.001"],
+      "expect": { "kind": "null_array", "value": null }
+    },
+    {
+      "name": "blocking_cleanup",
+      "now_ms": 200,
+      "argv": ["FLUSHDB"],
+      "expect": { "kind": "simple", "value": "OK" }
+    }
+  ]
+}
