@@ -3254,6 +3254,201 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'ZREMRANGEBYLEX' command"
       }
+    },
+
+    {
+      "name": "zrev_setup",
+      "now_ms": 900,
+      "argv": ["ZADD", "zrev", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e"],
+      "expect": { "kind": "integer", "value": 5 }
+    },
+    {
+      "name": "zrevrange_all",
+      "now_ms": 900,
+      "argv": ["ZREVRANGE", "zrev", "0", "-1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "e" },
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "a" }
+        ]
+      }
+    },
+    {
+      "name": "zrevrange_subset",
+      "now_ms": 900,
+      "argv": ["ZREVRANGE", "zrev", "1", "3"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "b" }
+        ]
+      }
+    },
+    {
+      "name": "zrevrange_withscores",
+      "now_ms": 900,
+      "argv": ["ZREVRANGE", "zrev", "0", "2", "WITHSCORES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "e" },
+          { "kind": "bulk", "value": "5" },
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "4" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "3" }
+        ]
+      }
+    },
+    {
+      "name": "zrevrange_nonexistent",
+      "now_ms": 900,
+      "argv": ["ZREVRANGE", "nosuchzrev", "0", "-1"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "zrevrange_out_of_bounds",
+      "now_ms": 900,
+      "argv": ["ZREVRANGE", "zrev", "10", "20"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "zrevrange_wrong_arity",
+      "now_ms": 900,
+      "argv": ["ZREVRANGE", "k"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'ZREVRANGE' command"
+      }
+    },
+    {
+      "name": "zrevrank_first",
+      "now_ms": 900,
+      "argv": ["ZREVRANK", "zrev", "e"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "zrevrank_middle",
+      "now_ms": 900,
+      "argv": ["ZREVRANK", "zrev", "c"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "zrevrank_last",
+      "now_ms": 900,
+      "argv": ["ZREVRANK", "zrev", "a"],
+      "expect": { "kind": "integer", "value": 4 }
+    },
+    {
+      "name": "zrevrank_nonexistent_member",
+      "now_ms": 900,
+      "argv": ["ZREVRANK", "zrev", "z"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "zrevrank_nonexistent_key",
+      "now_ms": 900,
+      "argv": ["ZREVRANK", "nosuchzrev", "a"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "zrevrank_wrong_arity",
+      "now_ms": 900,
+      "argv": ["ZREVRANK", "k"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'ZREVRANK' command"
+      }
+    },
+    {
+      "name": "zrevrangebyscore_all",
+      "now_ms": 900,
+      "argv": ["ZREVRANGEBYSCORE", "zrev", "+inf", "-inf"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "e" },
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "a" }
+        ]
+      }
+    },
+    {
+      "name": "zrevrangebyscore_range",
+      "now_ms": 900,
+      "argv": ["ZREVRANGEBYSCORE", "zrev", "4", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "b" }
+        ]
+      }
+    },
+    {
+      "name": "zrevrangebyscore_exclusive",
+      "now_ms": 900,
+      "argv": ["ZREVRANGEBYSCORE", "zrev", "(5", "(1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "b" }
+        ]
+      }
+    },
+    {
+      "name": "zrevrangebyscore_limit",
+      "now_ms": 900,
+      "argv": ["ZREVRANGEBYSCORE", "zrev", "+inf", "-inf", "LIMIT", "1", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "d" },
+          { "kind": "bulk", "value": "c" }
+        ]
+      }
+    },
+    {
+      "name": "zrevrangebyscore_withscores",
+      "now_ms": 900,
+      "argv": ["ZREVRANGEBYSCORE", "zrev", "3", "1", "WITHSCORES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "3" },
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "2" },
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "1" }
+        ]
+      }
+    },
+    {
+      "name": "zrevrangebyscore_nonexistent",
+      "now_ms": 900,
+      "argv": ["ZREVRANGEBYSCORE", "nosuchzrev", "+inf", "-inf"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "zrevrangebyscore_wrong_arity",
+      "now_ms": 900,
+      "argv": ["ZREVRANGEBYSCORE", "k"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'ZREVRANGEBYSCORE' command"
+      }
     }
   ]
 }

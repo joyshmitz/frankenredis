@@ -2745,6 +2745,92 @@
         "kind": "integer",
         "value": 785
       }
+    },
+
+    {
+      "name": "eval_ro_return_number",
+      "now_ms": 0,
+      "argv": ["EVAL_RO", "return 42", "0"],
+      "expect": { "kind": "integer", "value": 42 }
+    },
+    {
+      "name": "eval_ro_return_string",
+      "now_ms": 0,
+      "argv": ["EVAL_RO", "return 'hello'", "0"],
+      "expect": { "kind": "bulk", "value": "hello" }
+    },
+    {
+      "name": "eval_ro_return_table",
+      "now_ms": 0,
+      "argv": ["EVAL_RO", "return {1,2,3}", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 1 },
+          { "kind": "integer", "value": 2 },
+          { "kind": "integer", "value": 3 }
+        ]
+      }
+    },
+    {
+      "name": "eval_ro_with_keys_and_argv",
+      "now_ms": 0,
+      "argv": ["EVAL_RO", "return {KEYS[1], ARGV[1]}", "1", "mykey", "myval"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "mykey" },
+          { "kind": "bulk", "value": "myval" }
+        ]
+      }
+    },
+    {
+      "name": "eval_ro_redis_call",
+      "now_ms": 0,
+      "argv": ["EVAL_RO", "redis.call('SET','ero_k','ero_v') return redis.call('GET','ero_k')", "0"],
+      "expect": { "kind": "bulk", "value": "ero_v" }
+    },
+    {
+      "name": "eval_ro_wrong_arity",
+      "now_ms": 0,
+      "argv": ["EVAL_RO"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'EVAL' command"
+      }
+    },
+    {
+      "name": "evalsha_ro_setup_load",
+      "now_ms": 0,
+      "argv": ["SCRIPT", "LOAD", "return 99"],
+      "expect": {
+        "kind": "bulk",
+        "value": "a2eba4a6e7d6643bc4b14aa4f9e0eedd55dbae3d"
+      }
+    },
+    {
+      "name": "evalsha_ro_execute",
+      "now_ms": 0,
+      "argv": ["EVALSHA_RO", "a2eba4a6e7d6643bc4b14aa4f9e0eedd55dbae3d", "0"],
+      "expect": { "kind": "integer", "value": 99 }
+    },
+    {
+      "name": "evalsha_ro_noscript",
+      "now_ms": 0,
+      "argv": ["EVALSHA_RO", "0000000000000000000000000000000000000000", "0"],
+      "expect": {
+        "kind": "error",
+        "value": "NOSCRIPT No matching script. Please use EVAL."
+      }
+    },
+    {
+      "name": "evalsha_ro_wrong_arity",
+      "now_ms": 0,
+      "argv": ["EVALSHA_RO"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'EVALSHA' command"
+      }
     }
   ]
 }

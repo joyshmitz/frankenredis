@@ -2292,6 +2292,60 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'OBJECT' command"
       }
+    },
+
+    {
+      "name": "keys_setup_a",
+      "now_ms": 800,
+      "argv": ["SET", "key_a", "1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "keys_setup_b",
+      "now_ms": 800,
+      "argv": ["SET", "key_b", "2"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "keys_setup_c",
+      "now_ms": 800,
+      "argv": ["SET", "other_c", "3"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "keys_no_match",
+      "now_ms": 800,
+      "argv": ["KEYS", "zzz*"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "keys_wrong_arity_zero",
+      "now_ms": 800,
+      "argv": ["KEYS"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'KEYS' command"
+      }
+    },
+    {
+      "name": "keys_wrong_arity_extra",
+      "now_ms": 800,
+      "argv": ["KEYS", "*", "extra"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'KEYS' command"
+      }
+    },
+    {
+      "name": "keys_single_match",
+      "now_ms": 800,
+      "argv": ["KEYS", "other_?"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "other_c" }
+        ]
+      }
     }
   ]
 }

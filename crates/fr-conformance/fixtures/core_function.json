@@ -1303,6 +1303,49 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'FUNCTION' command"
       }
+    },
+
+    {
+      "name": "fcall_ro_setup_lib",
+      "now_ms": 500,
+      "argv": ["FUNCTION", "LOAD", "#!lua name=rolib\nredis.register_function('rofn', function(keys, args) return 'readonly_result' end)"],
+      "expect": { "kind": "bulk", "value": "rolib" }
+    },
+    {
+      "name": "fcall_ro_call",
+      "now_ms": 500,
+      "argv": ["FCALL_RO", "rofn", "0"],
+      "expect": { "kind": "bulk", "value": "readonly_result" }
+    },
+    {
+      "name": "fcall_ro_with_keys_argv",
+      "now_ms": 500,
+      "argv": ["FUNCTION", "LOAD", "REPLACE", "#!lua name=rolib2\nredis.register_function('rofn2', function(keys, args) return keys[1] .. ':' .. args[1] end)"],
+      "expect": { "kind": "bulk", "value": "rolib2" }
+    },
+    {
+      "name": "fcall_ro_with_keys_argv_call",
+      "now_ms": 500,
+      "argv": ["FCALL_RO", "rofn2", "1", "mykey", "myarg"],
+      "expect": { "kind": "bulk", "value": "mykey:myarg" }
+    },
+    {
+      "name": "fcall_ro_no_such_function",
+      "now_ms": 500,
+      "argv": ["FCALL_RO", "nosuchfn", "0"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Function not found"
+      }
+    },
+    {
+      "name": "fcall_ro_wrong_arity",
+      "now_ms": 500,
+      "argv": ["FCALL_RO"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'FCALL' command"
+      }
     }
   ]
 }
