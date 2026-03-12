@@ -3559,7 +3559,13 @@ fn xread(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
             continue;
         }
         if eq_ascii_command(&argv[idx], b"BLOCK") {
-            return Err(CommandError::SyntaxError);
+            if idx + 1 >= argv.len() {
+                return Err(CommandError::WrongArity("XREAD"));
+            }
+            // Validate the timeout but ignore it (non-blocking only)
+            let _timeout = parse_blocking_timeout(&argv[idx + 1])?;
+            idx += 2;
+            continue;
         }
         break;
     }
@@ -3639,7 +3645,13 @@ fn xreadgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             continue;
         }
         if eq_ascii_command(&argv[idx], b"BLOCK") {
-            return Err(CommandError::SyntaxError);
+            if idx + 1 >= argv.len() {
+                return Err(CommandError::WrongArity("XREADGROUP"));
+            }
+            // Validate the timeout but ignore it (non-blocking only)
+            let _timeout = parse_blocking_timeout(&argv[idx + 1])?;
+            idx += 2;
+            continue;
         }
         if eq_ascii_command(&argv[idx], b"NOACK") {
             noack = true;
@@ -14316,7 +14328,8 @@ mod tests {
             )
         );
 
-        let syntax = dispatch_argv(
+        // XREAD BLOCK is now accepted (non-blocking stub) — verify it doesn't error
+        let block_result = dispatch_argv(
             &[
                 b"XREAD".to_vec(),
                 b"BLOCK".to_vec(),
@@ -14327,9 +14340,8 @@ mod tests {
             ],
             &mut store,
             0,
-        )
-        .expect_err("xread block unsupported");
-        assert!(matches!(syntax, CommandError::SyntaxError));
+        );
+        assert!(block_result.is_ok());
 
         let bad_keyword = dispatch_argv(
             &[
@@ -14611,7 +14623,8 @@ mod tests {
             )
         );
 
-        let syntax_block = dispatch_argv(
+        // XREADGROUP BLOCK is now accepted (non-blocking stub) — verify it doesn't error
+        let block_result = dispatch_argv(
             &[
                 b"XREADGROUP".to_vec(),
                 b"GROUP".to_vec(),
@@ -14625,9 +14638,8 @@ mod tests {
             ],
             &mut store,
             0,
-        )
-        .expect_err("xreadgroup block unsupported");
-        assert!(matches!(syntax_block, CommandError::SyntaxError));
+        );
+        assert!(block_result.is_ok());
 
         let syntax_streams = dispatch_argv(
             &[
