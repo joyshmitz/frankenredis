@@ -1629,7 +1629,7 @@ impl<'a> LuaState<'a> {
             Stmt::GenericFor(names, iter_exprs, body) => {
                 let iter_vals = self.eval_expr_list(iter_exprs, env, varargs)?;
                 let iter_fn = iter_vals.first().cloned().unwrap_or(LuaValue::Nil);
-                let state = iter_vals.get(1).cloned().unwrap_or(LuaValue::Nil);
+                let mut state = iter_vals.get(1).cloned().unwrap_or(LuaValue::Nil);
                 let mut control = iter_vals.get(2).cloned().unwrap_or(LuaValue::Nil);
 
                 loop {
@@ -1640,6 +1640,8 @@ impl<'a> LuaState<'a> {
                         env,
                         varargs,
                     )?;
+                    // Update state from mutated args (needed for stateful iterators like gmatch)
+                    state = iter_args[0].clone();
                     let first = results.first().cloned().unwrap_or(LuaValue::Nil);
                     if matches!(first, LuaValue::Nil) {
                         break;
@@ -2208,6 +2210,43 @@ impl<'a> LuaState<'a> {
                     Ok(vec![LuaValue::Nil])
                 }
             }
+            "__gmatch_iter" => {
+                // Iterator for string.gmatch: state table has __gmatch_data and __gmatch_idx
+                let state = args.first().cloned().unwrap_or(LuaValue::Nil);
+                if let LuaValue::Table(ref t) = state {
+                    let idx_key = LuaValue::Str(b"__gmatch_idx".to_vec());
+                    let data_key = LuaValue::Str(b"__gmatch_data".to_vec());
+                    let idx = match t.get(&idx_key) {
+                        LuaValue::Number(n) => n as usize + 1,
+                        _ => 1,
+                    };
+                    if let LuaValue::Table(data) = t.get(&data_key) {
+                        let row_key = LuaValue::Number(idx as f64);
+                        if let LuaValue::Table(row) = data.get(&row_key) {
+                            // Update index in state - we need to mutate args[0]
+                            if let LuaValue::Table(ref mut st) = args[0] {
+                                st.set(idx_key, LuaValue::Number(idx as f64));
+                            }
+                            // Return the captures from this row
+                            let mut results = Vec::new();
+                            let mut i = 1;
+                            loop {
+                                let v = row.get(&LuaValue::Number(i as f64));
+                                if matches!(v, LuaValue::Nil) {
+                                    break;
+                                }
+                                results.push(v);
+                                i += 1;
+                            }
+                            if results.is_empty() {
+                                return Ok(vec![LuaValue::Nil]);
+                            }
+                            return Ok(results);
+                        }
+                    }
+                }
+                Ok(vec![LuaValue::Nil])
+            }
             "next" => {
                 let table = args.first().cloned().unwrap_or(LuaValue::Nil);
                 let key = args.get(1).cloned().unwrap_or(LuaValue::Nil);
@@ -2499,40 +2538,176 @@ impl<'a> LuaState<'a> {
                     .get(1)
                     .map(|a| a.to_display_string())
                     .unwrap_or_default();
-                let init = args.get(2).and_then(|v| v.to_number()).unwrap_or(1.0) as usize;
+                let init_raw = args.get(2).and_then(|v| v.to_number()).unwrap_or(1.0) as i64;
+                let init = if init_raw < 0 {
+                    (s.len() as i64 + init_raw).max(0) as usize
+                } else {
+                    (init_raw as usize).saturating_sub(1)
+                };
                 let plain = args.get(3).map(|v| v.is_truthy()).unwrap_or(false);
-                let s_str = String::from_utf8_lossy(&s);
-                let pat_str = String::from_utf8_lossy(&pattern);
                 if plain {
-                    let search_start = init.saturating_sub(1);
-                    if let Some(pos) = s_str[search_start..].find(pat_str.as_ref()) {
-                        let start = search_start + pos + 1; // 1-indexed
-                        let end = start + pat_str.len() - 1;
+                    // Plain substring search
+                    if let Some(pos) = s[init..].windows(pattern.len().max(1)).position(|w| w == pattern.as_slice()) {
+                        let start = init + pos + 1; // 1-indexed
+                        let end = start + pattern.len() - 1;
                         Ok(vec![
                             LuaValue::Number(start as f64),
                             LuaValue::Number(end as f64),
+                        ])
+                    } else if pattern.is_empty() {
+                        Ok(vec![
+                            LuaValue::Number((init + 1) as f64),
+                            LuaValue::Number(init as f64),
                         ])
                     } else {
                         Ok(vec![LuaValue::Nil])
                     }
                 } else {
-                    // Basic pattern matching: just do plain find as fallback
-                    let search_start = init.saturating_sub(1);
-                    if let Some(pos) = s_str[search_start..].find(pat_str.as_ref()) {
-                        let start = search_start + pos + 1;
-                        let end = start + pat_str.len() - 1;
-                        Ok(vec![
-                            LuaValue::Number(start as f64),
-                            LuaValue::Number(end as f64),
-                        ])
+                    // Lua pattern matching
+                    if let Some(m) = lua_pattern_find(&s, &pattern, init) {
+                        let mut result = vec![
+                            LuaValue::Number((m.start + 1) as f64), // 1-indexed
+                            LuaValue::Number(m.end as f64),         // inclusive end
+                        ];
+                        // Append captures if any
+                        for cap in &m.captures {
+                            match cap {
+                                LuaCapture::Substring(cs, ce) => {
+                                    result.push(LuaValue::Str(s[*cs..*ce].to_vec()));
+                                }
+                                LuaCapture::Position(pos) => {
+                                    result.push(LuaValue::Number(*pos as f64 + 1.0));
+                                }
+                            }
+                        }
+                        Ok(result)
                     } else {
                         Ok(vec![LuaValue::Nil])
                     }
                 }
             }
-            "string.match" | "string.gmatch" | "string.gsub" => {
-                // Stub for pattern matching — return nil/empty
-                Ok(vec![LuaValue::Nil])
+            "string.match" => {
+                let s = args
+                    .first()
+                    .map(|a| a.to_display_string())
+                    .unwrap_or_default();
+                let pattern = args
+                    .get(1)
+                    .map(|a| a.to_display_string())
+                    .unwrap_or_default();
+                let init_raw = args.get(2).and_then(|v| v.to_number()).unwrap_or(1.0) as i64;
+                let init = if init_raw < 0 {
+                    (s.len() as i64 + init_raw).max(0) as usize
+                } else {
+                    (init_raw as usize).saturating_sub(1)
+                };
+                if let Some(m) = lua_pattern_find(&s, &pattern, init) {
+                    Ok(lua_match_captures(&s, &m))
+                } else {
+                    Ok(vec![LuaValue::Nil])
+                }
+            }
+            "string.gmatch" => {
+                // Returns an iterator function. Each call returns next match.
+                // We collect all matches and return a closure-like iterator via a table.
+                let s = args
+                    .first()
+                    .map(|a| a.to_display_string())
+                    .unwrap_or_default();
+                let pattern = args
+                    .get(1)
+                    .map(|a| a.to_display_string())
+                    .unwrap_or_default();
+                // Collect all matches
+                let mut matches: Vec<Vec<LuaValue>> = Vec::new();
+                let mut pos = 0;
+                while pos <= s.len() {
+                    if let Some(m) = lua_pattern_find(&s, &pattern, pos) {
+                        matches.push(lua_match_captures(&s, &m));
+                        pos = if m.end == m.start { m.end + 1 } else { m.end };
+                    } else {
+                        break;
+                    }
+                }
+                // Build result table with all matches for iteration
+                let mut result_table = LuaTable::new();
+                for (i, cap_vals) in matches.iter().enumerate() {
+                    let mut row = LuaTable::new();
+                    for (j, val) in cap_vals.iter().enumerate() {
+                        row.set(LuaValue::Number((j + 1) as f64), val.clone());
+                    }
+                    result_table.set(LuaValue::Number((i + 1) as f64), LuaValue::Table(row));
+                }
+                // Return a special iterator: we store matches in a table and return
+                // an iterator function that pops values. For simplicity in our evaluator,
+                // we return the first match's captures (single call pattern used in for loops
+                // is handled by the generic-for which calls the iterator repeatedly).
+                // Actually, gmatch returns an iterator function. We need a stateful closure.
+                // Simplest approach: return a Rust function that internally tracks state.
+                // For now, flatten to first match only if used as expression.
+                // The for-in loop handles this via repeated calls.
+                // We'll store all matches in the iterator's upvalue.
+                // Return a table with __gmatch_data so the for loop can consume it.
+                let mut iter_state = LuaTable::new();
+                iter_state.set(
+                    LuaValue::Str(b"__gmatch_data".to_vec()),
+                    LuaValue::Table(result_table),
+                );
+                iter_state.set(
+                    LuaValue::Str(b"__gmatch_idx".to_vec()),
+                    LuaValue::Number(0.0),
+                );
+                Ok(vec![
+                    LuaValue::RustFunction("__gmatch_iter".to_string()),
+                    LuaValue::Table(iter_state),
+                    LuaValue::Nil,
+                ])
+            }
+            "string.gsub" => {
+                let s = args
+                    .first()
+                    .map(|a| a.to_display_string())
+                    .unwrap_or_default();
+                let pattern = args
+                    .get(1)
+                    .map(|a| a.to_display_string())
+                    .unwrap_or_default();
+                let repl = args
+                    .get(2)
+                    .map(|a| a.to_display_string())
+                    .unwrap_or_default();
+                let max_n = args
+                    .get(3)
+                    .and_then(|v| v.to_number())
+                    .map(|n| n as usize);
+                let mut result = Vec::new();
+                let mut pos = 0;
+                let mut count = 0usize;
+                while pos <= s.len() {
+                    if let Some(limit) = max_n {
+                        if count >= limit {
+                            break;
+                        }
+                    }
+                    if let Some(m) = lua_pattern_find(&s, &pattern, pos) {
+                        // Append text before match
+                        result.extend_from_slice(&s[pos..m.start]);
+                        // Append replacement
+                        result.extend_from_slice(&lua_gsub_replace(&s, &m, &repl));
+                        count += 1;
+                        pos = if m.end == m.start { m.end + 1 } else { m.end };
+                    } else {
+                        break;
+                    }
+                }
+                // Append remaining text
+                if pos <= s.len() {
+                    result.extend_from_slice(&s[pos..]);
+                }
+                Ok(vec![
+                    LuaValue::Str(result),
+                    LuaValue::Number(count as f64),
+                ])
             }
             // ── Table library ───────────────────────────────────────────
             "table.insert" => {
@@ -2673,6 +2848,379 @@ impl<'a> LuaState<'a> {
             }
         }
     }
+}
+
+// ── Lua pattern matching engine ─────────────────────────────────────────
+//
+// Implements Lua 5.1 pattern matching: character classes (%a, %d, etc.),
+// quantifiers (*, +, -, ?), anchors (^, $), captures, and character sets.
+
+/// Result of a successful pattern match.
+struct LuaPatMatch {
+    start: usize,            // 0-indexed byte offset of match start
+    end: usize,              // 0-indexed exclusive end of match
+    captures: Vec<LuaCapture>,
+}
+
+enum LuaCapture {
+    Substring(usize, usize), // start, end (0-indexed, exclusive end)
+    Position(usize),         // position capture from ()
+}
+
+/// Check if byte matches a Lua character class letter (the char after %).
+fn lua_class_match(class: u8, ch: u8) -> bool {
+    match class {
+        b'a' => ch.is_ascii_alphabetic(),
+        b'A' => !ch.is_ascii_alphabetic(),
+        b'd' => ch.is_ascii_digit(),
+        b'D' => !ch.is_ascii_digit(),
+        b'l' => ch.is_ascii_lowercase(),
+        b'L' => !ch.is_ascii_lowercase(),
+        b'u' => ch.is_ascii_uppercase(),
+        b'U' => !ch.is_ascii_uppercase(),
+        b'w' => ch.is_ascii_alphanumeric(),
+        b'W' => !ch.is_ascii_alphanumeric(),
+        b's' => ch.is_ascii_whitespace(),
+        b'S' => !ch.is_ascii_whitespace(),
+        b'p' => ch.is_ascii_punctuation(),
+        b'P' => !ch.is_ascii_punctuation(),
+        b'c' => ch.is_ascii_control(),
+        b'C' => !ch.is_ascii_control(),
+        b'x' => ch.is_ascii_hexdigit(),
+        b'X' => !ch.is_ascii_hexdigit(),
+        _ => ch == class, // %% matches %, %( matches (, etc.
+    }
+}
+
+/// Check if a byte matches a single pattern element at position `pi` in pattern.
+/// Returns the number of pattern bytes consumed.
+fn lua_single_match(pat: &[u8], pi: usize, ch: u8) -> bool {
+    if pi >= pat.len() {
+        return false;
+    }
+    match pat[pi] {
+        b'.' => true,
+        b'%' => {
+            if pi + 1 < pat.len() {
+                lua_class_match(pat[pi + 1], ch)
+            } else {
+                false
+            }
+        }
+        b'[' => lua_set_match(pat, pi, ch),
+        c => c == ch,
+    }
+}
+
+/// How many pattern bytes does a single element consume?
+fn lua_pattern_element_len(pat: &[u8], pi: usize) -> usize {
+    if pi >= pat.len() {
+        return 0;
+    }
+    match pat[pi] {
+        b'%' => {
+            if pi + 1 < pat.len() { 2 } else { 1 }
+        }
+        b'[' => {
+            // Find closing ]
+            let mut j = pi + 1;
+            if j < pat.len() && pat[j] == b'^' {
+                j += 1;
+            }
+            if j < pat.len() && pat[j] == b']' {
+                j += 1; // ] right after [ or [^ is literal
+            }
+            while j < pat.len() && pat[j] != b']' {
+                if pat[j] == b'%' {
+                    j += 1; // skip escaped char
+                }
+                j += 1;
+            }
+            if j < pat.len() {
+                j + 1 - pi // include the ]
+            } else {
+                pat.len() - pi
+            }
+        }
+        _ => 1,
+    }
+}
+
+/// Check if `ch` matches a [...] set starting at pat[pi].
+fn lua_set_match(pat: &[u8], pi: usize, ch: u8) -> bool {
+    let mut j = pi + 1; // skip [
+    let negate = j < pat.len() && pat[j] == b'^';
+    if negate {
+        j += 1;
+    }
+    // ] right after [ or [^ is literal
+    if j < pat.len() && pat[j] == b']' {
+        if ch == b']' {
+            return !negate;
+        }
+        j += 1;
+    }
+    let mut matched = false;
+    while j < pat.len() && pat[j] != b']' {
+        if pat[j] == b'%' && j + 1 < pat.len() {
+            if lua_class_match(pat[j + 1], ch) {
+                matched = true;
+            }
+            j += 2;
+        } else if j + 2 < pat.len() && pat[j + 1] == b'-' && pat[j + 2] != b']' {
+            // Range: a-z
+            if ch >= pat[j] && ch <= pat[j + 2] {
+                matched = true;
+            }
+            j += 3;
+        } else {
+            if pat[j] == ch {
+                matched = true;
+            }
+            j += 1;
+        }
+    }
+    if negate { !matched } else { matched }
+}
+
+/// Core recursive pattern matcher.
+/// Returns the end position (exclusive) of the match on success.
+fn lua_pat_match(
+    s: &[u8],
+    si: usize,
+    pat: &[u8],
+    pi: usize,
+    captures: &mut Vec<LuaCapture>,
+    depth: usize,
+) -> Option<usize> {
+    if depth > 200 {
+        return None; // prevent stack overflow
+    }
+    if pi >= pat.len() {
+        return Some(si);
+    }
+
+    // Handle captures: (
+    if pat[pi] == b'(' {
+        if pi + 1 < pat.len() && pat[pi + 1] == b')' {
+            // Position capture
+            let cap_idx = captures.len();
+            captures.push(LuaCapture::Position(si));
+            if let Some(end) = lua_pat_match(s, si, pat, pi + 2, captures, depth + 1) {
+                return Some(end);
+            }
+            captures.truncate(cap_idx);
+            return None;
+        }
+        // Start substring capture
+        let cap_idx = captures.len();
+        captures.push(LuaCapture::Substring(si, 0)); // placeholder
+        if let Some(end) = lua_pat_match(s, si, pat, pi + 1, captures, depth + 1) {
+            return Some(end);
+        }
+        captures.truncate(cap_idx);
+        return None;
+    }
+
+    // Handle capture close: )
+    if pat[pi] == b')' {
+        // Find the last open capture and close it
+        for i in (0..captures.len()).rev() {
+            if let LuaCapture::Substring(start, 0) = captures[i] {
+                captures[i] = LuaCapture::Substring(start, si);
+                if let Some(end) = lua_pat_match(s, si, pat, pi + 1, captures, depth + 1) {
+                    return Some(end);
+                }
+                captures[i] = LuaCapture::Substring(start, 0); // restore
+                return None;
+            }
+        }
+        return None; // unmatched close paren
+    }
+
+    // Handle $ anchor at end of pattern
+    if pat[pi] == b'$' && pi + 1 == pat.len() {
+        return if si == s.len() { Some(si) } else { None };
+    }
+
+    let elem_len = lua_pattern_element_len(pat, pi);
+    let after_elem = pi + elem_len;
+
+    // Check for quantifier after element
+    if after_elem < pat.len() {
+        match pat[after_elem] {
+            b'*' => {
+                // Greedy 0+
+                return lua_pat_greedy(s, si, pat, pi, after_elem + 1, captures, depth);
+            }
+            b'+' => {
+                // Greedy 1+
+                if si < s.len() && lua_single_match(pat, pi, s[si]) {
+                    return lua_pat_greedy(s, si + 1, pat, pi, after_elem + 1, captures, depth);
+                }
+                return None;
+            }
+            b'-' => {
+                // Lazy 0+
+                return lua_pat_lazy(s, si, pat, pi, after_elem + 1, captures, depth);
+            }
+            b'?' => {
+                // Optional
+                if si < s.len() && lua_single_match(pat, pi, s[si]) {
+                    if let Some(end) =
+                        lua_pat_match(s, si + 1, pat, after_elem + 1, captures, depth + 1)
+                    {
+                        return Some(end);
+                    }
+                }
+                return lua_pat_match(s, si, pat, after_elem + 1, captures, depth + 1);
+            }
+            _ => {}
+        }
+    }
+
+    // No quantifier: match single element
+    if si < s.len() && lua_single_match(pat, pi, s[si]) {
+        return lua_pat_match(s, si + 1, pat, after_elem, captures, depth + 1);
+    }
+
+    None
+}
+
+/// Greedy quantifier: match as many as possible, then backtrack.
+fn lua_pat_greedy(
+    s: &[u8],
+    si: usize,
+    pat: &[u8],
+    elem_pi: usize,
+    rest_pi: usize,
+    captures: &mut Vec<LuaCapture>,
+    depth: usize,
+) -> Option<usize> {
+    let mut count = 0;
+    while si + count < s.len() && lua_single_match(pat, elem_pi, s[si + count]) {
+        count += 1;
+    }
+    // Try from longest match down
+    loop {
+        if let Some(end) = lua_pat_match(s, si + count, pat, rest_pi, captures, depth + 1) {
+            return Some(end);
+        }
+        if count == 0 {
+            break;
+        }
+        count -= 1;
+    }
+    None
+}
+
+/// Lazy quantifier: match as few as possible, then try rest.
+fn lua_pat_lazy(
+    s: &[u8],
+    si: usize,
+    pat: &[u8],
+    elem_pi: usize,
+    rest_pi: usize,
+    captures: &mut Vec<LuaCapture>,
+    depth: usize,
+) -> Option<usize> {
+    let mut pos = si;
+    loop {
+        if let Some(end) = lua_pat_match(s, pos, pat, rest_pi, captures, depth + 1) {
+            return Some(end);
+        }
+        if pos < s.len() && lua_single_match(pat, elem_pi, s[pos]) {
+            pos += 1;
+        } else {
+            return None;
+        }
+    }
+}
+
+/// Top-level pattern match: try matching pattern at each position starting from `init`.
+/// If pattern starts with ^, only try at `init`.
+fn lua_pattern_find(s: &[u8], pat: &[u8], init: usize) -> Option<LuaPatMatch> {
+    let (anchored, pat_start) = if !pat.is_empty() && pat[0] == b'^' {
+        (true, 1)
+    } else {
+        (false, 0)
+    };
+
+    if anchored {
+        let mut captures = Vec::new();
+        if let Some(end) = lua_pat_match(s, init, pat, pat_start, &mut captures, 0) {
+            return Some(LuaPatMatch {
+                start: init,
+                end,
+                captures,
+            });
+        }
+        return None;
+    }
+
+    for start in init..=s.len() {
+        let mut captures = Vec::new();
+        if let Some(end) = lua_pat_match(s, start, pat, pat_start, &mut captures, 0) {
+            return Some(LuaPatMatch {
+                start,
+                end,
+                captures,
+            });
+        }
+    }
+    None
+}
+
+/// Extract capture values from a match. If no explicit captures, return the whole match.
+fn lua_match_captures(s: &[u8], m: &LuaPatMatch) -> Vec<LuaValue> {
+    if m.captures.is_empty() {
+        return vec![LuaValue::Str(s[m.start..m.end].to_vec())];
+    }
+    m.captures
+        .iter()
+        .map(|cap| match cap {
+            LuaCapture::Substring(start, end) => LuaValue::Str(s[*start..*end].to_vec()),
+            LuaCapture::Position(pos) => LuaValue::Number(*pos as f64 + 1.0), // 1-indexed
+        })
+        .collect()
+}
+
+/// Apply gsub replacement for one match. Handles string replacements with %0-%9.
+fn lua_gsub_replace(s: &[u8], m: &LuaPatMatch, repl: &[u8]) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < repl.len() {
+        if repl[i] == b'%' && i + 1 < repl.len() {
+            let next = repl[i + 1];
+            if next >= b'0' && next <= b'9' {
+                let idx = (next - b'0') as usize;
+                if idx == 0 {
+                    // %0 = whole match
+                    result.extend_from_slice(&s[m.start..m.end]);
+                } else if idx <= m.captures.len() {
+                    match &m.captures[idx - 1] {
+                        LuaCapture::Substring(cs, ce) => {
+                            result.extend_from_slice(&s[*cs..*ce]);
+                        }
+                        LuaCapture::Position(pos) => {
+                            result.extend_from_slice(format!("{}", pos + 1).as_bytes());
+                        }
+                    }
+                }
+                i += 2;
+            } else if next == b'%' {
+                result.push(b'%');
+                i += 2;
+            } else {
+                result.push(repl[i]);
+                i += 1;
+            }
+        } else {
+            result.push(repl[i]);
+            i += 1;
+        }
+    }
+    result
 }
 
 // ── Type conversions ────────────────────────────────────────────────────

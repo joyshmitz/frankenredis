@@ -1601,6 +1601,305 @@
         "kind": "integer",
         "value": 1
       }
+    },
+    {
+      "name": "eval_string_match_literal",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('hello world', 'world')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "world"
+      }
+    },
+    {
+      "name": "eval_string_match_no_match",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('hello', 'xyz')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
+    },
+    {
+      "name": "eval_string_match_pattern_digit",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('abc123def', '%d+')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "123"
+      }
+    },
+    {
+      "name": "eval_string_match_capture",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('key:value', '(%a+):(%a+)')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "key"
+      }
+    },
+    {
+      "name": "eval_string_match_alpha_class",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('123abc456', '%a+')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "abc"
+      }
+    },
+    {
+      "name": "eval_string_find_pattern",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local s, e = string.find('hello123', '%d+')\nreturn s",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 6
+      }
+    },
+    {
+      "name": "eval_string_find_pattern_end",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local s, e = string.find('hello123', '%d+')\nreturn e",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 8
+      }
+    },
+    {
+      "name": "eval_string_find_anchored",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local s = string.find('hello', '^hel')\nreturn s",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "eval_string_find_anchor_fail",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local s = string.find('hello', '^ell')\nif s then return s else return 0 end",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "eval_string_gsub_literal",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.gsub('hello world', 'world', 'lua')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "hello lua"
+      }
+    },
+    {
+      "name": "eval_string_gsub_pattern",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.gsub('abc 123 def 456', '%d+', 'N')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "abc N def N"
+      }
+    },
+    {
+      "name": "eval_string_gsub_with_limit",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.gsub('aaa', 'a', 'b', 2)",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "bba"
+      }
+    },
+    {
+      "name": "eval_string_gsub_capture_ref",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.gsub('hello', '(h)', '%1%1')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "hhello"
+      }
+    },
+    {
+      "name": "eval_string_match_set",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('abc123', '[a-z]+')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "abc"
+      }
+    },
+    {
+      "name": "eval_string_match_negated_set",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('abc123', '[^a-z]+')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "123"
+      }
+    },
+    {
+      "name": "eval_string_match_dot_star",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('hello', '.+')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "hello"
+      }
+    },
+    {
+      "name": "eval_string_match_lazy",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('<b>text</b>', '<(.-)>')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "b"
+      }
+    },
+    {
+      "name": "eval_string_match_optional",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('colour', 'colou?r')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "colour"
+      }
+    },
+    {
+      "name": "eval_string_match_optional_absent",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('color', 'colou?r')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "color"
+      }
+    },
+    {
+      "name": "eval_string_gsub_whitespace",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.gsub('hello  world', '%s+', '-')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "hello-world"
+      }
+    },
+    {
+      "name": "eval_string_match_end_anchor",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return string.match('hello.lua', '%.lua$')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": ".lua"
+      }
+    },
+    {
+      "name": "eval_string_gmatch_words",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local t = {}\nfor w in string.gmatch('one two three', '%a+') do\n  table.insert(t, w)\nend\nreturn #t",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
+    },
+    {
+      "name": "eval_string_gmatch_first_word",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local t = {}\nfor w in string.gmatch('one two three', '%a+') do\n  table.insert(t, w)\nend\nreturn t[1]",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "one"
+      }
     }
   ]
 }
