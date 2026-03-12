@@ -3449,6 +3449,211 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'ZREVRANGEBYSCORE' command"
       }
+    },
+
+    {
+      "name": "zmop_setup_x",
+      "now_ms": 950,
+      "argv": ["ZADD", "zmx", "1", "a", "2", "b", "3", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zmop_setup_y",
+      "now_ms": 950,
+      "argv": ["ZADD", "zmy", "2", "b", "3", "c", "4", "d"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zincrby_new_field",
+      "now_ms": 950,
+      "argv": ["ZINCRBY", "zmx", "10", "newmember"],
+      "expect": { "kind": "bulk", "value": "10" }
+    },
+    {
+      "name": "zincrby_existing",
+      "now_ms": 950,
+      "argv": ["ZINCRBY", "zmx", "5", "a"],
+      "expect": { "kind": "bulk", "value": "6" }
+    },
+    {
+      "name": "zincrby_negative",
+      "now_ms": 950,
+      "argv": ["ZINCRBY", "zmx", "-3", "b"],
+      "expect": { "kind": "bulk", "value": "-1" }
+    },
+    {
+      "name": "zincrby_new_key",
+      "now_ms": 950,
+      "argv": ["ZINCRBY", "zmnewkey", "5", "m"],
+      "expect": { "kind": "bulk", "value": "5" }
+    },
+    {
+      "name": "zincrby_wrong_arity",
+      "now_ms": 950,
+      "argv": ["ZINCRBY", "k"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'ZINCRBY' command"
+      }
+    },
+    {
+      "name": "zinterstore_basic",
+      "now_ms": 960,
+      "argv": ["ZINTERSTORE", "zis_dest", "2", "zmx", "zmy"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "zinterstore_verify_b",
+      "now_ms": 960,
+      "argv": ["ZSCORE", "zis_dest", "b"],
+      "expect": { "kind": "bulk", "value": "1" }
+    },
+    {
+      "name": "zinterstore_verify_c",
+      "now_ms": 960,
+      "argv": ["ZSCORE", "zis_dest", "c"],
+      "expect": { "kind": "bulk", "value": "6" }
+    },
+    {
+      "name": "zinterstore_weights",
+      "now_ms": 960,
+      "argv": ["ZINTERSTORE", "zis_w", "2", "zmx", "zmy", "WEIGHTS", "2", "1"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "zinterstore_weights_verify",
+      "now_ms": 960,
+      "argv": ["ZSCORE", "zis_w", "c"],
+      "expect": { "kind": "bulk", "value": "9" }
+    },
+    {
+      "name": "zinterstore_aggregate_min",
+      "now_ms": 960,
+      "argv": ["ZINTERSTORE", "zis_min", "2", "zmx", "zmy", "AGGREGATE", "MIN"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "zinterstore_aggregate_min_verify",
+      "now_ms": 960,
+      "argv": ["ZSCORE", "zis_min", "b"],
+      "expect": { "kind": "bulk", "value": "-1" }
+    },
+    {
+      "name": "zinterstore_wrong_arity",
+      "now_ms": 960,
+      "argv": ["ZINTERSTORE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'ZINTERSTORE' command"
+      }
+    },
+    {
+      "name": "zdiff_basic",
+      "now_ms": 970,
+      "argv": ["ZDIFF", "2", "zmx", "zmy"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "newmember" }
+        ]
+      }
+    },
+    {
+      "name": "zdiff_withscores",
+      "now_ms": 970,
+      "argv": ["ZDIFF", "2", "zmx", "zmy", "WITHSCORES"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "6" },
+          { "kind": "bulk", "value": "newmember" },
+          { "kind": "bulk", "value": "10" }
+        ]
+      }
+    },
+    {
+      "name": "zdiff_nonexistent",
+      "now_ms": 970,
+      "argv": ["ZDIFF", "2", "nosuchzd", "zmx"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "zdiff_wrong_arity",
+      "now_ms": 970,
+      "argv": ["ZDIFF"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'ZDIFF' command"
+      }
+    },
+    {
+      "name": "zdiffstore_basic",
+      "now_ms": 970,
+      "argv": ["ZDIFFSTORE", "zds_dest", "2", "zmx", "zmy"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "zdiffstore_verify",
+      "now_ms": 970,
+      "argv": ["ZSCORE", "zds_dest", "a"],
+      "expect": { "kind": "bulk", "value": "6" }
+    },
+    {
+      "name": "zdiffstore_wrong_arity",
+      "now_ms": 970,
+      "argv": ["ZDIFFSTORE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'ZDIFFSTORE' command"
+      }
+    },
+    {
+      "name": "zrangestore_setup",
+      "now_ms": 980,
+      "argv": ["ZADD", "zrs_src", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e"],
+      "expect": { "kind": "integer", "value": 5 }
+    },
+    {
+      "name": "zrangestore_basic",
+      "now_ms": 980,
+      "argv": ["ZRANGESTORE", "zrs_dest", "zrs_src", "1", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zrangestore_verify",
+      "now_ms": 980,
+      "argv": ["ZRANGE", "zrs_dest", "0", "-1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "d" }
+        ]
+      }
+    },
+    {
+      "name": "zrangestore_byscore",
+      "now_ms": 980,
+      "argv": ["ZRANGESTORE", "zrs_dest2", "zrs_src", "2", "4", "BYSCORE"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "zrangestore_nonexistent",
+      "now_ms": 980,
+      "argv": ["ZRANGESTORE", "zrs_dest3", "nosuchzrs", "0", "-1"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "zrangestore_wrong_arity",
+      "now_ms": 980,
+      "argv": ["ZRANGESTORE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'ZRANGESTORE' command"
+      }
     }
   ]
 }

@@ -2582,6 +2582,119 @@
           }
         ]
       }
+    },
+
+    {
+      "name": "lset_setup",
+      "now_ms": 800,
+      "argv": ["RPUSH", "lset_k", "a", "b", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "lset_middle",
+      "now_ms": 800,
+      "argv": ["LSET", "lset_k", "1", "B"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "lset_verify",
+      "now_ms": 800,
+      "argv": ["LRANGE", "lset_k", "0", "-1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "B" },
+          { "kind": "bulk", "value": "c" }
+        ]
+      }
+    },
+    {
+      "name": "lset_negative_index",
+      "now_ms": 800,
+      "argv": ["LSET", "lset_k", "-1", "C"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "lset_verify_neg",
+      "now_ms": 800,
+      "argv": ["LINDEX", "lset_k", "2"],
+      "expect": { "kind": "bulk", "value": "C" }
+    },
+    {
+      "name": "lset_out_of_range",
+      "now_ms": 800,
+      "argv": ["LSET", "lset_k", "99", "x"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR index out of range"
+      }
+    },
+    {
+      "name": "lset_nonexistent_key",
+      "now_ms": 800,
+      "argv": ["LSET", "nosuchlist", "0", "x"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
+    },
+    {
+      "name": "lset_wrong_arity",
+      "now_ms": 800,
+      "argv": ["LSET", "k"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'LSET' command"
+      }
+    },
+    {
+      "name": "lpushx_existing_list",
+      "now_ms": 810,
+      "argv": ["LPUSHX", "lset_k", "z"],
+      "expect": { "kind": "integer", "value": 4 }
+    },
+    {
+      "name": "lpushx_nonexistent",
+      "now_ms": 810,
+      "argv": ["LPUSHX", "nosuchpushx", "z"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "lpushx_multiple",
+      "now_ms": 810,
+      "argv": ["LPUSHX", "lset_k", "y", "x"],
+      "expect": { "kind": "integer", "value": 6 }
+    },
+    {
+      "name": "lpushx_wrong_arity",
+      "now_ms": 810,
+      "argv": ["LPUSHX"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'LPUSHX' command"
+      }
+    },
+    {
+      "name": "rpushx_existing_list",
+      "now_ms": 820,
+      "argv": ["RPUSHX", "lset_k", "end"],
+      "expect": { "kind": "integer", "value": 7 }
+    },
+    {
+      "name": "rpushx_nonexistent",
+      "now_ms": 820,
+      "argv": ["RPUSHX", "nosuchrpushx", "v"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "rpushx_wrong_arity",
+      "now_ms": 820,
+      "argv": ["RPUSHX"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'RPUSHX' command"
+      }
     }
   ]
 }

@@ -1838,6 +1838,99 @@
         "kind": "integer",
         "value": 2
       }
+    },
+
+    {
+      "name": "setops_setup_a",
+      "now_ms": 900,
+      "argv": ["SADD", "sop_a", "1", "2", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "setops_setup_b",
+      "now_ms": 900,
+      "argv": ["SADD", "sop_b", "2", "3", "4"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "sunionstore_basic",
+      "now_ms": 900,
+      "argv": ["SUNIONSTORE", "sop_union_dest", "sop_a", "sop_b"],
+      "expect": { "kind": "integer", "value": 4 }
+    },
+    {
+      "name": "sunionstore_verify_count",
+      "now_ms": 900,
+      "argv": ["SCARD", "sop_union_dest"],
+      "expect": { "kind": "integer", "value": 4 }
+    },
+    {
+      "name": "sunionstore_nonexistent_key",
+      "now_ms": 900,
+      "argv": ["SUNIONSTORE", "sop_union_dest2", "sop_a", "nosuchset"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "sunionstore_wrong_arity",
+      "now_ms": 900,
+      "argv": ["SUNIONSTORE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'SUNIONSTORE' command"
+      }
+    },
+    {
+      "name": "sinterstore_basic",
+      "now_ms": 900,
+      "argv": ["SINTERSTORE", "sop_inter_dest", "sop_a", "sop_b"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "sinterstore_nonexistent_key",
+      "now_ms": 900,
+      "argv": ["SINTERSTORE", "sop_inter_dest2", "sop_a", "nosuchset"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "sinterstore_wrong_arity",
+      "now_ms": 900,
+      "argv": ["SINTERSTORE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'SINTERSTORE' command"
+      }
+    },
+    {
+      "name": "sdiffstore_basic",
+      "now_ms": 900,
+      "argv": ["SDIFFSTORE", "sop_diff_dest", "sop_a", "sop_b"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "sdiffstore_verify",
+      "now_ms": 900,
+      "argv": ["SMEMBERS", "sop_diff_dest"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "1" }
+        ]
+      }
+    },
+    {
+      "name": "sdiffstore_nonexistent",
+      "now_ms": 900,
+      "argv": ["SDIFFSTORE", "sop_diff_dest2", "nosuchset", "sop_a"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "sdiffstore_wrong_arity",
+      "now_ms": 900,
+      "argv": ["SDIFFSTORE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'SDIFFSTORE' command"
+      }
     }
   ]
 }
