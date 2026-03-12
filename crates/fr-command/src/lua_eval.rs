@@ -1903,14 +1903,15 @@ impl<'a> LuaState<'a> {
                 let func = self.eval_expr(func_expr, env, varargs)?;
                 let mut arg_vals = self.eval_call_args(args, env, varargs)?;
                 let results = self.call_function(&func, &mut arg_vals, env, varargs)?;
-                // Write back table mutations (table.sort/insert/remove mutate args[0] in-place)
-                if let LuaValue::RustFunction(ref name) = func {
-                    if matches!(name.as_str(), "table.sort" | "table.insert" | "table.remove" | "rawset") {
-                        if let Some(Expr::Name(var_name)) = args.first() {
-                            if !env.set_existing_local(var_name, arg_vals[0].clone()) {
-                                self.globals.insert(var_name.clone(), arg_vals[0].clone());
-                            }
-                        }
+                // Write back table mutations (table.sort/insert/remove mutate args[0] in-place).
+                // The inner `if` has a side-effect (set_existing_local) so must not be collapsed.
+                #[allow(clippy::collapsible_if)]
+                if let LuaValue::RustFunction(ref name) = func
+                    && matches!(name.as_str(), "table.sort" | "table.insert" | "table.remove" | "rawset")
+                    && let Some(Expr::Name(var_name)) = args.first()
+                {
+                    if !env.set_existing_local(var_name, arg_vals[0].clone()) {
+                        self.globals.insert(var_name.clone(), arg_vals[0].clone());
                     }
                 }
                 Ok(results.into_iter().next().unwrap_or(LuaValue::Nil))
@@ -2858,10 +2859,10 @@ impl<'a> LuaState<'a> {
                 let mut pos = 0;
                 let mut count = 0usize;
                 while pos <= s.len() {
-                    if let Some(limit) = max_n {
-                        if count >= limit {
-                            break;
-                        }
+                    if let Some(limit) = max_n
+                        && count >= limit
+                    {
+                        break;
                     }
                     if let Some(m) = lua_pattern_find(&s, &pattern, pos) {
                         // Append text before match
@@ -3021,10 +3022,10 @@ impl<'a> LuaState<'a> {
                     }
                     // Check hash part for numeric keys
                     for (k, _) in &t.hash {
-                        if let LuaValue::Number(n) = k {
-                            if *n > max_n {
-                                max_n = *n;
-                            }
+                        if let LuaValue::Number(n) = k
+                            && *n > max_n
+                        {
+                            max_n = *n;
                         }
                     }
                     Ok(vec![LuaValue::Number(max_n)])
@@ -3297,12 +3298,12 @@ fn lua_pat_match(
             }
             b'?' => {
                 // Optional
-                if si < s.len() && lua_single_match(pat, pi, s[si]) {
-                    if let Some(end) =
+                if si < s.len()
+                    && lua_single_match(pat, pi, s[si])
+                    && let Some(end) =
                         lua_pat_match(s, si + 1, pat, after_elem + 1, captures, depth + 1)
-                    {
-                        return Some(end);
-                    }
+                {
+                    return Some(end);
                 }
                 return lua_pat_match(s, si, pat, after_elem + 1, captures, depth + 1);
             }
@@ -3423,7 +3424,7 @@ fn lua_gsub_replace(s: &[u8], m: &LuaPatMatch, repl: &[u8]) -> Vec<u8> {
     while i < repl.len() {
         if repl[i] == b'%' && i + 1 < repl.len() {
             let next = repl[i + 1];
-            if next >= b'0' && next <= b'9' {
+            if next.is_ascii_digit() {
                 let idx = (next - b'0') as usize;
                 if idx == 0 {
                     // %0 = whole match
@@ -3707,7 +3708,7 @@ fn lua_fmt_pad(s: &str, width: Option<usize>, left_align: bool, pad: char) -> St
         let (sign, rest) = s.split_at(1);
         format!("{sign}{}{rest}", "0".repeat(padding))
     } else {
-        format!("{}{s}", std::iter::repeat(pad).take(padding).collect::<String>())
+        format!("{}{s}", std::iter::repeat_n(pad, padding).collect::<String>())
     }
 }
 
@@ -3733,8 +3734,7 @@ fn lua_fmt_g(n: f64, prec: usize, upper: bool) -> String {
     let abs = n.abs();
     let exp = abs.log10().floor() as i32;
     if exp < -4 || exp >= prec as i32 {
-        let s = lua_fmt_scientific(n, prec.saturating_sub(1), upper);
-        s
+        lua_fmt_scientific(n, prec.saturating_sub(1), upper)
     } else {
         let decimal_prec = (prec as i32 - 1 - exp).max(0) as usize;
         let s = format!("{n:.decimal_prec$}");

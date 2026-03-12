@@ -4937,12 +4937,12 @@ fn transform_register_function(line: &str) -> Option<String> {
     let after = after.trim_start().strip_prefix('(')?;
     let after = after.trim_start();
     // Extract function name from 'name' or "name"
-    let (name, rest) = if after.starts_with('\'') {
-        let end = after[1..].find('\'')?;
-        (&after[1..1 + end], &after[2 + end..])
-    } else if after.starts_with('"') {
-        let end = after[1..].find('"')?;
-        (&after[1..1 + end], &after[2 + end..])
+    let (name, rest) = if let Some(stripped) = after.strip_prefix('\'') {
+        let end = stripped.find('\'')?;
+        (&stripped[..end], &stripped[end + 1..])
+    } else if let Some(stripped) = after.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        (&stripped[..end], &stripped[end + 1..])
     } else {
         return None;
     };
