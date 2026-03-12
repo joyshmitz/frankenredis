@@ -273,3 +273,19 @@ fn core_scan_conformance() {
     assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
     assert!(diff.failed.is_empty());
 }
+
+#[test]
+fn core_config_conformance() {
+    let cfg = HarnessConfig::default_paths();
+    let diff = run_fixture(&cfg, "core_config.json").expect("config fixture");
+    assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
+    assert!(diff.failed.is_empty());
+}
+
+#[test]
+fn core_cluster_conformance() {
+    let cfg = HarnessConfig::default_paths();
+    let diff = run_fixture(&cfg, "core_cluster.json").expect("cluster fixture");
+    assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
+    assert!(diff.failed.is_empty());
+}
