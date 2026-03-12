@@ -1390,14 +1390,27 @@
       "now_ms": 100,
       "argv": [
         "SORT",
-        "numlist",
+        "nums",
         "LIMIT",
         "-1",
         "3"
       ],
       "expect": {
         "kind": "array",
-        "value": []
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "1"
+          },
+          {
+            "kind": "bulk",
+            "value": "1"
+          },
+          {
+            "kind": "bulk",
+            "value": "2"
+          }
+        ]
       }
     },
     {
@@ -1405,14 +1418,47 @@
       "now_ms": 100,
       "argv": [
         "SORT",
-        "numlist",
+        "nums",
         "LIMIT",
         "0",
         "-1"
       ],
       "expect": {
         "kind": "array",
-        "value": []
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "1"
+          },
+          {
+            "kind": "bulk",
+            "value": "1"
+          },
+          {
+            "kind": "bulk",
+            "value": "2"
+          },
+          {
+            "kind": "bulk",
+            "value": "3"
+          },
+          {
+            "kind": "bulk",
+            "value": "4"
+          },
+          {
+            "kind": "bulk",
+            "value": "5"
+          },
+          {
+            "kind": "bulk",
+            "value": "6"
+          },
+          {
+            "kind": "bulk",
+            "value": "9"
+          }
+        ]
       }
     },
     {
