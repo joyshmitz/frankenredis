@@ -9175,6 +9175,9 @@ fn sort_ro_cmd(
     store: &mut Store,
     now_ms: u64,
 ) -> Result<RespFrame, CommandError> {
+    if argv.len() < 2 {
+        return Err(CommandError::WrongArity("SORT"));
+    }
     // SORT_RO rejects the STORE option
     for arg in &argv[2..] {
         if let Ok(s) = std::str::from_utf8(arg)

@@ -429,6 +429,188 @@
         "kind": "error",
         "value": "ERR syntax error"
       }
+    },
+
+    {
+      "name": "bitfield_u16_set_and_get",
+      "now_ms": 700,
+      "argv": ["BITFIELD", "bf16", "SET", "u16", "0", "1000"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_u16_get",
+      "now_ms": 701,
+      "argv": ["BITFIELD", "bf16", "GET", "u16", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 1000 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_at_offset",
+      "now_ms": 702,
+      "argv": ["BITFIELD", "bf_off", "SET", "u8", "8", "42"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_get_at_offset",
+      "now_ms": 703,
+      "argv": ["BITFIELD", "bf_off", "GET", "u8", "8"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 42 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_incrby_u8",
+      "now_ms": 710,
+      "argv": ["BITFIELD", "bf_incr", "SET", "u8", "0", "250", "INCRBY", "u8", "0", "10"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 },
+          { "kind": "integer", "value": 4 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_overflow_sat",
+      "now_ms": 720,
+      "argv": ["BITFIELD", "bf_sat", "SET", "u8", "0", "250", "OVERFLOW", "SAT", "INCRBY", "u8", "0", "10"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 },
+          { "kind": "integer", "value": 255 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_overflow_fail",
+      "now_ms": 730,
+      "argv": ["BITFIELD", "bf_fail", "SET", "u8", "0", "250", "OVERFLOW", "FAIL", "INCRBY", "u8", "0", "10"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 },
+          { "kind": "bulk", "value": null }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_overflow_invalid",
+      "now_ms": 740,
+      "argv": ["BITFIELD", "bf_err", "OVERFLOW", "NOPE", "GET", "u8", "0"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid OVERFLOW type (should be one of WRAP, SAT, FAIL)"
+      }
+    },
+    {
+      "name": "bitfield_i16_signed",
+      "now_ms": 750,
+      "argv": ["BITFIELD", "bf_i16", "SET", "i16", "0", "-500"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_i16_get",
+      "now_ms": 751,
+      "argv": ["BITFIELD", "bf_i16", "GET", "i16", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": -500 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_triple_ops",
+      "now_ms": 760,
+      "argv": ["BITFIELD", "bf_triple", "SET", "u8", "0", "10", "SET", "u8", "8", "20", "GET", "u8", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 0 },
+          { "kind": "integer", "value": 0 },
+          { "kind": "integer", "value": 10 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_wrongtype",
+      "now_ms": 770,
+      "argv": ["BITFIELD", "listkey2", "GET", "u8", "0"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+
+    {
+      "name": "bitpos_on_list_wrongtype",
+      "now_ms": 800,
+      "argv": ["BITPOS", "listkey2", "1"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "bitpos_wrong_arity_no_key",
+      "now_ms": 801,
+      "argv": ["BITPOS"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'BITPOS' command"
+      }
+    },
+
+    {
+      "name": "bitop_wrongtype_list",
+      "now_ms": 810,
+      "argv": ["BITOP", "AND", "bo_wt", "listkey2"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+
+    {
+      "name": "setbit_returns_previous_on_string",
+      "now_ms": 820,
+      "argv": ["SET", "bitstr", "A"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "getbit_on_string_key",
+      "now_ms": 821,
+      "argv": ["GETBIT", "bitstr", "1"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "bitcount_on_string_key",
+      "now_ms": 822,
+      "argv": ["BITCOUNT", "bitstr"],
+      "expect": { "kind": "integer", "value": 2 }
     }
   ]
 }

@@ -420,6 +420,117 @@
       "now_ms": 220,
       "argv": ["PING", "test 123"],
       "expect": { "kind": "bulk", "value": "test 123" }
+    },
+
+    {
+      "name": "swapdb_0_0_ok",
+      "now_ms": 300,
+      "argv": ["SWAPDB", "0", "0"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "swapdb_nonzero_error",
+      "now_ms": 301,
+      "argv": ["SWAPDB", "0", "1"],
+      "expect": { "kind": "error", "value": "ERR invalid DB index" }
+    },
+    {
+      "name": "swapdb_wrong_arity",
+      "now_ms": 302,
+      "argv": ["SWAPDB"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SWAPDB' command" }
+    },
+    {
+      "name": "swapdb_non_integer",
+      "now_ms": 303,
+      "argv": ["SWAPDB", "abc", "0"],
+      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+    },
+
+    {
+      "name": "select_too_many_args",
+      "now_ms": 310,
+      "argv": ["SELECT", "0", "extra"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SELECT' command" }
+    },
+
+    {
+      "name": "echo_empty_string",
+      "now_ms": 320,
+      "argv": ["ECHO", ""],
+      "expect": { "kind": "bulk", "value": "" }
+    },
+
+    {
+      "name": "flushdb_sync_arg",
+      "now_ms": 330,
+      "argv": ["FLUSHDB", "SYNC"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "setup_for_flushdb_verify",
+      "now_ms": 340,
+      "argv": ["SET", "ftest1", "v1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "setup_for_flushdb_verify_2",
+      "now_ms": 340,
+      "argv": ["SET", "ftest2", "v2"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "dbsize_before_flush",
+      "now_ms": 341,
+      "argv": ["DBSIZE"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "flushdb_clears_all",
+      "now_ms": 342,
+      "argv": ["FLUSHDB"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "dbsize_after_flush_is_0",
+      "now_ms": 343,
+      "argv": ["DBSIZE"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "unknown_command_empty_args",
+      "now_ms": 350,
+      "argv": ["XYZCOMMAND"],
+      "expect": { "kind": "error", "value": "ERR unknown command 'XYZCOMMAND'" }
+    },
+
+    {
+      "name": "hello_wrong_type_version",
+      "now_ms": 360,
+      "argv": ["HELLO", "abc"],
+      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+    },
+
+    {
+      "name": "hello_version_0_unsupported",
+      "now_ms": 361,
+      "argv": ["HELLO", "0"],
+      "expect": { "kind": "error", "value": "NOPROTO unsupported protocol version '0'" }
+    },
+
+    {
+      "name": "readonly_wrong_arity",
+      "now_ms": 380,
+      "argv": ["READONLY", "extra"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'READONLY' command" }
+    },
+    {
+      "name": "readwrite_wrong_arity",
+      "now_ms": 381,
+      "argv": ["READWRITE", "extra"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'READWRITE' command" }
     }
   ]
 }

@@ -4,49 +4,98 @@
     {
       "name": "client_getname_initially_nil",
       "now_ms": 1,
-      "argv": ["CLIENT", "GETNAME"],
-      "expect": { "kind": "bulk", "value": null }
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
     },
     {
       "name": "client_setname_ok",
       "now_ms": 2,
-      "argv": ["CLIENT", "SETNAME", "myconn"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "myconn"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_getname_after_setname",
       "now_ms": 3,
-      "argv": ["CLIENT", "GETNAME"],
-      "expect": { "kind": "bulk", "value": "myconn" }
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "myconn"
+      }
     },
     {
       "name": "client_setname_overwrite",
       "now_ms": 4,
-      "argv": ["CLIENT", "SETNAME", "newname"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "newname"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_getname_after_overwrite",
       "now_ms": 5,
-      "argv": ["CLIENT", "GETNAME"],
-      "expect": { "kind": "bulk", "value": "newname" }
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "newname"
+      }
     },
     {
       "name": "client_setname_clear_with_empty",
       "now_ms": 6,
-      "argv": ["CLIENT", "SETNAME", ""],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        ""
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_getname_after_clear",
       "now_ms": 7,
-      "argv": ["CLIENT", "GETNAME"],
-      "expect": { "kind": "bulk", "value": null }
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
     },
     {
       "name": "client_setname_spaces_rejected",
       "now_ms": 8,
-      "argv": ["CLIENT", "SETNAME", "my conn"],
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "my conn"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR Client names cannot contain spaces, newlines or special characters."
@@ -55,7 +104,10 @@
     {
       "name": "client_setname_wrong_arity",
       "now_ms": 9,
-      "argv": ["CLIENT", "SETNAME"],
+      "argv": [
+        "CLIENT",
+        "SETNAME"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
@@ -64,19 +116,37 @@
     {
       "name": "client_no_evict_on",
       "now_ms": 10,
-      "argv": ["CLIENT", "NO-EVICT", "ON"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "NO-EVICT",
+        "ON"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_no_evict_off",
       "now_ms": 11,
-      "argv": ["CLIENT", "NO-EVICT", "OFF"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "NO-EVICT",
+        "OFF"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_no_evict_invalid_arg",
       "now_ms": 12,
-      "argv": ["CLIENT", "NO-EVICT", "MAYBE"],
+      "argv": [
+        "CLIENT",
+        "NO-EVICT",
+        "MAYBE"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR argument must be 'on' or 'off'"
@@ -85,55 +155,114 @@
     {
       "name": "client_no_touch_on",
       "now_ms": 13,
-      "argv": ["CLIENT", "NO-TOUCH", "ON"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "NO-TOUCH",
+        "ON"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_no_touch_off",
       "now_ms": 14,
-      "argv": ["CLIENT", "NO-TOUCH", "OFF"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "NO-TOUCH",
+        "OFF"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_reply_on",
       "now_ms": 15,
-      "argv": ["CLIENT", "REPLY", "ON"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "REPLY",
+        "ON"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_kill_returns_zero",
       "now_ms": 16,
-      "argv": ["CLIENT", "KILL", "ID", "99999"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "CLIENT",
+        "KILL",
+        "ID",
+        "99999"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "client_pause_ok",
       "now_ms": 17,
-      "argv": ["CLIENT", "PAUSE", "1000"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "PAUSE",
+        "1000"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_unpause_ok",
       "now_ms": 18,
-      "argv": ["CLIENT", "UNPAUSE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "UNPAUSE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_tracking_on",
       "now_ms": 19,
-      "argv": ["CLIENT", "TRACKING", "ON"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "TRACKING",
+        "ON"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_caching_yes",
       "now_ms": 20,
-      "argv": ["CLIENT", "CACHING", "YES"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "CACHING",
+        "YES"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_unknown_subcommand",
       "now_ms": 21,
-      "argv": ["CLIENT", "BOGUS"],
+      "argv": [
+        "CLIENT",
+        "BOGUS"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR Unknown subcommand or wrong number of arguments for CLIENT BOGUS"
@@ -142,7 +271,9 @@
     {
       "name": "client_wrong_arity_no_args",
       "now_ms": 22,
-      "argv": ["CLIENT"],
+      "argv": [
+        "CLIENT"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
@@ -151,7 +282,10 @@
     {
       "name": "client_pause_wrong_arity",
       "now_ms": 23,
-      "argv": ["CLIENT", "PAUSE"],
+      "argv": [
+        "CLIENT",
+        "PAUSE"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
@@ -160,40 +294,60 @@
     {
       "name": "client_tracking_wrong_arity",
       "now_ms": 24,
-      "argv": ["CLIENT", "TRACKING"],
+      "argv": [
+        "CLIENT",
+        "TRACKING"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
       }
     },
-
     {
       "name": "client_id_wrong_arity",
       "now_ms": 31,
-      "argv": ["CLIENT", "ID", "extra"],
+      "argv": [
+        "CLIENT",
+        "ID",
+        "extra"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
       }
     },
-
     {
       "name": "client_setname_for_list_test",
       "now_ms": 40,
-      "argv": ["CLIENT", "SETNAME", "testconn"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "testconn"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_getname_after_list_setup",
       "now_ms": 41,
-      "argv": ["CLIENT", "GETNAME"],
-      "expect": { "kind": "bulk", "value": "testconn" }
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "testconn"
+      }
     },
-
     {
       "name": "client_no_evict_wrong_arity",
       "now_ms": 50,
-      "argv": ["CLIENT", "NO-EVICT"],
+      "argv": [
+        "CLIENT",
+        "NO-EVICT"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
@@ -202,7 +356,10 @@
     {
       "name": "client_no_touch_wrong_arity",
       "now_ms": 51,
-      "argv": ["CLIENT", "NO-TOUCH"],
+      "argv": [
+        "CLIENT",
+        "NO-TOUCH"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
@@ -211,7 +368,11 @@
     {
       "name": "client_no_touch_invalid_arg",
       "now_ms": 52,
-      "argv": ["CLIENT", "NO-TOUCH", "MAYBE"],
+      "argv": [
+        "CLIENT",
+        "NO-TOUCH",
+        "MAYBE"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR argument must be 'on' or 'off'"
@@ -220,17 +381,23 @@
     {
       "name": "client_reply_wrong_arity",
       "now_ms": 53,
-      "argv": ["CLIENT", "REPLY"],
+      "argv": [
+        "CLIENT",
+        "REPLY"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
       }
     },
-
     {
       "name": "client_unpause_wrong_arity",
       "now_ms": 60,
-      "argv": ["CLIENT", "UNPAUSE", "extra"],
+      "argv": [
+        "CLIENT",
+        "UNPAUSE",
+        "extra"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
@@ -239,7 +406,11 @@
     {
       "name": "client_pause_invalid_timeout",
       "now_ms": 61,
-      "argv": ["CLIENT", "PAUSE", "notanumber"],
+      "argv": [
+        "CLIENT",
+        "PAUSE",
+        "notanumber"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR value is not an integer or out of range"
@@ -248,20 +419,38 @@
     {
       "name": "client_pause_with_write",
       "now_ms": 62,
-      "argv": ["CLIENT", "PAUSE", "1000", "WRITE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "PAUSE",
+        "1000",
+        "WRITE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_pause_with_all",
       "now_ms": 63,
-      "argv": ["CLIENT", "PAUSE", "500", "ALL"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "PAUSE",
+        "500",
+        "ALL"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
-
     {
       "name": "client_caching_wrong_arity",
       "now_ms": 70,
-      "argv": ["CLIENT", "CACHING"],
+      "argv": [
+        "CLIENT",
+        "CACHING"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CLIENT' command"
@@ -270,135 +459,506 @@
     {
       "name": "client_caching_no",
       "now_ms": 71,
-      "argv": ["CLIENT", "CACHING", "NO"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "CACHING",
+        "NO"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
-
     {
       "name": "client_tracking_off",
       "now_ms": 80,
-      "argv": ["CLIENT", "TRACKING", "OFF"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "TRACKING",
+        "OFF"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
-
     {
       "name": "client_kill_addr",
       "now_ms": 90,
-      "argv": ["CLIENT", "KILL", "127.0.0.1:12345"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "CLIENT",
+        "KILL",
+        "127.0.0.1:12345"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
-
     {
       "name": "client_setname_clear_for_reset_test",
       "now_ms": 95,
-      "argv": ["CLIENT", "SETNAME", "preresetname"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "preresetname"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_getname_before_reset",
       "now_ms": 96,
-      "argv": ["CLIENT", "GETNAME"],
-      "expect": { "kind": "bulk", "value": "preresetname" }
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "preresetname"
+      }
     },
     {
       "name": "reset_clears_client_name",
       "now_ms": 97,
-      "argv": ["RESET"],
-      "expect": { "kind": "simple", "value": "RESET" }
+      "argv": [
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "RESET"
+      }
     },
     {
       "name": "client_getname_after_reset",
       "now_ms": 98,
-      "argv": ["CLIENT", "GETNAME"],
-      "expect": { "kind": "bulk", "value": null }
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
     },
     {
       "name": "client_setinfo_lib_name",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "LIB-NAME", "redis-py"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "LIB-NAME",
+        "redis-py"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_setinfo_lib_ver",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "LIB-VER", "5.0.1"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "LIB-VER",
+        "5.0.1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_setinfo_lib_name_lowercase",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "lib-name", "jedis"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "lib-name",
+        "jedis"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_setinfo_lib_ver_lowercase",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "lib-ver", "4.3.0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "lib-ver",
+        "4.3.0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_setinfo_clear_lib_name",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "LIB-NAME", ""],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "LIB-NAME",
+        ""
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_setinfo_clear_lib_ver",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "LIB-VER", ""],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "LIB-VER",
+        ""
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "client_setinfo_unknown_attr",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "UNKNOWN", "value"],
-      "expect": { "kind": "error", "value": "ERR Unrecognized option 'UNKNOWN' for CLIENT SETINFO" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "UNKNOWN",
+        "value"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Unrecognized option 'UNKNOWN' for CLIENT SETINFO"
+      }
     },
     {
       "name": "client_setinfo_wrong_arity",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "LIB-NAME"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'CLIENT' command" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "LIB-NAME"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'CLIENT' command"
+      }
     },
     {
       "name": "client_setinfo_lib_name_with_space",
       "now_ms": 100,
-      "argv": ["CLIENT", "SETINFO", "LIB-NAME", "has space"],
-      "expect": { "kind": "error", "value": "ERR lib-name can only contain characters that are allowed in CLIENT SETNAME" }
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "LIB-NAME",
+        "has space"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR lib-name can only contain characters that are allowed in CLIENT SETNAME"
+      }
     },
     {
       "name": "hello_setname_sets_client_name",
       "now_ms": 110,
-      "argv": ["CLIENT", "SETNAME", "before_hello"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "before_hello"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "hello_with_setname",
       "now_ms": 110,
-      "argv": ["HELLO", "2", "SETNAME", "fromhello"],
+      "argv": [
+        "HELLO",
+        "2",
+        "SETNAME",
+        "fromhello"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "server" },
-          { "kind": "bulk", "value": "frankenredis" },
-          { "kind": "bulk", "value": "version" },
-          { "kind": "bulk", "value": "0.1.0" },
-          { "kind": "bulk", "value": "proto" },
-          { "kind": "integer", "value": 2 }
+          {
+            "kind": "bulk",
+            "value": "server"
+          },
+          {
+            "kind": "bulk",
+            "value": "frankenredis"
+          },
+          {
+            "kind": "bulk",
+            "value": "version"
+          },
+          {
+            "kind": "bulk",
+            "value": "0.1.0"
+          },
+          {
+            "kind": "bulk",
+            "value": "proto"
+          },
+          {
+            "kind": "integer",
+            "value": 2
+          }
         ]
       }
     },
     {
       "name": "getname_after_hello_setname",
       "now_ms": 110,
-      "argv": ["CLIENT", "GETNAME"],
-      "expect": { "kind": "bulk", "value": "fromhello" }
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "fromhello"
+      }
     },
     {
       "name": "hello_setname_space_error",
       "now_ms": 110,
-      "argv": ["HELLO", "2", "SETNAME", "has space"],
-      "expect": { "kind": "error", "value": "ERR Client names cannot contain spaces, newlines or special characters." }
+      "argv": [
+        "HELLO",
+        "2",
+        "SETNAME",
+        "has space"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Client names cannot contain spaces, newlines or special characters."
+      }
+    },
+    {
+      "name": "client_setname_with_underscore",
+      "now_ms": 120,
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "my_connection_1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_getname_underscore",
+      "now_ms": 121,
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "my_connection_1"
+      }
+    },
+    {
+      "name": "client_setname_with_dash",
+      "now_ms": 122,
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "my-conn"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_getname_dash",
+      "now_ms": 123,
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "my-conn"
+      }
+    },
+    {
+      "name": "client_getname_wrong_arity",
+      "now_ms": 130,
+      "argv": [
+        "CLIENT",
+        "GETNAME",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'CLIENT' command"
+      }
+    },
+    {
+      "name": "client_reply_off",
+      "now_ms": 140,
+      "argv": [
+        "CLIENT",
+        "REPLY",
+        "OFF"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_reply_skip",
+      "now_ms": 141,
+      "argv": [
+        "CLIENT",
+        "REPLY",
+        "SKIP"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_kill_no_filter_returns_zero",
+      "now_ms": 150,
+      "argv": [
+        "CLIENT",
+        "KILL"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "client_setinfo_lib_ver_space",
+      "now_ms": 160,
+      "argv": [
+        "CLIENT",
+        "SETINFO",
+        "LIB-VER",
+        "has space"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR lib-ver can only contain characters that are allowed in CLIENT SETNAME"
+      }
+    },
+    {
+      "name": "client_case_insensitive_subcommand",
+      "now_ms": 170,
+      "argv": [
+        "CLIENT",
+        "getname"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "my-conn"
+      }
+    },
+    {
+      "name": "client_case_insensitive_setname",
+      "now_ms": 171,
+      "argv": [
+        "CLIENT",
+        "setname",
+        "lowered"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_verify_lowered",
+      "now_ms": 172,
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "lowered"
+      }
+    },
+    {
+      "name": "client_pause_negative_accepted",
+      "now_ms": 180,
+      "argv": [
+        "CLIENT",
+        "PAUSE",
+        "-1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_pause_zero_ok",
+      "now_ms": 181,
+      "argv": [
+        "CLIENT",
+        "PAUSE",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_setname_then_reset_clears",
+      "now_ms": 190,
+      "argv": [
+        "CLIENT",
+        "SETNAME",
+        "willreset"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "reset_again",
+      "now_ms": 191,
+      "argv": [
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "RESET"
+      }
+    },
+    {
+      "name": "client_getname_after_second_reset",
+      "now_ms": 192,
+      "argv": [
+        "CLIENT",
+        "GETNAME"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
     }
   ]
 }

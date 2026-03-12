@@ -498,6 +498,114 @@
       "now_ms": 0,
       "argv": ["TYPE", "sorted_words"],
       "expect": { "kind": "simple", "value": "list" }
+    },
+
+    {
+      "name": "setup_empty_list",
+      "now_ms": 0,
+      "argv": ["RPUSH", "emptylist", "x"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "setup_empty_list_pop",
+      "now_ms": 0,
+      "argv": ["RPOP", "emptylist"],
+      "expect": { "kind": "bulk", "value": "x" }
+    },
+    {
+      "name": "sort_limit_zero_count",
+      "now_ms": 0,
+      "argv": ["SORT", "nums", "LIMIT", "0", "0"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "sort_on_hash_wrongtype",
+      "now_ms": 0,
+      "argv": ["SORT", "user:a"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+    {
+      "name": "sort_ro_alpha_desc",
+      "now_ms": 0,
+      "argv": ["SORT_RO", "words", "ALPHA", "DESC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "date" },
+          { "kind": "bulk", "value": "cherry" },
+          { "kind": "bulk", "value": "banana" },
+          { "kind": "bulk", "value": "apple" }
+        ]
+      }
+    },
+    {
+      "name": "sort_ro_limit",
+      "now_ms": 0,
+      "argv": ["SORT_RO", "nums", "LIMIT", "0", "3"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "1" },
+          { "kind": "bulk", "value": "1" },
+          { "kind": "bulk", "value": "2" }
+        ]
+      }
+    },
+    {
+      "name": "sort_ro_wrong_arity",
+      "now_ms": 0,
+      "argv": ["SORT_RO"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'SORT' command" }
+    },
+    {
+      "name": "sort_ro_missing_key",
+      "now_ms": 0,
+      "argv": ["SORT_RO", "nonexistent"],
+      "expect": { "kind": "array", "value": [] }
+    },
+    {
+      "name": "sort_store_by_get_combo",
+      "now_ms": 0,
+      "argv": ["SORT", "items", "BY", "weight_*", "GET", "name_*", "STORE", "named_sorted"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "verify_store_by_get",
+      "now_ms": 0,
+      "argv": ["LRANGE", "named_sorted", "0", "-1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Bob" },
+          { "kind": "bulk", "value": "Charlie" },
+          { "kind": "bulk", "value": "Alice" }
+        ]
+      }
+    },
+    {
+      "name": "sort_case_insensitive_options",
+      "now_ms": 0,
+      "argv": ["SORT", "nums", "desc", "limit", "0", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "9" },
+          { "kind": "bulk", "value": "6" }
+        ]
+      }
+    },
+    {
+      "name": "sort_ro_by_external",
+      "now_ms": 0,
+      "argv": ["SORT_RO", "items", "BY", "weight_*"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "c" },
+          { "kind": "bulk", "value": "a" }
+        ]
+      }
     }
   ]
 }
