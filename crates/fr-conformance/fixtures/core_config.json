@@ -983,7 +983,7 @@
           },
           {
             "kind": "bulk",
-            "value": "10"
+            "value": "20"
           }
         ]
       }
@@ -1098,7 +1098,7 @@
           },
           {
             "kind": "bulk",
-            "value": "10"
+            "value": "20"
           }
         ]
       }
@@ -1522,7 +1522,7 @@
         "kind": "array",
         "value": [
           { "kind": "bulk", "value": "hz" },
-          { "kind": "bulk", "value": "10" }
+          { "kind": "bulk", "value": "20" }
         ]
       }
     },
@@ -1576,6 +1576,96 @@
       "now_ms": 200,
       "argv": ["CONFIG"],
       "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'CONFIG' command" }
+    },
+    {
+      "name": "config_set_hz_100",
+      "now_ms": 300,
+      "argv": ["CONFIG", "SET", "hz", "100"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_hz_after_100",
+      "now_ms": 300,
+      "argv": ["CONFIG", "GET", "hz"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "hz" },
+          { "kind": "bulk", "value": "100" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_hz_1_min",
+      "now_ms": 300,
+      "argv": ["CONFIG", "SET", "hz", "1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_hz_after_1",
+      "now_ms": 300,
+      "argv": ["CONFIG", "GET", "hz"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "hz" },
+          { "kind": "bulk", "value": "1" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_hz_500_max",
+      "now_ms": 300,
+      "argv": ["CONFIG", "SET", "hz", "500"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_hz_after_500",
+      "now_ms": 300,
+      "argv": ["CONFIG", "GET", "hz"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "hz" },
+          { "kind": "bulk", "value": "500" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_hz_non_integer",
+      "now_ms": 300,
+      "argv": ["CONFIG", "SET", "hz", "abc"],
+      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+    },
+    {
+      "name": "config_set_hz_zero_error",
+      "now_ms": 300,
+      "argv": ["CONFIG", "SET", "hz", "0"],
+      "expect": { "kind": "error", "value": "ERR Invalid argument '?' for CONFIG SET 'hz'" }
+    },
+    {
+      "name": "config_set_hz_negative_error",
+      "now_ms": 300,
+      "argv": ["CONFIG", "SET", "hz", "-1"],
+      "expect": { "kind": "error", "value": "ERR Invalid argument '?' for CONFIG SET 'hz'" }
+    },
+    {
+      "name": "config_set_hz_over_max_error",
+      "now_ms": 300,
+      "argv": ["CONFIG", "SET", "hz", "501"],
+      "expect": { "kind": "error", "value": "ERR Invalid argument '?' for CONFIG SET 'hz'" }
+    },
+    {
+      "name": "config_get_hz_unchanged_after_errors",
+      "now_ms": 300,
+      "argv": ["CONFIG", "GET", "hz"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "hz" },
+          { "kind": "bulk", "value": "500" }
+        ]
+      }
     }
   ]
 }

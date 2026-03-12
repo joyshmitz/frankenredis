@@ -718,6 +718,8 @@ pub struct Runtime {
     client_no_evict: bool,
     /// Flags: client no-touch mode.
     client_no_touch: bool,
+    /// Server hz (timer interrupt frequency).
+    hz: u64,
     /// Slow log: ring buffer of slow queries.
     slowlog: Vec<SlowlogEntry>,
     /// Slow log entry ID counter.
@@ -783,6 +785,7 @@ impl Runtime {
             client_lib_ver: None,
             client_no_evict: false,
             client_no_touch: false,
+            hz: 10,
             slowlog: Vec::new(),
             slowlog_next_id: 0,
             slowlog_log_slower_than_us: 10_000, // default: 10ms
@@ -1874,12 +1877,20 @@ impl Runtime {
                 self.slowlog_max_len.to_string().into_bytes(),
             )));
         }
+        // Dynamic hz — override the static default
+        if Self::config_pattern_matches(pattern, "hz") {
+            entries.push(RespFrame::BulkString(Some(b"hz".to_vec())));
+            entries.push(RespFrame::BulkString(Some(
+                self.hz.to_string().into_bytes(),
+            )));
+        }
         // Static configuration parameters that clients commonly probe
         for &(name, value) in CONFIG_STATIC_PARAMS {
             // Skip dynamically-managed params — we already emitted live values above
             if name == "maxmemory"
                 || name == "slowlog-log-slower-than"
                 || name == "slowlog-max-len"
+                || name == "hz"
             {
                 continue;
             }
@@ -1960,6 +1971,19 @@ impl Runtime {
                     Err(err) => return command_error_to_resp(err),
                 };
                 next_slowlog_max_len = Some(parsed);
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("hz") {
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(value) if (1..=500).contains(&value) => value as u64,
+                    Ok(_) => {
+                        return RespFrame::Error(
+                            "ERR Invalid argument '?' for CONFIG SET 'hz'".to_string(),
+                        );
+                    }
+                    Err(err) => return command_error_to_resp(err),
+                };
+                self.hz = parsed;
                 continue;
             }
             // Accept known CONFIG parameters as no-ops to avoid breaking clients.
@@ -4415,9 +4439,18 @@ mod tests {
     #[test]
     fn config_set_common_params_accepted() {
         let mut rt = Runtime::default_strict();
-        // Commonly-probed parameters should be accepted without error
+        // hz should be persisted and retrievable
         let set = rt.execute_frame(command(&[b"CONFIG", b"SET", b"hz", b"100"]), 0);
         assert_eq!(set, RespFrame::SimpleString("OK".to_string()));
+        let get = rt.execute_frame(command(&[b"CONFIG", b"GET", b"hz"]), 0);
+        assert_eq!(
+            get,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"hz".to_vec())),
+                RespFrame::BulkString(Some(b"100".to_vec())),
+            ]))
+        );
+        // Other common params still accepted as no-ops
         let set = rt.execute_frame(command(&[b"CONFIG", b"SET", b"timeout", b"300"]), 1);
         assert_eq!(set, RespFrame::SimpleString("OK".to_string()));
         let set = rt.execute_frame(command(&[b"CONFIG", b"SET", b"loglevel", b"warning"]), 2);
