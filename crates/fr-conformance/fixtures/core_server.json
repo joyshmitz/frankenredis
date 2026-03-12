@@ -4,31 +4,58 @@
     {
       "name": "slowlog_len_initially_zero",
       "now_ms": 1000,
-      "argv": ["SLOWLOG", "LEN"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "SLOWLOG",
+        "LEN"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "slowlog_get_initially_empty",
       "now_ms": 1001,
-      "argv": ["SLOWLOG", "GET"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "SLOWLOG",
+        "GET"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "slowlog_get_with_count",
       "now_ms": 1002,
-      "argv": ["SLOWLOG", "GET", "10"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "SLOWLOG",
+        "GET",
+        "10"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "slowlog_reset_ok",
       "now_ms": 1003,
-      "argv": ["SLOWLOG", "RESET"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SLOWLOG",
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_wrong_arity",
       "now_ms": 1004,
-      "argv": ["SLOWLOG"],
+      "argv": [
+        "SLOWLOG"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'SLOWLOG' command"
@@ -37,43 +64,76 @@
     {
       "name": "lastsave_initially_zero",
       "now_ms": 2000,
-      "argv": ["LASTSAVE"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "LASTSAVE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "save_returns_ok",
       "now_ms": 5000000,
-      "argv": ["SAVE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SAVE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "lastsave_after_save",
       "now_ms": 5001000,
-      "argv": ["LASTSAVE"],
-      "expect": { "kind": "integer", "value": 5000 }
+      "argv": [
+        "LASTSAVE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 5000
+      }
     },
     {
       "name": "bgsave_returns_message",
       "now_ms": 6000000,
-      "argv": ["BGSAVE"],
-      "expect": { "kind": "simple", "value": "Background saving started" }
+      "argv": [
+        "BGSAVE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "Background saving started"
+      }
     },
     {
       "name": "lastsave_after_bgsave",
       "now_ms": 6001000,
-      "argv": ["LASTSAVE"],
-      "expect": { "kind": "integer", "value": 6000 }
+      "argv": [
+        "LASTSAVE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 6000
+      }
     },
     {
       "name": "bgsave_schedule",
       "now_ms": 7000000,
-      "argv": ["BGSAVE", "SCHEDULE"],
-      "expect": { "kind": "simple", "value": "Background saving started" }
+      "argv": [
+        "BGSAVE",
+        "SCHEDULE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "Background saving started"
+      }
     },
     {
       "name": "bgrewriteaof_returns_message",
       "now_ms": 8000,
-      "argv": ["BGREWRITEAOF"],
+      "argv": [
+        "BGREWRITEAOF"
+      ],
       "expect": {
         "kind": "simple",
         "value": "Background append only file rewriting started"
@@ -82,13 +142,22 @@
     {
       "name": "shutdown_ok",
       "now_ms": 9000,
-      "argv": ["SHUTDOWN", "NOSAVE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SHUTDOWN",
+        "NOSAVE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "shutdown_invalid_flag",
       "now_ms": 9001,
-      "argv": ["SHUTDOWN", "BADARG"],
+      "argv": [
+        "SHUTDOWN",
+        "BADARG"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR unrecognized option or bad number of args for SHUTDOWN: 'BADARG'"
@@ -97,36 +166,69 @@
     {
       "name": "reset_returns_reset_string",
       "now_ms": 10000,
-      "argv": ["RESET"],
-      "expect": { "kind": "simple", "value": "RESET" }
+      "argv": [
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "RESET"
+      }
     },
     {
       "name": "command_count_matches_table_size",
       "now_ms": 11000,
-      "argv": ["COMMAND", "COUNT"],
-      "expect": { "kind": "integer", "value": 230 }
+      "argv": [
+        "COMMAND",
+        "COUNT"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 230
+      }
     },
     {
       "name": "command_info_single_known_entry",
       "now_ms": 11001,
-      "argv": ["COMMAND", "INFO", "COMMAND"],
+      "argv": [
+        "COMMAND",
+        "INFO",
+        "COMMAND"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "command" },
-              { "kind": "integer", "value": -1 },
+              {
+                "kind": "bulk",
+                "value": "command"
+              },
+              {
+                "kind": "integer",
+                "value": -1
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "simple", "value": "fast" }
+                  {
+                    "kind": "simple",
+                    "value": "fast"
+                  }
                 ]
               },
-              { "kind": "integer", "value": 0 },
-              { "kind": "integer", "value": 0 },
-              { "kind": "integer", "value": 0 }
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              }
             ]
           }
         ]
@@ -135,94 +237,172 @@
     {
       "name": "command_info_unknown_yields_null_entry",
       "now_ms": 11002,
-      "argv": ["COMMAND", "INFO", "NO_SUCH_COMMAND"],
+      "argv": [
+        "COMMAND",
+        "INFO",
+        "NO_SUCH_COMMAND"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": null }
+          {
+            "kind": "bulk",
+            "value": null
+          }
         ]
       }
     },
     {
       "name": "command_getkeys_returns_empty_array",
       "now_ms": 11003,
-      "argv": ["COMMAND", "GETKEYS"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "COMMAND",
+        "GETKEYS"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "command_docs_returns_empty_array",
       "now_ms": 11004,
-      "argv": ["COMMAND", "DOCS"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "COMMAND",
+        "DOCS"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "command_unknown_subcommand_errors",
       "now_ms": 11005,
-      "argv": ["COMMAND", "BOGUS"],
+      "argv": [
+        "COMMAND",
+        "BOGUS"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR unknown subcommand or wrong number of arguments for 'command|BOGUS'"
       }
     },
-
     {
       "name": "config_get_maxmemory_default",
       "now_ms": 12000,
-      "argv": ["CONFIG", "GET", "maxmemory"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "maxmemory"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "maxmemory" },
-          { "kind": "bulk", "value": "0" }
+          {
+            "kind": "bulk",
+            "value": "maxmemory"
+          },
+          {
+            "kind": "bulk",
+            "value": "0"
+          }
         ]
       }
     },
     {
       "name": "config_set_maxmemory_numeric",
       "now_ms": 12001,
-      "argv": ["CONFIG", "SET", "maxmemory", "104857600"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "maxmemory",
+        "104857600"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_maxmemory_after_set",
       "now_ms": 12002,
-      "argv": ["CONFIG", "GET", "maxmemory"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "maxmemory"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "maxmemory" },
-          { "kind": "bulk", "value": "104857600" }
+          {
+            "kind": "bulk",
+            "value": "maxmemory"
+          },
+          {
+            "kind": "bulk",
+            "value": "104857600"
+          }
         ]
       }
     },
     {
       "name": "config_set_maxmemory_back_to_zero",
       "now_ms": 12003,
-      "argv": ["CONFIG", "SET", "maxmemory", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "maxmemory",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_no_match",
       "now_ms": 12004,
-      "argv": ["CONFIG", "GET", "nonexistent_param_xyzzy"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "CONFIG",
+        "GET",
+        "nonexistent_param_xyzzy"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "config_resetstat_returns_ok",
       "now_ms": 12010,
-      "argv": ["CONFIG", "RESETSTAT"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "RESETSTAT"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_rewrite_returns_ok",
       "now_ms": 12011,
-      "argv": ["CONFIG", "REWRITE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "REWRITE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_wrong_arity",
       "now_ms": 12012,
-      "argv": ["CONFIG"],
+      "argv": [
+        "CONFIG"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CONFIG' command"
@@ -231,7 +411,10 @@
     {
       "name": "config_get_wrong_arity",
       "now_ms": 12013,
-      "argv": ["CONFIG", "GET"],
+      "argv": [
+        "CONFIG",
+        "GET"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'CONFIG' command"
@@ -240,119 +423,249 @@
     {
       "name": "config_unknown_subcommand",
       "now_ms": 12014,
-      "argv": ["CONFIG", "BOGUS"],
+      "argv": [
+        "CONFIG",
+        "BOGUS"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR Unknown subcommand or wrong number of arguments for CONFIG BOGUS"
       }
     },
-
     {
       "name": "object_encoding_setup_string",
       "now_ms": 13000,
-      "argv": ["SET", "obj_str", "hello"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "obj_str",
+        "hello"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "object_encoding_string",
       "now_ms": 13001,
-      "argv": ["OBJECT", "ENCODING", "obj_str"],
-      "expect": { "kind": "bulk", "value": "embstr" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_str"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "embstr"
+      }
     },
     {
       "name": "object_encoding_setup_int",
       "now_ms": 13002,
-      "argv": ["SET", "obj_int", "12345"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "obj_int",
+        "12345"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "object_encoding_int",
       "now_ms": 13003,
-      "argv": ["OBJECT", "ENCODING", "obj_int"],
-      "expect": { "kind": "bulk", "value": "int" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_int"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "int"
+      }
     },
     {
       "name": "object_encoding_setup_list",
       "now_ms": 13004,
-      "argv": ["RPUSH", "obj_list", "a", "b", "c"],
-      "expect": { "kind": "integer", "value": 3 }
+      "argv": [
+        "RPUSH",
+        "obj_list",
+        "a",
+        "b",
+        "c"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "object_encoding_list",
       "now_ms": 13005,
-      "argv": ["OBJECT", "ENCODING", "obj_list"],
-      "expect": { "kind": "bulk", "value": "listpack" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_list"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "listpack"
+      }
     },
     {
       "name": "object_encoding_setup_hash",
       "now_ms": 13006,
-      "argv": ["HSET", "obj_hash", "f1", "v1"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "HSET",
+        "obj_hash",
+        "f1",
+        "v1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "object_encoding_hash",
       "now_ms": 13007,
-      "argv": ["OBJECT", "ENCODING", "obj_hash"],
-      "expect": { "kind": "bulk", "value": "listpack" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_hash"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "listpack"
+      }
     },
     {
       "name": "object_encoding_setup_set",
       "now_ms": 13008,
-      "argv": ["SADD", "obj_set", "a", "b"],
-      "expect": { "kind": "integer", "value": 2 }
+      "argv": [
+        "SADD",
+        "obj_set",
+        "a",
+        "b"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
     },
     {
       "name": "object_encoding_set",
       "now_ms": 13009,
-      "argv": ["OBJECT", "ENCODING", "obj_set"],
-      "expect": { "kind": "bulk", "value": "listpack" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_set"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "listpack"
+      }
     },
     {
       "name": "object_encoding_setup_zset",
       "now_ms": 13010,
-      "argv": ["ZADD", "obj_zset", "1", "a", "2", "b"],
-      "expect": { "kind": "integer", "value": 2 }
+      "argv": [
+        "ZADD",
+        "obj_zset",
+        "1",
+        "a",
+        "2",
+        "b"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
     },
     {
       "name": "object_encoding_zset",
       "now_ms": 13011,
-      "argv": ["OBJECT", "ENCODING", "obj_zset"],
-      "expect": { "kind": "bulk", "value": "listpack" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_zset"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "listpack"
+      }
     },
     {
       "name": "object_encoding_missing_key",
       "now_ms": 13012,
-      "argv": ["OBJECT", "ENCODING", "nokey"],
-      "expect": { "kind": "error", "value": "ERR no such key" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "nokey"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
     },
     {
       "name": "object_refcount_existing",
       "now_ms": 13013,
-      "argv": ["OBJECT", "REFCOUNT", "obj_str"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "OBJECT",
+        "REFCOUNT",
+        "obj_str"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "object_refcount_missing_key",
       "now_ms": 13014,
-      "argv": ["OBJECT", "REFCOUNT", "nokey"],
-      "expect": { "kind": "error", "value": "ERR no such key" }
+      "argv": [
+        "OBJECT",
+        "REFCOUNT",
+        "nokey"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
     },
     {
       "name": "object_freq_existing",
       "now_ms": 13015,
-      "argv": ["OBJECT", "FREQ", "obj_str"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "OBJECT",
+        "FREQ",
+        "obj_str"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "object_freq_missing_key",
       "now_ms": 13016,
-      "argv": ["OBJECT", "FREQ", "nokey"],
-      "expect": { "kind": "error", "value": "ERR no such key" }
+      "argv": [
+        "OBJECT",
+        "FREQ",
+        "nokey"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
     },
     {
       "name": "object_wrong_arity",
       "now_ms": 13017,
-      "argv": ["OBJECT"],
+      "argv": [
+        "OBJECT"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'OBJECT' command"
@@ -361,7 +674,10 @@
     {
       "name": "object_encoding_wrong_arity",
       "now_ms": 13018,
-      "argv": ["OBJECT", "ENCODING"],
+      "argv": [
+        "OBJECT",
+        "ENCODING"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'OBJECT' command"
@@ -370,69 +686,124 @@
     {
       "name": "object_unknown_subcommand",
       "now_ms": 13019,
-      "argv": ["OBJECT", "BOGUS", "key"],
+      "argv": [
+        "OBJECT",
+        "BOGUS",
+        "key"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR Unknown subcommand or wrong number of arguments for OBJECT BOGUS"
       }
     },
-
     {
       "name": "memory_usage_setup",
       "now_ms": 14000,
-      "argv": ["SET", "mem_key", "hello"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "mem_key",
+        "hello"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "memory_usage_existing_key",
       "now_ms": 14001,
-      "argv": ["MEMORY", "USAGE", "mem_key"],
-      "expect": { "kind": "integer", "value": 52 }
+      "argv": [
+        "MEMORY",
+        "USAGE",
+        "mem_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 52
+      }
     },
     {
       "name": "memory_usage_missing_key",
       "now_ms": 14002,
-      "argv": ["MEMORY", "USAGE", "nokey"],
-      "expect": { "kind": "bulk", "value": null }
+      "argv": [
+        "MEMORY",
+        "USAGE",
+        "nokey"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
     },
     {
       "name": "memory_usage_with_samples",
       "now_ms": 14003,
-      "argv": ["MEMORY", "USAGE", "mem_key", "SAMPLES", "5"],
-      "expect": { "kind": "integer", "value": 52 }
+      "argv": [
+        "MEMORY",
+        "USAGE",
+        "mem_key",
+        "SAMPLES",
+        "5"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 52
+      }
     },
     {
       "name": "memory_doctor",
       "now_ms": 14004,
-      "argv": ["MEMORY", "DOCTOR"],
-      "expect": { "kind": "bulk", "value": "Sam, I have no memory problems" }
+      "argv": [
+        "MEMORY",
+        "DOCTOR"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "Sam, I have no memory problems"
+      }
     },
     {
       "name": "memory_purge",
       "now_ms": 14005,
-      "argv": ["MEMORY", "PURGE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "MEMORY",
+        "PURGE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "memory_wrong_arity",
       "now_ms": 14006,
-      "argv": ["MEMORY"],
+      "argv": [
+        "MEMORY"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'MEMORY' command"
       }
     },
-
     {
       "name": "wait_returns_zero_standalone",
       "now_ms": 15000,
-      "argv": ["WAIT", "1", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "1",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_wrong_arity",
       "now_ms": 15001,
-      "argv": ["WAIT"],
+      "argv": [
+        "WAIT"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'WAIT' command"
@@ -441,67 +812,116 @@
     {
       "name": "waitaof_returns_local_satisfied",
       "now_ms": 15002,
-      "argv": ["WAITAOF", "0", "0", "0"],
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_wrong_arity",
       "now_ms": 15003,
-      "argv": ["WAITAOF", "0"],
+      "argv": [
+        "WAITAOF",
+        "0"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'WAITAOF' command"
       }
     },
-
     {
       "name": "role_returns_master",
       "now_ms": 16000,
-      "argv": ["ROLE"],
+      "argv": [
+        "ROLE"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "master" },
-          { "kind": "integer", "value": 0 },
-          { "kind": "array", "value": [] }
+          {
+            "kind": "bulk",
+            "value": "master"
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
         ]
       }
     },
-
     {
       "name": "latency_latest_empty",
       "now_ms": 17000,
-      "argv": ["LATENCY", "LATEST"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "LATENCY",
+        "LATEST"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "latency_history_empty",
       "now_ms": 17001,
-      "argv": ["LATENCY", "HISTORY"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "LATENCY",
+        "HISTORY"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "latency_reset_ok",
       "now_ms": 17002,
-      "argv": ["LATENCY", "RESET"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "LATENCY",
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "latency_graph_null",
       "now_ms": 17003,
-      "argv": ["LATENCY", "GRAPH"],
-      "expect": { "kind": "bulk", "value": null }
+      "argv": [
+        "LATENCY",
+        "GRAPH"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
     },
     {
       "name": "latency_wrong_arity",
       "now_ms": 17004,
-      "argv": ["LATENCY"],
+      "argv": [
+        "LATENCY"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'LATENCY' command"
@@ -510,29 +930,47 @@
     {
       "name": "latency_unknown_subcommand",
       "now_ms": 17005,
-      "argv": ["LATENCY", "BOGUS"],
+      "argv": [
+        "LATENCY",
+        "BOGUS"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR unknown subcommand or wrong number of arguments for 'latency|BOGUS'"
       }
     },
-
     {
       "name": "debug_sleep_ok",
       "now_ms": 18000,
-      "argv": ["DEBUG", "SLEEP", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "DEBUG",
+        "SLEEP",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "debug_set_active_expire_ok",
       "now_ms": 18001,
-      "argv": ["DEBUG", "SET-ACTIVE-EXPIRE", "1"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "DEBUG",
+        "SET-ACTIVE-EXPIRE",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "debug_wrong_arity",
       "now_ms": 18002,
-      "argv": ["DEBUG"],
+      "argv": [
+        "DEBUG"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'DEBUG' command"
@@ -541,95 +979,167 @@
     {
       "name": "debug_unknown_subcommand",
       "now_ms": 18003,
-      "argv": ["DEBUG", "BOGUS"],
+      "argv": [
+        "DEBUG",
+        "BOGUS"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR Unknown subcommand or wrong number of arguments for DEBUG BOGUS"
       }
     },
-
     {
       "name": "swapdb_same_db_ok",
       "now_ms": 19000,
-      "argv": ["SWAPDB", "0", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SWAPDB",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "swapdb_invalid_db",
       "now_ms": 19001,
-      "argv": ["SWAPDB", "0", "1"],
-      "expect": { "kind": "error", "value": "ERR invalid DB index" }
+      "argv": [
+        "SWAPDB",
+        "0",
+        "1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR invalid DB index"
+      }
     },
     {
       "name": "swapdb_wrong_arity",
       "now_ms": 19002,
-      "argv": ["SWAPDB", "0"],
+      "argv": [
+        "SWAPDB",
+        "0"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'SWAPDB' command"
       }
     },
-
     {
       "name": "shutdown_save_flag",
       "now_ms": 20000,
-      "argv": ["SHUTDOWN", "SAVE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SHUTDOWN",
+        "SAVE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "shutdown_now_flag",
       "now_ms": 20001,
-      "argv": ["SHUTDOWN", "NOW"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SHUTDOWN",
+        "NOW"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "shutdown_force_flag",
       "now_ms": 20002,
-      "argv": ["SHUTDOWN", "FORCE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SHUTDOWN",
+        "FORCE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
-
     {
       "name": "move_same_db_returns_zero",
       "now_ms": 21000,
-      "argv": ["MOVE", "obj_str", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "MOVE",
+        "obj_str",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "move_other_db_error",
       "now_ms": 21001,
-      "argv": ["MOVE", "obj_str", "1"],
-      "expect": { "kind": "error", "value": "ERR index out of range" }
+      "argv": [
+        "MOVE",
+        "obj_str",
+        "1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR index out of range"
+      }
     },
     {
       "name": "move_wrong_arity",
       "now_ms": 21002,
-      "argv": ["MOVE", "key"],
+      "argv": [
+        "MOVE",
+        "key"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'MOVE' command"
       }
     },
-
     {
       "name": "slowlog_help_returns_array",
       "now_ms": 22000,
-      "argv": ["SLOWLOG", "HELP"],
+      "argv": [
+        "SLOWLOG",
+        "HELP"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:" },
-          { "kind": "bulk", "value": "GET [<count>] - Return the slow log entries." },
-          { "kind": "bulk", "value": "LEN - Return the number of entries in the slow log." },
-          { "kind": "bulk", "value": "RESET - Reset the slow log." },
-          { "kind": "bulk", "value": "HELP - Return subcommand help summary." }
+          {
+            "kind": "bulk",
+            "value": "SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:"
+          },
+          {
+            "kind": "bulk",
+            "value": "GET [<count>] - Return the slow log entries."
+          },
+          {
+            "kind": "bulk",
+            "value": "LEN - Return the number of entries in the slow log."
+          },
+          {
+            "kind": "bulk",
+            "value": "RESET - Reset the slow log."
+          },
+          {
+            "kind": "bulk",
+            "value": "HELP - Return subcommand help summary."
+          }
         ]
       }
     },
     {
       "name": "slowlog_unknown_subcommand",
       "now_ms": 22001,
-      "argv": ["SLOWLOG", "BOGUS"],
+      "argv": [
+        "SLOWLOG",
+        "BOGUS"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR unknown subcommand or wrong number of arguments for 'slowlog|BOGUS'"
@@ -638,19 +1148,34 @@
     {
       "name": "config_get_wildcard",
       "now_ms": 23000,
-      "argv": ["CONFIG", "GET", "maxmemory-policy"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "maxmemory-policy"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "maxmemory-policy" },
-          { "kind": "bulk", "value": "noeviction" }
+          {
+            "kind": "bulk",
+            "value": "maxmemory-policy"
+          },
+          {
+            "kind": "bulk",
+            "value": "noeviction"
+          }
         ]
       }
     },
     {
       "name": "config_set_unsupported_param",
       "now_ms": 23001,
-      "argv": ["CONFIG", "SET", "totally_unknown_param", "value"],
+      "argv": [
+        "CONFIG",
+        "SET",
+        "totally_unknown_param",
+        "value"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR Unsupported CONFIG parameter 'totally_unknown_param'"
@@ -659,253 +1184,779 @@
     {
       "name": "object_help",
       "now_ms": 24000,
-      "argv": ["OBJECT", "HELP"],
+      "argv": [
+        "OBJECT",
+        "HELP"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:" },
-          { "kind": "bulk", "value": "ENCODING <key> - Return the encoding of the object at <key>." },
-          { "kind": "bulk", "value": "FREQ <key> - Return the access frequency of <key>." },
-          { "kind": "bulk", "value": "HELP - Return subcommand help summary." },
-          { "kind": "bulk", "value": "IDLETIME <key> - Return the idle time of <key>." },
-          { "kind": "bulk", "value": "REFCOUNT <key> - Return the reference count of <key>." }
+          {
+            "kind": "bulk",
+            "value": "OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"
+          },
+          {
+            "kind": "bulk",
+            "value": "ENCODING <key> - Return the encoding of the object at <key>."
+          },
+          {
+            "kind": "bulk",
+            "value": "FREQ <key> - Return the access frequency of <key>."
+          },
+          {
+            "kind": "bulk",
+            "value": "HELP - Return subcommand help summary."
+          },
+          {
+            "kind": "bulk",
+            "value": "IDLETIME <key> - Return the idle time of <key>."
+          },
+          {
+            "kind": "bulk",
+            "value": "REFCOUNT <key> - Return the reference count of <key>."
+          }
         ]
       }
     },
     {
       "name": "memory_help",
       "now_ms": 24000,
-      "argv": ["MEMORY", "HELP"],
+      "argv": [
+        "MEMORY",
+        "HELP"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "MEMORY <subcommand> [<arg> [value] ...]. Subcommands are:" },
-          { "kind": "bulk", "value": "DOCTOR - Return memory problems reports." },
-          { "kind": "bulk", "value": "MALLOC-STATS - Return internal statistics report from the memory allocator." },
-          { "kind": "bulk", "value": "PURGE - Ask the allocator to release memory." },
-          { "kind": "bulk", "value": "STATS - Return information about the memory usage of the server." },
-          { "kind": "bulk", "value": "USAGE <key> [SAMPLES <count>] - Return memory in bytes used by <key> and its value." },
-          { "kind": "bulk", "value": "HELP - Return subcommand help summary." }
+          {
+            "kind": "bulk",
+            "value": "MEMORY <subcommand> [<arg> [value] ...]. Subcommands are:"
+          },
+          {
+            "kind": "bulk",
+            "value": "DOCTOR - Return memory problems reports."
+          },
+          {
+            "kind": "bulk",
+            "value": "MALLOC-STATS - Return internal statistics report from the memory allocator."
+          },
+          {
+            "kind": "bulk",
+            "value": "PURGE - Ask the allocator to release memory."
+          },
+          {
+            "kind": "bulk",
+            "value": "STATS - Return information about the memory usage of the server."
+          },
+          {
+            "kind": "bulk",
+            "value": "USAGE <key> [SAMPLES <count>] - Return memory in bytes used by <key> and its value."
+          },
+          {
+            "kind": "bulk",
+            "value": "HELP - Return subcommand help summary."
+          }
         ]
       }
     },
     {
       "name": "memory_malloc_stats",
       "now_ms": 24000,
-      "argv": ["MEMORY", "MALLOC-STATS"],
-      "expect": { "kind": "bulk", "value": "Memory allocator stats not available" }
+      "argv": [
+        "MEMORY",
+        "MALLOC-STATS"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "Memory allocator stats not available"
+      }
     },
     {
       "name": "memory_stats",
       "now_ms": 24000,
-      "argv": ["MEMORY", "STATS"],
-      "expect": { "kind": "bulk", "value": "peak.allocated:0\r\ntotal.allocated:0\r\nstartup.allocated:0\r\nreplication.backlog:0\r\nclients.slaves:0\r\nclients.normal:0\r\naof.buffer:0\r\n" }
+      "argv": [
+        "MEMORY",
+        "STATS"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "peak.allocated:0\r\ntotal.allocated:0\r\nstartup.allocated:0\r\nreplication.backlog:0\r\nclients.slaves:0\r\nclients.normal:0\r\naof.buffer:0\r\n"
+      }
     },
     {
       "name": "latency_help",
       "now_ms": 24000,
-      "argv": ["LATENCY", "HELP"],
+      "argv": [
+        "LATENCY",
+        "HELP"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "LATENCY <subcommand> [<arg> ...]. Subcommands are:" },
-          { "kind": "bulk", "value": "LATEST - Return the latest latency samples." },
-          { "kind": "bulk", "value": "HISTORY <event> - Return latency history for an event." },
-          { "kind": "bulk", "value": "RESET [<event> ...] - Reset latency data." },
-          { "kind": "bulk", "value": "GRAPH <event> - Return an ASCII graph of latency." },
-          { "kind": "bulk", "value": "HELP - Return subcommand help summary." }
+          {
+            "kind": "bulk",
+            "value": "LATENCY <subcommand> [<arg> ...]. Subcommands are:"
+          },
+          {
+            "kind": "bulk",
+            "value": "LATEST - Return the latest latency samples."
+          },
+          {
+            "kind": "bulk",
+            "value": "HISTORY <event> - Return latency history for an event."
+          },
+          {
+            "kind": "bulk",
+            "value": "RESET [<event> ...] - Reset latency data."
+          },
+          {
+            "kind": "bulk",
+            "value": "GRAPH <event> - Return an ASCII graph of latency."
+          },
+          {
+            "kind": "bulk",
+            "value": "HELP - Return subcommand help summary."
+          }
         ]
       }
     },
     {
       "name": "script_help",
       "now_ms": 24000,
-      "argv": ["SCRIPT", "HELP"],
+      "argv": [
+        "SCRIPT",
+        "HELP"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "SCRIPT <subcommand> [<arg> [value] ...]. Subcommands are:" },
-          { "kind": "bulk", "value": "EXISTS <sha1> [<sha1> ...] - Check existence of scripts by SHA1." },
-          { "kind": "bulk", "value": "FLUSH [ASYNC|SYNC] - Remove all scripts from the cache." },
-          { "kind": "bulk", "value": "KILL - Kill the currently executing script." },
-          { "kind": "bulk", "value": "LOAD <script> - Load a script into the cache." },
-          { "kind": "bulk", "value": "HELP - Return subcommand help summary." }
+          {
+            "kind": "bulk",
+            "value": "SCRIPT <subcommand> [<arg> [value] ...]. Subcommands are:"
+          },
+          {
+            "kind": "bulk",
+            "value": "EXISTS <sha1> [<sha1> ...] - Check existence of scripts by SHA1."
+          },
+          {
+            "kind": "bulk",
+            "value": "FLUSH [ASYNC|SYNC] - Remove all scripts from the cache."
+          },
+          {
+            "kind": "bulk",
+            "value": "KILL - Kill the currently executing script."
+          },
+          {
+            "kind": "bulk",
+            "value": "LOAD <script> - Load a script into the cache."
+          },
+          {
+            "kind": "bulk",
+            "value": "HELP - Return subcommand help summary."
+          }
         ]
       }
     },
     {
       "name": "debug_jmap",
       "now_ms": 24000,
-      "argv": ["DEBUG", "JMAP"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "DEBUG",
+        "JMAP"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "debug_reload",
       "now_ms": 24000,
-      "argv": ["DEBUG", "RELOAD"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "DEBUG",
+        "RELOAD"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "debug_object",
       "now_ms": 24000,
-      "argv": ["DEBUG", "OBJECT", "somekey"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "DEBUG",
+        "OBJECT",
+        "somekey"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "debug_unknown_subcommand",
       "now_ms": 24000,
-      "argv": ["DEBUG", "NOSUCH"],
-      "expect": { "kind": "error", "value": "ERR Unknown subcommand or wrong number of arguments for DEBUG NOSUCH" }
+      "argv": [
+        "DEBUG",
+        "NOSUCH"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Unknown subcommand or wrong number of arguments for DEBUG NOSUCH"
+      }
     },
     {
       "name": "memory_unknown_subcommand",
       "now_ms": 24000,
-      "argv": ["MEMORY", "NOSUCH"],
-      "expect": { "kind": "error", "value": "ERR unknown subcommand or wrong number of arguments for 'memory|NOSUCH'" }
+      "argv": [
+        "MEMORY",
+        "NOSUCH"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown subcommand or wrong number of arguments for 'memory|NOSUCH'"
+      }
     },
     {
       "name": "latency_unknown_subcommand",
       "now_ms": 24000,
-      "argv": ["LATENCY", "NOSUCH"],
-      "expect": { "kind": "error", "value": "ERR unknown subcommand or wrong number of arguments for 'latency|NOSUCH'" }
+      "argv": [
+        "LATENCY",
+        "NOSUCH"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown subcommand or wrong number of arguments for 'latency|NOSUCH'"
+      }
     },
     {
       "name": "command_docs",
       "now_ms": 24000,
-      "argv": ["COMMAND", "DOCS"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "COMMAND",
+        "DOCS"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "command_getkeys",
       "now_ms": 24000,
-      "argv": ["COMMAND", "GETKEYS"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "COMMAND",
+        "GETKEYS"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "command_unknown_subcommand",
       "now_ms": 24000,
-      "argv": ["COMMAND", "NOSUCH"],
-      "expect": { "kind": "error", "value": "ERR unknown subcommand or wrong number of arguments for 'command|NOSUCH'" }
+      "argv": [
+        "COMMAND",
+        "NOSUCH"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown subcommand or wrong number of arguments for 'command|NOSUCH'"
+      }
     },
     {
       "name": "slowlog_config_set_threshold_zero",
       "now_ms": 25000,
-      "argv": ["CONFIG", "SET", "slowlog-log-slower-than", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "slowlog-log-slower-than",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_trigger_set_command",
       "now_ms": 25000,
-      "argv": ["SET", "slowlog_key1", "value1"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "slowlog_key1",
+        "value1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_len_after_one_command",
       "now_ms": 25000,
-      "argv": ["SLOWLOG", "LEN"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "SLOWLOG",
+        "LEN"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "slowlog_trigger_second_command",
       "now_ms": 25000,
-      "argv": ["SET", "slowlog_key2", "value2"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "slowlog_key2",
+        "value2"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_len_after_two_commands",
       "now_ms": 25000,
-      "argv": ["SLOWLOG", "LEN"],
-      "expect": { "kind": "integer", "value": 2 }
+      "argv": [
+        "SLOWLOG",
+        "LEN"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
     },
     {
       "name": "slowlog_reset_clears",
       "now_ms": 25000,
-      "argv": ["SLOWLOG", "RESET"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SLOWLOG",
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_len_after_reset",
       "now_ms": 25000,
-      "argv": ["SLOWLOG", "LEN"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "SLOWLOG",
+        "LEN"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "slowlog_config_set_max_len_2",
       "now_ms": 26000,
-      "argv": ["CONFIG", "SET", "slowlog-max-len", "2"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "slowlog-max-len",
+        "2"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_fill_a",
       "now_ms": 26000,
-      "argv": ["SET", "sl_a", "1"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "sl_a",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_fill_b",
       "now_ms": 26000,
-      "argv": ["SET", "sl_b", "2"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "sl_b",
+        "2"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_fill_c",
       "now_ms": 26000,
-      "argv": ["SET", "sl_c", "3"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "sl_c",
+        "3"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_len_capped_at_max",
       "now_ms": 26000,
-      "argv": ["SLOWLOG", "LEN"],
-      "expect": { "kind": "integer", "value": 2 }
+      "argv": [
+        "SLOWLOG",
+        "LEN"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
     },
     {
       "name": "slowlog_config_get_threshold",
       "now_ms": 26000,
-      "argv": ["CONFIG", "GET", "slowlog-log-slower-than"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "slowlog-log-slower-than"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "slowlog-log-slower-than" },
-          { "kind": "bulk", "value": "0" }
+          {
+            "kind": "bulk",
+            "value": "slowlog-log-slower-than"
+          },
+          {
+            "kind": "bulk",
+            "value": "0"
+          }
         ]
       }
     },
     {
       "name": "slowlog_config_get_max_len",
       "now_ms": 26000,
-      "argv": ["CONFIG", "GET", "slowlog-max-len"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "slowlog-max-len"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "slowlog-max-len" },
-          { "kind": "bulk", "value": "2" }
+          {
+            "kind": "bulk",
+            "value": "slowlog-max-len"
+          },
+          {
+            "kind": "bulk",
+            "value": "2"
+          }
         ]
       }
     },
     {
       "name": "slowlog_disable_with_negative_threshold",
       "now_ms": 27000,
-      "argv": ["CONFIG", "SET", "slowlog-log-slower-than", "-1"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "slowlog-log-slower-than",
+        "-1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_reset_before_disable_test",
       "now_ms": 27000,
-      "argv": ["SLOWLOG", "RESET"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SLOWLOG",
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_trigger_while_disabled",
       "now_ms": 27000,
-      "argv": ["SET", "sl_disabled", "val"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "sl_disabled",
+        "val"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "slowlog_len_stays_zero_when_disabled",
       "now_ms": 27000,
-      "argv": ["SLOWLOG", "LEN"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "SLOWLOG",
+        "LEN"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "slowlog_help_returns_array",
+      "now_ms": 100,
+      "argv": [
+        "SLOWLOG",
+        "HELP"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:"
+          },
+          {
+            "kind": "bulk",
+            "value": "GET [<count>] - Return the slow log entries."
+          },
+          {
+            "kind": "bulk",
+            "value": "LEN - Return the number of entries in the slow log."
+          },
+          {
+            "kind": "bulk",
+            "value": "RESET - Reset the slow log."
+          },
+          {
+            "kind": "bulk",
+            "value": "HELP - Return subcommand help summary."
+          }
+        ]
+      }
+    },
+    {
+      "name": "slowlog_unknown_subcommand_nosuch",
+      "now_ms": 100,
+      "argv": [
+        "SLOWLOG",
+        "NOSUCH"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown subcommand or wrong number of arguments for 'slowlog|NOSUCH'"
+      }
+    },
+    {
+      "name": "slowlog_len_lowercase",
+      "now_ms": 100,
+      "argv": [
+        "SLOWLOG",
+        "len"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "memory_help_returns_array",
+      "now_ms": 100,
+      "argv": [
+        "MEMORY",
+        "HELP"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "MEMORY <subcommand> [<arg> [value] ...]. Subcommands are:"
+          },
+          {
+            "kind": "bulk",
+            "value": "DOCTOR - Return memory problems reports."
+          },
+          {
+            "kind": "bulk",
+            "value": "MALLOC-STATS - Return internal statistics report from the memory allocator."
+          },
+          {
+            "kind": "bulk",
+            "value": "PURGE - Ask the allocator to release memory."
+          },
+          {
+            "kind": "bulk",
+            "value": "STATS - Return information about the memory usage of the server."
+          },
+          {
+            "kind": "bulk",
+            "value": "USAGE <key> [SAMPLES <count>] - Return memory in bytes used by <key> and its value."
+          },
+          {
+            "kind": "bulk",
+            "value": "HELP - Return subcommand help summary."
+          }
+        ]
+      }
+    },
+    {
+      "name": "memory_doctor",
+      "now_ms": 100,
+      "argv": [
+        "MEMORY",
+        "DOCTOR"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "Sam, I have no memory problems"
+      }
+    },
+    {
+      "name": "memory_purge",
+      "now_ms": 100,
+      "argv": [
+        "MEMORY",
+        "PURGE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "memory_unknown_subcommand",
+      "now_ms": 100,
+      "argv": [
+        "MEMORY",
+        "NOSUCH"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown subcommand or wrong number of arguments for 'memory|NOSUCH'"
+      }
+    },
+    {
+      "name": "time_returns_two_elements",
+      "now_ms": 1500,
+      "argv": [
+        "TIME"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "1"
+          },
+          {
+            "kind": "bulk",
+            "value": "500000"
+          }
+        ]
+      }
+    },
+    {
+      "name": "time_zero",
+      "now_ms": 0,
+      "argv": [
+        "TIME"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "0"
+          },
+          {
+            "kind": "bulk",
+            "value": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "time_wrong_arity",
+      "now_ms": 100,
+      "argv": [
+        "TIME",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'TIME' command"
+      }
+    },
+    {
+      "name": "dbsize_setup",
+      "now_ms": 100,
+      "argv": [
+        "SET",
+        "dbsize_key",
+        "val"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "command_unknown_subcommand",
+      "now_ms": 100,
+      "argv": [
+        "COMMAND",
+        "NOSUCH"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown subcommand or wrong number of arguments for 'command|NOSUCH'"
+      }
+    },
+    {
+      "name": "save_returns_ok",
+      "now_ms": 100,
+      "argv": [
+        "SAVE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "bgsave_returns_ok",
+      "now_ms": 100,
+      "argv": [
+        "BGSAVE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "Background saving started"
+      }
+    },
+    {
+      "name": "bgrewriteaof_returns_ok",
+      "now_ms": 100,
+      "argv": [
+        "BGREWRITEAOF"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "Background append only file rewriting started"
+      }
     }
   ]
 }

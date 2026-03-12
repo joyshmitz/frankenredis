@@ -4,55 +4,114 @@
     {
       "name": "xlen_missing_key",
       "now_ms": 0,
-      "argv": ["XLEN", "stream"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "XLEN",
+        "stream"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "xadd_auto_first",
       "now_ms": 1000,
-      "argv": ["XADD", "stream", "*", "field1", "value1"],
-      "expect": { "kind": "bulk", "value": "1000-0" }
+      "argv": [
+        "XADD",
+        "stream",
+        "*",
+        "field1",
+        "value1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1000-0"
+      }
     },
     {
       "name": "xadd_auto_same_millisecond",
       "now_ms": 1000,
-      "argv": ["XADD", "stream", "*", "field2", "value2"],
-      "expect": { "kind": "bulk", "value": "1000-1" }
+      "argv": [
+        "XADD",
+        "stream",
+        "*",
+        "field2",
+        "value2"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1000-1"
+      }
     },
     {
       "name": "xlen_after_two_entries",
       "now_ms": 1000,
-      "argv": ["XLEN", "stream"],
-      "expect": { "kind": "integer", "value": 2 }
+      "argv": [
+        "XLEN",
+        "stream"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
     },
     {
       "name": "type_reports_stream",
       "now_ms": 1000,
-      "argv": ["TYPE", "stream"],
-      "expect": { "kind": "simple", "value": "stream" }
+      "argv": [
+        "TYPE",
+        "stream"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "stream"
+      }
     },
     {
       "name": "xadd_explicit_higher_id",
       "now_ms": 1000,
-      "argv": ["XADD", "stream", "1000-2", "field3", "value3"],
-      "expect": { "kind": "bulk", "value": "1000-2" }
+      "argv": [
+        "XADD",
+        "stream",
+        "1000-2",
+        "field3",
+        "value3"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1000-2"
+      }
     },
     {
       "name": "xrange_all_entries",
       "now_ms": 1000,
-      "argv": ["XRANGE", "stream", "-", "+"],
+      "argv": [
+        "XRANGE",
+        "stream",
+        "-",
+        "+"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-0" },
+              {
+                "kind": "bulk",
+                "value": "1000-0"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field1" },
-                  { "kind": "bulk", "value": "value1" }
+                  {
+                    "kind": "bulk",
+                    "value": "field1"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value1"
+                  }
                 ]
               }
             ]
@@ -60,12 +119,21 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-1" },
+              {
+                "kind": "bulk",
+                "value": "1000-1"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field2" },
-                  { "kind": "bulk", "value": "value2" }
+                  {
+                    "kind": "bulk",
+                    "value": "field2"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value2"
+                  }
                 ]
               }
             ]
@@ -73,12 +141,21 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-2" },
+              {
+                "kind": "bulk",
+                "value": "1000-2"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field3" },
-                  { "kind": "bulk", "value": "value3" }
+                  {
+                    "kind": "bulk",
+                    "value": "field3"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value3"
+                  }
                 ]
               }
             ]
@@ -89,19 +166,35 @@
     {
       "name": "xrange_with_count",
       "now_ms": 1000,
-      "argv": ["XRANGE", "stream", "1000", "+", "COUNT", "1"],
+      "argv": [
+        "XRANGE",
+        "stream",
+        "1000",
+        "+",
+        "COUNT",
+        "1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-0" },
+              {
+                "kind": "bulk",
+                "value": "1000-0"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field1" },
-                  { "kind": "bulk", "value": "value1" }
+                  {
+                    "kind": "bulk",
+                    "value": "field1"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value1"
+                  }
                 ]
               }
             ]
@@ -112,19 +205,33 @@
     {
       "name": "xrange_single_id_window",
       "now_ms": 1000,
-      "argv": ["XRANGE", "stream", "1000-1", "1000-1"],
+      "argv": [
+        "XRANGE",
+        "stream",
+        "1000-1",
+        "1000-1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-1" },
+              {
+                "kind": "bulk",
+                "value": "1000-1"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field2" },
-                  { "kind": "bulk", "value": "value2" }
+                  {
+                    "kind": "bulk",
+                    "value": "field2"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value2"
+                  }
                 ]
               }
             ]
@@ -135,25 +242,47 @@
     {
       "name": "xrange_invalid_bound_error",
       "now_ms": 1000,
-      "argv": ["XRANGE", "stream", "bad-id", "+"],
-      "expect": { "kind": "error", "value": "ERR Invalid stream ID specified as stream command argument" }
+      "argv": [
+        "XRANGE",
+        "stream",
+        "bad-id",
+        "+"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid stream ID specified as stream command argument"
+      }
     },
     {
       "name": "xrevrange_all_entries",
       "now_ms": 1000,
-      "argv": ["XREVRANGE", "stream", "+", "-"],
+      "argv": [
+        "XREVRANGE",
+        "stream",
+        "+",
+        "-"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-2" },
+              {
+                "kind": "bulk",
+                "value": "1000-2"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field3" },
-                  { "kind": "bulk", "value": "value3" }
+                  {
+                    "kind": "bulk",
+                    "value": "field3"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value3"
+                  }
                 ]
               }
             ]
@@ -161,12 +290,21 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-1" },
+              {
+                "kind": "bulk",
+                "value": "1000-1"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field2" },
-                  { "kind": "bulk", "value": "value2" }
+                  {
+                    "kind": "bulk",
+                    "value": "field2"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value2"
+                  }
                 ]
               }
             ]
@@ -174,12 +312,21 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-0" },
+              {
+                "kind": "bulk",
+                "value": "1000-0"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field1" },
-                  { "kind": "bulk", "value": "value1" }
+                  {
+                    "kind": "bulk",
+                    "value": "field1"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value1"
+                  }
                 ]
               }
             ]
@@ -190,19 +337,35 @@
     {
       "name": "xrevrange_with_count",
       "now_ms": 1000,
-      "argv": ["XREVRANGE", "stream", "1000-2", "1000-0", "COUNT", "1"],
+      "argv": [
+        "XREVRANGE",
+        "stream",
+        "1000-2",
+        "1000-0",
+        "COUNT",
+        "1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-2" },
+              {
+                "kind": "bulk",
+                "value": "1000-2"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field3" },
-                  { "kind": "bulk", "value": "value3" }
+                  {
+                    "kind": "bulk",
+                    "value": "field3"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value3"
+                  }
                 ]
               }
             ]
@@ -213,37 +376,73 @@
     {
       "name": "xrevrange_invalid_bound_error",
       "now_ms": 1000,
-      "argv": ["XREVRANGE", "stream", "bad-id", "-"],
-      "expect": { "kind": "error", "value": "ERR Invalid stream ID specified as stream command argument" }
+      "argv": [
+        "XREVRANGE",
+        "stream",
+        "bad-id",
+        "-"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid stream ID specified as stream command argument"
+      }
     },
     {
       "name": "xdel_removes_existing_and_missing_ids",
       "now_ms": 1000,
-      "argv": ["XDEL", "stream", "1000-1", "9999-0"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "XDEL",
+        "stream",
+        "1000-1",
+        "9999-0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "xlen_after_xdel",
       "now_ms": 1000,
-      "argv": ["XLEN", "stream"],
-      "expect": { "kind": "integer", "value": 2 }
+      "argv": [
+        "XLEN",
+        "stream"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
     },
     {
       "name": "xrange_after_xdel",
       "now_ms": 1000,
-      "argv": ["XRANGE", "stream", "-", "+"],
+      "argv": [
+        "XRANGE",
+        "stream",
+        "-",
+        "+"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-0" },
+              {
+                "kind": "bulk",
+                "value": "1000-0"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field1" },
-                  { "kind": "bulk", "value": "value1" }
+                  {
+                    "kind": "bulk",
+                    "value": "field1"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value1"
+                  }
                 ]
               }
             ]
@@ -251,12 +450,21 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-2" },
+              {
+                "kind": "bulk",
+                "value": "1000-2"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field3" },
-                  { "kind": "bulk", "value": "value3" }
+                  {
+                    "kind": "bulk",
+                    "value": "field3"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value3"
+                  }
                 ]
               }
             ]
@@ -267,43 +475,88 @@
     {
       "name": "xdel_missing_key",
       "now_ms": 1000,
-      "argv": ["XDEL", "missing_stream", "1-0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "XDEL",
+        "missing_stream",
+        "1-0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "xdel_invalid_id_error",
       "now_ms": 1000,
-      "argv": ["XDEL", "stream", "bad-id"],
-      "expect": { "kind": "error", "value": "ERR Invalid stream ID specified as stream command argument" }
+      "argv": [
+        "XDEL",
+        "stream",
+        "bad-id"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid stream ID specified as stream command argument"
+      }
     },
     {
       "name": "xadd_for_xtrim",
       "now_ms": 1000,
-      "argv": ["XADD", "stream", "1001-1", "field4", "value4"],
-      "expect": { "kind": "bulk", "value": "1001-1" }
+      "argv": [
+        "XADD",
+        "stream",
+        "1001-1",
+        "field4",
+        "value4"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1001-1"
+      }
     },
     {
       "name": "xtrim_maxlen_two",
       "now_ms": 1000,
-      "argv": ["XTRIM", "stream", "MAXLEN", "2"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "XTRIM",
+        "stream",
+        "MAXLEN",
+        "2"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "xrange_after_xtrim_maxlen_two",
       "now_ms": 1000,
-      "argv": ["XRANGE", "stream", "-", "+"],
+      "argv": [
+        "XRANGE",
+        "stream",
+        "-",
+        "+"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1000-2" },
+              {
+                "kind": "bulk",
+                "value": "1000-2"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field3" },
-                  { "kind": "bulk", "value": "value3" }
+                  {
+                    "kind": "bulk",
+                    "value": "field3"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value3"
+                  }
                 ]
               }
             ]
@@ -311,12 +564,21 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1001-1" },
+              {
+                "kind": "bulk",
+                "value": "1001-1"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field4" },
-                  { "kind": "bulk", "value": "value4" }
+                  {
+                    "kind": "bulk",
+                    "value": "field4"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value4"
+                  }
                 ]
               }
             ]
@@ -327,25 +589,48 @@
     {
       "name": "xtrim_maxlen_equals_one",
       "now_ms": 1000,
-      "argv": ["XTRIM", "stream", "MAXLEN", "=", "1"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "XTRIM",
+        "stream",
+        "MAXLEN",
+        "=",
+        "1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "xrange_after_xtrim_maxlen_equals_one",
       "now_ms": 1000,
-      "argv": ["XRANGE", "stream", "-", "+"],
+      "argv": [
+        "XRANGE",
+        "stream",
+        "-",
+        "+"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "1001-1" },
+              {
+                "kind": "bulk",
+                "value": "1001-1"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "field4" },
-                  { "kind": "bulk", "value": "value4" }
+                  {
+                    "kind": "bulk",
+                    "value": "field4"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value4"
+                  }
                 ]
               }
             ]
@@ -356,56 +641,116 @@
     {
       "name": "xtrim_invalid_mode_syntax_error",
       "now_ms": 1000,
-      "argv": ["XTRIM", "stream", "MINID", "1"],
-      "expect": { "kind": "error", "value": "ERR syntax error" }
+      "argv": [
+        "XTRIM",
+        "stream",
+        "MINID",
+        "1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
     },
     {
       "name": "xtrim_invalid_integer_error",
       "now_ms": 1000,
-      "argv": ["XTRIM", "stream", "MAXLEN", "-1"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "XTRIM",
+        "stream",
+        "MAXLEN",
+        "-1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "xadd_read1_first",
       "now_ms": 1000,
-      "argv": ["XADD", "read1", "2000-0", "fieldA", "valueA"],
-      "expect": { "kind": "bulk", "value": "2000-0" }
+      "argv": [
+        "XADD",
+        "read1",
+        "2000-0",
+        "fieldA",
+        "valueA"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "2000-0"
+      }
     },
     {
       "name": "xadd_read1_second",
       "now_ms": 1000,
-      "argv": ["XADD", "read1", "2000-1", "fieldB", "valueB"],
-      "expect": { "kind": "bulk", "value": "2000-1" }
+      "argv": [
+        "XADD",
+        "read1",
+        "2000-1",
+        "fieldB",
+        "valueB"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "2000-1"
+      }
     },
     {
       "name": "xadd_read2_first",
       "now_ms": 1000,
-      "argv": ["XADD", "read2", "3000-0", "fieldC", "valueC"],
-      "expect": { "kind": "bulk", "value": "3000-0" }
+      "argv": [
+        "XADD",
+        "read2",
+        "3000-0",
+        "fieldC",
+        "valueC"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "3000-0"
+      }
     },
     {
       "name": "xread_single_stream_after_id",
       "now_ms": 1000,
-      "argv": ["XREAD", "STREAMS", "read1", "2000-0"],
+      "argv": [
+        "XREAD",
+        "STREAMS",
+        "read1",
+        "2000-0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "read1" },
+              {
+                "kind": "bulk",
+                "value": "read1"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "2000-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "2000-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "fieldB" },
-                          { "kind": "bulk", "value": "valueB" }
+                          {
+                            "kind": "bulk",
+                            "value": "fieldB"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "valueB"
+                          }
                         ]
                       }
                     ]
@@ -420,26 +765,45 @@
     {
       "name": "xread_count_one",
       "now_ms": 1000,
-      "argv": ["XREAD", "COUNT", "1", "STREAMS", "read1", "0"],
+      "argv": [
+        "XREAD",
+        "COUNT",
+        "1",
+        "STREAMS",
+        "read1",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "read1" },
+              {
+                "kind": "bulk",
+                "value": "read1"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "2000-0" },
+                      {
+                        "kind": "bulk",
+                        "value": "2000-0"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "fieldA" },
-                          { "kind": "bulk", "value": "valueA" }
+                          {
+                            "kind": "bulk",
+                            "value": "fieldA"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "valueA"
+                          }
                         ]
                       }
                     ]
@@ -454,26 +818,45 @@
     {
       "name": "xread_multi_streams",
       "now_ms": 1000,
-      "argv": ["XREAD", "STREAMS", "read1", "read2", "0", "0"],
+      "argv": [
+        "XREAD",
+        "STREAMS",
+        "read1",
+        "read2",
+        "0",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "read1" },
+              {
+                "kind": "bulk",
+                "value": "read1"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "2000-0" },
+                      {
+                        "kind": "bulk",
+                        "value": "2000-0"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "fieldA" },
-                          { "kind": "bulk", "value": "valueA" }
+                          {
+                            "kind": "bulk",
+                            "value": "fieldA"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "valueA"
+                          }
                         ]
                       }
                     ]
@@ -481,12 +864,21 @@
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "2000-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "2000-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "fieldB" },
-                          { "kind": "bulk", "value": "valueB" }
+                          {
+                            "kind": "bulk",
+                            "value": "fieldB"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "valueB"
+                          }
                         ]
                       }
                     ]
@@ -498,19 +890,31 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "read2" },
+              {
+                "kind": "bulk",
+                "value": "read2"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "3000-0" },
+                      {
+                        "kind": "bulk",
+                        "value": "3000-0"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "fieldC" },
-                          { "kind": "bulk", "value": "valueC" }
+                          {
+                            "kind": "bulk",
+                            "value": "fieldC"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "valueC"
+                          }
                         ]
                       }
                     ]
@@ -525,68 +929,171 @@
     {
       "name": "xread_dollar_nil",
       "now_ms": 1000,
-      "argv": ["XREAD", "STREAMS", "read1", "read2", "$", "$"],
-      "expect": { "kind": "null_array" }
+      "argv": [
+        "XREAD",
+        "STREAMS",
+        "read1",
+        "read2",
+        "$",
+        "$"
+      ],
+      "expect": {
+        "kind": "null_array"
+      }
     },
     {
       "name": "xread_invalid_id_error",
       "now_ms": 1000,
-      "argv": ["XREAD", "STREAMS", "read1", "bad-id"],
-      "expect": { "kind": "error", "value": "ERR Invalid stream ID specified as stream command argument" }
+      "argv": [
+        "XREAD",
+        "STREAMS",
+        "read1",
+        "bad-id"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid stream ID specified as stream command argument"
+      }
     },
     {
       "name": "xread_invalid_mode_error",
       "now_ms": 1000,
-      "argv": ["XREAD", "BLOCK", "0", "STREAMS", "read1", "0"],
-      "expect": { "kind": "error", "value": "ERR syntax error" }
+      "argv": [
+        "XREAD",
+        "BLOCK",
+        "0",
+        "STREAMS",
+        "read1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
     },
     {
       "name": "xinfo_stream_read1",
       "now_ms": 1000,
-      "argv": ["XINFO", "STREAM", "read1"],
+      "argv": [
+        "XINFO",
+        "STREAM",
+        "read1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "length" },
-          { "kind": "integer", "value": 2 },
-          { "kind": "bulk", "value": "radix-tree-keys" },
-          { "kind": "integer", "value": 1 },
-          { "kind": "bulk", "value": "radix-tree-nodes" },
-          { "kind": "integer", "value": 2 },
-          { "kind": "bulk", "value": "last-generated-id" },
-          { "kind": "bulk", "value": "2000-1" },
-          { "kind": "bulk", "value": "max-deleted-entry-id" },
-          { "kind": "bulk", "value": "0-0" },
-          { "kind": "bulk", "value": "entries-added" },
-          { "kind": "integer", "value": 2 },
-          { "kind": "bulk", "value": "recorded-first-entry-id" },
-          { "kind": "bulk", "value": "2000-0" },
-          { "kind": "bulk", "value": "groups" },
-          { "kind": "integer", "value": 0 },
-          { "kind": "bulk", "value": "first-entry" },
+          {
+            "kind": "bulk",
+            "value": "length"
+          },
+          {
+            "kind": "integer",
+            "value": 2
+          },
+          {
+            "kind": "bulk",
+            "value": "radix-tree-keys"
+          },
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "bulk",
+            "value": "radix-tree-nodes"
+          },
+          {
+            "kind": "integer",
+            "value": 2
+          },
+          {
+            "kind": "bulk",
+            "value": "last-generated-id"
+          },
+          {
+            "kind": "bulk",
+            "value": "2000-1"
+          },
+          {
+            "kind": "bulk",
+            "value": "max-deleted-entry-id"
+          },
+          {
+            "kind": "bulk",
+            "value": "0-0"
+          },
+          {
+            "kind": "bulk",
+            "value": "entries-added"
+          },
+          {
+            "kind": "integer",
+            "value": 2
+          },
+          {
+            "kind": "bulk",
+            "value": "recorded-first-entry-id"
+          },
+          {
+            "kind": "bulk",
+            "value": "2000-0"
+          },
+          {
+            "kind": "bulk",
+            "value": "groups"
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          },
+          {
+            "kind": "bulk",
+            "value": "first-entry"
+          },
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "2000-0" },
+              {
+                "kind": "bulk",
+                "value": "2000-0"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "fieldA" },
-                  { "kind": "bulk", "value": "valueA" }
+                  {
+                    "kind": "bulk",
+                    "value": "fieldA"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "valueA"
+                  }
                 ]
               }
             ]
           },
-          { "kind": "bulk", "value": "last-entry" },
+          {
+            "kind": "bulk",
+            "value": "last-entry"
+          },
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "2000-1" },
+              {
+                "kind": "bulk",
+                "value": "2000-1"
+              },
               {
                 "kind": "array",
                 "value": [
-                  { "kind": "bulk", "value": "fieldB" },
-                  { "kind": "bulk", "value": "valueB" }
+                  {
+                    "kind": "bulk",
+                    "value": "fieldB"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "valueB"
+                  }
                 ]
               }
             ]
@@ -597,43 +1104,108 @@
     {
       "name": "xinfo_groups_read1_empty",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "read1"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "read1"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "xgroup_create_read1_ok",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATE", "read1", "g1", "$"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "read1",
+        "g1",
+        "$"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xgroup_setid_read1_ok",
       "now_ms": 1000,
-      "argv": ["XGROUP", "SETID", "read1", "g1", "2000-0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "XGROUP",
+        "SETID",
+        "read1",
+        "g1",
+        "2000-0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xinfo_groups_read1_after_setid",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "read1"],
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "read1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "g1" },
-              { "kind": "bulk", "value": "consumers" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "last-delivered-id" },
-              { "kind": "bulk", "value": "2000-0" },
-              { "kind": "bulk", "value": "entries-read" },
-              { "kind": "bulk", "value": null },
-              { "kind": "bulk", "value": "lag" },
-              { "kind": "bulk", "value": null }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "g1"
+              },
+              {
+                "kind": "bulk",
+                "value": "consumers"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "last-delivered-id"
+              },
+              {
+                "kind": "bulk",
+                "value": "2000-0"
+              },
+              {
+                "kind": "bulk",
+                "value": "entries-read"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              },
+              {
+                "kind": "bulk",
+                "value": "lag"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              }
             ]
           }
         ]
@@ -642,31 +1214,80 @@
     {
       "name": "xgroup_setid_read1_dollar_ok",
       "now_ms": 1000,
-      "argv": ["XGROUP", "SETID", "read1", "g1", "$"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "XGROUP",
+        "SETID",
+        "read1",
+        "g1",
+        "$"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xinfo_groups_read1_after_group_create",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "read1"],
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "read1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "g1" },
-              { "kind": "bulk", "value": "consumers" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "last-delivered-id" },
-              { "kind": "bulk", "value": "2000-1" },
-              { "kind": "bulk", "value": "entries-read" },
-              { "kind": "bulk", "value": null },
-              { "kind": "bulk", "value": "lag" },
-              { "kind": "bulk", "value": null }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "g1"
+              },
+              {
+                "kind": "bulk",
+                "value": "consumers"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "last-delivered-id"
+              },
+              {
+                "kind": "bulk",
+                "value": "2000-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "entries-read"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              },
+              {
+                "kind": "bulk",
+                "value": "lag"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              }
             ]
           }
         ]
@@ -675,43 +1296,110 @@
     {
       "name": "xgroup_createconsumer_read1_c1_created",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATECONSUMER", "read1", "g1", "c1"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "XGROUP",
+        "CREATECONSUMER",
+        "read1",
+        "g1",
+        "c1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "xgroup_createconsumer_read1_c1_duplicate",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATECONSUMER", "read1", "g1", "c1"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "XGROUP",
+        "CREATECONSUMER",
+        "read1",
+        "g1",
+        "c1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "xgroup_createconsumer_read1_c2_created",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATECONSUMER", "read1", "g1", "c2"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "XGROUP",
+        "CREATECONSUMER",
+        "read1",
+        "g1",
+        "c2"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "xinfo_groups_read1_after_createconsumer",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "read1"],
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "read1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "g1" },
-              { "kind": "bulk", "value": "consumers" },
-              { "kind": "integer", "value": 2 },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "last-delivered-id" },
-              { "kind": "bulk", "value": "2000-1" },
-              { "kind": "bulk", "value": "entries-read" },
-              { "kind": "bulk", "value": null },
-              { "kind": "bulk", "value": "lag" },
-              { "kind": "bulk", "value": null }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "g1"
+              },
+              {
+                "kind": "bulk",
+                "value": "consumers"
+              },
+              {
+                "kind": "integer",
+                "value": 2
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "last-delivered-id"
+              },
+              {
+                "kind": "bulk",
+                "value": "2000-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "entries-read"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              },
+              {
+                "kind": "bulk",
+                "value": "lag"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              }
             ]
           }
         ]
@@ -720,34 +1408,87 @@
     {
       "name": "xinfo_consumers_read1_after_createconsumer",
       "now_ms": 1000,
-      "argv": ["XINFO", "CONSUMERS", "read1", "g1"],
+      "argv": [
+        "XINFO",
+        "CONSUMERS",
+        "read1",
+        "g1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "c1" },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "idle" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "inactive" },
-              { "kind": "integer", "value": 0 }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "c1"
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "idle"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "inactive"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              }
             ]
           },
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "c2" },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "idle" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "inactive" },
-              { "kind": "integer", "value": 0 }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "c2"
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "idle"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "inactive"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              }
             ]
           }
         ]
@@ -756,31 +1497,80 @@
     {
       "name": "xgroup_delconsumer_read1_c1_zero",
       "now_ms": 1000,
-      "argv": ["XGROUP", "DELCONSUMER", "read1", "g1", "c1"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "XGROUP",
+        "DELCONSUMER",
+        "read1",
+        "g1",
+        "c1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "xinfo_groups_read1_after_delconsumer",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "read1"],
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "read1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "g1" },
-              { "kind": "bulk", "value": "consumers" },
-              { "kind": "integer", "value": 1 },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "last-delivered-id" },
-              { "kind": "bulk", "value": "2000-1" },
-              { "kind": "bulk", "value": "entries-read" },
-              { "kind": "bulk", "value": null },
-              { "kind": "bulk", "value": "lag" },
-              { "kind": "bulk", "value": null }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "g1"
+              },
+              {
+                "kind": "bulk",
+                "value": "consumers"
+              },
+              {
+                "kind": "integer",
+                "value": 1
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "last-delivered-id"
+              },
+              {
+                "kind": "bulk",
+                "value": "2000-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "entries-read"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              },
+              {
+                "kind": "bulk",
+                "value": "lag"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              }
             ]
           }
         ]
@@ -789,21 +1579,50 @@
     {
       "name": "xinfo_consumers_read1_after_delconsumer",
       "now_ms": 1000,
-      "argv": ["XINFO", "CONSUMERS", "read1", "g1"],
+      "argv": [
+        "XINFO",
+        "CONSUMERS",
+        "read1",
+        "g1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "c2" },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "idle" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "inactive" },
-              { "kind": "integer", "value": 0 }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "c2"
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "idle"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "inactive"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              }
             ]
           }
         ]
@@ -812,55 +1631,128 @@
     {
       "name": "xgroup_delconsumer_read1_missing_consumer_zero",
       "now_ms": 1000,
-      "argv": ["XGROUP", "DELCONSUMER", "read1", "g1", "missing-consumer"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "XGROUP",
+        "DELCONSUMER",
+        "read1",
+        "g1",
+        "missing-consumer"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "xgroup_create_duplicate_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATE", "read1", "g1", "0"],
-      "expect": { "kind": "error", "value": "BUSYGROUP Consumer Group name already exists" }
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "read1",
+        "g1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "BUSYGROUP Consumer Group name already exists"
+      }
     },
     {
       "name": "xgroup_destroy_read1_ok",
       "now_ms": 1000,
-      "argv": ["XGROUP", "DESTROY", "read1", "g1"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "XGROUP",
+        "DESTROY",
+        "read1",
+        "g1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "xinfo_groups_read1_after_group_destroy",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "read1"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "read1"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "xgroup_destroy_read1_missing_group_zero",
       "now_ms": 1000,
-      "argv": ["XGROUP", "DESTROY", "read1", "g1"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "XGROUP",
+        "DESTROY",
+        "read1",
+        "g1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "xgroup_destroy_missing_key_zero",
       "now_ms": 1000,
-      "argv": ["XGROUP", "DESTROY", "missing_stream", "g1"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "XGROUP",
+        "DESTROY",
+        "missing_stream",
+        "g1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "xgroup_create_missing_key_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATE", "missing_stream", "g1", "0"],
-      "expect": { "kind": "error", "value": "ERR no such key" }
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "missing_stream",
+        "g1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
     },
     {
       "name": "xgroup_create_invalid_id_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATE", "read1", "g2", "bad-id"],
-      "expect": { "kind": "error", "value": "ERR Invalid stream ID specified as stream command argument" }
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "read1",
+        "g2",
+        "bad-id"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid stream ID specified as stream command argument"
+      }
     },
     {
       "name": "xgroup_setid_missing_group_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "SETID", "read1", "missing_group", "0"],
+      "argv": [
+        "XGROUP",
+        "SETID",
+        "read1",
+        "missing_group",
+        "0"
+      ],
       "expect": {
         "kind": "error",
         "value": "NOGROUP No such key 'read1' or consumer group 'missing_group' in XGROUP command"
@@ -869,7 +1761,12 @@
     {
       "name": "xinfo_consumers_missing_group_error",
       "now_ms": 1000,
-      "argv": ["XINFO", "CONSUMERS", "read1", "missing_group"],
+      "argv": [
+        "XINFO",
+        "CONSUMERS",
+        "read1",
+        "missing_group"
+      ],
       "expect": {
         "kind": "error",
         "value": "NOGROUP No such consumer group 'missing_group' for key name 'read1'"
@@ -878,13 +1775,27 @@
     {
       "name": "xinfo_consumers_missing_key_error",
       "now_ms": 1000,
-      "argv": ["XINFO", "CONSUMERS", "missing_stream", "g1"],
-      "expect": { "kind": "error", "value": "ERR no such key" }
+      "argv": [
+        "XINFO",
+        "CONSUMERS",
+        "missing_stream",
+        "g1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
     },
     {
       "name": "xgroup_createconsumer_missing_group_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATECONSUMER", "read1", "missing_group", "c1"],
+      "argv": [
+        "XGROUP",
+        "CREATECONSUMER",
+        "read1",
+        "missing_group",
+        "c1"
+      ],
       "expect": {
         "kind": "error",
         "value": "NOGROUP No such key 'read1' or consumer group 'missing_group' in XGROUP command"
@@ -893,7 +1804,13 @@
     {
       "name": "xgroup_createconsumer_missing_key_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATECONSUMER", "missing_stream", "g1", "c1"],
+      "argv": [
+        "XGROUP",
+        "CREATECONSUMER",
+        "missing_stream",
+        "g1",
+        "c1"
+      ],
       "expect": {
         "kind": "error",
         "value": "NOGROUP No such key 'missing_stream' or consumer group 'g1' in XGROUP command"
@@ -902,7 +1819,13 @@
     {
       "name": "xgroup_delconsumer_missing_group_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "DELCONSUMER", "read1", "missing_group", "c1"],
+      "argv": [
+        "XGROUP",
+        "DELCONSUMER",
+        "read1",
+        "missing_group",
+        "c1"
+      ],
       "expect": {
         "kind": "error",
         "value": "NOGROUP No such key 'read1' or consumer group 'missing_group' in XGROUP command"
@@ -911,7 +1834,13 @@
     {
       "name": "xgroup_delconsumer_missing_key_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "DELCONSUMER", "missing_stream", "g1", "c1"],
+      "argv": [
+        "XGROUP",
+        "DELCONSUMER",
+        "missing_stream",
+        "g1",
+        "c1"
+      ],
       "expect": {
         "kind": "error",
         "value": "NOGROUP No such key 'missing_stream' or consumer group 'g1' in XGROUP command"
@@ -920,43 +1849,111 @@
     {
       "name": "xgroup_setid_missing_key_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "SETID", "missing_stream", "g1", "0"],
-      "expect": { "kind": "error", "value": "ERR no such key" }
+      "argv": [
+        "XGROUP",
+        "SETID",
+        "missing_stream",
+        "g1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
     },
     {
       "name": "xgroup_setid_invalid_id_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "SETID", "read1", "g1", "bad-id"],
-      "expect": { "kind": "error", "value": "ERR Invalid stream ID specified as stream command argument" }
+      "argv": [
+        "XGROUP",
+        "SETID",
+        "read1",
+        "g1",
+        "bad-id"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid stream ID specified as stream command argument"
+      }
     },
     {
       "name": "xgroup_create_mkstream_ok",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATE", "mkstream_stream", "g1", "0", "MKSTREAM"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "mkstream_stream",
+        "g1",
+        "0",
+        "MKSTREAM"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xinfo_groups_mkstream_stream",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "mkstream_stream"],
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "mkstream_stream"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "g1" },
-              { "kind": "bulk", "value": "consumers" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "last-delivered-id" },
-              { "kind": "bulk", "value": "0-0" },
-              { "kind": "bulk", "value": "entries-read" },
-              { "kind": "bulk", "value": null },
-              { "kind": "bulk", "value": "lag" },
-              { "kind": "bulk", "value": null }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "g1"
+              },
+              {
+                "kind": "bulk",
+                "value": "consumers"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "last-delivered-id"
+              },
+              {
+                "kind": "bulk",
+                "value": "0-0"
+              },
+              {
+                "kind": "bulk",
+                "value": "entries-read"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              },
+              {
+                "kind": "bulk",
+                "value": "lag"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              }
             ]
           }
         ]
@@ -965,50 +1962,106 @@
     {
       "name": "xgroup_invalid_subcommand_error",
       "now_ms": 1000,
-      "argv": ["XGROUP", "HELP", "read1", "g1", "0"],
-      "expect": { "kind": "error", "value": "ERR syntax error" }
+      "argv": [
+        "XGROUP",
+        "HELP",
+        "read1",
+        "g1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
     },
     {
       "name": "xadd_group_read_stream_first",
       "now_ms": 1000,
-      "argv": ["XADD", "group_read_stream", "4000-0", "field", "v1"],
-      "expect": { "kind": "bulk", "value": "4000-0" }
+      "argv": [
+        "XADD",
+        "group_read_stream",
+        "4000-0",
+        "field",
+        "v1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "4000-0"
+      }
     },
     {
       "name": "xadd_group_read_stream_second",
       "now_ms": 1000,
-      "argv": ["XADD", "group_read_stream", "4000-1", "field", "v2"],
-      "expect": { "kind": "bulk", "value": "4000-1" }
+      "argv": [
+        "XADD",
+        "group_read_stream",
+        "4000-1",
+        "field",
+        "v2"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "4000-1"
+      }
     },
     {
       "name": "xgroup_create_group_read_stream",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATE", "group_read_stream", "g1", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "group_read_stream",
+        "g1",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xreadgroup_group_read_stream_first",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "g1", "c1", "STREAMS", "group_read_stream", ">"],
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "g1",
+        "c1",
+        "STREAMS",
+        "group_read_stream",
+        ">"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "group_read_stream" },
+              {
+                "kind": "bulk",
+                "value": "group_read_stream"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "4000-0" },
+                      {
+                        "kind": "bulk",
+                        "value": "4000-0"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "v1" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v1"
+                          }
                         ]
                       }
                     ]
@@ -1016,12 +2069,21 @@
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "4000-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "4000-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "v2" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v2"
+                          }
                         ]
                       }
                     ]
@@ -1036,38 +2098,79 @@
     {
       "name": "xreadgroup_group_read_stream_second_nil",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "g1", "c1", "STREAMS", "group_read_stream", ">"],
-      "expect": { "kind": "null_array" }
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "g1",
+        "c1",
+        "STREAMS",
+        "group_read_stream",
+        ">"
+      ],
+      "expect": {
+        "kind": "null_array"
+      }
     },
     {
       "name": "xadd_group_read_stream_third",
       "now_ms": 1000,
-      "argv": ["XADD", "group_read_stream", "4000-2", "field", "v3"],
-      "expect": { "kind": "bulk", "value": "4000-2" }
+      "argv": [
+        "XADD",
+        "group_read_stream",
+        "4000-2",
+        "field",
+        "v3"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "4000-2"
+      }
     },
     {
       "name": "xreadgroup_group_read_stream_count_one",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "g1", "c1", "COUNT", "1", "STREAMS", "group_read_stream", ">"],
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "g1",
+        "c1",
+        "COUNT",
+        "1",
+        "STREAMS",
+        "group_read_stream",
+        ">"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "group_read_stream" },
+              {
+                "kind": "bulk",
+                "value": "group_read_stream"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "4000-2" },
+                      {
+                        "kind": "bulk",
+                        "value": "4000-2"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "v3" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v3"
+                          }
                         ]
                       }
                     ]
@@ -1082,26 +2185,46 @@
     {
       "name": "xreadgroup_group_read_stream_pending_replay_owner",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "g1", "c1", "STREAMS", "group_read_stream", "0"],
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "g1",
+        "c1",
+        "STREAMS",
+        "group_read_stream",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "group_read_stream" },
+              {
+                "kind": "bulk",
+                "value": "group_read_stream"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "4000-0" },
+                      {
+                        "kind": "bulk",
+                        "value": "4000-0"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "v1" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v1"
+                          }
                         ]
                       }
                     ]
@@ -1109,12 +2232,21 @@
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "4000-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "4000-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "v2" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v2"
+                          }
                         ]
                       }
                     ]
@@ -1122,12 +2254,21 @@
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "4000-2" },
+                      {
+                        "kind": "bulk",
+                        "value": "4000-2"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "v3" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v3"
+                          }
                         ]
                       }
                     ]
@@ -1142,31 +2283,81 @@
     {
       "name": "xreadgroup_group_read_stream_pending_replay_other_consumer_nil",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "g1", "c2", "STREAMS", "group_read_stream", "0"],
-      "expect": { "kind": "null_array" }
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "g1",
+        "c2",
+        "STREAMS",
+        "group_read_stream",
+        "0"
+      ],
+      "expect": {
+        "kind": "null_array"
+      }
     },
     {
       "name": "xinfo_groups_group_read_stream_after_pending_replay",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "group_read_stream"],
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "group_read_stream"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "g1" },
-              { "kind": "bulk", "value": "consumers" },
-              { "kind": "integer", "value": 2 },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 3 },
-              { "kind": "bulk", "value": "last-delivered-id" },
-              { "kind": "bulk", "value": "4000-2" },
-              { "kind": "bulk", "value": "entries-read" },
-              { "kind": "bulk", "value": null },
-              { "kind": "bulk", "value": "lag" },
-              { "kind": "bulk", "value": null }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "g1"
+              },
+              {
+                "kind": "bulk",
+                "value": "consumers"
+              },
+              {
+                "kind": "integer",
+                "value": 2
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 3
+              },
+              {
+                "kind": "bulk",
+                "value": "last-delivered-id"
+              },
+              {
+                "kind": "bulk",
+                "value": "4000-2"
+              },
+              {
+                "kind": "bulk",
+                "value": "entries-read"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              },
+              {
+                "kind": "bulk",
+                "value": "lag"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              }
             ]
           }
         ]
@@ -1175,44 +2366,92 @@
     {
       "name": "xadd_group_noack_stream_first",
       "now_ms": 1000,
-      "argv": ["XADD", "group_noack_stream", "5000-0", "field", "n1"],
-      "expect": { "kind": "bulk", "value": "5000-0" }
+      "argv": [
+        "XADD",
+        "group_noack_stream",
+        "5000-0",
+        "field",
+        "n1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "5000-0"
+      }
     },
     {
       "name": "xadd_group_noack_stream_second",
       "now_ms": 1000,
-      "argv": ["XADD", "group_noack_stream", "5000-1", "field", "n2"],
-      "expect": { "kind": "bulk", "value": "5000-1" }
+      "argv": [
+        "XADD",
+        "group_noack_stream",
+        "5000-1",
+        "field",
+        "n2"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "5000-1"
+      }
     },
     {
       "name": "xgroup_create_group_noack_stream",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATE", "group_noack_stream", "g1", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "group_noack_stream",
+        "g1",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xreadgroup_group_noack_stream_noack",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "g1", "c1", "NOACK", "STREAMS", "group_noack_stream", ">"],
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "g1",
+        "c1",
+        "NOACK",
+        "STREAMS",
+        "group_noack_stream",
+        ">"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "group_noack_stream" },
+              {
+                "kind": "bulk",
+                "value": "group_noack_stream"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "5000-0" },
+                      {
+                        "kind": "bulk",
+                        "value": "5000-0"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "n1" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "n1"
+                          }
                         ]
                       }
                     ]
@@ -1220,12 +2459,21 @@
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "5000-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "5000-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "n2" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "n2"
+                          }
                         ]
                       }
                     ]
@@ -1240,31 +2488,81 @@
     {
       "name": "xreadgroup_group_noack_stream_replay_after_noack_nil",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "g1", "c1", "STREAMS", "group_noack_stream", "0"],
-      "expect": { "kind": "null_array" }
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "g1",
+        "c1",
+        "STREAMS",
+        "group_noack_stream",
+        "0"
+      ],
+      "expect": {
+        "kind": "null_array"
+      }
     },
     {
       "name": "xinfo_groups_group_noack_stream_after_noack",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "group_noack_stream"],
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "group_noack_stream"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "name" },
-              { "kind": "bulk", "value": "g1" },
-              { "kind": "bulk", "value": "consumers" },
-              { "kind": "integer", "value": 1 },
-              { "kind": "bulk", "value": "pending" },
-              { "kind": "integer", "value": 0 },
-              { "kind": "bulk", "value": "last-delivered-id" },
-              { "kind": "bulk", "value": "5000-1" },
-              { "kind": "bulk", "value": "entries-read" },
-              { "kind": "bulk", "value": null },
-              { "kind": "bulk", "value": "lag" },
-              { "kind": "bulk", "value": null }
+              {
+                "kind": "bulk",
+                "value": "name"
+              },
+              {
+                "kind": "bulk",
+                "value": "g1"
+              },
+              {
+                "kind": "bulk",
+                "value": "consumers"
+              },
+              {
+                "kind": "integer",
+                "value": 1
+              },
+              {
+                "kind": "bulk",
+                "value": "pending"
+              },
+              {
+                "kind": "integer",
+                "value": 0
+              },
+              {
+                "kind": "bulk",
+                "value": "last-delivered-id"
+              },
+              {
+                "kind": "bulk",
+                "value": "5000-1"
+              },
+              {
+                "kind": "bulk",
+                "value": "entries-read"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              },
+              {
+                "kind": "bulk",
+                "value": "lag"
+              },
+              {
+                "kind": "bulk",
+                "value": null
+              }
             ]
           }
         ]
@@ -1273,7 +2571,15 @@
     {
       "name": "xreadgroup_missing_group_error",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "missing_group", "c1", "STREAMS", "group_read_stream", ">"],
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "missing_group",
+        "c1",
+        "STREAMS",
+        "group_read_stream",
+        ">"
+      ],
       "expect": {
         "kind": "error",
         "value": "NOGROUP No such key 'group_read_stream' or consumer group 'missing_group' in XREADGROUP with GROUP option"
@@ -1282,31 +2588,71 @@
     {
       "name": "xreadgroup_invalid_mode_error",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "g1", "c1", "BLOCK", "0", "STREAMS", "group_read_stream", ">"],
-      "expect": { "kind": "error", "value": "ERR syntax error" }
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "g1",
+        "c1",
+        "BLOCK",
+        "0",
+        "STREAMS",
+        "group_read_stream",
+        ">"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
     },
     {
       "name": "xinfo_invalid_subcommand_error",
       "now_ms": 1000,
-      "argv": ["XINFO", "HELP", "read1"],
-      "expect": { "kind": "error", "value": "ERR syntax error" }
+      "argv": [
+        "XINFO",
+        "HELP",
+        "read1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
     },
     {
       "name": "xinfo_missing_key_error",
       "now_ms": 1000,
-      "argv": ["XINFO", "STREAM", "missing_stream"],
-      "expect": { "kind": "error", "value": "ERR no such key" }
+      "argv": [
+        "XINFO",
+        "STREAM",
+        "missing_stream"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
     },
     {
       "name": "xinfo_groups_missing_key_error",
       "now_ms": 1000,
-      "argv": ["XINFO", "GROUPS", "missing_stream"],
-      "expect": { "kind": "error", "value": "ERR no such key" }
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "missing_stream"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
     },
     {
       "name": "xadd_equal_or_lower_id_error",
       "now_ms": 1000,
-      "argv": ["XADD", "stream", "1000-2", "field4", "value4"],
+      "argv": [
+        "XADD",
+        "stream",
+        "1000-2",
+        "field4",
+        "value4"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR The ID specified in XADD is equal or smaller than the target stream top item"
@@ -1315,104 +2661,508 @@
     {
       "name": "xadd_zero_zero_error",
       "now_ms": 0,
-      "argv": ["XADD", "stream2", "0-0", "field", "value"],
-      "expect": { "kind": "error", "value": "ERR The ID specified in XADD must be greater than 0-0" }
+      "argv": [
+        "XADD",
+        "stream2",
+        "0-0",
+        "field",
+        "value"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR The ID specified in XADD must be greater than 0-0"
+      }
     },
     {
       "name": "xadd_invalid_id_error",
       "now_ms": 0,
-      "argv": ["XADD", "stream2", "bad-id", "field", "value"],
-      "expect": { "kind": "error", "value": "ERR Invalid stream ID specified as stream command argument" }
+      "argv": [
+        "XADD",
+        "stream2",
+        "bad-id",
+        "field",
+        "value"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid stream ID specified as stream command argument"
+      }
     },
     {
       "name": "xadd_wrongtype_seed",
       "now_ms": 0,
-      "argv": ["SET", "strkey_stream", "v"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "strkey_stream",
+        "v"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xadd_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XADD", "strkey_stream", "*", "field", "value"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XADD",
+        "strkey_stream",
+        "*",
+        "field",
+        "value"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xrange_wrongtype_seed",
       "now_ms": 0,
-      "argv": ["SET", "strkey_stream_range", "v"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "strkey_stream_range",
+        "v"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xrange_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XRANGE", "strkey_stream_range", "-", "+"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XRANGE",
+        "strkey_stream_range",
+        "-",
+        "+"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xrevrange_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XREVRANGE", "strkey_stream_range", "+", "-"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XREVRANGE",
+        "strkey_stream_range",
+        "+",
+        "-"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xdel_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XDEL", "strkey_stream_range", "1-0"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XDEL",
+        "strkey_stream_range",
+        "1-0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xtrim_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XTRIM", "strkey_stream_range", "MAXLEN", "1"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XTRIM",
+        "strkey_stream_range",
+        "MAXLEN",
+        "1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xread_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XREAD", "STREAMS", "strkey_stream_range", "0"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XREAD",
+        "STREAMS",
+        "strkey_stream_range",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xinfo_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XINFO", "STREAM", "strkey_stream_range"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XINFO",
+        "STREAM",
+        "strkey_stream_range"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xinfo_groups_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XINFO", "GROUPS", "strkey_stream_range"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XINFO",
+        "GROUPS",
+        "strkey_stream_range"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xinfo_consumers_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XINFO", "CONSUMERS", "strkey_stream_range", "g1"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XINFO",
+        "CONSUMERS",
+        "strkey_stream_range",
+        "g1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xgroup_destroy_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XGROUP", "DESTROY", "strkey_stream_range", "g1"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XGROUP",
+        "DESTROY",
+        "strkey_stream_range",
+        "g1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xgroup_setid_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XGROUP", "SETID", "strkey_stream_range", "g1", "0"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XGROUP",
+        "SETID",
+        "strkey_stream_range",
+        "g1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xgroup_createconsumer_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XGROUP", "CREATECONSUMER", "strkey_stream_range", "g1", "c1"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XGROUP",
+        "CREATECONSUMER",
+        "strkey_stream_range",
+        "g1",
+        "c1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
     },
     {
       "name": "xgroup_delconsumer_wrongtype_error",
       "now_ms": 0,
-      "argv": ["XGROUP", "DELCONSUMER", "strkey_stream_range", "g1", "c1"],
-      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+      "argv": [
+        "XGROUP",
+        "DELCONSUMER",
+        "strkey_stream_range",
+        "g1",
+        "c1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "xadd_id_zero_error",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "stream_err",
+        "0-0",
+        "f",
+        "v"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR The ID specified in XADD must be greater than 0-0"
+      }
+    },
+    {
+      "name": "xadd_explicit_setup",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "xadd_expl",
+        "5-0",
+        "name",
+        "alice"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "5-0"
+      }
+    },
+    {
+      "name": "xadd_lower_id_error",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "xadd_expl",
+        "3-0",
+        "name",
+        "bob"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+      }
+    },
+    {
+      "name": "xadd_equal_id_error",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "xadd_expl",
+        "5-0",
+        "name",
+        "bob"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+      }
+    },
+    {
+      "name": "xadd_wrong_arity_no_fields",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "key",
+        "*"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XADD' command"
+      }
+    },
+    {
+      "name": "xadd_wrong_arity_odd_fields",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "key",
+        "*",
+        "f1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XADD' command"
+      }
+    },
+    {
+      "name": "xlen_wrong_arity",
+      "now_ms": 100,
+      "argv": [
+        "XLEN"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XLEN' command"
+      }
+    },
+    {
+      "name": "xdel_wrong_arity",
+      "now_ms": 100,
+      "argv": [
+        "XDEL",
+        "key"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XDEL' command"
+      }
+    },
+    {
+      "name": "xrange_count_zero",
+      "now_ms": 100,
+      "argv": [
+        "XRANGE",
+        "xadd_expl",
+        "-",
+        "+",
+        "COUNT",
+        "0"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "xrange_missing_key",
+      "now_ms": 100,
+      "argv": [
+        "XRANGE",
+        "nosuchstream",
+        "-",
+        "+"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "xrevrange_missing_key",
+      "now_ms": 100,
+      "argv": [
+        "XREVRANGE",
+        "nosuchstream",
+        "+",
+        "-"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "xtrim_setup",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "xtrim_test",
+        "1-0",
+        "a",
+        "1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-0"
+      }
+    },
+    {
+      "name": "xtrim_setup2",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "xtrim_test",
+        "2-0",
+        "b",
+        "2"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "2-0"
+      }
+    },
+    {
+      "name": "xtrim_maxlen_zero",
+      "now_ms": 100,
+      "argv": [
+        "XTRIM",
+        "xtrim_test",
+        "MAXLEN",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "xtrim_verify_empty",
+      "now_ms": 100,
+      "argv": [
+        "XLEN",
+        "xtrim_test"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "xack_wrong_arity",
+      "now_ms": 100,
+      "argv": [
+        "XACK",
+        "key",
+        "group"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XACK' command"
+      }
+    },
+    {
+      "name": "xinfo_wrong_arity",
+      "now_ms": 100,
+      "argv": [
+        "XINFO"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XINFO' command"
+      }
+    },
+    {
+      "name": "xgroup_wrong_arity",
+      "now_ms": 100,
+      "argv": [
+        "XGROUP"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XGROUP' command"
+      }
+    },
+    {
+      "name": "xread_wrong_arity",
+      "now_ms": 100,
+      "argv": [
+        "XREAD"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XREAD' command"
+      }
+    },
+    {
+      "name": "xreadgroup_wrong_arity",
+      "now_ms": 100,
+      "argv": [
+        "XREADGROUP"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'XREADGROUP' command"
+      }
     }
   ]
 }
