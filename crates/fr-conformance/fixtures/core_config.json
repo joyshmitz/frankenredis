@@ -481,6 +481,61 @@
           { "kind": "bulk", "value": "3600" }
         ]
       }
+    },
+    {
+      "name": "config_get_multi_pattern_two_exact",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "maxmemory", "hz"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "maxmemory" },
+          { "kind": "bulk", "value": "2097152" },
+          { "kind": "bulk", "value": "hz" },
+          { "kind": "bulk", "value": "10" }
+        ]
+      }
+    },
+    {
+      "name": "config_get_multi_pattern_mixed",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "bind", "databases", "port"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bind" },
+          { "kind": "bulk", "value": "127.0.0.1" },
+          { "kind": "bulk", "value": "databases" },
+          { "kind": "bulk", "value": "16" },
+          { "kind": "bulk", "value": "port" },
+          { "kind": "bulk", "value": "6379" }
+        ]
+      }
+    },
+    {
+      "name": "config_get_multi_pattern_with_glob",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "bind", "repl-backlog*"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bind" },
+          { "kind": "bulk", "value": "127.0.0.1" },
+          { "kind": "bulk", "value": "repl-backlog-size" },
+          { "kind": "bulk", "value": "1048576" },
+          { "kind": "bulk", "value": "repl-backlog-ttl" },
+          { "kind": "bulk", "value": "3600" }
+        ]
+      }
+    },
+    {
+      "name": "config_get_multi_pattern_no_match",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "nosuchparam1", "nosuchparam2"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     }
   ]
 }

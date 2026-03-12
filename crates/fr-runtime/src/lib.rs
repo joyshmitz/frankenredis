@@ -1797,36 +1797,45 @@ impl Runtime {
     }
 
     fn handle_config_get(&self, argv: &[Vec<u8>]) -> RespFrame {
-        if argv.len() != 3 {
+        if argv.len() < 3 {
             return command_error_to_resp(CommandError::WrongArity("CONFIG"));
         }
-        let raw_pattern = match std::str::from_utf8(&argv[2]) {
-            Ok(pattern) => pattern,
-            Err(_) => return command_error_to_resp(CommandError::InvalidUtf8Argument),
-        };
-        let pattern = raw_pattern.to_ascii_lowercase();
         let mut entries = Vec::new();
-        if Self::config_pattern_matches(&pattern, "requirepass") {
+        // Redis 7+ supports multiple patterns: CONFIG GET pattern1 pattern2 ...
+        for arg in &argv[2..] {
+            let raw_pattern = match std::str::from_utf8(arg) {
+                Ok(pattern) => pattern,
+                Err(_) => return command_error_to_resp(CommandError::InvalidUtf8Argument),
+            };
+            let pattern = raw_pattern.to_ascii_lowercase();
+            self.collect_config_entries(&pattern, &mut entries);
+        }
+        RespFrame::Array(Some(entries))
+    }
+
+    /// Collect all config parameter entries matching a single pattern.
+    fn collect_config_entries(&self, pattern: &str, entries: &mut Vec<RespFrame>) {
+        if Self::config_pattern_matches(pattern, "requirepass") {
             entries.push(RespFrame::BulkString(Some(b"requirepass".to_vec())));
             entries.push(RespFrame::BulkString(Some(
                 self.auth_state.requirepass().unwrap_or_default().to_vec(),
             )));
         }
-        if Self::config_pattern_matches(&pattern, "acllog-max-len") {
+        if Self::config_pattern_matches(pattern, "acllog-max-len") {
             entries.push(RespFrame::BulkString(Some(b"acllog-max-len".to_vec())));
             entries.push(RespFrame::BulkString(Some(
                 self.acllog_max_len.to_string().into_bytes(),
             )));
         }
         // Dynamic maxmemory — override the static default
-        if Self::config_pattern_matches(&pattern, "maxmemory") {
+        if Self::config_pattern_matches(pattern, "maxmemory") {
             entries.push(RespFrame::BulkString(Some(b"maxmemory".to_vec())));
             entries.push(RespFrame::BulkString(Some(
                 self.maxmemory_bytes.to_string().into_bytes(),
             )));
         }
         // Dynamic slowlog params — override the static defaults
-        if Self::config_pattern_matches(&pattern, "slowlog-log-slower-than") {
+        if Self::config_pattern_matches(pattern, "slowlog-log-slower-than") {
             entries.push(RespFrame::BulkString(Some(
                 b"slowlog-log-slower-than".to_vec(),
             )));
@@ -1834,7 +1843,7 @@ impl Runtime {
                 self.slowlog_log_slower_than_us.to_string().into_bytes(),
             )));
         }
-        if Self::config_pattern_matches(&pattern, "slowlog-max-len") {
+        if Self::config_pattern_matches(pattern, "slowlog-max-len") {
             entries.push(RespFrame::BulkString(Some(b"slowlog-max-len".to_vec())));
             entries.push(RespFrame::BulkString(Some(
                 self.slowlog_max_len.to_string().into_bytes(),
@@ -1849,12 +1858,11 @@ impl Runtime {
             {
                 continue;
             }
-            if Self::config_pattern_matches(&pattern, name) {
+            if Self::config_pattern_matches(pattern, name) {
                 entries.push(RespFrame::BulkString(Some(name.as_bytes().to_vec())));
                 entries.push(RespFrame::BulkString(Some(value.as_bytes().to_vec())));
             }
         }
-        RespFrame::Array(Some(entries))
     }
 
     fn handle_config_set(&mut self, argv: &[Vec<u8>]) -> RespFrame {
