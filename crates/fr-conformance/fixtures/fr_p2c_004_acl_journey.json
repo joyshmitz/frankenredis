@@ -44,12 +44,19 @@
       }
     },
     {
-      "name": "hello_wrong_arity_is_rejected",
+      "name": "hello_no_args_returns_server_info",
       "now_ms": 5,
       "argv": ["HELLO"],
       "expect": {
-        "kind": "error",
-        "value": "ERR wrong number of arguments for 'HELLO' command"
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "server" },
+          { "kind": "bulk", "value": "frankenredis" },
+          { "kind": "bulk", "value": "version" },
+          { "kind": "bulk", "value": "0.1.0" },
+          { "kind": "bulk", "value": "proto" },
+          { "kind": "integer", "value": 2 }
+        ]
       }
     },
     {
@@ -62,10 +69,20 @@
       }
     },
     {
-      "name": "hello_unknown_option_is_syntax_error",
+      "name": "hello_setname_option_accepted",
       "now_ms": 7,
       "argv": ["HELLO", "3", "SETNAME", "client-a"],
-      "expect": { "kind": "error", "value": "ERR syntax error" }
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "server" },
+          { "kind": "bulk", "value": "frankenredis" },
+          { "kind": "bulk", "value": "version" },
+          { "kind": "bulk", "value": "0.1.0" },
+          { "kind": "bulk", "value": "proto" },
+          { "kind": "integer", "value": 3 }
+        ]
+      }
     },
     {
       "name": "set_acl_contract_key",
