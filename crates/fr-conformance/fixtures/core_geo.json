@@ -502,7 +502,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEORADIUS' command"
+        "value": "ERR wrong number of arguments for 'georadius' command"
       }
     },
     {
@@ -827,7 +827,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEOADD' command"
+        "value": "ERR wrong number of arguments for 'geoadd' command"
       }
     },
     {
@@ -838,7 +838,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEOHASH' command"
+        "value": "ERR wrong number of arguments for 'geohash' command"
       }
     },
     {
@@ -1124,7 +1124,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEOADD' command"
+        "value": "ERR wrong number of arguments for 'geoadd' command"
       }
     },
     {
@@ -1203,7 +1203,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEOPOS' command"
+        "value": "ERR wrong number of arguments for 'geopos' command"
       }
     },
     {
@@ -1215,7 +1215,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEODIST' command"
+        "value": "ERR wrong number of arguments for 'geodist' command"
       }
     },
     {
@@ -1227,7 +1227,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEOSEARCH' command"
+        "value": "ERR wrong number of arguments for 'geosearch' command"
       }
     },
     {
@@ -1239,7 +1239,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEOSEARCHSTORE' command"
+        "value": "ERR wrong number of arguments for 'geosearchstore' command"
       }
     },
     {
@@ -1251,7 +1251,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GEORADIUSBYMEMBER' command"
+        "value": "ERR wrong number of arguments for 'georadiusbymember' command"
       }
     },
     {
@@ -1748,8 +1748,14 @@
       "expect": {
         "kind": "array",
         "value": [
-          {"kind": "bulk", "value": "Catania"},
-          {"kind": "bulk", "value": "Palermo"}
+          {
+            "kind": "bulk",
+            "value": "Catania"
+          },
+          {
+            "kind": "bulk",
+            "value": "Palermo"
+          }
         ]
       }
     },

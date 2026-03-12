@@ -1254,7 +1254,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RPOPLPUSH' command"
+        "value": "ERR wrong number of arguments for 'rpoplpush' command"
       }
     },
     {
@@ -1426,7 +1426,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LMOVE' command"
+        "value": "ERR wrong number of arguments for 'lmove' command"
       }
     },
     {
@@ -1561,7 +1561,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LREM' command"
+        "value": "ERR wrong number of arguments for 'lrem' command"
       }
     },
     {
@@ -1692,7 +1692,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LTRIM' command"
+        "value": "ERR wrong number of arguments for 'ltrim' command"
       }
     },
     {
@@ -2032,7 +2032,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LCS' command"
+        "value": "ERR wrong number of arguments for 'lcs' command"
       }
     },
     {
@@ -2583,48 +2583,98 @@
         ]
       }
     },
-
     {
       "name": "lset_setup",
       "now_ms": 800,
-      "argv": ["RPUSH", "lset_k", "a", "b", "c"],
-      "expect": { "kind": "integer", "value": 3 }
+      "argv": [
+        "RPUSH",
+        "lset_k",
+        "a",
+        "b",
+        "c"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "lset_middle",
       "now_ms": 800,
-      "argv": ["LSET", "lset_k", "1", "B"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "LSET",
+        "lset_k",
+        "1",
+        "B"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "lset_verify",
       "now_ms": 800,
-      "argv": ["LRANGE", "lset_k", "0", "-1"],
+      "argv": [
+        "LRANGE",
+        "lset_k",
+        "0",
+        "-1"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "a" },
-          { "kind": "bulk", "value": "B" },
-          { "kind": "bulk", "value": "c" }
+          {
+            "kind": "bulk",
+            "value": "a"
+          },
+          {
+            "kind": "bulk",
+            "value": "B"
+          },
+          {
+            "kind": "bulk",
+            "value": "c"
+          }
         ]
       }
     },
     {
       "name": "lset_negative_index",
       "now_ms": 800,
-      "argv": ["LSET", "lset_k", "-1", "C"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "LSET",
+        "lset_k",
+        "-1",
+        "C"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "lset_verify_neg",
       "now_ms": 800,
-      "argv": ["LINDEX", "lset_k", "2"],
-      "expect": { "kind": "bulk", "value": "C" }
+      "argv": [
+        "LINDEX",
+        "lset_k",
+        "2"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "C"
+      }
     },
     {
       "name": "lset_out_of_range",
       "now_ms": 800,
-      "argv": ["LSET", "lset_k", "99", "x"],
+      "argv": [
+        "LSET",
+        "lset_k",
+        "99",
+        "x"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR index out of range"
@@ -2633,7 +2683,12 @@
     {
       "name": "lset_nonexistent_key",
       "now_ms": 800,
-      "argv": ["LSET", "nosuchlist", "0", "x"],
+      "argv": [
+        "LSET",
+        "nosuchlist",
+        "0",
+        "x"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR no such key"
@@ -2642,58 +2697,101 @@
     {
       "name": "lset_wrong_arity",
       "now_ms": 800,
-      "argv": ["LSET", "k"],
+      "argv": [
+        "LSET",
+        "k"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LSET' command"
+        "value": "ERR wrong number of arguments for 'lset' command"
       }
     },
     {
       "name": "lpushx_existing_list",
       "now_ms": 810,
-      "argv": ["LPUSHX", "lset_k", "z"],
-      "expect": { "kind": "integer", "value": 4 }
+      "argv": [
+        "LPUSHX",
+        "lset_k",
+        "z"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 4
+      }
     },
     {
       "name": "lpushx_nonexistent",
       "now_ms": 810,
-      "argv": ["LPUSHX", "nosuchpushx", "z"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "LPUSHX",
+        "nosuchpushx",
+        "z"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "lpushx_multiple",
       "now_ms": 810,
-      "argv": ["LPUSHX", "lset_k", "y", "x"],
-      "expect": { "kind": "integer", "value": 6 }
+      "argv": [
+        "LPUSHX",
+        "lset_k",
+        "y",
+        "x"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 6
+      }
     },
     {
       "name": "lpushx_wrong_arity",
       "now_ms": 810,
-      "argv": ["LPUSHX"],
+      "argv": [
+        "LPUSHX"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LPUSHX' command"
+        "value": "ERR wrong number of arguments for 'lpushx' command"
       }
     },
     {
       "name": "rpushx_existing_list",
       "now_ms": 820,
-      "argv": ["RPUSHX", "lset_k", "end"],
-      "expect": { "kind": "integer", "value": 7 }
+      "argv": [
+        "RPUSHX",
+        "lset_k",
+        "end"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 7
+      }
     },
     {
       "name": "rpushx_nonexistent",
       "now_ms": 820,
-      "argv": ["RPUSHX", "nosuchrpushx", "v"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "RPUSHX",
+        "nosuchrpushx",
+        "v"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "rpushx_wrong_arity",
       "now_ms": 820,
-      "argv": ["RPUSHX"],
+      "argv": [
+        "RPUSHX"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RPUSHX' command"
+        "value": "ERR wrong number of arguments for 'rpushx' command"
       }
     }
   ]

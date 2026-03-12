@@ -2967,7 +2967,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XADD' command"
+        "value": "ERR wrong number of arguments for 'xadd' command"
       }
     },
     {
@@ -2981,7 +2981,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XADD' command"
+        "value": "ERR wrong number of arguments for 'xadd' command"
       }
     },
     {
@@ -2992,7 +2992,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XLEN' command"
+        "value": "ERR wrong number of arguments for 'xlen' command"
       }
     },
     {
@@ -3004,7 +3004,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XDEL' command"
+        "value": "ERR wrong number of arguments for 'xdel' command"
       }
     },
     {
@@ -3117,7 +3117,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XACK' command"
+        "value": "ERR wrong number of arguments for 'xack' command"
       }
     },
     {
@@ -3128,7 +3128,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XINFO' command"
+        "value": "ERR wrong number of arguments for 'xinfo' command"
       }
     },
     {
@@ -3139,7 +3139,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XGROUP' command"
+        "value": "ERR wrong number of arguments for 'xgroup' command"
       }
     },
     {
@@ -3150,7 +3150,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XREAD' command"
+        "value": "ERR wrong number of arguments for 'xread' command"
       }
     },
     {
@@ -3161,7 +3161,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XREADGROUP' command"
+        "value": "ERR wrong number of arguments for 'xreadgroup' command"
       }
     },
     {
@@ -3215,7 +3215,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XSETID' command"
+        "value": "ERR wrong number of arguments for 'xsetid' command"
       }
     },
     {
@@ -3931,7 +3931,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XCLAIM' command"
+        "value": "ERR wrong number of arguments for 'xclaim' command"
       }
     },
     {
@@ -4242,7 +4242,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'XAUTOCLAIM' command"
+        "value": "ERR wrong number of arguments for 'xautoclaim' command"
       }
     },
     {
@@ -4261,36 +4261,63 @@
         "value": "NOGROUP No such consumer group 'nosuchgrp' for key name 'xac'"
       }
     },
-
     {
       "name": "xread_block_setup",
       "now_ms": 1000,
-      "argv": ["XADD", "xblock_s", "1-1", "field", "value1"],
-      "expect": { "kind": "bulk", "value": "1-1" }
+      "argv": [
+        "XADD",
+        "xblock_s",
+        "1-1",
+        "field",
+        "value1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-1"
+      }
     },
     {
       "name": "xread_block_zero_returns_data",
       "now_ms": 1000,
-      "argv": ["XREAD", "BLOCK", "0", "STREAMS", "xblock_s", "0"],
+      "argv": [
+        "XREAD",
+        "BLOCK",
+        "0",
+        "STREAMS",
+        "xblock_s",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "xblock_s" },
+              {
+                "kind": "bulk",
+                "value": "xblock_s"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "1-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "1-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "value1" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "value1"
+                          }
                         ]
                       }
                     ]
@@ -4305,32 +4332,63 @@
     {
       "name": "xread_block_no_data_returns_nil",
       "now_ms": 1000,
-      "argv": ["XREAD", "BLOCK", "0", "STREAMS", "xblock_noexist", "0"],
-      "expect": { "kind": "null_array", "value": null }
+      "argv": [
+        "XREAD",
+        "BLOCK",
+        "0",
+        "STREAMS",
+        "xblock_noexist",
+        "0"
+      ],
+      "expect": {
+        "kind": "null_array",
+        "value": null
+      }
     },
     {
       "name": "xread_block_with_count",
       "now_ms": 1000,
-      "argv": ["XREAD", "COUNT", "10", "BLOCK", "100", "STREAMS", "xblock_s", "0"],
+      "argv": [
+        "XREAD",
+        "COUNT",
+        "10",
+        "BLOCK",
+        "100",
+        "STREAMS",
+        "xblock_s",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "xblock_s" },
+              {
+                "kind": "bulk",
+                "value": "xblock_s"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "1-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "1-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "value1" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "value1"
+                          }
                         ]
                       }
                     ]
@@ -4345,44 +4403,95 @@
     {
       "name": "xread_block_negative_timeout",
       "now_ms": 1000,
-      "argv": ["XREAD", "BLOCK", "-1", "STREAMS", "xblock_s", "0"],
-      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+      "argv": [
+        "XREAD",
+        "BLOCK",
+        "-1",
+        "STREAMS",
+        "xblock_s",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR timeout is negative"
+      }
     },
     {
       "name": "xread_block_invalid_timeout",
       "now_ms": 1000,
-      "argv": ["XREAD", "BLOCK", "abc", "STREAMS", "xblock_s", "0"],
-      "expect": { "kind": "error", "value": "ERR timeout is not a float or out of range" }
+      "argv": [
+        "XREAD",
+        "BLOCK",
+        "abc",
+        "STREAMS",
+        "xblock_s",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR timeout is not a float or out of range"
+      }
     },
     {
       "name": "xreadgroup_block_setup_group",
       "now_ms": 1000,
-      "argv": ["XGROUP", "CREATE", "xblock_s", "xbgrp", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "xblock_s",
+        "xbgrp",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "xreadgroup_block_reads_data",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "xbgrp", "consumer1", "BLOCK", "0", "STREAMS", "xblock_s", ">"],
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "xbgrp",
+        "consumer1",
+        "BLOCK",
+        "0",
+        "STREAMS",
+        "xblock_s",
+        ">"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "xblock_s" },
+              {
+                "kind": "bulk",
+                "value": "xblock_s"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "1-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "1-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "field" },
-                          { "kind": "bulk", "value": "value1" }
+                          {
+                            "kind": "bulk",
+                            "value": "field"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "value1"
+                          }
                         ]
                       }
                     ]
@@ -4397,44 +4506,102 @@
     {
       "name": "xreadgroup_block_no_new_data",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "xbgrp", "consumer1", "BLOCK", "0", "STREAMS", "xblock_s", ">"],
-      "expect": { "kind": "null_array", "value": null }
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "xbgrp",
+        "consumer1",
+        "BLOCK",
+        "0",
+        "STREAMS",
+        "xblock_s",
+        ">"
+      ],
+      "expect": {
+        "kind": "null_array",
+        "value": null
+      }
     },
     {
       "name": "xreadgroup_block_negative_timeout",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "xbgrp", "consumer1", "BLOCK", "-1", "STREAMS", "xblock_s", ">"],
-      "expect": { "kind": "error", "value": "ERR timeout is negative" }
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "xbgrp",
+        "consumer1",
+        "BLOCK",
+        "-1",
+        "STREAMS",
+        "xblock_s",
+        ">"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR timeout is negative"
+      }
     },
     {
       "name": "xreadgroup_block_with_noack",
       "now_ms": 1000,
-      "argv": ["XADD", "xblock_s", "2-1", "f2", "v2"],
-      "expect": { "kind": "bulk", "value": "2-1" }
+      "argv": [
+        "XADD",
+        "xblock_s",
+        "2-1",
+        "f2",
+        "v2"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "2-1"
+      }
     },
     {
       "name": "xreadgroup_block_noack_reads",
       "now_ms": 1000,
-      "argv": ["XREADGROUP", "GROUP", "xbgrp", "consumer1", "BLOCK", "0", "NOACK", "STREAMS", "xblock_s", ">"],
+      "argv": [
+        "XREADGROUP",
+        "GROUP",
+        "xbgrp",
+        "consumer1",
+        "BLOCK",
+        "0",
+        "NOACK",
+        "STREAMS",
+        "xblock_s",
+        ">"
+      ],
       "expect": {
         "kind": "array",
         "value": [
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "xblock_s" },
+              {
+                "kind": "bulk",
+                "value": "xblock_s"
+              },
               {
                 "kind": "array",
                 "value": [
                   {
                     "kind": "array",
                     "value": [
-                      { "kind": "bulk", "value": "2-1" },
+                      {
+                        "kind": "bulk",
+                        "value": "2-1"
+                      },
                       {
                         "kind": "array",
                         "value": [
-                          { "kind": "bulk", "value": "f2" },
-                          { "kind": "bulk", "value": "v2" }
+                          {
+                            "kind": "bulk",
+                            "value": "f2"
+                          },
+                          {
+                            "kind": "bulk",
+                            "value": "v2"
+                          }
                         ]
                       }
                     ]
@@ -4449,8 +4616,15 @@
     {
       "name": "xread_block_cleanup",
       "now_ms": 1000,
-      "argv": ["DEL", "xblock_s", "xblock_noexist"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "DEL",
+        "xblock_s",
+        "xblock_noexist"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     }
   ]
 }

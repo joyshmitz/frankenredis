@@ -437,7 +437,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'COPY' command"
+        "value": "ERR wrong number of arguments for 'copy' command"
       }
     },
     {
@@ -449,7 +449,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'COPY' command"
+        "value": "ERR wrong number of arguments for 'copy' command"
       }
     },
     {
@@ -486,7 +486,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DUMP' command"
+        "value": "ERR wrong number of arguments for 'dump' command"
       }
     },
     {
@@ -499,7 +499,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DUMP' command"
+        "value": "ERR wrong number of arguments for 'dump' command"
       }
     },
     {
@@ -522,7 +522,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RESTORE' command"
+        "value": "ERR wrong number of arguments for 'restore' command"
       }
     },
     {
@@ -534,7 +534,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RESTORE' command"
+        "value": "ERR wrong number of arguments for 'restore' command"
       }
     },
     {
@@ -547,7 +547,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RESTORE' command"
+        "value": "ERR wrong number of arguments for 'restore' command"
       }
     },
     {

@@ -4,16 +4,21 @@
     {
       "name": "cluster_wrong_arity_is_rejected",
       "now_ms": 0,
-      "argv": ["CLUSTER"],
+      "argv": [
+        "CLUSTER"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CLUSTER' command"
+        "value": "ERR wrong number of arguments for 'cluster' command"
       }
     },
     {
       "name": "cluster_unknown_subcommand_is_rejected",
       "now_ms": 1,
-      "argv": ["CLUSTER", "NOPE"],
+      "argv": [
+        "CLUSTER",
+        "NOPE"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR Unknown subcommand or wrong number of arguments for 'CLUSTER'. Try CLUSTER HELP."
@@ -22,7 +27,10 @@
     {
       "name": "cluster_info_is_reachable_from_runtime",
       "now_ms": 2,
-      "argv": ["CLUSTER", "INFO"],
+      "argv": [
+        "CLUSTER",
+        "INFO"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "cluster_enabled:0\r\ncluster_state:ok\r\ncluster_slots_assigned:0\r\ncluster_slots_ok:0\r\ncluster_slots_pfail:0\r\ncluster_slots_fail:0\r\ncluster_known_nodes:0\r\ncluster_size:0\r\ncluster_current_epoch:0\r\ncluster_my_epoch:0\r\ncluster_stats_messages_sent:0\r\ncluster_stats_messages_received:0\r\ntotal_cluster_links_buffer_limit_exceeded:0\r\n"
@@ -31,7 +39,10 @@
     {
       "name": "cluster_myid_is_reachable_from_runtime",
       "now_ms": 3,
-      "argv": ["CLUSTER", "MYID"],
+      "argv": [
+        "CLUSTER",
+        "MYID"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "0000000000000000000000000000000000000000"
@@ -40,7 +51,10 @@
     {
       "name": "cluster_slots_is_reachable_from_runtime",
       "now_ms": 4,
-      "argv": ["CLUSTER", "SLOTS"],
+      "argv": [
+        "CLUSTER",
+        "SLOTS"
+      ],
       "expect": {
         "kind": "array",
         "value": []
@@ -49,7 +63,11 @@
     {
       "name": "cluster_keyslot_is_reachable_from_runtime",
       "now_ms": 5,
-      "argv": ["CLUSTER", "KEYSLOT", "foo"],
+      "argv": [
+        "CLUSTER",
+        "KEYSLOT",
+        "foo"
+      ],
       "expect": {
         "kind": "integer",
         "value": 12182
@@ -58,7 +76,10 @@
     {
       "name": "cluster_shards_is_reachable_from_runtime",
       "now_ms": 6,
-      "argv": ["CLUSTER", "SHARDS"],
+      "argv": [
+        "CLUSTER",
+        "SHARDS"
+      ],
       "expect": {
         "kind": "array",
         "value": []
@@ -67,7 +88,10 @@
     {
       "name": "cluster_nodes_is_reachable_from_runtime",
       "now_ms": 7,
-      "argv": ["CLUSTER", "NODES"],
+      "argv": [
+        "CLUSTER",
+        "NODES"
+      ],
       "expect": {
         "kind": "bulk",
         "value": ""
@@ -76,7 +100,12 @@
     {
       "name": "cluster_getkeysinslot_is_reachable_from_runtime",
       "now_ms": 8,
-      "argv": ["CLUSTER", "GETKEYSINSLOT", "12182", "10"],
+      "argv": [
+        "CLUSTER",
+        "GETKEYSINSLOT",
+        "12182",
+        "10"
+      ],
       "expect": {
         "kind": "array",
         "value": []
@@ -85,7 +114,11 @@
     {
       "name": "cluster_countkeysinslot_is_reachable_from_runtime",
       "now_ms": 9,
-      "argv": ["CLUSTER", "COUNTKEYSINSLOT", "12182"],
+      "argv": [
+        "CLUSTER",
+        "COUNTKEYSINSLOT",
+        "12182"
+      ],
       "expect": {
         "kind": "integer",
         "value": 0
@@ -94,7 +127,10 @@
     {
       "name": "cluster_reset_is_reachable_from_runtime",
       "now_ms": 10,
-      "argv": ["CLUSTER", "RESET"],
+      "argv": [
+        "CLUSTER",
+        "RESET"
+      ],
       "expect": {
         "kind": "simple",
         "value": "OK"
@@ -103,59 +139,105 @@
     {
       "name": "readonly_enables_cluster_mode",
       "now_ms": 11,
-      "argv": ["READONLY"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "READONLY"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "asking_after_readonly_is_ok",
       "now_ms": 12,
-      "argv": ["ASKING"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "ASKING"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "readwrite_clears_cluster_mode",
       "now_ms": 13,
-      "argv": ["READWRITE"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "READWRITE"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "readonly_wrong_arity_is_rejected",
       "now_ms": 14,
-      "argv": ["READONLY", "extra"],
+      "argv": [
+        "READONLY",
+        "extra"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'READONLY' command"
+        "value": "ERR wrong number of arguments for 'readonly' command"
       }
     },
     {
       "name": "set_cluster_contract_key",
       "now_ms": 15,
-      "argv": ["SET", "fr:p2c:007:key", "value"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "fr:p2c:007:key",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "get_cluster_contract_key",
       "now_ms": 16,
-      "argv": ["GET", "fr:p2c:007:key"],
-      "expect": { "kind": "bulk", "value": "value" }
+      "argv": [
+        "GET",
+        "fr:p2c:007:key"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "value"
+      }
     },
     {
       "name": "dbsize_before_flush",
       "now_ms": 17,
-      "argv": ["DBSIZE"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "flush_cluster_workspace",
       "now_ms": 18,
-      "argv": ["FLUSHDB"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "dbsize_after_flush",
       "now_ms": 19,
-      "argv": ["DBSIZE"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     }
   ]
 }

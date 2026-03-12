@@ -398,7 +398,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PUBLISH' command"
+        "value": "ERR wrong number of arguments for 'publish' command"
       }
     },
     {
@@ -409,7 +409,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SUBSCRIBE' command"
+        "value": "ERR wrong number of arguments for 'subscribe' command"
       }
     },
     {
@@ -420,7 +420,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PSUBSCRIBE' command"
+        "value": "ERR wrong number of arguments for 'psubscribe' command"
       }
     },
     {
@@ -431,7 +431,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PUBSUB' command"
+        "value": "ERR wrong number of arguments for 'pubsub' command"
       }
     },
     {
@@ -1087,7 +1087,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SSUBSCRIBE' command"
+        "value": "ERR wrong number of arguments for 'ssubscribe' command"
       }
     },
     {
@@ -1099,7 +1099,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SPUBLISH' command"
+        "value": "ERR wrong number of arguments for 'spublish' command"
       }
     },
     {

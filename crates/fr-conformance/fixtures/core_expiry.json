@@ -503,7 +503,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'EXPIRE' command"
+        "value": "ERR wrong number of arguments for 'expire' command"
       }
     },
     {
@@ -514,7 +514,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PTTL' command"
+        "value": "ERR wrong number of arguments for 'pttl' command"
       }
     },
     {
@@ -525,7 +525,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'TTL' command"
+        "value": "ERR wrong number of arguments for 'ttl' command"
       }
     },
     {
@@ -536,7 +536,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PERSIST' command"
+        "value": "ERR wrong number of arguments for 'persist' command"
       }
     },
     {
@@ -547,7 +547,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'TYPE' command"
+        "value": "ERR wrong number of arguments for 'type' command"
       }
     },
     {
@@ -794,7 +794,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PEXPIRE' command"
+        "value": "ERR wrong number of arguments for 'pexpire' command"
       }
     },
     {
@@ -930,7 +930,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'EXPIREAT' command"
+        "value": "ERR wrong number of arguments for 'expireat' command"
       }
     },
     {
@@ -1066,7 +1066,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PEXPIREAT' command"
+        "value": "ERR wrong number of arguments for 'pexpireat' command"
       }
     },
     {
@@ -1245,7 +1245,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GETEX' command"
+        "value": "ERR wrong number of arguments for 'getex' command"
       }
     },
     {
@@ -1663,7 +1663,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'EXPIRETIME' command"
+        "value": "ERR wrong number of arguments for 'expiretime' command"
       }
     },
     {
@@ -1674,7 +1674,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PEXPIRETIME' command"
+        "value": "ERR wrong number of arguments for 'pexpiretime' command"
       }
     },
     {

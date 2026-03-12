@@ -990,7 +990,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HSET' command"
+        "value": "ERR wrong number of arguments for 'hset' command"
       }
     },
     {
@@ -1001,7 +1001,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HGET' command"
+        "value": "ERR wrong number of arguments for 'hget' command"
       }
     },
     {
@@ -1012,7 +1012,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HDEL' command"
+        "value": "ERR wrong number of arguments for 'hdel' command"
       }
     },
     {
@@ -1023,7 +1023,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HMGET' command"
+        "value": "ERR wrong number of arguments for 'hmget' command"
       }
     },
     {
@@ -1034,7 +1034,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HRANDFIELD' command"
+        "value": "ERR wrong number of arguments for 'hrandfield' command"
       }
     },
     {
@@ -1183,7 +1183,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HMSET' command"
+        "value": "ERR wrong number of arguments for 'hmset' command"
       }
     },
     {
@@ -1198,7 +1198,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HSET' command"
+        "value": "ERR wrong number of arguments for 'hset' command"
       }
     },
     {
@@ -1225,7 +1225,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HEXISTS' command"
+        "value": "ERR wrong number of arguments for 'hexists' command"
       }
     },
     {
@@ -1236,7 +1236,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HLEN' command"
+        "value": "ERR wrong number of arguments for 'hlen' command"
       }
     },
     {
@@ -1248,7 +1248,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HINCRBY' command"
+        "value": "ERR wrong number of arguments for 'hincrby' command"
       }
     },
     {
@@ -1260,7 +1260,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HINCRBYFLOAT' command"
+        "value": "ERR wrong number of arguments for 'hincrbyfloat' command"
       }
     },
     {
@@ -1271,7 +1271,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HSETNX' command"
+        "value": "ERR wrong number of arguments for 'hsetnx' command"
       }
     },
     {
@@ -1282,7 +1282,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HSTRLEN' command"
+        "value": "ERR wrong number of arguments for 'hstrlen' command"
       }
     },
     {
@@ -1521,7 +1521,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HRANDFIELD' command"
+        "value": "ERR wrong number of arguments for 'hrandfield' command"
       }
     },
     {
@@ -1550,7 +1550,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HRANDFIELD' command"
+        "value": "ERR wrong number of arguments for 'hrandfield' command"
       }
     },
     {
@@ -1711,7 +1711,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HSET' command"
+        "value": "ERR wrong number of arguments for 'hset' command"
       }
     },
     {
@@ -1723,7 +1723,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HSET' command"
+        "value": "ERR wrong number of arguments for 'hset' command"
       }
     },
     {
@@ -1905,7 +1905,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HMSET' command"
+        "value": "ERR wrong number of arguments for 'hmset' command"
       }
     },
     {
@@ -1920,7 +1920,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HMSET' command"
+        "value": "ERR wrong number of arguments for 'hmset' command"
       }
     },
     {
@@ -1968,7 +1968,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HKEYS' command"
+        "value": "ERR wrong number of arguments for 'hkeys' command"
       }
     },
     {

@@ -937,7 +937,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SADD' command"
+        "value": "ERR wrong number of arguments for 'sadd' command"
       }
     },
     {
@@ -948,7 +948,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SREM' command"
+        "value": "ERR wrong number of arguments for 'srem' command"
       }
     },
     {
@@ -959,7 +959,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SRANDMEMBER' command"
+        "value": "ERR wrong number of arguments for 'srandmember' command"
       }
     },
     {
@@ -970,7 +970,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SPOP' command"
+        "value": "ERR wrong number of arguments for 'spop' command"
       }
     },
     {
@@ -982,7 +982,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SINTERSTORE' command"
+        "value": "ERR wrong number of arguments for 'sinterstore' command"
       }
     },
     {
@@ -1358,7 +1358,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SMISMEMBER' command"
+        "value": "ERR wrong number of arguments for 'smismember' command"
       }
     },
     {
@@ -1369,7 +1369,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SINTERCARD' command"
+        "value": "ERR wrong number of arguments for 'sintercard' command"
       }
     },
     {
@@ -1381,7 +1381,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SUNIONSTORE' command"
+        "value": "ERR wrong number of arguments for 'sunionstore' command"
       }
     },
     {
@@ -1393,7 +1393,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SDIFFSTORE' command"
+        "value": "ERR wrong number of arguments for 'sdiffstore' command"
       }
     },
     {
@@ -1405,7 +1405,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SMOVE' command"
+        "value": "ERR wrong number of arguments for 'smove' command"
       }
     },
     {
@@ -1416,7 +1416,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SINTER' command"
+        "value": "ERR wrong number of arguments for 'sinter' command"
       }
     },
     {
@@ -1427,7 +1427,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SUNION' command"
+        "value": "ERR wrong number of arguments for 'sunion' command"
       }
     },
     {
@@ -1438,7 +1438,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SDIFF' command"
+        "value": "ERR wrong number of arguments for 'sdiff' command"
       }
     },
     {
@@ -1450,7 +1450,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SSCAN' command"
+        "value": "ERR wrong number of arguments for 'sscan' command"
       }
     },
     {
@@ -1765,7 +1765,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SADD' command"
+        "value": "ERR wrong number of arguments for 'sadd' command"
       }
     },
     {
@@ -1839,97 +1839,180 @@
         "value": 2
       }
     },
-
     {
       "name": "setops_setup_a",
       "now_ms": 900,
-      "argv": ["SADD", "sop_a", "1", "2", "3"],
-      "expect": { "kind": "integer", "value": 3 }
+      "argv": [
+        "SADD",
+        "sop_a",
+        "1",
+        "2",
+        "3"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "setops_setup_b",
       "now_ms": 900,
-      "argv": ["SADD", "sop_b", "2", "3", "4"],
-      "expect": { "kind": "integer", "value": 3 }
+      "argv": [
+        "SADD",
+        "sop_b",
+        "2",
+        "3",
+        "4"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "sunionstore_basic",
       "now_ms": 900,
-      "argv": ["SUNIONSTORE", "sop_union_dest", "sop_a", "sop_b"],
-      "expect": { "kind": "integer", "value": 4 }
+      "argv": [
+        "SUNIONSTORE",
+        "sop_union_dest",
+        "sop_a",
+        "sop_b"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 4
+      }
     },
     {
       "name": "sunionstore_verify_count",
       "now_ms": 900,
-      "argv": ["SCARD", "sop_union_dest"],
-      "expect": { "kind": "integer", "value": 4 }
+      "argv": [
+        "SCARD",
+        "sop_union_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 4
+      }
     },
     {
       "name": "sunionstore_nonexistent_key",
       "now_ms": 900,
-      "argv": ["SUNIONSTORE", "sop_union_dest2", "sop_a", "nosuchset"],
-      "expect": { "kind": "integer", "value": 3 }
+      "argv": [
+        "SUNIONSTORE",
+        "sop_union_dest2",
+        "sop_a",
+        "nosuchset"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "sunionstore_wrong_arity",
       "now_ms": 900,
-      "argv": ["SUNIONSTORE"],
+      "argv": [
+        "SUNIONSTORE"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SUNIONSTORE' command"
+        "value": "ERR wrong number of arguments for 'sunionstore' command"
       }
     },
     {
       "name": "sinterstore_basic",
       "now_ms": 900,
-      "argv": ["SINTERSTORE", "sop_inter_dest", "sop_a", "sop_b"],
-      "expect": { "kind": "integer", "value": 2 }
+      "argv": [
+        "SINTERSTORE",
+        "sop_inter_dest",
+        "sop_a",
+        "sop_b"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
     },
     {
       "name": "sinterstore_nonexistent_key",
       "now_ms": 900,
-      "argv": ["SINTERSTORE", "sop_inter_dest2", "sop_a", "nosuchset"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "SINTERSTORE",
+        "sop_inter_dest2",
+        "sop_a",
+        "nosuchset"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "sinterstore_wrong_arity",
       "now_ms": 900,
-      "argv": ["SINTERSTORE"],
+      "argv": [
+        "SINTERSTORE"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SINTERSTORE' command"
+        "value": "ERR wrong number of arguments for 'sinterstore' command"
       }
     },
     {
       "name": "sdiffstore_basic",
       "now_ms": 900,
-      "argv": ["SDIFFSTORE", "sop_diff_dest", "sop_a", "sop_b"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "SDIFFSTORE",
+        "sop_diff_dest",
+        "sop_a",
+        "sop_b"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     },
     {
       "name": "sdiffstore_verify",
       "now_ms": 900,
-      "argv": ["SMEMBERS", "sop_diff_dest"],
+      "argv": [
+        "SMEMBERS",
+        "sop_diff_dest"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "1" }
+          {
+            "kind": "bulk",
+            "value": "1"
+          }
         ]
       }
     },
     {
       "name": "sdiffstore_nonexistent",
       "now_ms": 900,
-      "argv": ["SDIFFSTORE", "sop_diff_dest2", "nosuchset", "sop_a"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "SDIFFSTORE",
+        "sop_diff_dest2",
+        "nosuchset",
+        "sop_a"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "sdiffstore_wrong_arity",
       "now_ms": 900,
-      "argv": ["SDIFFSTORE"],
+      "argv": [
+        "SDIFFSTORE"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SDIFFSTORE' command"
+        "value": "ERR wrong number of arguments for 'sdiffstore' command"
       }
     }
   ]

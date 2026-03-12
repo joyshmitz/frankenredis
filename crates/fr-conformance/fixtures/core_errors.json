@@ -33,7 +33,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GET' command"
+        "value": "ERR wrong number of arguments for 'get' command"
       }
     },
     {
@@ -85,7 +85,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'EXPIRETIME' command"
+        "value": "ERR wrong number of arguments for 'expiretime' command"
       }
     },
     {
@@ -97,7 +97,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'WAIT' command"
+        "value": "ERR wrong number of arguments for 'wait' command"
       }
     },
     {
@@ -136,7 +136,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'WAITAOF' command"
+        "value": "ERR wrong number of arguments for 'waitaof' command"
       }
     },
     {
@@ -340,7 +340,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DEL' command"
+        "value": "ERR wrong number of arguments for 'del' command"
       }
     },
     {
@@ -351,7 +351,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'MGET' command"
+        "value": "ERR wrong number of arguments for 'mget' command"
       }
     },
     {
@@ -362,7 +362,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'APPEND' command"
+        "value": "ERR wrong number of arguments for 'append' command"
       }
     },
     {
@@ -373,7 +373,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'STRLEN' command"
+        "value": "ERR wrong number of arguments for 'strlen' command"
       }
     },
     {
@@ -385,7 +385,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GETRANGE' command"
+        "value": "ERR wrong number of arguments for 'getrange' command"
       }
     },
     {
@@ -397,7 +397,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SETRANGE' command"
+        "value": "ERR wrong number of arguments for 'setrange' command"
       }
     },
     {
@@ -409,7 +409,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LPUSH' command"
+        "value": "ERR wrong number of arguments for 'lpush' command"
       }
     },
     {
@@ -421,7 +421,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RPUSH' command"
+        "value": "ERR wrong number of arguments for 'rpush' command"
       }
     },
     {
@@ -433,7 +433,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SADD' command"
+        "value": "ERR wrong number of arguments for 'sadd' command"
       }
     },
     {
@@ -445,7 +445,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZADD' command"
+        "value": "ERR wrong number of arguments for 'zadd' command"
       }
     },
     {
@@ -457,7 +457,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HSET' command"
+        "value": "ERR wrong number of arguments for 'hset' command"
       }
     },
     {
@@ -468,7 +468,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'TYPE' command"
+        "value": "ERR wrong number of arguments for 'type' command"
       }
     },
     {
@@ -479,7 +479,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'KEYS' command"
+        "value": "ERR wrong number of arguments for 'keys' command"
       }
     },
     {
@@ -491,7 +491,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RENAME' command"
+        "value": "ERR wrong number of arguments for 'rename' command"
       }
     },
     {
@@ -503,7 +503,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RENAMENX' command"
+        "value": "ERR wrong number of arguments for 'renamenx' command"
       }
     },
     {
@@ -514,7 +514,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SELECT' command"
+        "value": "ERR wrong number of arguments for 'select' command"
       }
     },
     {
@@ -525,7 +525,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LLEN' command"
+        "value": "ERR wrong number of arguments for 'llen' command"
       }
     },
     {
@@ -536,7 +536,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SCARD' command"
+        "value": "ERR wrong number of arguments for 'scard' command"
       }
     },
     {
@@ -547,7 +547,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZCARD' command"
+        "value": "ERR wrong number of arguments for 'zcard' command"
       }
     },
     {
@@ -558,7 +558,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HLEN' command"
+        "value": "ERR wrong number of arguments for 'hlen' command"
       }
     },
     {
@@ -761,7 +761,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'INCRBYFLOAT' command"
+        "value": "ERR wrong number of arguments for 'incrbyfloat' command"
       }
     },
     {
@@ -1002,7 +1002,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LINDEX' command"
+        "value": "ERR wrong number of arguments for 'lindex' command"
       }
     },
     {
@@ -1015,7 +1015,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LSET' command"
+        "value": "ERR wrong number of arguments for 'lset' command"
       }
     },
     {
@@ -1102,7 +1102,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'BITCOUNT' command"
+        "value": "ERR wrong number of arguments for 'bitcount' command"
       }
     },
     {
@@ -1114,7 +1114,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GETBIT' command"
+        "value": "ERR wrong number of arguments for 'getbit' command"
       }
     },
     {
@@ -1127,7 +1127,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SETBIT' command"
+        "value": "ERR wrong number of arguments for 'setbit' command"
       }
     },
     {
@@ -1179,7 +1179,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DECR' command"
+        "value": "ERR wrong number of arguments for 'decr' command"
       }
     },
     {
@@ -1190,7 +1190,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'INCR' command"
+        "value": "ERR wrong number of arguments for 'incr' command"
       }
     },
     {
@@ -1202,7 +1202,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'INCRBY' command"
+        "value": "ERR wrong number of arguments for 'incrby' command"
       }
     },
     {
@@ -1214,7 +1214,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DECRBY' command"
+        "value": "ERR wrong number of arguments for 'decrby' command"
       }
     },
     {
@@ -1226,7 +1226,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'MSET' command"
+        "value": "ERR wrong number of arguments for 'mset' command"
       }
     },
     {
@@ -1238,7 +1238,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'MSETNX' command"
+        "value": "ERR wrong number of arguments for 'msetnx' command"
       }
     },
     {
@@ -1274,7 +1274,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PERSIST' command"
+        "value": "ERR wrong number of arguments for 'persist' command"
       }
     },
     {
@@ -1285,7 +1285,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'TTL' command"
+        "value": "ERR wrong number of arguments for 'ttl' command"
       }
     },
     {
@@ -1296,7 +1296,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PTTL' command"
+        "value": "ERR wrong number of arguments for 'pttl' command"
       }
     },
     {
@@ -1307,7 +1307,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'EXISTS' command"
+        "value": "ERR wrong number of arguments for 'exists' command"
       }
     },
     {
@@ -1319,7 +1319,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DBSIZE' command"
+        "value": "ERR wrong number of arguments for 'dbsize' command"
       }
     },
     {
@@ -1330,7 +1330,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SINTERCARD' command"
+        "value": "ERR wrong number of arguments for 'sintercard' command"
       }
     },
     {
@@ -1342,7 +1342,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZRANGEBYSCORE' command"
+        "value": "ERR wrong number of arguments for 'zrangebyscore' command"
       }
     },
     {
@@ -1354,7 +1354,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZSCORE' command"
+        "value": "ERR wrong number of arguments for 'zscore' command"
       }
     },
     {

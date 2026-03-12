@@ -58,7 +58,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SLOWLOG' command"
+        "value": "ERR wrong number of arguments for 'slowlog' command"
       }
     },
     {
@@ -405,7 +405,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CONFIG' command"
+        "value": "ERR wrong number of arguments for 'config' command"
       }
     },
     {
@@ -417,7 +417,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CONFIG' command"
+        "value": "ERR wrong number of arguments for 'config' command"
       }
     },
     {
@@ -598,14 +598,30 @@
     {
       "name": "object_encoding_setup_stream",
       "now_ms": 13012,
-      "argv": ["XADD", "obj_stream", "1-0", "field", "value"],
-      "expect": { "kind": "bulk", "value": "1-0" }
+      "argv": [
+        "XADD",
+        "obj_stream",
+        "1-0",
+        "field",
+        "value"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-0"
+      }
     },
     {
       "name": "object_encoding_stream",
       "now_ms": 13012,
-      "argv": ["OBJECT", "ENCODING", "obj_stream"],
-      "expect": { "kind": "bulk", "value": "stream" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_stream"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "stream"
+      }
     },
     {
       "name": "object_encoding_missing_key",
@@ -680,7 +696,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'OBJECT' command"
+        "value": "ERR wrong number of arguments for 'object' command"
       }
     },
     {
@@ -692,7 +708,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'OBJECT' command"
+        "value": "ERR wrong number of arguments for 'object' command"
       }
     },
     {
@@ -794,7 +810,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'MEMORY' command"
+        "value": "ERR wrong number of arguments for 'memory' command"
       }
     },
     {
@@ -818,7 +834,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'WAIT' command"
+        "value": "ERR wrong number of arguments for 'wait' command"
       }
     },
     {
@@ -853,7 +869,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'WAITAOF' command"
+        "value": "ERR wrong number of arguments for 'waitaof' command"
       }
     },
     {
@@ -936,7 +952,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LATENCY' command"
+        "value": "ERR wrong number of arguments for 'latency' command"
       }
     },
     {
@@ -985,7 +1001,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DEBUG' command"
+        "value": "ERR wrong number of arguments for 'debug' command"
       }
     },
     {
@@ -1035,7 +1051,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SWAPDB' command"
+        "value": "ERR wrong number of arguments for 'swapdb' command"
       }
     },
     {
@@ -1109,7 +1125,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'MOVE' command"
+        "value": "ERR wrong number of arguments for 'move' command"
       }
     },
     {
@@ -1918,7 +1934,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'TIME' command"
+        "value": "ERR wrong number of arguments for 'time' command"
       }
     },
     {
@@ -2202,11 +2218,13 @@
         "value": "OK"
       }
     },
-
     {
       "name": "info_cluster_section",
       "now_ms": 0,
-      "argv": ["INFO", "cluster"],
+      "argv": [
+        "INFO",
+        "cluster"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "# Cluster\r\ncluster_enabled:0\r\n\r\n"
@@ -2215,7 +2233,10 @@
     {
       "name": "info_modules_section",
       "now_ms": 0,
-      "argv": ["INFO", "modules"],
+      "argv": [
+        "INFO",
+        "modules"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "# Modules\r\n\r\n"
@@ -2224,7 +2245,10 @@
     {
       "name": "info_errorstats_section",
       "now_ms": 0,
-      "argv": ["INFO", "errorstats"],
+      "argv": [
+        "INFO",
+        "errorstats"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "# Errorstats\r\n\r\n"
@@ -2233,7 +2257,10 @@
     {
       "name": "info_replication_section",
       "now_ms": 0,
-      "argv": ["INFO", "replication"],
+      "argv": [
+        "INFO",
+        "replication"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "# Replication\r\nrole:master\r\nconnected_slaves:0\r\nmaster_failover_state:no-failover\r\nmaster_replid:0000000000000000000000000000000000000000\r\nmaster_replid2:0000000000000000000000000000000000000000\r\nmaster_repl_offset:0\r\nsecond_repl_offset:-1\r\nrepl_backlog_active:0\r\nrepl_backlog_size:1048576\r\nrepl_backlog_first_byte_offset:0\r\nrepl_backlog_histlen:0\r\n\r\n"
@@ -2242,7 +2269,10 @@
     {
       "name": "info_cpu_section",
       "now_ms": 0,
-      "argv": ["INFO", "cpu"],
+      "argv": [
+        "INFO",
+        "cpu"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "# CPU\r\nused_cpu_sys:0.000000\r\nused_cpu_user:0.000000\r\nused_cpu_sys_children:0.000000\r\nused_cpu_user_children:0.000000\r\nused_cpu_sys_main_thread:0.000000\r\nused_cpu_user_main_thread:0.000000\r\n\r\n"
@@ -2251,7 +2281,10 @@
     {
       "name": "info_unknown_section_empty",
       "now_ms": 0,
-      "argv": ["INFO", "nosuchsection"],
+      "argv": [
+        "INFO",
+        "nosuchsection"
+      ],
       "expect": {
         "kind": "bulk",
         "value": ""
@@ -2260,7 +2293,10 @@
     {
       "name": "info_clients_section",
       "now_ms": 0,
-      "argv": ["INFO", "clients"],
+      "argv": [
+        "INFO",
+        "clients"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "# Clients\r\nconnected_clients:1\r\ncluster_connections:0\r\nmaxclients:10000\r\nclient_recent_max_input_buffer:0\r\nclient_recent_max_output_buffer:0\r\ntotal_clients_connected_including_replicas:1\r\nblocked_clients:0\r\ntracking_clients:0\r\nclients_in_timeout_table:0\r\ntotal_blocking_clients:0\r\ntotal_blocking_clients_on_nokey:0\r\n\r\n"
@@ -2269,7 +2305,10 @@
     {
       "name": "info_memory_section",
       "now_ms": 0,
-      "argv": ["INFO", "memory"],
+      "argv": [
+        "INFO",
+        "memory"
+      ],
       "expect": {
         "kind": "bulk",
         "value": "# Memory\r\nused_memory:0\r\nused_memory_human:0B\r\nused_memory_rss:0\r\nused_memory_rss_human:0B\r\nused_memory_peak:0\r\nused_memory_peak_human:0B\r\nused_memory_peak_perc:0.00%\r\nused_memory_overhead:0\r\nused_memory_startup:0\r\nused_memory_dataset:0\r\nused_memory_dataset_perc:0.00%\r\nmaxmemory:0\r\nmaxmemory_human:0B\r\nmaxmemory_policy:noeviction\r\nmem_fragmentation_ratio:1.00\r\nmem_allocator:rust-alloc\r\nactive_defrag_running:0\r\nlazyfree_pending_objects:0\r\nlazyfreed_objects:0\r\n\r\n"
@@ -2278,140 +2317,939 @@
     {
       "name": "object_encoding_setup_raw_string",
       "now_ms": 30000,
-      "argv": ["SET", "obj_raw", "this-string-is-longer-than-44-bytes-so-it-should-be-raw-encoding"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "obj_raw",
+        "this-string-is-longer-than-44-bytes-so-it-should-be-raw-encoding"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "object_encoding_raw_string",
       "now_ms": 30000,
-      "argv": ["OBJECT", "ENCODING", "obj_raw"],
-      "expect": { "kind": "bulk", "value": "raw" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_raw"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "raw"
+      }
     },
     {
       "name": "object_encoding_setup_embstr",
       "now_ms": 30000,
-      "argv": ["SET", "obj_emb", "short"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "obj_emb",
+        "short"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "object_encoding_embstr",
       "now_ms": 30000,
-      "argv": ["OBJECT", "ENCODING", "obj_emb"],
-      "expect": { "kind": "bulk", "value": "embstr" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_emb"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "embstr"
+      }
     },
     {
       "name": "object_encoding_setup_intset",
       "now_ms": 30000,
-      "argv": ["SADD", "obj_intset", "1", "2", "3"],
-      "expect": { "kind": "integer", "value": 3 }
+      "argv": [
+        "SADD",
+        "obj_intset",
+        "1",
+        "2",
+        "3"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "object_encoding_intset",
       "now_ms": 30000,
-      "argv": ["OBJECT", "ENCODING", "obj_intset"],
-      "expect": { "kind": "bulk", "value": "intset" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_intset"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "intset"
+      }
     },
     {
       "name": "object_encoding_setup_set_listpack",
       "now_ms": 30000,
-      "argv": ["SADD", "obj_setlp", "a", "b", "c"],
-      "expect": { "kind": "integer", "value": 3 }
+      "argv": [
+        "SADD",
+        "obj_setlp",
+        "a",
+        "b",
+        "c"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "object_encoding_set_listpack",
       "now_ms": 30000,
-      "argv": ["OBJECT", "ENCODING", "obj_setlp"],
-      "expect": { "kind": "bulk", "value": "listpack" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_setlp"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "listpack"
+      }
     },
     {
       "name": "object_encoding_setup_quicklist",
       "now_ms": 30000,
-      "argv": ["RPUSH", "obj_ql", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak", "al", "am", "an", "ao", "ap", "aq", "ar", "as", "at", "au", "av", "aw", "ax", "ay", "az", "ba", "bb", "bc", "bd", "be", "bf", "bg", "bh", "bi", "bj", "bk", "bl", "bm", "bn", "bo", "bp", "bq", "br", "bs", "bt", "bu", "bv", "bw", "bx", "by", "bz", "ca", "cb", "cc", "cd", "ce", "cf", "cg", "ch", "ci", "cj", "ck", "cl", "cm", "cn", "co", "cp", "cq", "cr", "cs", "ct", "cu", "cv", "cw", "cx", "cy", "cz", "da", "db", "dc", "dd", "de", "df", "dg", "dh", "di", "dj", "dk", "dl", "dm", "dn", "do", "dp", "dq", "dr", "ds", "dt", "du", "dv", "dw", "dx", "dy", "dz"],
-      "expect": { "kind": "integer", "value": 130 }
+      "argv": [
+        "RPUSH",
+        "obj_ql",
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+        "k",
+        "l",
+        "m",
+        "n",
+        "o",
+        "p",
+        "q",
+        "r",
+        "s",
+        "t",
+        "u",
+        "v",
+        "w",
+        "x",
+        "y",
+        "z",
+        "aa",
+        "ab",
+        "ac",
+        "ad",
+        "ae",
+        "af",
+        "ag",
+        "ah",
+        "ai",
+        "aj",
+        "ak",
+        "al",
+        "am",
+        "an",
+        "ao",
+        "ap",
+        "aq",
+        "ar",
+        "as",
+        "at",
+        "au",
+        "av",
+        "aw",
+        "ax",
+        "ay",
+        "az",
+        "ba",
+        "bb",
+        "bc",
+        "bd",
+        "be",
+        "bf",
+        "bg",
+        "bh",
+        "bi",
+        "bj",
+        "bk",
+        "bl",
+        "bm",
+        "bn",
+        "bo",
+        "bp",
+        "bq",
+        "br",
+        "bs",
+        "bt",
+        "bu",
+        "bv",
+        "bw",
+        "bx",
+        "by",
+        "bz",
+        "ca",
+        "cb",
+        "cc",
+        "cd",
+        "ce",
+        "cf",
+        "cg",
+        "ch",
+        "ci",
+        "cj",
+        "ck",
+        "cl",
+        "cm",
+        "cn",
+        "co",
+        "cp",
+        "cq",
+        "cr",
+        "cs",
+        "ct",
+        "cu",
+        "cv",
+        "cw",
+        "cx",
+        "cy",
+        "cz",
+        "da",
+        "db",
+        "dc",
+        "dd",
+        "de",
+        "df",
+        "dg",
+        "dh",
+        "di",
+        "dj",
+        "dk",
+        "dl",
+        "dm",
+        "dn",
+        "do",
+        "dp",
+        "dq",
+        "dr",
+        "ds",
+        "dt",
+        "du",
+        "dv",
+        "dw",
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 130
+      }
     },
     {
       "name": "object_encoding_quicklist",
       "now_ms": 30000,
-      "argv": ["OBJECT", "ENCODING", "obj_ql"],
-      "expect": { "kind": "bulk", "value": "quicklist" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_ql"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "quicklist"
+      }
     },
     {
       "name": "object_encoding_setup_skiplist",
       "now_ms": 30000,
-      "argv": ["ZADD", "obj_sl", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e", "6", "f", "7", "g", "8", "h", "9", "i", "10", "j", "11", "k", "12", "l", "13", "m", "14", "n", "15", "o", "16", "p", "17", "q", "18", "r", "19", "s", "20", "t", "21", "u", "22", "v", "23", "w", "24", "x", "25", "y", "26", "z", "27", "aa", "28", "ab", "29", "ac", "30", "ad", "31", "ae", "32", "af", "33", "ag", "34", "ah", "35", "ai", "36", "aj", "37", "ak", "38", "al", "39", "am", "40", "an", "41", "ao", "42", "ap", "43", "aq", "44", "ar", "45", "as", "46", "at", "47", "au", "48", "av", "49", "aw", "50", "ax", "51", "ay", "52", "az", "53", "ba", "54", "bb", "55", "bc", "56", "bd", "57", "be", "58", "bf", "59", "bg", "60", "bh", "61", "bi", "62", "bj", "63", "bk", "64", "bl", "65", "bm", "66", "bn", "67", "bo", "68", "bp", "69", "bq", "70", "br", "71", "bs", "72", "bt", "73", "bu", "74", "bv", "75", "bw", "76", "bx", "77", "by", "78", "bz", "79", "ca", "80", "cb", "81", "cc", "82", "cd", "83", "ce", "84", "cf", "85", "cg", "86", "ch", "87", "ci", "88", "cj", "89", "ck", "90", "cl", "91", "cm", "92", "cn", "93", "co", "94", "cp", "95", "cq", "96", "cr", "97", "cs", "98", "ct", "99", "cu", "100", "cv", "101", "cw", "102", "cx", "103", "cy", "104", "cz", "105", "da", "106", "db", "107", "dc", "108", "dd", "109", "de", "110", "df", "111", "dg", "112", "dh", "113", "di", "114", "dj", "115", "dk", "116", "dl", "117", "dm", "118", "dn", "119", "do", "120", "dp", "121", "dq", "122", "dr", "123", "ds", "124", "dt", "125", "du", "126", "dv", "127", "dw", "128", "dx", "129", "dy"],
-      "expect": { "kind": "integer", "value": 129 }
+      "argv": [
+        "ZADD",
+        "obj_sl",
+        "1",
+        "a",
+        "2",
+        "b",
+        "3",
+        "c",
+        "4",
+        "d",
+        "5",
+        "e",
+        "6",
+        "f",
+        "7",
+        "g",
+        "8",
+        "h",
+        "9",
+        "i",
+        "10",
+        "j",
+        "11",
+        "k",
+        "12",
+        "l",
+        "13",
+        "m",
+        "14",
+        "n",
+        "15",
+        "o",
+        "16",
+        "p",
+        "17",
+        "q",
+        "18",
+        "r",
+        "19",
+        "s",
+        "20",
+        "t",
+        "21",
+        "u",
+        "22",
+        "v",
+        "23",
+        "w",
+        "24",
+        "x",
+        "25",
+        "y",
+        "26",
+        "z",
+        "27",
+        "aa",
+        "28",
+        "ab",
+        "29",
+        "ac",
+        "30",
+        "ad",
+        "31",
+        "ae",
+        "32",
+        "af",
+        "33",
+        "ag",
+        "34",
+        "ah",
+        "35",
+        "ai",
+        "36",
+        "aj",
+        "37",
+        "ak",
+        "38",
+        "al",
+        "39",
+        "am",
+        "40",
+        "an",
+        "41",
+        "ao",
+        "42",
+        "ap",
+        "43",
+        "aq",
+        "44",
+        "ar",
+        "45",
+        "as",
+        "46",
+        "at",
+        "47",
+        "au",
+        "48",
+        "av",
+        "49",
+        "aw",
+        "50",
+        "ax",
+        "51",
+        "ay",
+        "52",
+        "az",
+        "53",
+        "ba",
+        "54",
+        "bb",
+        "55",
+        "bc",
+        "56",
+        "bd",
+        "57",
+        "be",
+        "58",
+        "bf",
+        "59",
+        "bg",
+        "60",
+        "bh",
+        "61",
+        "bi",
+        "62",
+        "bj",
+        "63",
+        "bk",
+        "64",
+        "bl",
+        "65",
+        "bm",
+        "66",
+        "bn",
+        "67",
+        "bo",
+        "68",
+        "bp",
+        "69",
+        "bq",
+        "70",
+        "br",
+        "71",
+        "bs",
+        "72",
+        "bt",
+        "73",
+        "bu",
+        "74",
+        "bv",
+        "75",
+        "bw",
+        "76",
+        "bx",
+        "77",
+        "by",
+        "78",
+        "bz",
+        "79",
+        "ca",
+        "80",
+        "cb",
+        "81",
+        "cc",
+        "82",
+        "cd",
+        "83",
+        "ce",
+        "84",
+        "cf",
+        "85",
+        "cg",
+        "86",
+        "ch",
+        "87",
+        "ci",
+        "88",
+        "cj",
+        "89",
+        "ck",
+        "90",
+        "cl",
+        "91",
+        "cm",
+        "92",
+        "cn",
+        "93",
+        "co",
+        "94",
+        "cp",
+        "95",
+        "cq",
+        "96",
+        "cr",
+        "97",
+        "cs",
+        "98",
+        "ct",
+        "99",
+        "cu",
+        "100",
+        "cv",
+        "101",
+        "cw",
+        "102",
+        "cx",
+        "103",
+        "cy",
+        "104",
+        "cz",
+        "105",
+        "da",
+        "106",
+        "db",
+        "107",
+        "dc",
+        "108",
+        "dd",
+        "109",
+        "de",
+        "110",
+        "df",
+        "111",
+        "dg",
+        "112",
+        "dh",
+        "113",
+        "di",
+        "114",
+        "dj",
+        "115",
+        "dk",
+        "116",
+        "dl",
+        "117",
+        "dm",
+        "118",
+        "dn",
+        "119",
+        "do",
+        "120",
+        "dp",
+        "121",
+        "dq",
+        "122",
+        "dr",
+        "123",
+        "ds",
+        "124",
+        "dt",
+        "125",
+        "du",
+        "126",
+        "dv",
+        "127",
+        "dw",
+        "128",
+        "dx",
+        "129",
+        "dy"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 129
+      }
     },
     {
       "name": "object_encoding_skiplist",
       "now_ms": 30000,
-      "argv": ["OBJECT", "ENCODING", "obj_sl"],
-      "expect": { "kind": "bulk", "value": "skiplist" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_sl"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "skiplist"
+      }
     },
     {
       "name": "object_encoding_setup_hashtable_hash",
       "now_ms": 30000,
-      "argv": ["HSET", "obj_ht", "f001", "v", "f002", "v", "f003", "v", "f004", "v", "f005", "v", "f006", "v", "f007", "v", "f008", "v", "f009", "v", "f010", "v", "f011", "v", "f012", "v", "f013", "v", "f014", "v", "f015", "v", "f016", "v", "f017", "v", "f018", "v", "f019", "v", "f020", "v", "f021", "v", "f022", "v", "f023", "v", "f024", "v", "f025", "v", "f026", "v", "f027", "v", "f028", "v", "f029", "v", "f030", "v", "f031", "v", "f032", "v", "f033", "v", "f034", "v", "f035", "v", "f036", "v", "f037", "v", "f038", "v", "f039", "v", "f040", "v", "f041", "v", "f042", "v", "f043", "v", "f044", "v", "f045", "v", "f046", "v", "f047", "v", "f048", "v", "f049", "v", "f050", "v", "f051", "v", "f052", "v", "f053", "v", "f054", "v", "f055", "v", "f056", "v", "f057", "v", "f058", "v", "f059", "v", "f060", "v", "f061", "v", "f062", "v", "f063", "v", "f064", "v", "f065", "v", "f066", "v", "f067", "v", "f068", "v", "f069", "v", "f070", "v", "f071", "v", "f072", "v", "f073", "v", "f074", "v", "f075", "v", "f076", "v", "f077", "v", "f078", "v", "f079", "v", "f080", "v", "f081", "v", "f082", "v", "f083", "v", "f084", "v", "f085", "v", "f086", "v", "f087", "v", "f088", "v", "f089", "v", "f090", "v", "f091", "v", "f092", "v", "f093", "v", "f094", "v", "f095", "v", "f096", "v", "f097", "v", "f098", "v", "f099", "v", "f100", "v", "f101", "v", "f102", "v", "f103", "v", "f104", "v", "f105", "v", "f106", "v", "f107", "v", "f108", "v", "f109", "v", "f110", "v", "f111", "v", "f112", "v", "f113", "v", "f114", "v", "f115", "v", "f116", "v", "f117", "v", "f118", "v", "f119", "v", "f120", "v", "f121", "v", "f122", "v", "f123", "v", "f124", "v", "f125", "v", "f126", "v", "f127", "v", "f128", "v", "f129", "v"],
-      "expect": { "kind": "integer", "value": 129 }
+      "argv": [
+        "HSET",
+        "obj_ht",
+        "f001",
+        "v",
+        "f002",
+        "v",
+        "f003",
+        "v",
+        "f004",
+        "v",
+        "f005",
+        "v",
+        "f006",
+        "v",
+        "f007",
+        "v",
+        "f008",
+        "v",
+        "f009",
+        "v",
+        "f010",
+        "v",
+        "f011",
+        "v",
+        "f012",
+        "v",
+        "f013",
+        "v",
+        "f014",
+        "v",
+        "f015",
+        "v",
+        "f016",
+        "v",
+        "f017",
+        "v",
+        "f018",
+        "v",
+        "f019",
+        "v",
+        "f020",
+        "v",
+        "f021",
+        "v",
+        "f022",
+        "v",
+        "f023",
+        "v",
+        "f024",
+        "v",
+        "f025",
+        "v",
+        "f026",
+        "v",
+        "f027",
+        "v",
+        "f028",
+        "v",
+        "f029",
+        "v",
+        "f030",
+        "v",
+        "f031",
+        "v",
+        "f032",
+        "v",
+        "f033",
+        "v",
+        "f034",
+        "v",
+        "f035",
+        "v",
+        "f036",
+        "v",
+        "f037",
+        "v",
+        "f038",
+        "v",
+        "f039",
+        "v",
+        "f040",
+        "v",
+        "f041",
+        "v",
+        "f042",
+        "v",
+        "f043",
+        "v",
+        "f044",
+        "v",
+        "f045",
+        "v",
+        "f046",
+        "v",
+        "f047",
+        "v",
+        "f048",
+        "v",
+        "f049",
+        "v",
+        "f050",
+        "v",
+        "f051",
+        "v",
+        "f052",
+        "v",
+        "f053",
+        "v",
+        "f054",
+        "v",
+        "f055",
+        "v",
+        "f056",
+        "v",
+        "f057",
+        "v",
+        "f058",
+        "v",
+        "f059",
+        "v",
+        "f060",
+        "v",
+        "f061",
+        "v",
+        "f062",
+        "v",
+        "f063",
+        "v",
+        "f064",
+        "v",
+        "f065",
+        "v",
+        "f066",
+        "v",
+        "f067",
+        "v",
+        "f068",
+        "v",
+        "f069",
+        "v",
+        "f070",
+        "v",
+        "f071",
+        "v",
+        "f072",
+        "v",
+        "f073",
+        "v",
+        "f074",
+        "v",
+        "f075",
+        "v",
+        "f076",
+        "v",
+        "f077",
+        "v",
+        "f078",
+        "v",
+        "f079",
+        "v",
+        "f080",
+        "v",
+        "f081",
+        "v",
+        "f082",
+        "v",
+        "f083",
+        "v",
+        "f084",
+        "v",
+        "f085",
+        "v",
+        "f086",
+        "v",
+        "f087",
+        "v",
+        "f088",
+        "v",
+        "f089",
+        "v",
+        "f090",
+        "v",
+        "f091",
+        "v",
+        "f092",
+        "v",
+        "f093",
+        "v",
+        "f094",
+        "v",
+        "f095",
+        "v",
+        "f096",
+        "v",
+        "f097",
+        "v",
+        "f098",
+        "v",
+        "f099",
+        "v",
+        "f100",
+        "v",
+        "f101",
+        "v",
+        "f102",
+        "v",
+        "f103",
+        "v",
+        "f104",
+        "v",
+        "f105",
+        "v",
+        "f106",
+        "v",
+        "f107",
+        "v",
+        "f108",
+        "v",
+        "f109",
+        "v",
+        "f110",
+        "v",
+        "f111",
+        "v",
+        "f112",
+        "v",
+        "f113",
+        "v",
+        "f114",
+        "v",
+        "f115",
+        "v",
+        "f116",
+        "v",
+        "f117",
+        "v",
+        "f118",
+        "v",
+        "f119",
+        "v",
+        "f120",
+        "v",
+        "f121",
+        "v",
+        "f122",
+        "v",
+        "f123",
+        "v",
+        "f124",
+        "v",
+        "f125",
+        "v",
+        "f126",
+        "v",
+        "f127",
+        "v",
+        "f128",
+        "v",
+        "f129",
+        "v"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 129
+      }
     },
     {
       "name": "object_encoding_hashtable_hash",
       "now_ms": 30000,
-      "argv": ["OBJECT", "ENCODING", "obj_ht"],
-      "expect": { "kind": "bulk", "value": "hashtable" }
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "obj_ht"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "hashtable"
+      }
     },
     {
       "name": "info_server_section",
       "now_ms": 60000,
-      "argv": ["INFO", "server"],
-      "expect": { "kind": "bulk", "value": "# Server\r\nredis_version:7.2.0-frankenredis\r\nredis_git_sha1:00000000\r\nredis_git_dirty:0\r\nredis_build_id:0\r\nredis_mode:standalone\r\nos:Linux\r\narch_bits:64\r\nmonotonic_clock:POSIX clock_gettime\r\nmultiplexing_api:epoll\r\ngcc_version:0.0.0\r\nprocess_id:1\r\nrun_id:00000000000000000000000000000000\r\ntcp_port:6379\r\nuptime_in_seconds:60\r\nuptime_in_days:0\r\nhz:10\r\nconfigured_hz:10\r\nlru_clock:0\r\nexecutable:/usr/local/bin/frankenredis\r\nconfig_file:\r\n\r\n" }
+      "argv": [
+        "INFO",
+        "server"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "# Server\r\nredis_version:7.2.0-frankenredis\r\nredis_git_sha1:00000000\r\nredis_git_dirty:0\r\nredis_build_id:0\r\nredis_mode:standalone\r\nos:Linux\r\narch_bits:64\r\nmonotonic_clock:POSIX clock_gettime\r\nmultiplexing_api:epoll\r\ngcc_version:0.0.0\r\nprocess_id:1\r\nrun_id:00000000000000000000000000000000\r\ntcp_port:6379\r\nuptime_in_seconds:60\r\nuptime_in_days:0\r\nhz:10\r\nconfigured_hz:10\r\nlru_clock:0\r\nexecutable:/usr/local/bin/frankenredis\r\nconfig_file:\r\n\r\n"
+      }
     },
     {
       "name": "info_persistence_section",
       "now_ms": 60000,
-      "argv": ["INFO", "persistence"],
-      "expect": { "kind": "bulk", "value": "# Persistence\r\nloading:0\r\nasync_loading:0\r\ncurrent_cow_peak:0\r\ncurrent_cow_size:0\r\ncurrent_cow_size_age:0\r\ncurrent_fork_perc:0.00\r\ncurrent_save_keys_processed:0\r\ncurrent_save_keys_total:0\r\nrdb_changes_since_last_save:0\r\nrdb_bgsave_in_progress:0\r\nrdb_last_save_time:0\r\nrdb_last_bgsave_status:ok\r\nrdb_last_bgsave_time_sec:-1\r\nrdb_current_bgsave_time_sec:-1\r\nrdb_saves:0\r\nrdb_last_cow_size:0\r\naof_enabled:0\r\naof_rewrite_in_progress:0\r\naof_rewrite_scheduled:0\r\naof_last_rewrite_time_sec:-1\r\naof_current_rewrite_time_sec:-1\r\naof_last_bgrewrite_status:ok\r\naof_last_write_status:ok\r\naof_last_cow_size:0\r\n\r\n" }
+      "argv": [
+        "INFO",
+        "persistence"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "# Persistence\r\nloading:0\r\nasync_loading:0\r\ncurrent_cow_peak:0\r\ncurrent_cow_size:0\r\ncurrent_cow_size_age:0\r\ncurrent_fork_perc:0.00\r\ncurrent_save_keys_processed:0\r\ncurrent_save_keys_total:0\r\nrdb_changes_since_last_save:0\r\nrdb_bgsave_in_progress:0\r\nrdb_last_save_time:0\r\nrdb_last_bgsave_status:ok\r\nrdb_last_bgsave_time_sec:-1\r\nrdb_current_bgsave_time_sec:-1\r\nrdb_saves:0\r\nrdb_last_cow_size:0\r\naof_enabled:0\r\naof_rewrite_in_progress:0\r\naof_rewrite_scheduled:0\r\naof_last_rewrite_time_sec:-1\r\naof_current_rewrite_time_sec:-1\r\naof_last_bgrewrite_status:ok\r\naof_last_write_status:ok\r\naof_last_cow_size:0\r\n\r\n"
+      }
     },
     {
       "name": "info_stats_section",
       "now_ms": 60000,
-      "argv": ["INFO", "stats"],
-      "expect": { "kind": "bulk", "value": "# Stats\r\ntotal_connections_received:1\r\ntotal_commands_processed:0\r\ninstantaneous_ops_per_sec:0\r\ntotal_net_input_bytes:0\r\ntotal_net_output_bytes:0\r\ntotal_net_repl_input_bytes:0\r\ntotal_net_repl_output_bytes:0\r\ninstantaneous_input_kbps:0.00\r\ninstantaneous_output_kbps:0.00\r\ninstantaneous_input_repl_kbps:0.00\r\ninstantaneous_output_repl_kbps:0.00\r\nrejected_connections:0\r\nsync_full:0\r\nsync_partial_ok:0\r\nsync_partial_err:0\r\nexpired_keys:0\r\nexpired_stale_perc:0.00\r\nexpired_time_cap_reached_count:0\r\nexpire_cycle_cpu_milliseconds:0\r\nevicted_keys:0\r\nevicted_clients:0\r\ntotal_keys_expired:0\r\ntotal_keys_evicted:0\r\nkeyspace_hits:0\r\nkeyspace_misses:0\r\npubsub_channels:0\r\npubsub_patterns:0\r\npubsub_shardchannels:0\r\nlatest_fork_usec:0\r\ntotal_forks:0\r\nmigrate_cached_sockets:0\r\nslave_expires_tracked_keys:0\r\nactive_defrag_hits:0\r\nactive_defrag_misses:0\r\nactive_defrag_key_hits:0\r\nactive_defrag_key_misses:0\r\ntracking_total_keys:0\r\ntracking_total_items:0\r\ntracking_total_prefixes:0\r\nunexpected_error_replies:0\r\ntotal_error_replies:0\r\ndump_payload_sanitizations:0\r\ntotal_reads_processed:0\r\ntotal_writes_processed:0\r\nio_threaded_reads_processed:0\r\nio_threaded_writes_processed:0\r\nreply_buffer_shrinks:0\r\nreply_buffer_expands:0\r\ncurrent_eviction_exceeded_time:0\r\ncurrent_active_defrag_time:0\r\n\r\n" }
+      "argv": [
+        "INFO",
+        "stats"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "# Stats\r\ntotal_connections_received:1\r\ntotal_commands_processed:0\r\ninstantaneous_ops_per_sec:0\r\ntotal_net_input_bytes:0\r\ntotal_net_output_bytes:0\r\ntotal_net_repl_input_bytes:0\r\ntotal_net_repl_output_bytes:0\r\ninstantaneous_input_kbps:0.00\r\ninstantaneous_output_kbps:0.00\r\ninstantaneous_input_repl_kbps:0.00\r\ninstantaneous_output_repl_kbps:0.00\r\nrejected_connections:0\r\nsync_full:0\r\nsync_partial_ok:0\r\nsync_partial_err:0\r\nexpired_keys:0\r\nexpired_stale_perc:0.00\r\nexpired_time_cap_reached_count:0\r\nexpire_cycle_cpu_milliseconds:0\r\nevicted_keys:0\r\nevicted_clients:0\r\ntotal_keys_expired:0\r\ntotal_keys_evicted:0\r\nkeyspace_hits:0\r\nkeyspace_misses:0\r\npubsub_channels:0\r\npubsub_patterns:0\r\npubsub_shardchannels:0\r\nlatest_fork_usec:0\r\ntotal_forks:0\r\nmigrate_cached_sockets:0\r\nslave_expires_tracked_keys:0\r\nactive_defrag_hits:0\r\nactive_defrag_misses:0\r\nactive_defrag_key_hits:0\r\nactive_defrag_key_misses:0\r\ntracking_total_keys:0\r\ntracking_total_items:0\r\ntracking_total_prefixes:0\r\nunexpected_error_replies:0\r\ntotal_error_replies:0\r\ndump_payload_sanitizations:0\r\ntotal_reads_processed:0\r\ntotal_writes_processed:0\r\nio_threaded_reads_processed:0\r\nio_threaded_writes_processed:0\r\nreply_buffer_shrinks:0\r\nreply_buffer_expands:0\r\ncurrent_eviction_exceeded_time:0\r\ncurrent_active_defrag_time:0\r\n\r\n"
+      }
     },
     {
       "name": "info_unknown_section_returns_empty_bulk",
       "now_ms": 60000,
-      "argv": ["INFO", "nonexistent_section"],
-      "expect": { "kind": "bulk", "value": "" }
+      "argv": [
+        "INFO",
+        "nonexistent_section"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": ""
+      }
     },
     {
       "name": "info_keyspace_flush_for_test",
       "now_ms": 60000,
-      "argv": ["FLUSHDB"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "info_keyspace_section_empty_db",
       "now_ms": 60000,
-      "argv": ["INFO", "keyspace"],
-      "expect": { "kind": "bulk", "value": "# Keyspace\r\n\r\n" }
+      "argv": [
+        "INFO",
+        "keyspace"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "# Keyspace\r\n\r\n"
+      }
     },
     {
       "name": "info_keyspace_setup",
       "now_ms": 60000,
-      "argv": ["SET", "info_test_key", "value"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "info_test_key",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "info_keyspace_section_with_key",
       "now_ms": 60000,
-      "argv": ["INFO", "keyspace"],
-      "expect": { "kind": "bulk", "value": "# Keyspace\r\ndb0:keys=1,expires=0,avg_ttl=0\r\n\r\n" }
+      "argv": [
+        "INFO",
+        "keyspace"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "# Keyspace\r\ndb0:keys=1,expires=0,avg_ttl=0\r\n\r\n"
+      }
     },
     {
       "name": "info_keyspace_cleanup",
       "now_ms": 60000,
-      "argv": ["DEL", "info_test_key"],
-      "expect": { "kind": "integer", "value": 1 }
+      "argv": [
+        "DEL",
+        "info_test_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
     }
   ]
 }

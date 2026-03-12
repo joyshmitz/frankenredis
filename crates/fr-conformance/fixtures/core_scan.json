@@ -428,7 +428,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SCAN' command"
+        "value": "ERR wrong number of arguments for 'scan' command"
       }
     },
     {
@@ -1037,7 +1037,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'HSCAN' command"
+        "value": "ERR wrong number of arguments for 'hscan' command"
       }
     },
     {
@@ -1123,7 +1123,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SSCAN' command"
+        "value": "ERR wrong number of arguments for 'sscan' command"
       }
     },
     {
@@ -1209,7 +1209,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZSCAN' command"
+        "value": "ERR wrong number of arguments for 'zscan' command"
       }
     },
     {

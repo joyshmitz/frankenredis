@@ -742,7 +742,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CONFIG' command"
+        "value": "ERR wrong number of arguments for 'config' command"
       }
     },
     {
@@ -754,7 +754,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CONFIG' command"
+        "value": "ERR wrong number of arguments for 'config' command"
       }
     },
     {
@@ -767,7 +767,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CONFIG' command"
+        "value": "ERR wrong number of arguments for 'config' command"
       }
     },
     {
@@ -780,7 +780,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CONFIG' command"
+        "value": "ERR wrong number of arguments for 'config' command"
       }
     },
     {
@@ -1314,7 +1314,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CONFIG' command"
+        "value": "ERR wrong number of arguments for 'config' command"
       }
     },
     {
@@ -1441,7 +1441,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'CONFIG' command"
+        "value": "ERR wrong number of arguments for 'config' command"
       }
     },
     {
@@ -1493,43 +1493,84 @@
     {
       "name": "config_set_maxmemory_zero",
       "now_ms": 200,
-      "argv": ["CONFIG", "SET", "maxmemory", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "maxmemory",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_maxmemory_after_zero",
       "now_ms": 200,
-      "argv": ["CONFIG", "GET", "maxmemory"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "maxmemory"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "maxmemory" },
-          { "kind": "bulk", "value": "0" }
+          {
+            "kind": "bulk",
+            "value": "maxmemory"
+          },
+          {
+            "kind": "bulk",
+            "value": "0"
+          }
         ]
       }
     },
     {
       "name": "config_set_hz_value",
       "now_ms": 200,
-      "argv": ["CONFIG", "SET", "hz", "20"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hz",
+        "20"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_hz_after_set",
       "now_ms": 200,
-      "argv": ["CONFIG", "GET", "hz"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "hz"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "hz" },
-          { "kind": "bulk", "value": "20" }
+          {
+            "kind": "bulk",
+            "value": "hz"
+          },
+          {
+            "kind": "bulk",
+            "value": "20"
+          }
         ]
       }
     },
     {
       "name": "config_set_unknown_param",
       "now_ms": 200,
-      "argv": ["CONFIG", "SET", "totally-made-up-param", "123"],
+      "argv": [
+        "CONFIG",
+        "SET",
+        "totally-made-up-param",
+        "123"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR Unsupported CONFIG parameter 'totally-made-up-param'"
@@ -1538,132 +1579,263 @@
     {
       "name": "config_get_save",
       "now_ms": 200,
-      "argv": ["CONFIG", "GET", "save"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "save"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "save" },
-          { "kind": "bulk", "value": "" }
+          {
+            "kind": "bulk",
+            "value": "save"
+          },
+          {
+            "kind": "bulk",
+            "value": ""
+          }
         ]
       }
     },
     {
       "name": "config_get_loglevel",
       "now_ms": 200,
-      "argv": ["CONFIG", "GET", "loglevel"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "loglevel"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "loglevel" },
-          { "kind": "bulk", "value": "notice" }
+          {
+            "kind": "bulk",
+            "value": "loglevel"
+          },
+          {
+            "kind": "bulk",
+            "value": "notice"
+          }
         ]
       }
     },
     {
       "name": "config_get_appendonly",
       "now_ms": 200,
-      "argv": ["CONFIG", "GET", "appendonly"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "appendonly"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "appendonly" },
-          { "kind": "bulk", "value": "no" }
+          {
+            "kind": "bulk",
+            "value": "appendonly"
+          },
+          {
+            "kind": "bulk",
+            "value": "no"
+          }
         ]
       }
     },
     {
       "name": "config_wrong_arity_bare",
       "now_ms": 200,
-      "argv": ["CONFIG"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'CONFIG' command" }
+      "argv": [
+        "CONFIG"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'config' command"
+      }
     },
     {
       "name": "config_set_hz_100",
       "now_ms": 300,
-      "argv": ["CONFIG", "SET", "hz", "100"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hz",
+        "100"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_hz_after_100",
       "now_ms": 300,
-      "argv": ["CONFIG", "GET", "hz"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "hz"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "hz" },
-          { "kind": "bulk", "value": "100" }
+          {
+            "kind": "bulk",
+            "value": "hz"
+          },
+          {
+            "kind": "bulk",
+            "value": "100"
+          }
         ]
       }
     },
     {
       "name": "config_set_hz_1_min",
       "now_ms": 300,
-      "argv": ["CONFIG", "SET", "hz", "1"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hz",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_hz_after_1",
       "now_ms": 300,
-      "argv": ["CONFIG", "GET", "hz"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "hz"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "hz" },
-          { "kind": "bulk", "value": "1" }
+          {
+            "kind": "bulk",
+            "value": "hz"
+          },
+          {
+            "kind": "bulk",
+            "value": "1"
+          }
         ]
       }
     },
     {
       "name": "config_set_hz_500_max",
       "now_ms": 300,
-      "argv": ["CONFIG", "SET", "hz", "500"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hz",
+        "500"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_hz_after_500",
       "now_ms": 300,
-      "argv": ["CONFIG", "GET", "hz"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "hz"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "hz" },
-          { "kind": "bulk", "value": "500" }
+          {
+            "kind": "bulk",
+            "value": "hz"
+          },
+          {
+            "kind": "bulk",
+            "value": "500"
+          }
         ]
       }
     },
     {
       "name": "config_set_hz_non_integer",
       "now_ms": 300,
-      "argv": ["CONFIG", "SET", "hz", "abc"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hz",
+        "abc"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "config_set_hz_zero_error",
       "now_ms": 300,
-      "argv": ["CONFIG", "SET", "hz", "0"],
-      "expect": { "kind": "error", "value": "ERR Invalid argument '?' for CONFIG SET 'hz'" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hz",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid argument '?' for CONFIG SET 'hz'"
+      }
     },
     {
       "name": "config_set_hz_negative_error",
       "now_ms": 300,
-      "argv": ["CONFIG", "SET", "hz", "-1"],
-      "expect": { "kind": "error", "value": "ERR Invalid argument '?' for CONFIG SET 'hz'" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hz",
+        "-1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid argument '?' for CONFIG SET 'hz'"
+      }
     },
     {
       "name": "config_set_hz_over_max_error",
       "now_ms": 300,
-      "argv": ["CONFIG", "SET", "hz", "501"],
-      "expect": { "kind": "error", "value": "ERR Invalid argument '?' for CONFIG SET 'hz'" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hz",
+        "501"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Invalid argument '?' for CONFIG SET 'hz'"
+      }
     },
     {
       "name": "config_get_hz_unchanged_after_errors",
       "now_ms": 300,
-      "argv": ["CONFIG", "GET", "hz"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "hz"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "hz" },
-          { "kind": "bulk", "value": "500" }
+          {
+            "kind": "bulk",
+            "value": "hz"
+          },
+          {
+            "kind": "bulk",
+            "value": "500"
+          }
         ]
       }
     }

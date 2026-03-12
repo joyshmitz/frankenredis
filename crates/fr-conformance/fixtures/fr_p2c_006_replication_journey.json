@@ -4,44 +4,93 @@
     {
       "name": "set_replication_leader",
       "now_ms": 0,
-      "argv": ["SET", "fr:p2c:006:leader", "node-a"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "fr:p2c:006:leader",
+        "node-a"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "get_replication_leader",
       "now_ms": 1,
-      "argv": ["GET", "fr:p2c:006:leader"],
-      "expect": { "kind": "bulk", "value": "node-a" }
+      "argv": [
+        "GET",
+        "fr:p2c:006:leader"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "node-a"
+      }
     },
     {
       "name": "initialize_replication_offset",
       "now_ms": 2,
-      "argv": ["SET", "fr:p2c:006:offset", "0"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "fr:p2c:006:offset",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "increment_replication_offset_first_ack",
       "now_ms": 3,
-      "argv": ["INCRBY", "fr:p2c:006:offset", "7"],
-      "expect": { "kind": "integer", "value": 7 }
+      "argv": [
+        "INCRBY",
+        "fr:p2c:006:offset",
+        "7"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 7
+      }
     },
     {
       "name": "increment_replication_offset_second_ack",
       "now_ms": 4,
-      "argv": ["INCRBY", "fr:p2c:006:offset", "5"],
-      "expect": { "kind": "integer", "value": 12 }
+      "argv": [
+        "INCRBY",
+        "fr:p2c:006:offset",
+        "5"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 12
+      }
     },
     {
       "name": "read_replication_offset",
       "now_ms": 5,
-      "argv": ["GET", "fr:p2c:006:offset"],
-      "expect": { "kind": "bulk", "value": "12" }
+      "argv": [
+        "GET",
+        "fr:p2c:006:offset"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "12"
+      }
     },
     {
       "name": "seed_replica_ack_markers",
       "now_ms": 6,
-      "argv": ["MSET", "fr:p2c:006:replica:a", "1", "fr:p2c:006:replica:b", "2"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "MSET",
+        "fr:p2c:006:replica:a",
+        "1",
+        "fr:p2c:006:replica:b",
+        "2"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "count_replication_markers",
@@ -52,30 +101,55 @@
         "fr:p2c:006:replica:a",
         "fr:p2c:006:replica:b"
       ],
-      "expect": { "kind": "integer", "value": 3 }
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "wait_reports_zero_without_replica_acks",
       "now_ms": 8,
-      "argv": ["WAIT", "1", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "1",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "waitaof_reports_local_and_replica_ack_tuple",
       "now_ms": 9,
-      "argv": ["WAITAOF", "1", "0", "0"],
+      "argv": [
+        "WAITAOF",
+        "1",
+        "0",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "wait_rejects_negative_required_replica_count",
       "now_ms": 10,
-      "argv": ["WAIT", "-1", "0"],
+      "argv": [
+        "WAIT",
+        "-1",
+        "0"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR value is not an integer or out of range"
@@ -84,7 +158,11 @@
     {
       "name": "wait_rejects_negative_timeout",
       "now_ms": 11,
-      "argv": ["WAIT", "1", "-1"],
+      "argv": [
+        "WAIT",
+        "1",
+        "-1"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR value is not an integer or out of range"
@@ -93,16 +171,25 @@
     {
       "name": "waitaof_rejects_wrong_arity",
       "now_ms": 12,
-      "argv": ["WAITAOF", "1", "0"],
+      "argv": [
+        "WAITAOF",
+        "1",
+        "0"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'WAITAOF' command"
+        "value": "ERR wrong number of arguments for 'waitaof' command"
       }
     },
     {
       "name": "waitaof_rejects_non_integer_local_threshold",
       "now_ms": 13,
-      "argv": ["WAITAOF", "nope", "1", "0"],
+      "argv": [
+        "WAITAOF",
+        "nope",
+        "1",
+        "0"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR value is not an integer or out of range"
@@ -111,7 +198,12 @@
     {
       "name": "waitaof_rejects_non_integer_replica_threshold",
       "now_ms": 14,
-      "argv": ["WAITAOF", "1", "nope", "0"],
+      "argv": [
+        "WAITAOF",
+        "1",
+        "nope",
+        "0"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR value is not an integer or out of range"
@@ -120,7 +212,12 @@
     {
       "name": "waitaof_rejects_negative_timeout",
       "now_ms": 15,
-      "argv": ["WAITAOF", "1", "0", "-1"],
+      "argv": [
+        "WAITAOF",
+        "1",
+        "0",
+        "-1"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR value is not an integer or out of range"
@@ -129,20 +226,35 @@
     {
       "name": "dbsize_before_flush",
       "now_ms": 16,
-      "argv": ["DBSIZE"],
-      "expect": { "kind": "integer", "value": 4 }
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 4
+      }
     },
     {
       "name": "flush_replication_workspace",
       "now_ms": 17,
-      "argv": ["FLUSHDB"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "dbsize_after_flush",
       "now_ms": 18,
-      "argv": ["DBSIZE"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     }
   ]
 }

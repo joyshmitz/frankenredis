@@ -2832,7 +2832,7 @@ fn command_error_to_resp(error: CommandError) -> RespFrame {
         }
         CommandError::WrongArity(cmd) => RespFrame::Error(format!(
             "ERR wrong number of arguments for '{}' command",
-            cmd
+            cmd.to_ascii_lowercase()
         )),
         CommandError::InvalidInteger => {
             RespFrame::Error("ERR value is not an integer or out of range".to_string())
@@ -3599,7 +3599,7 @@ mod tests {
         let wrong_arity = rt.execute_frame(command(&[b"WAIT", b"1"]), 0);
         assert_eq!(
             wrong_arity,
-            RespFrame::Error("ERR wrong number of arguments for 'WAIT' command".to_string())
+            RespFrame::Error("ERR wrong number of arguments for 'wait' command".to_string())
         );
 
         let invalid_integer = rt.execute_frame(command(&[b"WAIT", b"nope", b"0"]), 1);
@@ -3655,7 +3655,7 @@ mod tests {
         let wrong_arity = rt.execute_frame(command(&[b"WAITAOF", b"1", b"0"]), 0);
         assert_eq!(
             wrong_arity,
-            RespFrame::Error("ERR wrong number of arguments for 'WAITAOF' command".to_string())
+            RespFrame::Error("ERR wrong number of arguments for 'waitaof' command".to_string())
         );
 
         let invalid_local = rt.execute_frame(command(&[b"WAITAOF", b"nope", b"1", b"0"]), 0);
@@ -3919,7 +3919,7 @@ mod tests {
         let wrong_arity = rt.execute_frame(command(&[b"CLUSTER"]), 0);
         assert_eq!(
             wrong_arity,
-            RespFrame::Error("ERR wrong number of arguments for 'CLUSTER' command".to_string())
+            RespFrame::Error("ERR wrong number of arguments for 'cluster' command".to_string())
         );
 
         let help = rt.execute_frame(command(&[b"CLUSTER", b"HELP"]), 0);

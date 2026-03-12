@@ -1021,7 +1021,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SORT' command"
+        "value": "ERR wrong number of arguments for 'sort' command"
       }
     },
     {
@@ -1273,7 +1273,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SORT' command"
+        "value": "ERR wrong number of arguments for 'sort' command"
       }
     },
     {
@@ -1770,68 +1770,131 @@
         ]
       }
     },
-
     {
       "name": "sort_ro_setup_list",
       "now_ms": 500,
-      "argv": ["RPUSH", "sro_list", "3", "1", "2"],
-      "expect": { "kind": "integer", "value": 3 }
+      "argv": [
+        "RPUSH",
+        "sro_list",
+        "3",
+        "1",
+        "2"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
     },
     {
       "name": "sort_ro_basic",
       "now_ms": 500,
-      "argv": ["SORT_RO", "sro_list"],
+      "argv": [
+        "SORT_RO",
+        "sro_list"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "1" },
-          { "kind": "bulk", "value": "2" },
-          { "kind": "bulk", "value": "3" }
+          {
+            "kind": "bulk",
+            "value": "1"
+          },
+          {
+            "kind": "bulk",
+            "value": "2"
+          },
+          {
+            "kind": "bulk",
+            "value": "3"
+          }
         ]
       }
     },
     {
       "name": "sort_ro_desc",
       "now_ms": 500,
-      "argv": ["SORT_RO", "sro_list", "DESC"],
+      "argv": [
+        "SORT_RO",
+        "sro_list",
+        "DESC"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "3" },
-          { "kind": "bulk", "value": "2" },
-          { "kind": "bulk", "value": "1" }
+          {
+            "kind": "bulk",
+            "value": "3"
+          },
+          {
+            "kind": "bulk",
+            "value": "2"
+          },
+          {
+            "kind": "bulk",
+            "value": "1"
+          }
         ]
       }
     },
     {
       "name": "sort_ro_limit",
       "now_ms": 500,
-      "argv": ["SORT_RO", "sro_list", "LIMIT", "0", "2"],
+      "argv": [
+        "SORT_RO",
+        "sro_list",
+        "LIMIT",
+        "0",
+        "2"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "1" },
-          { "kind": "bulk", "value": "2" }
+          {
+            "kind": "bulk",
+            "value": "1"
+          },
+          {
+            "kind": "bulk",
+            "value": "2"
+          }
         ]
       }
     },
     {
       "name": "sort_ro_alpha",
       "now_ms": 500,
-      "argv": ["SORT_RO", "sro_list", "ALPHA"],
+      "argv": [
+        "SORT_RO",
+        "sro_list",
+        "ALPHA"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "1" },
-          { "kind": "bulk", "value": "2" },
-          { "kind": "bulk", "value": "3" }
+          {
+            "kind": "bulk",
+            "value": "1"
+          },
+          {
+            "kind": "bulk",
+            "value": "2"
+          },
+          {
+            "kind": "bulk",
+            "value": "3"
+          }
         ]
       }
     },
     {
       "name": "sort_ro_store_rejected",
       "now_ms": 500,
-      "argv": ["SORT_RO", "sro_list", "STORE", "dest"],
+      "argv": [
+        "SORT_RO",
+        "sro_list",
+        "STORE",
+        "dest"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR syntax error"
@@ -1840,7 +1903,10 @@
     {
       "name": "sort_ro_nonexistent_key",
       "now_ms": 500,
-      "argv": ["SORT_RO", "nosuchkey"],
+      "argv": [
+        "SORT_RO",
+        "nosuchkey"
+      ],
       "expect": {
         "kind": "array",
         "value": []
@@ -1849,10 +1915,12 @@
     {
       "name": "sort_ro_wrong_arity",
       "now_ms": 500,
-      "argv": ["SORT_RO"],
+      "argv": [
+        "SORT_RO"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SORT' command"
+        "value": "ERR wrong number of arguments for 'sort' command"
       }
     }
   ]

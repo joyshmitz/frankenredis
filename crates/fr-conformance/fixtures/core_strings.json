@@ -1118,7 +1118,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GET' command"
+        "value": "ERR wrong number of arguments for 'get' command"
       }
     },
     {
@@ -1913,7 +1913,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'APPEND' command"
+        "value": "ERR wrong number of arguments for 'append' command"
       }
     },
     {
@@ -1924,7 +1924,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GETDEL' command"
+        "value": "ERR wrong number of arguments for 'getdel' command"
       }
     },
     {
@@ -1935,7 +1935,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GETEX' command"
+        "value": "ERR wrong number of arguments for 'getex' command"
       }
     },
     {
@@ -1948,7 +1948,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PSETEX' command"
+        "value": "ERR wrong number of arguments for 'psetex' command"
       }
     },
     {
@@ -1960,7 +1960,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SETEX' command"
+        "value": "ERR wrong number of arguments for 'setex' command"
       }
     },
     {
@@ -1972,7 +1972,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'LCS' command"
+        "value": "ERR wrong number of arguments for 'lcs' command"
       }
     },
     {
@@ -1984,7 +1984,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GETRANGE' command"
+        "value": "ERR wrong number of arguments for 'getrange' command"
       }
     },
     {
@@ -2110,7 +2110,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'APPEND' command"
+        "value": "ERR wrong number of arguments for 'append' command"
       }
     },
     {
@@ -2170,7 +2170,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'STRLEN' command"
+        "value": "ERR wrong number of arguments for 'strlen' command"
       }
     },
     {
@@ -2300,7 +2300,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SETRANGE' command"
+        "value": "ERR wrong number of arguments for 'setrange' command"
       }
     },
     {
@@ -2423,7 +2423,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GETRANGE' command"
+        "value": "ERR wrong number of arguments for 'getrange' command"
       }
     },
     {
@@ -2483,7 +2483,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'GETDEL' command"
+        "value": "ERR wrong number of arguments for 'getdel' command"
       }
     },
     {
@@ -3240,7 +3240,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'MSET' command"
+        "value": "ERR wrong number of arguments for 'mset' command"
       }
     },
     {

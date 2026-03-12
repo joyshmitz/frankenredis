@@ -1820,7 +1820,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZRANDMEMBER' command"
+        "value": "ERR wrong number of arguments for 'zrandmember' command"
       }
     },
     {
@@ -1897,7 +1897,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZMSCORE' command"
+        "value": "ERR wrong number of arguments for 'zmscore' command"
       }
     },
     {
@@ -3204,7 +3204,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZRANGEBYLEX' command"
+        "value": "ERR wrong number of arguments for 'zrangebylex' command"
       }
     },
     {
@@ -3216,7 +3216,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZREVRANGEBYLEX' command"
+        "value": "ERR wrong number of arguments for 'zrevrangebylex' command"
       }
     },
     {
@@ -3228,7 +3228,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZLEXCOUNT' command"
+        "value": "ERR wrong number of arguments for 'zlexcount' command"
       }
     },
     {
@@ -3240,7 +3240,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZREMRANGEBYRANK' command"
+        "value": "ERR wrong number of arguments for 'zremrangebyrank' command"
       }
     },
     {
@@ -3252,7 +3252,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZREMRANGEBYLEX' command"
+        "value": "ERR wrong number of arguments for 'zremrangebylex' command"
       }
     },
     {
@@ -3416,7 +3416,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZREVRANGE' command"
+        "value": "ERR wrong number of arguments for 'zrevrange' command"
       }
     },
     {
@@ -3493,7 +3493,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZREVRANK' command"
+        "value": "ERR wrong number of arguments for 'zrevrank' command"
       }
     },
     {
@@ -3674,7 +3674,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZREVRANGEBYSCORE' command"
+        "value": "ERR wrong number of arguments for 'zrevrangebyscore' command"
       }
     },
     {
@@ -3778,7 +3778,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZINCRBY' command"
+        "value": "ERR wrong number of arguments for 'zincrby' command"
       }
     },
     {
@@ -3891,7 +3891,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZINTERSTORE' command"
+        "value": "ERR wrong number of arguments for 'zinterstore' command"
       }
     },
     {
@@ -3971,7 +3971,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZDIFF' command"
+        "value": "ERR wrong number of arguments for 'zdiff' command"
       }
     },
     {
@@ -4010,7 +4010,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZDIFFSTORE' command"
+        "value": "ERR wrong number of arguments for 'zdiffstore' command"
       }
     },
     {
@@ -4116,7 +4116,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZRANGESTORE' command"
+        "value": "ERR wrong number of arguments for 'zrangestore' command"
       }
     },
     {
@@ -4426,7 +4426,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZMPOP' command"
+        "value": "ERR wrong number of arguments for 'zmpop' command"
       }
     },
     {
@@ -4637,7 +4637,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZREMRANGEBYSCORE' command"
+        "value": "ERR wrong number of arguments for 'zremrangebyscore' command"
       }
     },
     {
@@ -4932,7 +4932,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ZCOUNT' command"
+        "value": "ERR wrong number of arguments for 'zcount' command"
       }
     },
     {

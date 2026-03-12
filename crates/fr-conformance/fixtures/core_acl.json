@@ -706,7 +706,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'AUTH' command"
+        "value": "ERR wrong number of arguments for 'auth' command"
       }
     },
     {
@@ -720,7 +720,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'AUTH' command"
+        "value": "ERR wrong number of arguments for 'auth' command"
       }
     },
     {

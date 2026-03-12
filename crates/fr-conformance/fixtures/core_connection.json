@@ -34,7 +34,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PING' command"
+        "value": "ERR wrong number of arguments for 'ping' command"
       }
     },
     {
@@ -57,7 +57,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ECHO' command"
+        "value": "ERR wrong number of arguments for 'echo' command"
       }
     },
     {
@@ -70,7 +70,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'ECHO' command"
+        "value": "ERR wrong number of arguments for 'echo' command"
       }
     },
     {
@@ -105,7 +105,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SELECT' command"
+        "value": "ERR wrong number of arguments for 'select' command"
       }
     },
     {
@@ -177,7 +177,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DBSIZE' command"
+        "value": "ERR wrong number of arguments for 'dbsize' command"
       }
     },
     {
@@ -263,7 +263,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'TIME' command"
+        "value": "ERR wrong number of arguments for 'time' command"
       }
     },
     {
@@ -359,7 +359,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'FLUSHDB' command"
+        "value": "ERR wrong number of arguments for 'flushdb' command"
       }
     },
     {
@@ -645,7 +645,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'FLUSHALL' command"
+        "value": "ERR wrong number of arguments for 'flushall' command"
       }
     },
     {
@@ -689,7 +689,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RANDOMKEY' command"
+        "value": "ERR wrong number of arguments for 'randomkey' command"
       }
     },
     {
@@ -750,7 +750,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SWAPDB' command"
+        "value": "ERR wrong number of arguments for 'swapdb' command"
       }
     },
     {
@@ -776,7 +776,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'SELECT' command"
+        "value": "ERR wrong number of arguments for 'select' command"
       }
     },
     {
@@ -906,7 +906,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'READONLY' command"
+        "value": "ERR wrong number of arguments for 'readonly' command"
       }
     },
     {
@@ -918,7 +918,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'READWRITE' command"
+        "value": "ERR wrong number of arguments for 'readwrite' command"
       }
     },
     {
@@ -1191,7 +1191,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DEBUG' command"
+        "value": "ERR wrong number of arguments for 'debug' command"
       }
     },
     {
@@ -1253,7 +1253,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'MOVE' command"
+        "value": "ERR wrong number of arguments for 'move' command"
       }
     },
     {
@@ -1314,7 +1314,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'OBJECT' command"
+        "value": "ERR wrong number of arguments for 'object' command"
       }
     },
     {

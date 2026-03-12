@@ -1589,7 +1589,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'TOUCH' command"
+        "value": "ERR wrong number of arguments for 'touch' command"
       }
     },
     {
@@ -1646,7 +1646,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RANDOMKEY' command"
+        "value": "ERR wrong number of arguments for 'randomkey' command"
       }
     },
     {
@@ -2234,7 +2234,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RENAME' command"
+        "value": "ERR wrong number of arguments for 'rename' command"
       }
     },
     {
@@ -2246,7 +2246,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RENAMENX' command"
+        "value": "ERR wrong number of arguments for 'renamenx' command"
       }
     },
     {
@@ -2257,7 +2257,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'TYPE' command"
+        "value": "ERR wrong number of arguments for 'type' command"
       }
     },
     {
@@ -2268,7 +2268,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'PERSIST' command"
+        "value": "ERR wrong number of arguments for 'persist' command"
       }
     },
     {
@@ -2279,7 +2279,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DEL' command"
+        "value": "ERR wrong number of arguments for 'del' command"
       }
     },
     {
@@ -2290,100 +2290,158 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'OBJECT' command"
+        "value": "ERR wrong number of arguments for 'object' command"
       }
     },
-
     {
       "name": "keys_setup_a",
       "now_ms": 800,
-      "argv": ["SET", "key_a", "1"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "key_a",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "keys_setup_b",
       "now_ms": 800,
-      "argv": ["SET", "key_b", "2"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "key_b",
+        "2"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "keys_setup_c",
       "now_ms": 800,
-      "argv": ["SET", "other_c", "3"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "other_c",
+        "3"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "keys_no_match",
       "now_ms": 800,
-      "argv": ["KEYS", "zzz*"],
-      "expect": { "kind": "array", "value": [] }
+      "argv": [
+        "KEYS",
+        "zzz*"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
     },
     {
       "name": "keys_wrong_arity_zero",
       "now_ms": 800,
-      "argv": ["KEYS"],
+      "argv": [
+        "KEYS"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'KEYS' command"
+        "value": "ERR wrong number of arguments for 'keys' command"
       }
     },
     {
       "name": "keys_wrong_arity_extra",
       "now_ms": 800,
-      "argv": ["KEYS", "*", "extra"],
+      "argv": [
+        "KEYS",
+        "*",
+        "extra"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'KEYS' command"
+        "value": "ERR wrong number of arguments for 'keys' command"
       }
     },
     {
       "name": "keys_single_match",
       "now_ms": 800,
-      "argv": ["KEYS", "other_?"],
+      "argv": [
+        "KEYS",
+        "other_?"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "other_c" }
+          {
+            "kind": "bulk",
+            "value": "other_c"
+          }
         ]
       }
     },
     {
       "name": "dump_missing_key",
       "now_ms": 900,
-      "argv": ["DUMP", "nosuchdumpkey"],
-      "expect": { "kind": "bulk", "value": null }
+      "argv": [
+        "DUMP",
+        "nosuchdumpkey"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
     },
     {
       "name": "dump_wrong_arity_no_args",
       "now_ms": 900,
-      "argv": ["DUMP"],
+      "argv": [
+        "DUMP"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DUMP' command"
+        "value": "ERR wrong number of arguments for 'dump' command"
       }
     },
     {
       "name": "dump_wrong_arity_extra",
       "now_ms": 900,
-      "argv": ["DUMP", "a", "b"],
+      "argv": [
+        "DUMP",
+        "a",
+        "b"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'DUMP' command"
+        "value": "ERR wrong number of arguments for 'dump' command"
       }
     },
     {
       "name": "restore_wrong_arity",
       "now_ms": 900,
-      "argv": ["RESTORE", "key"],
+      "argv": [
+        "RESTORE",
+        "key"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'RESTORE' command"
+        "value": "ERR wrong number of arguments for 'restore' command"
       }
     },
     {
       "name": "restore_invalid_payload",
       "now_ms": 900,
-      "argv": ["RESTORE", "rkey", "0", "invalidpayload"],
+      "argv": [
+        "RESTORE",
+        "rkey",
+        "0",
+        "invalidpayload"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR DUMP payload version or checksum are wrong"
@@ -2392,7 +2450,12 @@
     {
       "name": "restore_invalid_payload_long",
       "now_ms": 910,
-      "argv": ["RESTORE", "rkey2", "0", "thispayloadislongenoughtopassminimumlengthcheckbutfailscrc"],
+      "argv": [
+        "RESTORE",
+        "rkey2",
+        "0",
+        "thispayloadislongenoughtopassminimumlengthcheckbutfailscrc"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR DUMP payload version or checksum are wrong"

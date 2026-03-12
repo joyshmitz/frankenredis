@@ -4,7 +4,10 @@
     {
       "name": "auth_without_config_is_rejected",
       "now_ms": 0,
-      "argv": ["AUTH", "secret"],
+      "argv": [
+        "AUTH",
+        "secret"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?"
@@ -13,7 +16,13 @@
     {
       "name": "hello_auth_without_config_is_rejected",
       "now_ms": 1,
-      "argv": ["HELLO", "3", "AUTH", "default", "secret"],
+      "argv": [
+        "HELLO",
+        "3",
+        "AUTH",
+        "default",
+        "secret"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?"
@@ -22,7 +31,10 @@
     {
       "name": "hello_with_invalid_proto_is_rejected",
       "now_ms": 2,
-      "argv": ["HELLO", "7"],
+      "argv": [
+        "HELLO",
+        "7"
+      ],
       "expect": {
         "kind": "error",
         "value": "NOPROTO unsupported protocol version '7'"
@@ -31,38 +43,72 @@
     {
       "name": "hello_auth_syntax_error_is_deterministic",
       "now_ms": 3,
-      "argv": ["HELLO", "3", "AUTH", "default"],
-      "expect": { "kind": "error", "value": "ERR syntax error" }
+      "argv": [
+        "HELLO",
+        "3",
+        "AUTH",
+        "default"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
     },
     {
       "name": "auth_wrong_arity_is_rejected",
       "now_ms": 4,
-      "argv": ["AUTH"],
+      "argv": [
+        "AUTH"
+      ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'AUTH' command"
+        "value": "ERR wrong number of arguments for 'auth' command"
       }
     },
     {
       "name": "hello_no_args_returns_server_info",
       "now_ms": 5,
-      "argv": ["HELLO"],
+      "argv": [
+        "HELLO"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "server" },
-          { "kind": "bulk", "value": "frankenredis" },
-          { "kind": "bulk", "value": "version" },
-          { "kind": "bulk", "value": "0.1.0" },
-          { "kind": "bulk", "value": "proto" },
-          { "kind": "integer", "value": 2 }
+          {
+            "kind": "bulk",
+            "value": "server"
+          },
+          {
+            "kind": "bulk",
+            "value": "frankenredis"
+          },
+          {
+            "kind": "bulk",
+            "value": "version"
+          },
+          {
+            "kind": "bulk",
+            "value": "0.1.0"
+          },
+          {
+            "kind": "bulk",
+            "value": "proto"
+          },
+          {
+            "kind": "integer",
+            "value": 2
+          }
         ]
       }
     },
     {
       "name": "auth_user_without_config_is_rejected",
       "now_ms": 6,
-      "argv": ["AUTH", "alice", "secret2"],
+      "argv": [
+        "AUTH",
+        "alice",
+        "secret2"
+      ],
       "expect": {
         "kind": "error",
         "value": "ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?"
@@ -71,82 +117,172 @@
     {
       "name": "hello_setname_option_accepted",
       "now_ms": 7,
-      "argv": ["HELLO", "3", "SETNAME", "client-a"],
+      "argv": [
+        "HELLO",
+        "3",
+        "SETNAME",
+        "client-a"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "server" },
-          { "kind": "bulk", "value": "frankenredis" },
-          { "kind": "bulk", "value": "version" },
-          { "kind": "bulk", "value": "0.1.0" },
-          { "kind": "bulk", "value": "proto" },
-          { "kind": "integer", "value": 3 }
+          {
+            "kind": "bulk",
+            "value": "server"
+          },
+          {
+            "kind": "bulk",
+            "value": "frankenredis"
+          },
+          {
+            "kind": "bulk",
+            "value": "version"
+          },
+          {
+            "kind": "bulk",
+            "value": "0.1.0"
+          },
+          {
+            "kind": "bulk",
+            "value": "proto"
+          },
+          {
+            "kind": "integer",
+            "value": 3
+          }
         ]
       }
     },
     {
       "name": "set_acl_contract_key",
       "now_ms": 8,
-      "argv": ["SET", "fr:p2c:004:key", "value"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "fr:p2c:004:key",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "get_acl_contract_key",
       "now_ms": 9,
-      "argv": ["GET", "fr:p2c:004:key"],
-      "expect": { "kind": "bulk", "value": "value" }
+      "argv": [
+        "GET",
+        "fr:p2c:004:key"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "value"
+      }
     },
     {
       "name": "config_set_requirepass_bridges_default_acl_user",
       "now_ms": 10,
-      "argv": ["CONFIG", "SET", "requirepass", "secret"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "requirepass",
+        "secret"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_requirepass_after_bridge",
       "now_ms": 11,
-      "argv": ["CONFIG", "GET", "requirepass"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "requirepass"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "requirepass" },
-          { "kind": "bulk", "value": "secret" }
+          {
+            "kind": "bulk",
+            "value": "requirepass"
+          },
+          {
+            "kind": "bulk",
+            "value": "secret"
+          }
         ]
       }
     },
     {
       "name": "config_set_acllog_max_len",
       "now_ms": 12,
-      "argv": ["CONFIG", "SET", "acllog-max-len", "256"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "acllog-max-len",
+        "256"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_acllog_max_len_with_pattern",
       "now_ms": 13,
-      "argv": ["CONFIG", "GET", "acl*"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "acl*"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "acllog-max-len" },
-          { "kind": "bulk", "value": "256" }
+          {
+            "kind": "bulk",
+            "value": "acllog-max-len"
+          },
+          {
+            "kind": "bulk",
+            "value": "256"
+          }
         ]
       }
     },
     {
       "name": "config_clear_requirepass_restores_nopass_bridge",
       "now_ms": 14,
-      "argv": ["CONFIG", "SET", "requirepass", ""],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "CONFIG",
+        "SET",
+        "requirepass",
+        ""
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "config_get_requirepass_after_clear",
       "now_ms": 15,
-      "argv": ["CONFIG", "GET", "requirepass"],
+      "argv": [
+        "CONFIG",
+        "GET",
+        "requirepass"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "requirepass" },
-          { "kind": "bulk", "value": "" }
+          {
+            "kind": "bulk",
+            "value": "requirepass"
+          },
+          {
+            "kind": "bulk",
+            "value": ""
+          }
         ]
       }
     }

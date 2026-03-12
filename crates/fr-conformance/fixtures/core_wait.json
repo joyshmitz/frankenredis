@@ -4,308 +4,650 @@
     {
       "name": "wait_standalone_zero_replicas",
       "now_ms": 0,
-      "argv": ["WAIT", "0", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_standalone_one_replica",
       "now_ms": 0,
-      "argv": ["WAIT", "1", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "1",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_standalone_many_replicas",
       "now_ms": 0,
-      "argv": ["WAIT", "100", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "100",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_standalone_with_timeout",
       "now_ms": 0,
-      "argv": ["WAIT", "1", "100"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "1",
+        "100"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_standalone_large_numreplicas",
       "now_ms": 0,
-      "argv": ["WAIT", "999999", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "999999",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_standalone_large_timeout",
       "now_ms": 0,
-      "argv": ["WAIT", "0", "999999"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "0",
+        "999999"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_case_insensitive",
       "now_ms": 0,
-      "argv": ["wait", "0", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "wait",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_after_set_still_zero",
       "now_ms": 100,
-      "argv": ["SET", "wait_key", "value"],
-      "expect": { "kind": "simple", "value": "OK" }
+      "argv": [
+        "SET",
+        "wait_key",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     },
     {
       "name": "wait_after_write_standalone",
       "now_ms": 100,
-      "argv": ["WAIT", "1", "0"],
-      "expect": { "kind": "integer", "value": 0 }
+      "argv": [
+        "WAIT",
+        "1",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     },
     {
       "name": "wait_wrong_arity_no_args",
       "now_ms": 0,
-      "argv": ["WAIT"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'WAIT' command" }
+      "argv": [
+        "WAIT"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'wait' command"
+      }
     },
     {
       "name": "wait_wrong_arity_one_arg",
       "now_ms": 0,
-      "argv": ["WAIT", "1"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'WAIT' command" }
+      "argv": [
+        "WAIT",
+        "1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'wait' command"
+      }
     },
     {
       "name": "wait_wrong_arity_extra_args",
       "now_ms": 0,
-      "argv": ["WAIT", "1", "0", "extra"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'WAIT' command" }
+      "argv": [
+        "WAIT",
+        "1",
+        "0",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'wait' command"
+      }
     },
     {
       "name": "wait_wrong_arity_four_args",
       "now_ms": 0,
-      "argv": ["WAIT", "1", "0", "extra", "more"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'WAIT' command" }
+      "argv": [
+        "WAIT",
+        "1",
+        "0",
+        "extra",
+        "more"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'wait' command"
+      }
     },
     {
       "name": "wait_invalid_numreplicas",
       "now_ms": 0,
-      "argv": ["WAIT", "abc", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAIT",
+        "abc",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "wait_negative_numreplicas",
       "now_ms": 0,
-      "argv": ["WAIT", "-1", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAIT",
+        "-1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "wait_negative_large_numreplicas",
       "now_ms": 0,
-      "argv": ["WAIT", "-100", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAIT",
+        "-100",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "wait_invalid_timeout",
       "now_ms": 0,
-      "argv": ["WAIT", "0", "abc"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAIT",
+        "0",
+        "abc"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "wait_negative_timeout",
       "now_ms": 0,
-      "argv": ["WAIT", "0", "-1"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAIT",
+        "0",
+        "-1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "wait_float_numreplicas",
       "now_ms": 0,
-      "argv": ["WAIT", "1.5", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAIT",
+        "1.5",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "wait_float_timeout",
       "now_ms": 0,
-      "argv": ["WAIT", "0", "1.5"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAIT",
+        "0",
+        "1.5"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "wait_empty_numreplicas",
       "now_ms": 0,
-      "argv": ["WAIT", "", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAIT",
+        "",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_standalone_zero_zero",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "0", "0"],
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_standalone_one_zero",
       "now_ms": 0,
-      "argv": ["WAITAOF", "1", "0", "0"],
+      "argv": [
+        "WAITAOF",
+        "1",
+        "0",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_standalone_zero_one",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "1", "0"],
+      "argv": [
+        "WAITAOF",
+        "0",
+        "1",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_standalone_one_one",
       "now_ms": 0,
-      "argv": ["WAITAOF", "1", "1", "0"],
+      "argv": [
+        "WAITAOF",
+        "1",
+        "1",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_standalone_with_timeout",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "0", "100"],
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "100"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_standalone_large_local",
       "now_ms": 0,
-      "argv": ["WAITAOF", "100", "0", "0"],
+      "argv": [
+        "WAITAOF",
+        "100",
+        "0",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_standalone_large_replicas",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "100", "0"],
+      "argv": [
+        "WAITAOF",
+        "0",
+        "100",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_case_insensitive",
       "now_ms": 0,
-      "argv": ["waitaof", "0", "0", "0"],
+      "argv": [
+        "waitaof",
+        "0",
+        "0",
+        "0"
+      ],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "integer", "value": 1 },
-          { "kind": "integer", "value": 0 }
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
         ]
       }
     },
     {
       "name": "waitaof_wrong_arity_no_args",
       "now_ms": 0,
-      "argv": ["WAITAOF"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'WAITAOF' command" }
+      "argv": [
+        "WAITAOF"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'waitaof' command"
+      }
     },
     {
       "name": "waitaof_wrong_arity_one_arg",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'WAITAOF' command" }
+      "argv": [
+        "WAITAOF",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'waitaof' command"
+      }
     },
     {
       "name": "waitaof_wrong_arity_two_args",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "0"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'WAITAOF' command" }
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'waitaof' command"
+      }
     },
     {
       "name": "waitaof_wrong_arity_extra_args",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "0", "0", "extra"],
-      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'WAITAOF' command" }
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "0",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'waitaof' command"
+      }
     },
     {
       "name": "waitaof_invalid_numlocal",
       "now_ms": 0,
-      "argv": ["WAITAOF", "abc", "0", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "abc",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_negative_numlocal",
       "now_ms": 0,
-      "argv": ["WAITAOF", "-1", "0", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "-1",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_invalid_numreplicas",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "abc", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "0",
+        "abc",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_negative_numreplicas",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "-1", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "0",
+        "-1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_invalid_timeout",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "0", "abc"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "abc"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_negative_timeout",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "0", "-1"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "-1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_float_numlocal",
       "now_ms": 0,
-      "argv": ["WAITAOF", "1.5", "0", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "1.5",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_float_numreplicas",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "1.5", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "0",
+        "1.5",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_float_timeout",
       "now_ms": 0,
-      "argv": ["WAITAOF", "0", "0", "1.5"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "1.5"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     },
     {
       "name": "waitaof_empty_numlocal",
       "now_ms": 0,
-      "argv": ["WAITAOF", "", "0", "0"],
-      "expect": { "kind": "error", "value": "ERR value is not an integer or out of range" }
+      "argv": [
+        "WAITAOF",
+        "",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     }
   ]
 }
