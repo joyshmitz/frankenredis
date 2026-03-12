@@ -311,6 +311,60 @@
       "now_ms": 98,
       "argv": ["CLIENT", "GETNAME"],
       "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "client_setinfo_lib_name",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "LIB-NAME", "redis-py"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_setinfo_lib_ver",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "LIB-VER", "5.0.1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_setinfo_lib_name_lowercase",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "lib-name", "jedis"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_setinfo_lib_ver_lowercase",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "lib-ver", "4.3.0"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_setinfo_clear_lib_name",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "LIB-NAME", ""],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_setinfo_clear_lib_ver",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "LIB-VER", ""],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "client_setinfo_unknown_attr",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "UNKNOWN", "value"],
+      "expect": { "kind": "error", "value": "ERR Unrecognized option 'UNKNOWN' for CLIENT SETINFO" }
+    },
+    {
+      "name": "client_setinfo_wrong_arity",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "LIB-NAME"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'CLIENT' command" }
+    },
+    {
+      "name": "client_setinfo_lib_name_with_space",
+      "now_ms": 100,
+      "argv": ["CLIENT", "SETINFO", "LIB-NAME", "has space"],
+      "expect": { "kind": "error", "value": "ERR lib-name can only contain characters that are allowed in CLIENT SETNAME" }
     }
   ]
 }

@@ -709,6 +709,10 @@ pub struct Runtime {
     client_id: u64,
     /// Per-client name set via CLIENT SETNAME.
     client_name: Option<Vec<u8>>,
+    /// Client library name set via CLIENT SETINFO LIB-NAME (Redis 7.2+).
+    client_lib_name: Option<String>,
+    /// Client library version set via CLIENT SETINFO LIB-VER (Redis 7.2+).
+    client_lib_ver: Option<String>,
     /// Flags: client no-evict mode.
     client_no_evict: bool,
     /// Flags: client no-touch mode.
@@ -774,6 +778,8 @@ impl Runtime {
             last_active_expire_cycle: None,
             client_id: CLIENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             client_name: None,
+            client_lib_name: None,
+            client_lib_ver: None,
             client_no_evict: false,
             client_no_touch: false,
             slowlog: Vec::new(),
@@ -2063,13 +2069,17 @@ impl Runtime {
             } else {
                 -1
             };
+            let lib_name = self.client_lib_name.as_deref().unwrap_or("");
+            let lib_ver = self.client_lib_ver.as_deref().unwrap_or("");
             let info_line = format!(
-                "id={} addr=127.0.0.1:0 laddr=127.0.0.1:6379 fd=0 name={} db=0 sub=0 psub=0 ssub=0 multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user=default lib-name= lib-ver= resp=2 flags={}\r\n",
+                "id={} addr=127.0.0.1:0 laddr=127.0.0.1:6379 fd=0 name={} db=0 sub=0 psub=0 ssub=0 multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user=default lib-name={} lib-ver={} resp=2 flags={}\r\n",
                 self.client_id,
                 name_str,
                 multi_count,
                 self.transaction_state.watched_keys.len(),
                 sub.to_ascii_lowercase(),
+                lib_name,
+                lib_ver,
                 flags,
             );
             RespFrame::BulkString(Some(info_line.into_bytes()))
@@ -2103,6 +2113,43 @@ impl Runtime {
                 self.client_no_touch = false;
             } else {
                 return RespFrame::Error("ERR argument must be 'on' or 'off'".to_string());
+            }
+            RespFrame::SimpleString("OK".to_string())
+        } else if sub.eq_ignore_ascii_case("SETINFO") {
+            // CLIENT SETINFO <attr> <value> (Redis 7.2+)
+            if argv.len() != 4 {
+                return command_error_to_resp(CommandError::WrongArity("CLIENT"));
+            }
+            let attr = match std::str::from_utf8(&argv[2]) {
+                Ok(a) => a,
+                Err(_) => return command_error_to_resp(CommandError::InvalidUtf8Argument),
+            };
+            let val = match std::str::from_utf8(&argv[3]) {
+                Ok(v) => v.to_string(),
+                Err(_) => return command_error_to_resp(CommandError::InvalidUtf8Argument),
+            };
+            if attr.eq_ignore_ascii_case("LIB-NAME") || attr.eq_ignore_ascii_case("lib-name") {
+                // Redis validates: lib-name must not contain spaces or newlines
+                if val.contains(' ') || val.contains('\n') {
+                    return RespFrame::Error(
+                        "ERR lib-name can only contain characters that are allowed in CLIENT SETNAME"
+                            .to_string(),
+                    );
+                }
+                self.client_lib_name = if val.is_empty() { None } else { Some(val) };
+            } else if attr.eq_ignore_ascii_case("LIB-VER") || attr.eq_ignore_ascii_case("lib-ver")
+            {
+                if val.contains(' ') || val.contains('\n') {
+                    return RespFrame::Error(
+                        "ERR lib-ver can only contain characters that are allowed in CLIENT SETNAME"
+                            .to_string(),
+                    );
+                }
+                self.client_lib_ver = if val.is_empty() { None } else { Some(val) };
+            } else {
+                return RespFrame::Error(format!(
+                    "ERR Unrecognized option '{attr}' for CLIENT SETINFO"
+                ));
             }
             RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("REPLY") {
@@ -2155,6 +2202,8 @@ impl Runtime {
         }
         // Reset all per-client state to initial values
         self.client_name = None;
+        self.client_lib_name = None;
+        self.client_lib_ver = None;
         self.client_no_evict = false;
         self.client_no_touch = false;
         self.transaction_state = TransactionState::default();
