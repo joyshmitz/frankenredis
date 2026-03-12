@@ -4913,6 +4913,11 @@ impl Store {
         }
 
         self.stream_groups.remove(destination);
+        // Copy stream consumer groups if source has them
+        if let Some(groups) = self.stream_groups.get(source) {
+            self.stream_groups
+                .insert(destination.to_vec(), groups.clone());
+        }
         self.entries.insert(destination.to_vec(), entry);
         Ok(true)
     }

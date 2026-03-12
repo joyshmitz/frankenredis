@@ -1056,6 +1056,175 @@
         "kind": "bulk",
         "value": "hello"
       }
+    },
+    {
+      "name": "copy_stream_setup_xadd",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "cp_stream_src",
+        "1-1",
+        "field1",
+        "value1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-1"
+      }
+    },
+    {
+      "name": "copy_stream_setup_xadd2",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "cp_stream_src",
+        "2-1",
+        "field2",
+        "value2"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "2-1"
+      }
+    },
+    {
+      "name": "copy_stream_setup_group",
+      "now_ms": 100,
+      "argv": [
+        "XGROUP",
+        "CREATE",
+        "cp_stream_src",
+        "testgroup",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "copy_stream",
+      "now_ms": 100,
+      "argv": [
+        "COPY",
+        "cp_stream_src",
+        "cp_stream_dst"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "copy_stream_type_verify",
+      "now_ms": 100,
+      "argv": [
+        "TYPE",
+        "cp_stream_dst"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "stream"
+      }
+    },
+    {
+      "name": "copy_stream_len_verify",
+      "now_ms": 100,
+      "argv": [
+        "XLEN",
+        "cp_stream_dst"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "copy_stream_encoding_verify",
+      "now_ms": 100,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "cp_stream_dst"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "stream"
+      }
+    },
+    {
+      "name": "copy_stream_data_verify",
+      "now_ms": 100,
+      "argv": [
+        "XRANGE",
+        "cp_stream_dst",
+        "-",
+        "+"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "1-1"
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "field1"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value1"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "2-1"
+              },
+              {
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "field2"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "value2"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "copy_stream_group_preserved_setid",
+      "now_ms": 100,
+      "argv": [
+        "XGROUP",
+        "SETID",
+        "cp_stream_dst",
+        "testgroup",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     }
   ]
 }

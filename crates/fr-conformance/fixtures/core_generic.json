@@ -1765,6 +1765,154 @@
         "kind": "integer",
         "value": 0
       }
+    },
+    {
+      "name": "object_encoding_stream_setup",
+      "now_ms": 100,
+      "argv": [
+        "XADD",
+        "enc_stream",
+        "1-1",
+        "f",
+        "v"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "1-1"
+      }
+    },
+    {
+      "name": "object_encoding_stream",
+      "now_ms": 100,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "enc_stream"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "stream"
+      }
+    },
+    {
+      "name": "sort_stream_wrongtype",
+      "now_ms": 100,
+      "argv": [
+        "SORT",
+        "enc_stream"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "object_encoding_raw_string_setup",
+      "now_ms": 100,
+      "argv": [
+        "SET",
+        "enc_raw",
+        "this is a longer string that exceeds the embstr limit of forty four bytes in redis"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "object_encoding_raw_string",
+      "now_ms": 100,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "enc_raw"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "raw"
+      }
+    },
+    {
+      "name": "object_encoding_hashtable_setup",
+      "now_ms": 100,
+      "argv": [
+        "HSET",
+        "enc_big_hash",
+        "field_with_a_very_long_name_that_exceeds_the_sixty_four_byte_limit_for_listpack",
+        "value"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "object_encoding_hashtable",
+      "now_ms": 100,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "enc_big_hash"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "hashtable"
+      }
+    },
+    {
+      "name": "object_encoding_skiplist_setup",
+      "now_ms": 100,
+      "argv": [
+        "ZADD",
+        "enc_big_zset",
+        "1",
+        "member_with_a_very_long_name_that_exceeds_the_sixty_four_byte_limit_for_listpack_encoding"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "object_encoding_skiplist",
+      "now_ms": 100,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "enc_big_zset"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "skiplist"
+      }
+    },
+    {
+      "name": "object_encoding_intset_setup",
+      "now_ms": 100,
+      "argv": [
+        "SADD",
+        "enc_intset",
+        "1",
+        "2",
+        "3"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
+    },
+    {
+      "name": "object_encoding_intset",
+      "now_ms": 100,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "enc_intset"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "intset"
+      }
     }
   ]
 }
