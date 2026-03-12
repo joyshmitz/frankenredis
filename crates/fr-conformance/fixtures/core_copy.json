@@ -1,0 +1,270 @@
+{
+  "suite": "core_copy",
+  "cases": [
+    {
+      "name": "setup_string",
+      "now_ms": 0,
+      "argv": ["SET", "src_str", "hello"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "setup_list",
+      "now_ms": 0,
+      "argv": ["RPUSH", "src_list", "a", "b", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "setup_set",
+      "now_ms": 0,
+      "argv": ["SADD", "src_set", "x", "y", "z"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "setup_hash",
+      "now_ms": 0,
+      "argv": ["HSET", "src_hash", "f1", "v1", "f2", "v2"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "setup_zset",
+      "now_ms": 0,
+      "argv": ["ZADD", "src_zset", "1.5", "alpha", "2.5", "beta"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "copy_string",
+      "now_ms": 0,
+      "argv": ["COPY", "src_str", "dst_str"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "verify_copy_string",
+      "now_ms": 0,
+      "argv": ["GET", "dst_str"],
+      "expect": { "kind": "bulk", "value": "hello" }
+    },
+    {
+      "name": "verify_source_unchanged",
+      "now_ms": 0,
+      "argv": ["GET", "src_str"],
+      "expect": { "kind": "bulk", "value": "hello" }
+    },
+    {
+      "name": "copy_list",
+      "now_ms": 0,
+      "argv": ["COPY", "src_list", "dst_list"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "verify_copy_list",
+      "now_ms": 0,
+      "argv": ["LRANGE", "dst_list", "0", "-1"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "a" },
+          { "kind": "bulk", "value": "b" },
+          { "kind": "bulk", "value": "c" }
+        ]
+      }
+    },
+    {
+      "name": "copy_set",
+      "now_ms": 0,
+      "argv": ["COPY", "src_set", "dst_set"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "verify_copy_set_card",
+      "now_ms": 0,
+      "argv": ["SCARD", "dst_set"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "copy_hash",
+      "now_ms": 0,
+      "argv": ["COPY", "src_hash", "dst_hash"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "verify_copy_hash",
+      "now_ms": 0,
+      "argv": ["HGET", "dst_hash", "f1"],
+      "expect": { "kind": "bulk", "value": "v1" }
+    },
+    {
+      "name": "copy_zset",
+      "now_ms": 0,
+      "argv": ["COPY", "src_zset", "dst_zset"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "verify_copy_zset",
+      "now_ms": 0,
+      "argv": ["ZSCORE", "dst_zset", "alpha"],
+      "expect": { "kind": "bulk", "value": "1.5" }
+    },
+    {
+      "name": "copy_nonexistent_source",
+      "now_ms": 0,
+      "argv": ["COPY", "no_such_key", "dst_nothing"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "copy_destination_exists_no_replace",
+      "now_ms": 0,
+      "argv": ["COPY", "src_str", "dst_str"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "verify_destination_unchanged",
+      "now_ms": 0,
+      "argv": ["GET", "dst_str"],
+      "expect": { "kind": "bulk", "value": "hello" }
+    },
+    {
+      "name": "setup_overwrite_target",
+      "now_ms": 0,
+      "argv": ["SET", "overwrite_dst", "old_value"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "copy_with_replace",
+      "now_ms": 0,
+      "argv": ["COPY", "src_str", "overwrite_dst", "REPLACE"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "verify_replace_worked",
+      "now_ms": 0,
+      "argv": ["GET", "overwrite_dst"],
+      "expect": { "kind": "bulk", "value": "hello" }
+    },
+    {
+      "name": "copy_with_replace_case_insensitive",
+      "now_ms": 0,
+      "argv": ["SET", "overwrite2", "old"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "copy_replace_lowercase",
+      "now_ms": 0,
+      "argv": ["COPY", "src_str", "overwrite2", "replace"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "copy_with_db_option",
+      "now_ms": 0,
+      "argv": ["COPY", "src_str", "dst_db", "DB", "0"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "copy_with_replace_and_db",
+      "now_ms": 0,
+      "argv": ["COPY", "src_str", "dst_db", "REPLACE", "DB", "0"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "copy_preserves_ttl",
+      "now_ms": 1000,
+      "argv": ["SET", "ttl_src", "value"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "copy_set_ttl",
+      "now_ms": 1000,
+      "argv": ["PEXPIRE", "ttl_src", "60000"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "copy_key_with_ttl",
+      "now_ms": 1000,
+      "argv": ["COPY", "ttl_src", "ttl_dst"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "verify_ttl_preserved",
+      "now_ms": 1000,
+      "argv": ["PTTL", "ttl_dst"],
+      "expect": { "kind": "integer", "value": 60000 }
+    },
+    {
+      "name": "copy_expired_source",
+      "now_ms": 100000,
+      "argv": ["COPY", "ttl_src", "dst_expired"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "copy_wrong_arity_no_args",
+      "now_ms": 0,
+      "argv": ["COPY"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'COPY' command" }
+    },
+    {
+      "name": "copy_wrong_arity_one_arg",
+      "now_ms": 0,
+      "argv": ["COPY", "src"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'COPY' command" }
+    },
+    {
+      "name": "copy_invalid_option",
+      "now_ms": 0,
+      "argv": ["COPY", "src_str", "dst_bad", "INVALID"],
+      "expect": { "kind": "error", "value": "ERR syntax error" }
+    },
+    {
+      "name": "dump_nonexistent_key",
+      "now_ms": 0,
+      "argv": ["DUMP", "nonexistent"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "dump_wrong_arity",
+      "now_ms": 0,
+      "argv": ["DUMP"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'DUMP' command" }
+    },
+    {
+      "name": "dump_wrong_arity_extra",
+      "now_ms": 0,
+      "argv": ["DUMP", "key1", "key2"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'DUMP' command" }
+    },
+    {
+      "name": "dump_expired_key",
+      "now_ms": 100000,
+      "argv": ["DUMP", "ttl_src"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "restore_wrong_arity",
+      "now_ms": 0,
+      "argv": ["RESTORE"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'RESTORE' command" }
+    },
+    {
+      "name": "restore_wrong_arity_two",
+      "now_ms": 0,
+      "argv": ["RESTORE", "key"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'RESTORE' command" }
+    },
+    {
+      "name": "restore_wrong_arity_three",
+      "now_ms": 0,
+      "argv": ["RESTORE", "key", "0"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'RESTORE' command" }
+    },
+    {
+      "name": "restore_bad_payload",
+      "now_ms": 0,
+      "argv": ["RESTORE", "badkey", "0", "garbage"],
+      "expect": { "kind": "error", "value": "ERR DUMP payload version or checksum are wrong" }
+    },
+    {
+      "name": "restore_bad_payload_existing_key",
+      "now_ms": 0,
+      "argv": ["RESTORE", "src_str", "0", "some_payload_doesnt_matter"],
+      "expect": { "kind": "error", "value": "ERR DUMP payload version or checksum are wrong" }
+    }
+  ]
+}
