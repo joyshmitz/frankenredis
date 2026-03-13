@@ -1985,6 +1985,386 @@
         "kind": "error",
         "value": "ERR syntax error"
       }
+    },
+    {
+      "name": "scan_edge_flush",
+      "now_ms": 200,
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "scan_count_1_setup",
+      "now_ms": 200,
+      "argv": [
+        "SET",
+        "scan_a",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "scan_count_1_setup2",
+      "now_ms": 200,
+      "argv": [
+        "SET",
+        "scan_b",
+        "2"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "scan_count_1_setup3",
+      "now_ms": 200,
+      "argv": [
+        "SET",
+        "scan_c",
+        "3"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "scan_count_large_returns_all",
+      "now_ms": 200,
+      "argv": [
+        "SCAN",
+        "0",
+        "COUNT",
+        "100"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "0"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "scan_a"
+              },
+              {
+                "kind": "bulk",
+                "value": "scan_b"
+              },
+              {
+                "kind": "bulk",
+                "value": "scan_c"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "hscan_empty_hash_setup",
+      "now_ms": 300,
+      "argv": [
+        "HSET",
+        "hscan_temp",
+        "f1",
+        "v1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "hscan_empty_hash_del_field",
+      "now_ms": 300,
+      "argv": [
+        "HDEL",
+        "hscan_temp",
+        "f1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "hscan_empty_hash_returns_empty",
+      "now_ms": 300,
+      "argv": [
+        "HSCAN",
+        "hscan_temp",
+        "0"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "0"
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "sscan_empty_set_setup",
+      "now_ms": 300,
+      "argv": [
+        "SADD",
+        "sscan_temp",
+        "m1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "sscan_empty_set_del_member",
+      "now_ms": 300,
+      "argv": [
+        "SREM",
+        "sscan_temp",
+        "m1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "sscan_empty_set_returns_empty",
+      "now_ms": 300,
+      "argv": [
+        "SSCAN",
+        "sscan_temp",
+        "0"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "0"
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "zscan_empty_zset_setup",
+      "now_ms": 300,
+      "argv": [
+        "ZADD",
+        "zscan_temp",
+        "1",
+        "m1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "zscan_empty_zset_del_member",
+      "now_ms": 300,
+      "argv": [
+        "ZREM",
+        "zscan_temp",
+        "m1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "zscan_empty_zset_returns_empty",
+      "now_ms": 300,
+      "argv": [
+        "ZSCAN",
+        "zscan_temp",
+        "0"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "0"
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "scan_type_case_insensitive",
+      "now_ms": 200,
+      "argv": [
+        "SCAN",
+        "0",
+        "TYPE",
+        "STRING"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "0"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "scan_a"
+              },
+              {
+                "kind": "bulk",
+                "value": "scan_b"
+              },
+              {
+                "kind": "bulk",
+                "value": "scan_c"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "hscan_wrong_arity_no_cursor",
+      "now_ms": 300,
+      "argv": [
+        "HSCAN",
+        "key"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'hscan' command"
+      }
+    },
+    {
+      "name": "sscan_wrong_arity_no_cursor",
+      "now_ms": 300,
+      "argv": [
+        "SSCAN",
+        "key"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sscan' command"
+      }
+    },
+    {
+      "name": "zscan_wrong_arity_no_cursor",
+      "now_ms": 300,
+      "argv": [
+        "ZSCAN",
+        "key"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'zscan' command"
+      }
+    },
+    {
+      "name": "zscan_score_correctness_setup",
+      "now_ms": 400,
+      "argv": [
+        "ZADD",
+        "zscan_scores",
+        "1.5",
+        "alpha",
+        "2.7",
+        "beta",
+        "3.14",
+        "gamma"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
+    },
+    {
+      "name": "zscan_score_correctness_verify",
+      "now_ms": 400,
+      "argv": [
+        "ZSCAN",
+        "zscan_scores",
+        "0"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "0"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "alpha"
+              },
+              {
+                "kind": "bulk",
+                "value": "1.5"
+              },
+              {
+                "kind": "bulk",
+                "value": "beta"
+              },
+              {
+                "kind": "bulk",
+                "value": "2.7"
+              },
+              {
+                "kind": "bulk",
+                "value": "gamma"
+              },
+              {
+                "kind": "bulk",
+                "value": "3.14"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "scan_edge_cleanup",
+      "now_ms": 500,
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
     }
   ]
 }
