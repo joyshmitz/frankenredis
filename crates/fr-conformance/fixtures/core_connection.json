@@ -1523,8 +1523,381 @@
       }
     },
     {
+      "name": "dbsize_setup_flush",
+      "now_ms": 500,
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "dbsize_empty_after_flush",
+      "now_ms": 500,
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "dbsize_setup_string",
+      "now_ms": 500,
+      "argv": [
+        "SET",
+        "dbsize_str",
+        "val"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "dbsize_setup_hash",
+      "now_ms": 500,
+      "argv": [
+        "HSET",
+        "dbsize_hash",
+        "f1",
+        "v1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "dbsize_setup_list",
+      "now_ms": 500,
+      "argv": [
+        "RPUSH",
+        "dbsize_list",
+        "a"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "dbsize_setup_set",
+      "now_ms": 500,
+      "argv": [
+        "SADD",
+        "dbsize_set",
+        "m1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "dbsize_setup_zset",
+      "now_ms": 500,
+      "argv": [
+        "ZADD",
+        "dbsize_zset",
+        "1",
+        "m1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "dbsize_counts_all_types",
+      "now_ms": 500,
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 5
+      }
+    },
+    {
+      "name": "dbsize_after_del_one",
+      "now_ms": 500,
+      "argv": [
+        "DEL",
+        "dbsize_str"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "dbsize_after_del_is_4",
+      "now_ms": 500,
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 4
+      }
+    },
+    {
+      "name": "randomkey_setup_flush",
+      "now_ms": 600,
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "randomkey_setup_single_key",
+      "now_ms": 600,
+      "argv": [
+        "SET",
+        "thekey",
+        "val"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "randomkey_returns_thekey",
+      "now_ms": 600,
+      "argv": [
+        "RANDOMKEY"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "thekey"
+      }
+    },
+    {
+      "name": "object_help_returns_array",
+      "now_ms": 700,
+      "argv": [
+        "OBJECT",
+        "HELP"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"
+          },
+          {
+            "kind": "bulk",
+            "value": "ENCODING <key> - Return the encoding of the object at <key>."
+          },
+          {
+            "kind": "bulk",
+            "value": "FREQ <key> - Return the access frequency of <key>."
+          },
+          {
+            "kind": "bulk",
+            "value": "HELP - Return subcommand help summary."
+          },
+          {
+            "kind": "bulk",
+            "value": "IDLETIME <key> - Return the idle time of <key>."
+          },
+          {
+            "kind": "bulk",
+            "value": "REFCOUNT <key> - Return the reference count of <key>."
+          }
+        ]
+      }
+    },
+    {
+      "name": "object_encoding_string",
+      "now_ms": 700,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "thekey"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "embstr"
+      }
+    },
+    {
+      "name": "object_encoding_int",
+      "now_ms": 700,
+      "argv": [
+        "SET",
+        "intkey",
+        "12345"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "object_encoding_int_verify",
+      "now_ms": 700,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "intkey"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "int"
+      }
+    },
+    {
+      "name": "object_refcount_always_1",
+      "now_ms": 700,
+      "argv": [
+        "OBJECT",
+        "REFCOUNT",
+        "thekey"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "object_idletime_zero",
+      "now_ms": 700,
+      "argv": [
+        "OBJECT",
+        "IDLETIME",
+        "thekey"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "object_freq_zero",
+      "now_ms": 700,
+      "argv": [
+        "OBJECT",
+        "FREQ",
+        "thekey"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "object_encoding_nonexistent",
+      "now_ms": 700,
+      "argv": [
+        "OBJECT",
+        "ENCODING",
+        "nosuchkey"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
+    },
+    {
+      "name": "object_unknown_subcommand",
+      "now_ms": 700,
+      "argv": [
+        "OBJECT",
+        "NOPE",
+        "key"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Unknown subcommand or wrong number of arguments for OBJECT NOPE"
+      }
+    },
+    {
+      "name": "command_count_returns_integer",
+      "now_ms": 800,
+      "argv": [
+        "COMMAND",
+        "COUNT"
+      ],
+      "expect": {
+        "kind": "any_integer"
+      }
+    },
+    {
+      "name": "command_docs_unknown",
+      "now_ms": 800,
+      "argv": [
+        "COMMAND",
+        "DOCS",
+        "NOSUCHCOMMAND"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "debug_set_active_expire",
+      "now_ms": 800,
+      "argv": [
+        "DEBUG",
+        "SET-ACTIVE-EXPIRE",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "debug_sleep_zero",
+      "now_ms": 800,
+      "argv": [
+        "DEBUG",
+        "SLEEP",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "debug_jmap",
+      "now_ms": 800,
+      "argv": [
+        "DEBUG",
+        "JMAP"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "debug_reload",
+      "now_ms": 800,
+      "argv": [
+        "DEBUG",
+        "RELOAD"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
       "name": "connection_cleanup",
-      "now_ms": 200,
+      "now_ms": 900,
       "argv": [
         "FLUSHDB"
       ],
