@@ -4930,6 +4930,230 @@
       "now_ms": 93000,
       "argv": ["XLEN", "ts"],
       "expect": { "kind": "integer", "value": 1 }
+    },
+
+    {"name":"_comment_xinfo_stream_full","now_ms":95000,"argv":["DEL","xifull"],"expect":{"kind":"any_integer"}},
+
+    {
+      "name": "xinfo_full_setup_add1",
+      "now_ms": 95000,
+      "argv": ["XADD", "xifull", "1-1", "a", "1"],
+      "expect": { "kind": "bulk", "value": "1-1" }
+    },
+    {
+      "name": "xinfo_full_setup_add2",
+      "now_ms": 95000,
+      "argv": ["XADD", "xifull", "2-1", "b", "2"],
+      "expect": { "kind": "bulk", "value": "2-1" }
+    },
+    {
+      "name": "xinfo_full_setup_add3",
+      "now_ms": 95000,
+      "argv": ["XADD", "xifull", "3-1", "c", "3"],
+      "expect": { "kind": "bulk", "value": "3-1" }
+    },
+    {
+      "name": "xinfo_full_no_groups",
+      "now_ms": 95000,
+      "argv": ["XINFO", "STREAM", "xifull", "FULL"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind":"bulk","value":"length"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"radix-tree-keys"},
+          {"kind":"integer","value":1},
+          {"kind":"bulk","value":"radix-tree-nodes"},
+          {"kind":"integer","value":2},
+          {"kind":"bulk","value":"last-generated-id"},
+          {"kind":"bulk","value":"3-1"},
+          {"kind":"bulk","value":"max-deleted-entry-id"},
+          {"kind":"bulk","value":"0-0"},
+          {"kind":"bulk","value":"entries-added"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"recorded-first-entry-id"},
+          {"kind":"bulk","value":"1-1"},
+          {"kind":"bulk","value":"entries"},
+          {"kind":"array","value":[
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"1-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"a"},{"kind":"bulk","value":"1"}]}
+            ]},
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"2-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"b"},{"kind":"bulk","value":"2"}]}
+            ]},
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"3-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"c"},{"kind":"bulk","value":"3"}]}
+            ]}
+          ]},
+          {"kind":"bulk","value":"groups"},
+          {"kind":"array","value":[]}
+        ]
+      }
+    },
+    {
+      "name": "xinfo_full_count_2_limits_entries",
+      "now_ms": 95000,
+      "argv": ["XINFO", "STREAM", "xifull", "FULL", "COUNT", "2"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind":"bulk","value":"length"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"radix-tree-keys"},
+          {"kind":"integer","value":1},
+          {"kind":"bulk","value":"radix-tree-nodes"},
+          {"kind":"integer","value":2},
+          {"kind":"bulk","value":"last-generated-id"},
+          {"kind":"bulk","value":"3-1"},
+          {"kind":"bulk","value":"max-deleted-entry-id"},
+          {"kind":"bulk","value":"0-0"},
+          {"kind":"bulk","value":"entries-added"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"recorded-first-entry-id"},
+          {"kind":"bulk","value":"1-1"},
+          {"kind":"bulk","value":"entries"},
+          {"kind":"array","value":[
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"1-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"a"},{"kind":"bulk","value":"1"}]}
+            ]},
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"2-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"b"},{"kind":"bulk","value":"2"}]}
+            ]}
+          ]},
+          {"kind":"bulk","value":"groups"},
+          {"kind":"array","value":[]}
+        ]
+      }
+    },
+    {
+      "name": "xinfo_full_nonexistent_key",
+      "now_ms": 95000,
+      "argv": ["XINFO", "STREAM", "no_such_stream_xifull", "FULL"],
+      "expect": { "kind": "error", "value": "ERR no such key" }
+    },
+    {
+      "name": "xinfo_full_wrongtype_setup",
+      "now_ms": 95000,
+      "argv": ["SET", "xifull_str", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "xinfo_full_wrongtype_check",
+      "now_ms": 95000,
+      "argv": ["XINFO", "STREAM", "xifull_str", "FULL"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Operation against a key holding the wrong kind of value" }
+    },
+    {
+      "name": "xinfo_full_bad_arity_missing_count_value",
+      "now_ms": 95000,
+      "argv": ["XINFO", "STREAM", "xifull", "FULL", "COUNT"],
+      "expect": { "kind": "error", "value": "ERR wrong number of arguments for 'xinfo' command" }
+    },
+    {
+      "name": "xinfo_full_with_group_setup",
+      "now_ms": 95000,
+      "argv": ["XGROUP", "CREATE", "xifull", "grp1", "0"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "xinfo_full_with_group",
+      "now_ms": 95000,
+      "argv": ["XINFO", "STREAM", "xifull", "FULL"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind":"bulk","value":"length"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"radix-tree-keys"},
+          {"kind":"integer","value":1},
+          {"kind":"bulk","value":"radix-tree-nodes"},
+          {"kind":"integer","value":2},
+          {"kind":"bulk","value":"last-generated-id"},
+          {"kind":"bulk","value":"3-1"},
+          {"kind":"bulk","value":"max-deleted-entry-id"},
+          {"kind":"bulk","value":"0-0"},
+          {"kind":"bulk","value":"entries-added"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"recorded-first-entry-id"},
+          {"kind":"bulk","value":"1-1"},
+          {"kind":"bulk","value":"entries"},
+          {"kind":"array","value":[
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"1-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"a"},{"kind":"bulk","value":"1"}]}
+            ]},
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"2-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"b"},{"kind":"bulk","value":"2"}]}
+            ]},
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"3-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"c"},{"kind":"bulk","value":"3"}]}
+            ]}
+          ]},
+          {"kind":"bulk","value":"groups"},
+          {"kind":"array","value":[
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"name"},
+              {"kind":"bulk","value":"grp1"},
+              {"kind":"bulk","value":"consumers"},
+              {"kind":"integer","value":0},
+              {"kind":"bulk","value":"pending"},
+              {"kind":"integer","value":0},
+              {"kind":"bulk","value":"last-delivered-id"},
+              {"kind":"bulk","value":"0-0"},
+              {"kind":"bulk","value":"consumers-list"},
+              {"kind":"array","value":[]}
+            ]}
+          ]}
+        ]
+      }
+    },
+    {
+      "name": "xinfo_full_count_0_empty_entries",
+      "now_ms": 95000,
+      "argv": ["XINFO", "STREAM", "xifull", "FULL", "COUNT", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind":"bulk","value":"length"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"radix-tree-keys"},
+          {"kind":"integer","value":1},
+          {"kind":"bulk","value":"radix-tree-nodes"},
+          {"kind":"integer","value":2},
+          {"kind":"bulk","value":"last-generated-id"},
+          {"kind":"bulk","value":"3-1"},
+          {"kind":"bulk","value":"max-deleted-entry-id"},
+          {"kind":"bulk","value":"0-0"},
+          {"kind":"bulk","value":"entries-added"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"recorded-first-entry-id"},
+          {"kind":"bulk","value":"1-1"},
+          {"kind":"bulk","value":"entries"},
+          {"kind":"array","value":[]},
+          {"kind":"bulk","value":"groups"},
+          {"kind":"array","value":[
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"name"},
+              {"kind":"bulk","value":"grp1"},
+              {"kind":"bulk","value":"consumers"},
+              {"kind":"integer","value":0},
+              {"kind":"bulk","value":"pending"},
+              {"kind":"integer","value":0},
+              {"kind":"bulk","value":"last-delivered-id"},
+              {"kind":"bulk","value":"0-0"},
+              {"kind":"bulk","value":"consumers-list"},
+              {"kind":"array","value":[]}
+            ]}
+          ]}
+        ]
+      }
     }
   ]
 }

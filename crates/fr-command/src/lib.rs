@@ -4347,9 +4347,27 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     if !eq_ascii_command(&argv[1], b"STREAM") {
         return Err(CommandError::SyntaxError);
     }
-    if argv.len() != 3 {
+
+    // XINFO STREAM key [FULL [COUNT count]]
+    let full_mode = argv.len() >= 4 && eq_ascii_command(&argv[3], b"FULL");
+    if !full_mode && argv.len() != 3 {
         return Err(CommandError::WrongArity("XINFO"));
     }
+    if full_mode && argv.len() != 4 && argv.len() != 6 {
+        return Err(CommandError::WrongArity("XINFO"));
+    }
+    let full_count: usize = if full_mode && argv.len() == 6 {
+        if !eq_ascii_command(&argv[4], b"COUNT") {
+            return Err(CommandError::SyntaxError);
+        }
+        let n = parse_i64_arg(&argv[5])?;
+        if n < 0 {
+            return Err(CommandError::InvalidInteger);
+        }
+        n as usize
+    } else {
+        10 // Redis default COUNT for FULL is 10
+    };
 
     let Some((len, first, last)) = store.xinfo_stream(&argv[2], now_ms)? else {
         return Err(CommandError::NoSuchKey);
@@ -4364,6 +4382,64 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         .map(|(id, _)| format_stream_id(*id))
         .unwrap_or_else(|| b"0-0".to_vec());
     let len_i64 = i64::try_from(len).unwrap_or(i64::MAX);
+
+    if full_mode {
+        // FULL mode: include entries and detailed group info
+        let entries_frames: Vec<RespFrame> = store
+            .xrange(&argv[2], (0, 0), (u64::MAX, u64::MAX), None, now_ms)?
+            .into_iter()
+            .take(full_count)
+            .map(|(id, fields)| stream_record_to_frame(id, fields))
+            .collect();
+
+        let groups = store.xinfo_groups(&argv[2], now_ms)?.unwrap_or_default();
+        let mut group_frames = Vec::with_capacity(groups.len());
+        for (name, consumers_count, pending_count, last_delivered_id) in &groups {
+            let consumers_info = store
+                .xinfo_consumers(&argv[2], name, now_ms)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let consumer_frames: Vec<RespFrame> = consumers_info
+                .into_iter()
+                .map(stream_consumer_info_to_frame)
+                .collect();
+            group_frames.push(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"name".to_vec())),
+                RespFrame::BulkString(Some(name.clone())),
+                RespFrame::BulkString(Some(b"consumers".to_vec())),
+                RespFrame::Integer(i64::try_from(*consumers_count).unwrap_or(i64::MAX)),
+                RespFrame::BulkString(Some(b"pending".to_vec())),
+                RespFrame::Integer(i64::try_from(*pending_count).unwrap_or(i64::MAX)),
+                RespFrame::BulkString(Some(b"last-delivered-id".to_vec())),
+                RespFrame::BulkString(Some(format_stream_id(*last_delivered_id))),
+                RespFrame::BulkString(Some(b"consumers-list".to_vec())),
+                RespFrame::Array(Some(consumer_frames)),
+            ])));
+        }
+
+        return Ok(RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"length".to_vec())),
+            RespFrame::Integer(len_i64),
+            RespFrame::BulkString(Some(b"radix-tree-keys".to_vec())),
+            RespFrame::Integer(if len == 0 { 0 } else { 1 }),
+            RespFrame::BulkString(Some(b"radix-tree-nodes".to_vec())),
+            RespFrame::Integer(if len == 0 { 0 } else { 2 }),
+            RespFrame::BulkString(Some(b"last-generated-id".to_vec())),
+            RespFrame::BulkString(Some(last_generated_id)),
+            RespFrame::BulkString(Some(b"max-deleted-entry-id".to_vec())),
+            RespFrame::BulkString(Some(b"0-0".to_vec())),
+            RespFrame::BulkString(Some(b"entries-added".to_vec())),
+            RespFrame::Integer(len_i64),
+            RespFrame::BulkString(Some(b"recorded-first-entry-id".to_vec())),
+            RespFrame::BulkString(Some(recorded_first_entry_id)),
+            RespFrame::BulkString(Some(b"entries".to_vec())),
+            RespFrame::Array(Some(entries_frames)),
+            RespFrame::BulkString(Some(b"groups".to_vec())),
+            RespFrame::Array(Some(group_frames)),
+        ])));
+    }
+
     let group_count = store
         .xinfo_groups(&argv[2], now_ms)?
         .map(|groups| i64::try_from(groups.len()).unwrap_or(i64::MAX))
