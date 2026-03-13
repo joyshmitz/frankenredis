@@ -1320,6 +1320,131 @@
         "kind": "integer",
         "value": -1
       }
+    },
+    {
+      "name": "hll_large_flush",
+      "now_ms": 400,
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "hll_large_pfadd_batch_0",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_000", "elem_001", "elem_002", "elem_003", "elem_004", "elem_005", "elem_006", "elem_007", "elem_008", "elem_009"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_1",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_010", "elem_011", "elem_012", "elem_013", "elem_014", "elem_015", "elem_016", "elem_017", "elem_018", "elem_019"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_2",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_020", "elem_021", "elem_022", "elem_023", "elem_024", "elem_025", "elem_026", "elem_027", "elem_028", "elem_029"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_3",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_030", "elem_031", "elem_032", "elem_033", "elem_034", "elem_035", "elem_036", "elem_037", "elem_038", "elem_039"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_4",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_040", "elem_041", "elem_042", "elem_043", "elem_044", "elem_045", "elem_046", "elem_047", "elem_048", "elem_049"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfcount_50",
+      "now_ms": 400,
+      "argv": ["PFCOUNT", "hll_large"],
+      "expect": { "kind": "integer", "value": 50 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_5",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_050", "elem_051", "elem_052", "elem_053", "elem_054", "elem_055", "elem_056", "elem_057", "elem_058", "elem_059"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_6",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_060", "elem_061", "elem_062", "elem_063", "elem_064", "elem_065", "elem_066", "elem_067", "elem_068", "elem_069"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_7",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_070", "elem_071", "elem_072", "elem_073", "elem_074", "elem_075", "elem_076", "elem_077", "elem_078", "elem_079"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_8",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_080", "elem_081", "elem_082", "elem_083", "elem_084", "elem_085", "elem_086", "elem_087", "elem_088", "elem_089"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfadd_batch_9",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_large", "elem_090", "elem_091", "elem_092", "elem_093", "elem_094", "elem_095", "elem_096", "elem_097", "elem_098", "elem_099"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_large_pfcount_100",
+      "now_ms": 400,
+      "argv": ["PFCOUNT", "hll_large"],
+      "expect": { "kind": "integer", "value": 100 }
+    },
+    {
+      "name": "hll_dup_in_single_call",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_dup", "x", "x", "y", "y", "z"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_dup_count_is_3",
+      "now_ms": 400,
+      "argv": ["PFCOUNT", "hll_dup"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "hll_empty_string_element",
+      "now_ms": 400,
+      "argv": ["PFADD", "hll_empty_str", ""],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_empty_string_count",
+      "now_ms": 400,
+      "argv": ["PFCOUNT", "hll_empty_str"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "hll_merge_non_hll_dest_setup",
+      "now_ms": 400,
+      "argv": ["SET", "hll_bad_dest", "not_hll"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "hll_merge_non_hll_dest_error",
+      "now_ms": 400,
+      "argv": ["PFMERGE", "hll_bad_dest", "hll_dup"],
+      "expect": { "kind": "error", "value": "WRONGTYPE Key is not a valid HyperLogLog string value." }
+    },
+    {
+      "name": "hll_pfcount_multiple_nonexistent",
+      "now_ms": 400,
+      "argv": ["PFCOUNT", "nonexist1", "nonexist2", "nonexist3"],
+      "expect": { "kind": "integer", "value": 0 }
     }
   ]
 }
