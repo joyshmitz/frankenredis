@@ -5902,6 +5902,34 @@ impl Store {
                         }
                         commands.push(argv);
                     }
+
+                    // Emit XSETID to preserve the last-generated-id.
+                    if let Some(&(ms, seq)) = self.stream_last_ids.get(&key) {
+                        let id = format!("{ms}-{seq}");
+                        commands.push(vec![
+                            b"XSETID".to_vec(),
+                            key.clone(),
+                            id.into_bytes(),
+                        ]);
+                    }
+
+                    // Emit XGROUP CREATE for each consumer group.
+                    if let Some(groups) = self.stream_groups.get(&key) {
+                        let mut group_names: Vec<&Vec<u8>> = groups.keys().collect();
+                        group_names.sort();
+                        for group_name in group_names {
+                            let group = &groups[group_name];
+                            let (ms, seq) = group.last_delivered_id;
+                            let id = format!("{ms}-{seq}");
+                            commands.push(vec![
+                                b"XGROUP".to_vec(),
+                                b"CREATE".to_vec(),
+                                key.clone(),
+                                group_name.clone(),
+                                id.into_bytes(),
+                            ]);
+                        }
+                    }
                 }
             }
 
@@ -9261,6 +9289,48 @@ mod tests {
         assert_eq!(cmds[0][2], b"1000-0");
         assert_eq!(cmds[0][3], b"name");
         assert_eq!(cmds[0][4], b"val");
+    }
+
+    #[test]
+    fn aof_commands_stream_with_xsetid() {
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1, 0), &[(b"k".to_vec(), b"v".to_vec())], 100)
+            .unwrap();
+        // XSETID sets a last-generated-id higher than any entry
+        store.xsetid(b"s", (999, 0), 100).unwrap();
+        let cmds = store.to_aof_commands(100);
+        // XADD + XSETID
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0][0], b"XADD");
+        assert_eq!(cmds[1][0], b"XSETID");
+        assert_eq!(cmds[1][1], b"s");
+        assert_eq!(cmds[1][2], b"999-0");
+    }
+
+    #[test]
+    fn aof_commands_stream_with_consumer_group() {
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1, 0), &[(b"k".to_vec(), b"v".to_vec())], 100)
+            .unwrap();
+        store.xgroup_create(b"s", b"grp1", (0, 0), false, 100).unwrap();
+        store.xgroup_create(b"s", b"grp2", (1, 0), false, 100).unwrap();
+        let cmds = store.to_aof_commands(100);
+        // XADD + 2x XGROUP CREATE (no XSETID since none was explicitly set)
+        assert_eq!(cmds.len(), 3);
+        assert_eq!(cmds[0][0], b"XADD");
+        // Groups sorted by name
+        assert_eq!(cmds[1][0], b"XGROUP");
+        assert_eq!(cmds[1][1], b"CREATE");
+        assert_eq!(cmds[1][2], b"s");
+        assert_eq!(cmds[1][3], b"grp1");
+        assert_eq!(cmds[1][4], b"0-0");
+        assert_eq!(cmds[2][0], b"XGROUP");
+        assert_eq!(cmds[2][1], b"CREATE");
+        assert_eq!(cmds[2][2], b"s");
+        assert_eq!(cmds[2][3], b"grp2");
+        assert_eq!(cmds[2][4], b"1-0");
     }
 
     #[test]
