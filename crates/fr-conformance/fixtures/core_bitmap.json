@@ -1441,6 +1441,91 @@
         "kind": "error",
         "value": "ERR bit is not an integer or out of range"
       }
+    },
+
+    {
+      "name": "bitfield_ro_setup_field",
+      "now_ms": 1000,
+      "argv": ["BITFIELD", "bfro_key", "SET", "u8", "0", "42"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "integer", "value": 0 }]
+      }
+    },
+    {
+      "name": "bitfield_ro_get_u8",
+      "now_ms": 1001,
+      "argv": ["BITFIELD_RO", "bfro_key", "GET", "u8", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "integer", "value": 42 }]
+      }
+    },
+    {
+      "name": "bitfield_ro_rejects_set",
+      "now_ms": 1002,
+      "argv": ["BITFIELD_RO", "bfro_key", "SET", "u8", "0", "99"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR BITFIELD_RO only supports the GET subcommand"
+      }
+    },
+    {
+      "name": "bitfield_ro_rejects_incrby",
+      "now_ms": 1003,
+      "argv": ["BITFIELD_RO", "bfro_key", "INCRBY", "u8", "0", "1"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR BITFIELD_RO only supports the GET subcommand"
+      }
+    },
+    {
+      "name": "bitfield_ro_multiple_gets",
+      "now_ms": 1004,
+      "argv": ["BITFIELD", "bfro_key", "SET", "u8", "8", "99"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "integer", "value": 0 }]
+      }
+    },
+    {
+      "name": "bitfield_ro_read_two_fields",
+      "now_ms": 1005,
+      "argv": ["BITFIELD_RO", "bfro_key", "GET", "u8", "0", "GET", "u8", "8"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 42 },
+          { "kind": "integer", "value": 99 }
+        ]
+      }
+    },
+    {
+      "name": "bitfield_ro_nonexistent_key",
+      "now_ms": 1006,
+      "argv": ["BITFIELD_RO", "no_such_bf_key", "GET", "u8", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "integer", "value": 0 }]
+      }
+    },
+    {
+      "name": "bitfield_ro_signed_get",
+      "now_ms": 1007,
+      "argv": ["BITFIELD", "bfro_signed", "SET", "i8", "0", "-50"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "integer", "value": 0 }]
+      }
+    },
+    {
+      "name": "bitfield_ro_read_signed",
+      "now_ms": 1008,
+      "argv": ["BITFIELD_RO", "bfro_signed", "GET", "i8", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [{ "kind": "integer", "value": -50 }]
+      }
     }
   ]
 }

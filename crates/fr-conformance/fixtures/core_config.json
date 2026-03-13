@@ -1838,6 +1838,191 @@
           }
         ]
       }
+    },
+
+    {
+      "name": "config_set_maxmemory_policy_allkeys_lru",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_maxmemory_policy_after_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "maxmemory-policy"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "maxmemory-policy" },
+          { "kind": "bulk", "value": "allkeys-lru" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_loglevel",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "loglevel", "debug"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_loglevel_after_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "loglevel"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "loglevel" },
+          { "kind": "bulk", "value": "debug" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_timeout",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "timeout", "300"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_timeout_after_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "timeout"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "timeout" },
+          { "kind": "bulk", "value": "300" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_tcp_keepalive",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "tcp-keepalive", "60"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_tcp_keepalive_after_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "tcp-keepalive"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "tcp-keepalive" },
+          { "kind": "bulk", "value": "60" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_notify_keyspace_events",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "notify-keyspace-events", "KEA"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_notify_keyspace_events_after_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "notify-keyspace-events"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "notify-keyspace-events" },
+          { "kind": "bulk", "value": "KEA" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_active_defrag_enabled",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "active-defrag-enabled", "yes"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_active_defrag_enabled_after_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "active-defrag-enabled"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "active-defrag-enabled" },
+          { "kind": "bulk", "value": "yes" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_multi_params",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "bind", "0.0.0.0", "protected-mode", "no"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_bind_after_multi_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "bind"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "bind" },
+          { "kind": "bulk", "value": "0.0.0.0" }
+        ]
+      }
+    },
+    {
+      "name": "config_get_protected_mode_after_multi_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "protected-mode"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "protected-mode" },
+          { "kind": "bulk", "value": "no" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_unknown_param_error",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "completely-bogus-param", "value"],
+      "expect": { "kind": "error", "value": "ERR Unsupported CONFIG parameter 'completely-bogus-param'" }
+    },
+    {
+      "name": "config_set_overwrite_previous",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "maxmemory-policy", "volatile-lfu"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_maxmemory_policy_overwritten",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "maxmemory-policy"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "maxmemory-policy" },
+          { "kind": "bulk", "value": "volatile-lfu" }
+        ]
+      }
+    },
+
+    {
+      "name": "config_resetstat_ok",
+      "now_ms": 0,
+      "argv": ["CONFIG", "RESETSTAT"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_rewrite_ok",
+      "now_ms": 0,
+      "argv": ["CONFIG", "REWRITE"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_unknown_subcommand",
+      "now_ms": 0,
+      "argv": ["CONFIG", "BOGUS"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Unknown subcommand or wrong number of arguments for CONFIG BOGUS"
+      }
     }
   ]
 }

@@ -1,0 +1,227 @@
+{
+  "suite": "core_object",
+  "cases": [
+    {
+      "name": "object_encoding_string_int",
+      "now_ms": 0,
+      "argv": ["SET", "obj_int", "12345"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_returns_int",
+      "now_ms": 1,
+      "argv": ["OBJECT", "ENCODING", "obj_int"],
+      "expect": { "kind": "bulk", "value": "int" }
+    },
+    {
+      "name": "object_encoding_string_embstr",
+      "now_ms": 2,
+      "argv": ["SET", "obj_emb", "hello"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_returns_embstr",
+      "now_ms": 3,
+      "argv": ["OBJECT", "ENCODING", "obj_emb"],
+      "expect": { "kind": "bulk", "value": "embstr" }
+    },
+    {
+      "name": "object_encoding_string_raw_setup",
+      "now_ms": 4,
+      "argv": ["SET", "obj_raw", "this is a string that is longer than forty-four bytes exactly right now yes"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_returns_raw",
+      "now_ms": 5,
+      "argv": ["OBJECT", "ENCODING", "obj_raw"],
+      "expect": { "kind": "bulk", "value": "raw" }
+    },
+
+    {
+      "name": "object_encoding_hash_small_setup",
+      "now_ms": 10,
+      "argv": ["HSET", "obj_hash_small", "f1", "v1", "f2", "v2"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "object_encoding_hash_listpack",
+      "now_ms": 11,
+      "argv": ["OBJECT", "ENCODING", "obj_hash_small"],
+      "expect": { "kind": "bulk", "value": "listpack" }
+    },
+
+    {
+      "name": "object_encoding_list_small_setup",
+      "now_ms": 20,
+      "argv": ["RPUSH", "obj_list_small", "a", "b", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "object_encoding_list_listpack",
+      "now_ms": 21,
+      "argv": ["OBJECT", "ENCODING", "obj_list_small"],
+      "expect": { "kind": "bulk", "value": "listpack" }
+    },
+
+    {
+      "name": "object_encoding_set_intset_setup",
+      "now_ms": 30,
+      "argv": ["SADD", "obj_set_int", "1", "2", "3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "object_encoding_set_intset",
+      "now_ms": 31,
+      "argv": ["OBJECT", "ENCODING", "obj_set_int"],
+      "expect": { "kind": "bulk", "value": "intset" }
+    },
+    {
+      "name": "object_encoding_set_listpack_setup",
+      "now_ms": 32,
+      "argv": ["SADD", "obj_set_lp", "alpha", "beta", "gamma"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "object_encoding_set_listpack",
+      "now_ms": 33,
+      "argv": ["OBJECT", "ENCODING", "obj_set_lp"],
+      "expect": { "kind": "bulk", "value": "listpack" }
+    },
+
+    {
+      "name": "object_encoding_zset_small_setup",
+      "now_ms": 40,
+      "argv": ["ZADD", "obj_zs_small", "1.0", "a", "2.0", "b"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "object_encoding_zset_listpack",
+      "now_ms": 41,
+      "argv": ["OBJECT", "ENCODING", "obj_zs_small"],
+      "expect": { "kind": "bulk", "value": "listpack" }
+    },
+
+    {
+      "name": "object_encoding_stream_setup",
+      "now_ms": 50,
+      "argv": ["XADD", "obj_stream", "1-0", "f", "v"],
+      "expect": { "kind": "bulk", "value": "1-0" }
+    },
+    {
+      "name": "object_encoding_stream",
+      "now_ms": 51,
+      "argv": ["OBJECT", "ENCODING", "obj_stream"],
+      "expect": { "kind": "bulk", "value": "stream" }
+    },
+
+    {
+      "name": "object_encoding_missing_key",
+      "now_ms": 60,
+      "argv": ["OBJECT", "ENCODING", "no_such_key_obj"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
+    },
+
+    {
+      "name": "object_idletime_setup",
+      "now_ms": 100,
+      "argv": ["SET", "obj_idle_test", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_idletime_returns_seconds",
+      "now_ms": 5100,
+      "argv": ["OBJECT", "IDLETIME", "obj_idle_test"],
+      "expect": { "kind": "integer", "value": 5 }
+    },
+    {
+      "name": "object_idletime_missing_key",
+      "now_ms": 5200,
+      "argv": ["OBJECT", "IDLETIME", "no_such_key_obj"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
+    },
+
+    {
+      "name": "object_refcount_string",
+      "now_ms": 6000,
+      "argv": ["OBJECT", "REFCOUNT", "obj_int"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "object_refcount_missing_key",
+      "now_ms": 6001,
+      "argv": ["OBJECT", "REFCOUNT", "no_such_key_obj"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
+    },
+
+    {
+      "name": "object_freq_returns_zero",
+      "now_ms": 20000,
+      "argv": ["OBJECT", "FREQ", "obj_int"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "object_freq_missing_key",
+      "now_ms": 20001,
+      "argv": ["OBJECT", "FREQ", "no_such_key_obj"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR no such key"
+      }
+    },
+
+    {
+      "name": "object_help_returns_array",
+      "now_ms": 25000,
+      "argv": ["OBJECT", "HELP"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:" },
+          { "kind": "bulk", "value": "ENCODING <key> - Return the encoding of the object at <key>." },
+          { "kind": "bulk", "value": "FREQ <key> - Return the access frequency of <key>." },
+          { "kind": "bulk", "value": "HELP - Return subcommand help summary." },
+          { "kind": "bulk", "value": "IDLETIME <key> - Return the idle time of <key>." },
+          { "kind": "bulk", "value": "REFCOUNT <key> - Return the reference count of <key>." }
+        ]
+      }
+    },
+
+    {
+      "name": "object_unknown_subcommand",
+      "now_ms": 26000,
+      "argv": ["OBJECT", "BOGUS", "somekey"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Unknown subcommand or wrong number of arguments for OBJECT BOGUS"
+      }
+    },
+    {
+      "name": "object_no_subcommand",
+      "now_ms": 26001,
+      "argv": ["OBJECT"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'object' command"
+      }
+    },
+    {
+      "name": "object_encoding_no_key",
+      "now_ms": 26002,
+      "argv": ["OBJECT", "ENCODING"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'object' command"
+      }
+    }
+  ]
+}
