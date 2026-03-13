@@ -1206,6 +1206,120 @@
         "kind": "simple",
         "value": "string"
       }
+    },
+    {
+      "name": "pfmerge_ttl_setup_dest",
+      "now_ms": 300,
+      "argv": [
+        "PFADD",
+        "hll_ttl_dest",
+        "x",
+        "y"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "pfmerge_ttl_set_expire",
+      "now_ms": 300,
+      "argv": [
+        "PEXPIRE",
+        "hll_ttl_dest",
+        "60000"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "pfmerge_ttl_verify_ttl_before",
+      "now_ms": 300,
+      "argv": [
+        "PTTL",
+        "hll_ttl_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 60000
+      }
+    },
+    {
+      "name": "pfmerge_ttl_setup_src",
+      "now_ms": 300,
+      "argv": [
+        "PFADD",
+        "hll_ttl_src",
+        "z"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "pfmerge_ttl_merge_preserves_ttl",
+      "now_ms": 300,
+      "argv": [
+        "PFMERGE",
+        "hll_ttl_dest",
+        "hll_ttl_src"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "pfmerge_ttl_verify_ttl_after",
+      "now_ms": 300,
+      "argv": [
+        "PTTL",
+        "hll_ttl_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 60000
+      }
+    },
+    {
+      "name": "pfmerge_ttl_count_after_merge",
+      "now_ms": 300,
+      "argv": [
+        "PFCOUNT",
+        "hll_ttl_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
+    },
+    {
+      "name": "pfmerge_no_ttl_on_new_dest",
+      "now_ms": 300,
+      "argv": [
+        "PFMERGE",
+        "hll_ttl_new_dest",
+        "hll_ttl_src"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "pfmerge_no_ttl_on_new_dest_verify",
+      "now_ms": 300,
+      "argv": [
+        "TTL",
+        "hll_ttl_new_dest"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": -1
+      }
     }
   ]
 }

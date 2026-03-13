@@ -4432,8 +4432,12 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut merged = vec![0u8; HLL_REGISTERS];
 
-        // Include dest if it already holds an HLL
+        // Include dest if it already holds an HLL, and preserve its TTL
         self.drop_if_expired(dest, now_ms);
+        let existing_ttl = self
+            .entries
+            .get(dest)
+            .and_then(|e| e.expires_at_ms);
         if let Some(entry) = self.entries.get(dest) {
             match &entry.value {
                 Value::String(data) => {
@@ -4472,7 +4476,7 @@ impl Store {
 
         let data = hll_encode(&merged);
         self.entries
-            .insert(dest.to_vec(), Entry::new(Value::String(data), None, now_ms));
+            .insert(dest.to_vec(), Entry::new(Value::String(data), existing_ttl, now_ms));
         Ok(())
     }
 
