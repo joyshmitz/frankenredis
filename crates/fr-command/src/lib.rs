@@ -238,6 +238,7 @@ pub fn dispatch_argv(
         Some(CommandId::Move) => return move_cmd(argv),
         Some(CommandId::Latency) => return latency_cmd(argv),
         Some(CommandId::Bitfield) => return bitfield_cmd(argv, store, now_ms),
+        Some(CommandId::BitfieldRo) => return bitfield_ro_cmd(argv, store, now_ms),
         Some(CommandId::Memory) => return memory_cmd(argv, store, now_ms),
         Some(CommandId::Substr) => return getrange(argv, store, now_ms),
         Some(CommandId::Bitop) => return bitop(argv, store, now_ms),
@@ -562,6 +563,7 @@ enum CommandId {
     Move,
     Latency,
     Bitfield,
+    BitfieldRo,
     Georadius,
     Georadiusbymember,
     Geosearch,
@@ -1070,6 +1072,8 @@ fn classify_command(cmd: &[u8]) -> Option<CommandId> {
                 Some(CommandId::Unsubscribe)
             } else if eq_ascii_command(cmd, b"ZRANGESTORE") {
                 Some(CommandId::Zrangestore)
+            } else if eq_ascii_command(cmd, b"BITFIELD_RO") {
+                Some(CommandId::BitfieldRo)
             } else {
                 None
             }
@@ -3471,7 +3475,7 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     let id_idx = idx;
     idx += 1;
     // Must have at least one field-value pair after the ID
-    if idx >= argv.len() || (argv.len() - idx) % 2 != 0 {
+    if idx >= argv.len() || !(argv.len() - idx).is_multiple_of(2) {
         return Err(CommandError::WrongArity("XADD"));
     }
 
@@ -6197,7 +6201,7 @@ fn getex(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                 return Err(CommandError::SyntaxError);
             }
             let secs = parse_expire_time_arg(&argv[3], "getex")?;
-            Some(Some(now_ms.saturating_add(secs * 1000)))
+            Some(Some(now_ms.saturating_add(secs.saturating_mul(1000))))
         } else if opt.eq_ignore_ascii_case("PX") {
             if argv.len() != 4 {
                 return Err(CommandError::SyntaxError);
@@ -6209,7 +6213,7 @@ fn getex(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                 return Err(CommandError::SyntaxError);
             }
             let ts = parse_expire_time_arg(&argv[3], "getex")?;
-            Some(Some(ts * 1000))
+            Some(Some(ts.saturating_mul(1000)))
         } else if opt.eq_ignore_ascii_case("PXAT") {
             if argv.len() != 4 {
                 return Err(CommandError::SyntaxError);
@@ -7135,6 +7139,7 @@ const COMMAND_TABLE: &[(&str, i64, &str, i64, i64, i64)] = &[
     ("bitpos", -3, "readonly", 1, 1, 1),
     ("bitop", -4, "write denyoom", 2, -1, 1),
     ("bitfield", -2, "write denyoom", 1, 1, 1),
+    ("bitfield_ro", -2, "readonly fast", 1, 1, 1),
     ("geoadd", -5, "write denyoom", 1, 1, 1),
     ("geopos", -2, "readonly", 1, 1, 1),
     ("geodist", -4, "readonly", 1, 1, 1),
@@ -8972,6 +8977,57 @@ fn bitfield_cmd(
             i += 2;
         } else {
             return Ok(RespFrame::Error("ERR syntax error".to_string()));
+        }
+    }
+    Ok(RespFrame::Array(Some(results)))
+}
+
+/// BITFIELD_RO key [GET encoding offset] ...
+/// Read-only variant of BITFIELD — only GET subcommands are allowed.
+fn bitfield_ro_cmd(
+    argv: &[Vec<u8>],
+    store: &mut Store,
+    now_ms: u64,
+) -> Result<RespFrame, CommandError> {
+    if argv.len() < 2 {
+        return Err(CommandError::WrongArity("BITFIELD_RO"));
+    }
+    let key = &argv[1];
+    let mut results: Vec<RespFrame> = Vec::new();
+    let mut i = 2;
+
+    while i < argv.len() {
+        let sub = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        if sub.eq_ignore_ascii_case("GET") {
+            if i + 2 >= argv.len() {
+                return Ok(RespFrame::Error("ERR syntax error".to_string()));
+            }
+            let (signed, bits) = match bitfield_parse_encoding(&argv[i + 1]) {
+                Some(v) => v,
+                None => {
+                    return Ok(RespFrame::Error(
+                        "ERR Invalid bitfield type. Use something like i8 u8 i16 u16 i32 u32 i64 u63"
+                            .to_string(),
+                    ));
+                }
+            };
+            let bit_offset = match bitfield_parse_offset(&argv[i + 2], bits) {
+                Some(v) => v,
+                None => {
+                    return Ok(RespFrame::Error(
+                        "ERR bit offset is not an integer or out of range".to_string(),
+                    ));
+                }
+            };
+            let val = store
+                .bitfield_get(key, bit_offset, bits, signed, now_ms)
+                .map_err(CommandError::Store)?;
+            results.push(RespFrame::Integer(val));
+            i += 3;
+        } else {
+            return Ok(RespFrame::Error(
+                "ERR BITFIELD_RO only supports the GET subcommand".to_string(),
+            ));
         }
     }
     Ok(RespFrame::Array(Some(results)))
@@ -20420,6 +20476,153 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, RespFrame::Array(Some(vec![RespFrame::Integer(1000)])));
+    }
+
+    // ── BITFIELD_RO tests ──────────────────────────────────────────
+
+    #[test]
+    fn bitfield_ro_get() {
+        let mut store = Store::new();
+        // First set a value using BITFIELD
+        dispatch_argv(
+            &[
+                b"BITFIELD".to_vec(),
+                b"bf".to_vec(),
+                b"SET".to_vec(),
+                b"u8".to_vec(),
+                b"0".to_vec(),
+                b"42".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        // Read it with BITFIELD_RO
+        let out = dispatch_argv(
+            &[
+                b"BITFIELD_RO".to_vec(),
+                b"bf".to_vec(),
+                b"GET".to_vec(),
+                b"u8".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::Array(Some(vec![RespFrame::Integer(42)])));
+    }
+
+    #[test]
+    fn bitfield_ro_rejects_set() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[
+                b"BITFIELD_RO".to_vec(),
+                b"bf".to_vec(),
+                b"SET".to_vec(),
+                b"u8".to_vec(),
+                b"0".to_vec(),
+                b"42".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        match out {
+            RespFrame::Error(msg) => {
+                assert!(msg.contains("BITFIELD_RO only supports the GET subcommand"));
+            }
+            _ => panic!("Expected error for SET in BITFIELD_RO"),
+        }
+    }
+
+    #[test]
+    fn bitfield_ro_rejects_incrby() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[
+                b"BITFIELD_RO".to_vec(),
+                b"bf".to_vec(),
+                b"INCRBY".to_vec(),
+                b"u8".to_vec(),
+                b"0".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        match out {
+            RespFrame::Error(msg) => {
+                assert!(msg.contains("BITFIELD_RO only supports the GET subcommand"));
+            }
+            _ => panic!("Expected error for INCRBY in BITFIELD_RO"),
+        }
+    }
+
+    #[test]
+    fn bitfield_ro_multiple_gets() {
+        let mut store = Store::new();
+        // Set two fields
+        dispatch_argv(
+            &[
+                b"BITFIELD".to_vec(),
+                b"bf".to_vec(),
+                b"SET".to_vec(),
+                b"u8".to_vec(),
+                b"0".to_vec(),
+                b"10".to_vec(),
+                b"SET".to_vec(),
+                b"u8".to_vec(),
+                b"8".to_vec(),
+                b"20".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        // Read both with BITFIELD_RO
+        let out = dispatch_argv(
+            &[
+                b"BITFIELD_RO".to_vec(),
+                b"bf".to_vec(),
+                b"GET".to_vec(),
+                b"u8".to_vec(),
+                b"0".to_vec(),
+                b"GET".to_vec(),
+                b"u8".to_vec(),
+                b"8".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![
+                RespFrame::Integer(10),
+                RespFrame::Integer(20),
+            ]))
+        );
+    }
+
+    #[test]
+    fn bitfield_ro_empty_key() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[
+                b"BITFIELD_RO".to_vec(),
+                b"nonexistent".to_vec(),
+                b"GET".to_vec(),
+                b"u8".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::Array(Some(vec![RespFrame::Integer(0)])));
     }
 
     // ── XACK tests ──────────────────────────────────────────────────

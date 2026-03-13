@@ -357,9 +357,13 @@ impl Store {
     /// Returns `Err(WrongType)` if the key holds a non-string value.
     pub fn get(&mut self, key: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::String(v) => Ok(Some(v.clone())),
+                Value::String(v) => {
+                    let v = v.clone();
+                    entry.touch(now_ms);
+                    Ok(Some(v))
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(None),
@@ -408,7 +412,12 @@ impl Store {
 
     pub fn exists(&mut self, key: &[u8], now_ms: u64) -> bool {
         self.drop_if_expired(key, now_ms);
-        self.entries.contains_key(key)
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.touch(now_ms);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn incr(&mut self, key: &[u8], now_ms: u64) -> Result<i64, StoreError> {
@@ -525,9 +534,13 @@ impl Store {
 
     pub fn strlen(&mut self, key: &[u8], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::String(v) => Ok(v.len()),
+                Value::String(v) => {
+                    let len = v.len();
+                    entry.touch(now_ms);
+                    Ok(len)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
@@ -537,15 +550,23 @@ impl Store {
     /// MGET returns values for each key; non-string keys return None (like Redis).
     #[must_use]
     pub fn mget(&mut self, keys: &[&[u8]], now_ms: u64) -> Vec<Option<Vec<u8>>> {
-        keys.iter()
-            .map(|key| {
-                self.drop_if_expired(key, now_ms);
-                self.entries.get(*key).and_then(|entry| match &entry.value {
-                    Value::String(v) => Some(v.clone()),
+        let mut results = Vec::with_capacity(keys.len());
+        for key in keys {
+            self.drop_if_expired(key, now_ms);
+            let val = match self.entries.get_mut(*key) {
+                Some(entry) => match &entry.value {
+                    Value::String(v) => {
+                        let v = v.clone();
+                        entry.touch(now_ms);
+                        Some(v)
+                    }
                     _ => None,
-                })
-            })
-            .collect()
+                },
+                None => None,
+            };
+            results.push(val);
+        }
+        results
     }
 
     pub fn setnx(&mut self, key: Vec<u8>, value: Vec<u8>, now_ms: u64) -> bool {
@@ -1345,9 +1366,13 @@ impl Store {
         now_ms: u64,
     ) -> Result<Option<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Hash(m) => Ok(m.get(field).cloned()),
+                Value::Hash(m) => {
+                    let result = m.get(field).cloned();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(None),
@@ -1380,9 +1405,13 @@ impl Store {
 
     pub fn hexists(&mut self, key: &[u8], field: &[u8], now_ms: u64) -> Result<bool, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Hash(m) => Ok(m.contains_key(field)),
+                Value::Hash(m) => {
+                    let result = m.contains_key(field);
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(false),
@@ -1391,9 +1420,13 @@ impl Store {
 
     pub fn hlen(&mut self, key: &[u8], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Hash(m) => Ok(m.len()),
+                Value::Hash(m) => {
+                    let len = m.len();
+                    entry.touch(now_ms);
+                    Ok(len)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
@@ -1407,12 +1440,13 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
                     let mut pairs: Vec<(Vec<u8>, Vec<u8>)> =
                         m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                    entry.touch(now_ms);
                     Ok(pairs)
                 }
                 _ => Err(StoreError::WrongType),
@@ -1423,11 +1457,12 @@ impl Store {
 
     pub fn hkeys(&mut self, key: &[u8], now_ms: u64) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
                     let mut keys: Vec<Vec<u8>> = m.keys().cloned().collect();
                     keys.sort();
+                    entry.touch(now_ms);
                     Ok(keys)
                 }
                 _ => Err(StoreError::WrongType),
@@ -1438,12 +1473,15 @@ impl Store {
 
     pub fn hvals(&mut self, key: &[u8], now_ms: u64) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
                     let mut pairs: Vec<(&Vec<u8>, &Vec<u8>)> = m.iter().collect();
                     pairs.sort_by_key(|(k, _)| *k);
-                    Ok(pairs.into_iter().map(|(_, v)| v.clone()).collect())
+                    let result: Vec<Vec<u8>> =
+                        pairs.into_iter().map(|(_, v)| v.clone()).collect();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -1458,9 +1496,14 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Hash(m) => Ok(fields.iter().map(|f| m.get(*f).cloned()).collect()),
+                Value::Hash(m) => {
+                    let result: Vec<Option<Vec<u8>>> =
+                        fields.iter().map(|f| m.get(*f).cloned()).collect();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(fields.iter().map(|_| None).collect()),
@@ -1533,9 +1576,13 @@ impl Store {
 
     pub fn hstrlen(&mut self, key: &[u8], field: &[u8], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Hash(m) => Ok(m.get(field).map_or(0, Vec::len)),
+                Value::Hash(m) => {
+                    let result = m.get(field).map_or(0, Vec::len);
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
@@ -1732,9 +1779,13 @@ impl Store {
 
     pub fn llen(&mut self, key: &[u8], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::List(l) => Ok(l.len()),
+                Value::List(l) => {
+                    let len = l.len();
+                    entry.touch(now_ms);
+                    Ok(len)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
@@ -1749,7 +1800,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::List(l) => {
                     let len = l.len() as i64;
@@ -1759,7 +1810,10 @@ impl Store {
                         return Ok(Vec::new());
                     }
                     let e = e.min(len as usize - 1);
-                    Ok(l.iter().skip(s).take(e - s + 1).cloned().collect())
+                    let result: Vec<Vec<u8>> =
+                        l.iter().skip(s).take(e - s + 1).cloned().collect();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -1774,7 +1828,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Option<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::List(l) => {
                     let len = l.len() as i64;
@@ -1782,7 +1836,9 @@ impl Store {
                         return Ok(None);
                     }
                     let idx = normalize_index(index, len);
-                    Ok(l.get(idx).cloned())
+                    let result = l.get(idx).cloned();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -1822,9 +1878,13 @@ impl Store {
         now_ms: u64,
     ) -> Result<Option<usize>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::List(l) => Ok(l.iter().position(|v| v.as_slice() == element)),
+                Value::List(l) => {
+                    let result = l.iter().position(|v| v.as_slice() == element);
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(None),
@@ -1845,7 +1905,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<usize>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::List(l) => {
                     let len = l.len();
@@ -1893,6 +1953,7 @@ impl Store {
                             }
                         }
                     }
+                    entry.touch(now_ms);
                     Ok(results)
                 }
                 _ => Err(StoreError::WrongType),
@@ -2299,11 +2360,12 @@ impl Store {
 
     pub fn smembers(&mut self, key: &[u8], now_ms: u64) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Set(s) => {
                     let mut members: Vec<Vec<u8>> = s.iter().cloned().collect();
                     members.sort();
+                    entry.touch(now_ms);
                     Ok(members)
                 }
                 _ => Err(StoreError::WrongType),
@@ -2314,9 +2376,13 @@ impl Store {
 
     pub fn scard(&mut self, key: &[u8], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Set(s) => Ok(s.len()),
+                Value::Set(s) => {
+                    let len = s.len();
+                    entry.touch(now_ms);
+                    Ok(len)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
@@ -2330,9 +2396,13 @@ impl Store {
         now_ms: u64,
     ) -> Result<bool, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Set(s) => Ok(s.contains(member)),
+                Value::Set(s) => {
+                    let result = s.contains(member);
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(false),
@@ -2792,9 +2862,13 @@ impl Store {
         now_ms: u64,
     ) -> Result<Option<f64>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::SortedSet(zs) => Ok(zs.get(member).copied()),
+                Value::SortedSet(zs) => {
+                    let result = zs.get(member).copied();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(None),
@@ -2804,9 +2878,13 @@ impl Store {
     /// Return cardinality of sorted set.
     pub fn zcard(&mut self, key: &[u8], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::SortedSet(zs) => Ok(zs.len()),
+                Value::SortedSet(zs) => {
+                    let len = zs.len();
+                    entry.touch(now_ms);
+                    Ok(len)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
@@ -2821,7 +2899,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Option<usize>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let Some(score) = zs.get(member).copied() else {
@@ -2831,6 +2909,7 @@ impl Store {
                         .iter()
                         .filter(|(m, s)| score_member_lt(**s, m, score, member))
                         .count();
+                    entry.touch(now_ms);
                     Ok(Some(rank))
                 }
                 _ => Err(StoreError::WrongType),
@@ -2847,7 +2926,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Option<usize>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let Some(score) = zs.get(member).copied() else {
@@ -2857,6 +2936,7 @@ impl Store {
                         .iter()
                         .filter(|(m, s)| score_member_lt(score, member, **s, m))
                         .count();
+                    entry.touch(now_ms);
                     Ok(Some(rank))
                 }
                 _ => Err(StoreError::WrongType),
@@ -2874,7 +2954,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let sorted = sorted_members_asc(zs);
@@ -2885,7 +2965,10 @@ impl Store {
                         return Ok(Vec::new());
                     }
                     let end = (e + 1).min(sorted.len());
-                    Ok(sorted[s..end].iter().map(|(_, m)| m.clone()).collect())
+                    let result: Vec<Vec<u8>> =
+                        sorted[s..end].iter().map(|(_, m)| m.clone()).collect();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -2902,7 +2985,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let mut sorted = sorted_members_asc(zs);
@@ -2914,7 +2997,10 @@ impl Store {
                         return Ok(Vec::new());
                     }
                     let end = (e + 1).min(sorted.len());
-                    Ok(sorted[s..end].iter().map(|(_, m)| m.clone()).collect())
+                    let result: Vec<Vec<u8>> =
+                        sorted[s..end].iter().map(|(_, m)| m.clone()).collect();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -2931,15 +3017,17 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let sorted = sorted_members_asc(zs);
-                    Ok(sorted
+                    let result: Vec<Vec<u8>> = sorted
                         .into_iter()
                         .filter(|(s, _)| score_in_range(*s, min, max))
                         .map(|(_, m)| m)
-                        .collect())
+                        .collect();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -2956,15 +3044,17 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let sorted = sorted_members_asc(zs);
-                    Ok(sorted
+                    let result: Vec<(Vec<u8>, f64)> = sorted
                         .into_iter()
                         .filter(|(s, _)| score_in_range(*s, min, max))
                         .map(|(s, m)| (m, s))
-                        .collect())
+                        .collect();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -2993,12 +3083,16 @@ impl Store {
         now_ms: u64,
     ) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::SortedSet(zs) => Ok(zs
-                    .values()
-                    .filter(|s| score_in_range(**s, min, max))
-                    .count()),
+                Value::SortedSet(zs) => {
+                    let result = zs
+                        .values()
+                        .filter(|s| score_in_range(**s, min, max))
+                        .count();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
@@ -3133,7 +3227,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let sorted = sorted_members_asc(zs);
@@ -3144,10 +3238,12 @@ impl Store {
                         return Ok(Vec::new());
                     }
                     let end = (e + 1).min(sorted.len());
-                    Ok(sorted[s..end]
+                    let result: Vec<(Vec<u8>, f64)> = sorted[s..end]
                         .iter()
                         .map(|(score, m)| (m.clone(), *score))
-                        .collect())
+                        .collect();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -3163,7 +3259,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let mut sorted = sorted_members_asc(zs);
@@ -3175,10 +3271,12 @@ impl Store {
                         return Ok(Vec::new());
                     }
                     let end = (e + 1).min(sorted.len());
-                    Ok(sorted[s..end]
+                    let result: Vec<(Vec<u8>, f64)> = sorted[s..end]
                         .iter()
                         .map(|(score, m)| (m.clone(), *score))
-                        .collect())
+                        .collect();
+                    entry.touch(now_ms);
+                    Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -3194,16 +3292,17 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let mut sorted = sorted_members_asc(zs);
                     sorted.reverse();
-                    let result = sorted
+                    let result: Vec<Vec<u8>> = sorted
                         .into_iter()
                         .filter(|(score, _)| *score >= min && *score <= max)
                         .map(|(_, m)| m)
                         .collect();
+                    entry.touch(now_ms);
                     Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
@@ -3220,15 +3319,16 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let sorted = sorted_members_asc(zs);
-                    let result = sorted
+                    let result: Vec<Vec<u8>> = sorted
                         .into_iter()
                         .filter(|(_, m)| lex_in_range(m, min, max))
                         .map(|(_, m)| m)
                         .collect();
+                    entry.touch(now_ms);
                     Ok(result)
                 }
                 _ => Err(StoreError::WrongType),
@@ -3422,9 +3522,14 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Option<f64>>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::SortedSet(zs) => Ok(members.iter().map(|m| zs.get(*m).copied()).collect()),
+                Value::SortedSet(zs) => {
+                    let result: Vec<Option<f64>> =
+                        members.iter().map(|m| zs.get(*m).copied()).collect();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(members.iter().map(|_| None).collect()),
@@ -3483,9 +3588,13 @@ impl Store {
 
     pub fn xlen(&mut self, key: &[u8], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Stream(entries) => Ok(entries.len()),
+                Value::Stream(entries) => {
+                    let result = entries.len();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
@@ -3501,7 +3610,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<StreamRecord>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Stream(entries) => {
                     if start > end {
@@ -3516,6 +3625,7 @@ impl Store {
                             break;
                         }
                     }
+                    entry.touch(now_ms);
                     Ok(out)
                 }
                 _ => Err(StoreError::WrongType),
@@ -3533,7 +3643,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<StreamRecord>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Stream(entries) => {
                     if start > end {
@@ -3548,6 +3658,7 @@ impl Store {
                             break;
                         }
                     }
+                    entry.touch(now_ms);
                     Ok(out)
                 }
                 _ => Err(StoreError::WrongType),
@@ -4440,7 +4551,7 @@ impl Store {
         let mut merged = vec![0u8; HLL_REGISTERS];
         for &key in keys {
             self.drop_if_expired(key, now_ms);
-            if let Some(entry) = self.entries.get(key) {
+            if let Some(entry) = self.entries.get_mut(key) {
                 match &entry.value {
                     Value::String(data) => {
                         if data.starts_with(HLL_MAGIC) {
@@ -4448,6 +4559,7 @@ impl Store {
                             for i in 0..HLL_REGISTERS {
                                 merged[i] = merged[i].max(regs[i]);
                             }
+                            entry.touch(now_ms);
                         } else {
                             return Err(StoreError::InvalidHllValue);
                         }
@@ -4742,9 +4854,13 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<bool>, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get(key) {
+        match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::Set(s) => Ok(members.iter().map(|m| s.contains(*m)).collect()),
+                Value::Set(s) => {
+                    let result: Vec<bool> = members.iter().map(|m| s.contains(*m)).collect();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(vec![false; members.len()]),

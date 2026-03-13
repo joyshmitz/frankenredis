@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     sync::atomic::{AtomicU64, Ordering},
     time::Instant,
 };
@@ -732,6 +732,8 @@ pub struct Runtime {
     last_save_time_sec: u64,
     /// Path for AOF persistence file (used by SAVE/BGSAVE).
     aof_path: Option<std::path::PathBuf>,
+    /// Dynamically overridden CONFIG parameters (set via CONFIG SET, returned by CONFIG GET).
+    config_overrides: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -792,6 +794,7 @@ impl Runtime {
             slowlog_max_len: 128,
             last_save_time_sec: 0,
             aof_path: None,
+            config_overrides: HashMap::new(),
         }
     }
 
@@ -1813,7 +1816,16 @@ impl Runtime {
         if sub.eq_ignore_ascii_case("SET") {
             return self.handle_config_set(argv);
         }
-        if sub.eq_ignore_ascii_case("RESETSTAT") || sub.eq_ignore_ascii_case("REWRITE") {
+        if sub.eq_ignore_ascii_case("RESETSTAT") {
+            if argv.len() != 2 {
+                return command_error_to_resp(CommandError::WrongArity("CONFIG"));
+            }
+            // Reset tracked statistics: clear slowlog, reset next ID, reset config overrides
+            self.slowlog.clear();
+            self.slowlog_next_id = 0;
+            return RespFrame::SimpleString("OK".to_string());
+        }
+        if sub.eq_ignore_ascii_case("REWRITE") {
             if argv.len() != 2 {
                 return command_error_to_resp(CommandError::WrongArity("CONFIG"));
             }
@@ -1884,8 +1896,9 @@ impl Runtime {
                 self.hz.to_string().into_bytes(),
             )));
         }
-        // Static configuration parameters that clients commonly probe
-        for &(name, value) in CONFIG_STATIC_PARAMS {
+        // Static configuration parameters that clients commonly probe.
+        // If a parameter has been overridden via CONFIG SET, use the override.
+        for &(name, default_value) in CONFIG_STATIC_PARAMS {
             // Skip dynamically-managed params — we already emitted live values above
             if name == "maxmemory"
                 || name == "slowlog-log-slower-than"
@@ -1896,7 +1909,12 @@ impl Runtime {
             }
             if Self::config_pattern_matches(pattern, name) {
                 entries.push(RespFrame::BulkString(Some(name.as_bytes().to_vec())));
-                entries.push(RespFrame::BulkString(Some(value.as_bytes().to_vec())));
+                let value = self
+                    .config_overrides
+                    .get(name)
+                    .map(|v| v.as_bytes().to_vec())
+                    .unwrap_or_else(|| default_value.as_bytes().to_vec());
+                entries.push(RespFrame::BulkString(Some(value)));
             }
         }
     }
@@ -1986,12 +2004,19 @@ impl Runtime {
                 self.hz = parsed;
                 continue;
             }
-            // Accept known CONFIG parameters as no-ops to avoid breaking clients.
-            // These are recognized but their values are not yet stored dynamically.
+            // Accept known CONFIG parameters and store the overridden value so
+            // CONFIG GET returns the SET value rather than the compiled-in default.
             let is_known_param = CONFIG_STATIC_PARAMS
                 .iter()
                 .any(|&(name, _)| name.eq_ignore_ascii_case(parameter));
             if is_known_param {
+                let canonical = CONFIG_STATIC_PARAMS
+                    .iter()
+                    .find(|&&(name, _)| name.eq_ignore_ascii_case(parameter))
+                    .map(|&(name, _)| name.to_string())
+                    .unwrap();
+                let value = String::from_utf8_lossy(&pair[1]).to_string();
+                self.config_overrides.insert(canonical, value);
                 continue;
             }
             return RespFrame::Error(format!("ERR Unsupported CONFIG parameter '{parameter}'"));
