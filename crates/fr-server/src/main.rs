@@ -12,6 +12,7 @@ use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
 use fr_config::RuntimePolicy;
+use fr_protocol::RespFrame;
 use fr_runtime::Runtime;
 
 /// Default port matching Redis convention.
@@ -108,9 +109,14 @@ fn main() -> ExitCode {
         if trimmed.is_empty() {
             continue;
         }
-        // Inline command format: space-separated arguments
-        let response = runtime.execute_bytes(trimmed.as_bytes(), now_ms());
-        let _ = stdout.write_all(&response);
+        // Inline command format: space-separated arguments → RESP array
+        let argv: Vec<RespFrame> = trimmed
+            .split_whitespace()
+            .map(|s| RespFrame::BulkString(Some(s.as_bytes().to_vec())))
+            .collect();
+        let frame = RespFrame::Array(Some(argv));
+        let response = runtime.execute_frame(frame, now_ms());
+        let _ = stdout.write_all(&response.to_bytes());
         let _ = stdout.flush();
     }
 
@@ -134,8 +140,8 @@ mod tests {
     fn server_bootstrap_processes_ping() {
         let mut runtime = Runtime::new(RuntimePolicy::hardened());
         let now_ms = 1_000_000u64;
-        let response = runtime.execute_bytes(b"PING", now_ms);
-        // Should get a RESP simple string "+PONG\r\n"
+        // RESP array format: *1\r\n$4\r\nPING\r\n
+        let response = runtime.execute_bytes(b"*1\r\n$4\r\nPING\r\n", now_ms);
         let response_str = String::from_utf8_lossy(&response);
         assert!(
             response_str.contains("PONG"),
