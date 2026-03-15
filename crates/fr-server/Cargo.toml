@@ -1,0 +1,15 @@
+[package]
+name = "fr-server"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+description = "FrankenRedis standalone server binary"
+
+[[bin]]
+name = "frankenredis"
+path = "src/main.rs"
+
+[dependencies]
+fr-runtime = { path = "../fr-runtime" }
+fr-config = { path = "../fr-config" }
+fr-protocol = { path = "../fr-protocol" }

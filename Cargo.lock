@@ -109,6 +109,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fr-server"
+version = "0.1.0"
+dependencies = [
+ "fr-config",
+ "fr-protocol",
+ "fr-runtime",
+]
+
+[[package]]
 name = "fr-store"
 version = "0.1.0"
 dependencies = [
