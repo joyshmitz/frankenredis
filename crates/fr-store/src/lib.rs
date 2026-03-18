@@ -6952,13 +6952,6 @@ fn score_member_lt(s1: f64, m1: &[u8], s2: f64, m2: &[u8]) -> bool {
     cmp_score_member(s1, m1, s2, m2) == std::cmp::Ordering::Less
 }
 
-/// Return sorted members as (score, member) pairs in ascending order.
-fn sorted_members_asc(zs: &SortedSet) -> Vec<(f64, Vec<u8>)> {
-    let mut pairs: Vec<(f64, Vec<u8>)> = zs.iter().map(|(m, &s)| (s, m.clone())).collect();
-    pairs.sort_by(|(s1, m1), (s2, m2)| cmp_score_member(*s1, m1, *s2, m2));
-    pairs
-}
-
 /// Check if a member falls within a lex range.
 /// Redis lex range format: `-` = neg infinity, `+` = pos infinity,
 /// `[value` = inclusive, `(value` = exclusive.
