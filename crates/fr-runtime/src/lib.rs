@@ -1354,6 +1354,15 @@ impl Runtime {
     }
 
     #[must_use]
+    pub fn parser_config(&self) -> fr_protocol::ParserConfig {
+        fr_protocol::ParserConfig {
+            max_bulk_len: self.policy.gate.max_bulk_len,
+            max_array_len: self.policy.gate.max_array_len,
+            max_recursion_depth: 128,
+        }
+    }
+
+    #[must_use]
     pub fn is_cluster_asking(&self) -> bool {
         self.session.cluster_state.asking
     }

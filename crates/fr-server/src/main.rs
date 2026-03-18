@@ -470,7 +470,7 @@ fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
                 Err(e) => Err(e),
             }
         } else {
-            parse_frame(&conn.read_buf).map(|p| (p.frame, p.consumed))
+            fr_protocol::parse_frame_with_config(&conn.read_buf, &runtime.parser_config()).map(|p| (p.frame, p.consumed))
         };
 
         match parse_result {
