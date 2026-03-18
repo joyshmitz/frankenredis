@@ -64,6 +64,23 @@ pub struct ParseResult {
     pub consumed: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParserConfig {
+    pub max_bulk_len: usize,
+    pub max_array_len: usize,
+    pub max_recursion_depth: usize,
+}
+
+impl Default for ParserConfig {
+    fn default() -> Self {
+        Self {
+            max_bulk_len: 512 * 1024 * 1024, // 512 MiB default (Redis standard)
+            max_array_len: 1024 * 1024,      // 1M elements
+            max_recursion_depth: 128,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RespParseError {
     Incomplete,
@@ -73,6 +90,10 @@ pub enum RespParseError {
     InvalidBulkLength,
     InvalidMultibulkLength,
     InvalidUtf8,
+    BulkLengthTooLarge,
+    MultibulkLengthTooLarge,
+    RecursionLimitExceeded,
+    LineTooLong,
 }
 
 impl Display for RespParseError {
@@ -87,6 +108,10 @@ impl Display for RespParseError {
             Self::InvalidBulkLength => write!(f, "invalid bulk length"),
             Self::InvalidMultibulkLength => write!(f, "invalid multibulk length"),
             Self::InvalidUtf8 => write!(f, "invalid UTF-8 payload"),
+            Self::BulkLengthTooLarge => write!(f, "bulk length exceeds limit"),
+            Self::MultibulkLengthTooLarge => write!(f, "multibulk length exceeds limit"),
+            Self::RecursionLimitExceeded => write!(f, "nested array depth limit exceeded"),
+            Self::LineTooLong => write!(f, "RESP line too long"),
         }
     }
 }
@@ -94,11 +119,26 @@ impl Display for RespParseError {
 impl Error for RespParseError {}
 
 pub fn parse_frame(input: &[u8]) -> Result<ParseResult, RespParseError> {
-    let (frame, consumed) = parse_frame_internal(input, 0)?;
+    parse_frame_with_config(input, &ParserConfig::default())
+}
+
+pub fn parse_frame_with_config(
+    input: &[u8],
+    config: &ParserConfig,
+) -> Result<ParseResult, RespParseError> {
+    let (frame, consumed) = parse_frame_internal(input, 0, 0, config)?;
     Ok(ParseResult { frame, consumed })
 }
 
-fn parse_frame_internal(input: &[u8], start: usize) -> Result<(RespFrame, usize), RespParseError> {
+fn parse_frame_internal(
+    input: &[u8],
+    start: usize,
+    depth: usize,
+    config: &ParserConfig,
+) -> Result<(RespFrame, usize), RespParseError> {
+    if depth > config.max_recursion_depth {
+        return Err(RespParseError::RecursionLimitExceeded);
+    }
     let prefix = *input.get(start).ok_or(RespParseError::Incomplete)?;
     let next = start + 1;
     match prefix {
@@ -124,8 +164,8 @@ fn parse_frame_internal(input: &[u8], start: usize) -> Result<(RespFrame, usize)
                 .map_err(|_| RespParseError::InvalidInteger)?;
             Ok((RespFrame::Integer(n), consumed))
         }
-        b'$' => parse_bulk(input, next),
-        b'*' => parse_array(input, next),
+        b'$' => parse_bulk(input, next, config),
+        b'*' => parse_array(input, next, depth, config),
         b'~' | b'%' | b'#' | b',' | b'_' | b'(' | b'=' | b'|' | b'>' | b'!' => {
             Err(RespParseError::UnsupportedResp3Type(prefix))
         }
@@ -133,7 +173,11 @@ fn parse_frame_internal(input: &[u8], start: usize) -> Result<(RespFrame, usize)
     }
 }
 
-fn parse_bulk(input: &[u8], start: usize) -> Result<(RespFrame, usize), RespParseError> {
+fn parse_bulk(
+    input: &[u8],
+    start: usize,
+    config: &ParserConfig,
+) -> Result<(RespFrame, usize), RespParseError> {
     let (line, consumed) = read_line(input, start)?;
     let text = std::str::from_utf8(line).map_err(|_| RespParseError::InvalidUtf8)?;
     let len = text
@@ -149,6 +193,9 @@ fn parse_bulk(input: &[u8], start: usize) -> Result<(RespFrame, usize), RespPars
         return Err(RespParseError::InvalidBulkLength);
     }
     let data_len = usize::try_from(len).map_err(|_| RespParseError::InvalidBulkLength)?;
+    if data_len > config.max_bulk_len {
+        return Err(RespParseError::BulkLengthTooLarge);
+    }
     let end = consumed
         .checked_add(data_len)
         .and_then(|idx| idx.checked_add(2))
@@ -163,7 +210,12 @@ fn parse_bulk(input: &[u8], start: usize) -> Result<(RespFrame, usize), RespPars
     Ok((RespFrame::BulkString(Some(bytes)), end))
 }
 
-fn parse_array(input: &[u8], start: usize) -> Result<(RespFrame, usize), RespParseError> {
+fn parse_array(
+    input: &[u8],
+    start: usize,
+    depth: usize,
+    config: &ParserConfig,
+) -> Result<(RespFrame, usize), RespParseError> {
     let (line, mut cursor) = read_line(input, start)?;
     let text = std::str::from_utf8(line).map_err(|_| RespParseError::InvalidUtf8)?;
     let len = text
@@ -179,27 +231,37 @@ fn parse_array(input: &[u8], start: usize) -> Result<(RespFrame, usize), RespPar
         return Err(RespParseError::InvalidMultibulkLength);
     }
     let count = usize::try_from(len).map_err(|_| RespParseError::InvalidMultibulkLength)?;
+    if count > config.max_array_len {
+        return Err(RespParseError::MultibulkLengthTooLarge);
+    }
     let mut items = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
-        let (item, consumed) = parse_frame_internal(input, cursor)?;
+        let (item, consumed) = parse_frame_internal(input, cursor, depth + 1, config)?;
         items.push(item);
         cursor = consumed;
     }
     Ok((RespFrame::Array(Some(items)), cursor))
 }
 
+const MAX_LINE_LENGTH: usize = 64 * 1024; // 64 KiB
+
 fn read_line(input: &[u8], start: usize) -> Result<(&[u8], usize), RespParseError> {
     if start >= input.len() {
         return Err(RespParseError::Incomplete);
     }
+    let max_search = (start + MAX_LINE_LENGTH).min(input.len());
     let mut i = start;
-    while i + 1 < input.len() {
+    while i + 1 < max_search {
         if input[i] == b'\r' && input[i + 1] == b'\n' {
             return Ok((&input[start..i], i + 2));
         }
         i += 1;
     }
-    Err(RespParseError::Incomplete)
+    if i + 1 < input.len() {
+        Err(RespParseError::LineTooLong)
+    } else {
+        Err(RespParseError::Incomplete)
+    }
 }
 
 #[cfg(test)]

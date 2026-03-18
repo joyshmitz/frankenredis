@@ -386,7 +386,12 @@ pub fn run_protocol_fixture(
     for case in fixture.cases {
         let evidence_before = runtime.evidence().events().len();
         let encoded = runtime.execute_bytes(case.raw_request.as_bytes(), case.now_ms);
-        let actual = parse_frame(&encoded)
+        let parser_config = fr_protocol::ParserConfig {
+            max_bulk_len: 512 * 1024 * 1024,
+            max_array_len: 1024 * 1024,
+            max_recursion_depth: 1024,
+        };
+        let actual = fr_protocol::parse_frame_with_config(&encoded, &parser_config)
             .map_err(|err| format!("runtime emitted invalid RESP frame in {}: {err}", case.name))?
             .frame;
         let new_events = &runtime.evidence().events()[evidence_before..];

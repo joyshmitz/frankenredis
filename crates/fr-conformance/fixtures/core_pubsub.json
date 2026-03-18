@@ -485,6 +485,67 @@
       }
     },
     {
+      "name": "pubsub_shardchannels_subscribed",
+      "now_ms": 0,
+      "argv": [
+        "PUBSUB",
+        "SHARDCHANNELS"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "shardch"
+          }
+        ]
+      }
+    },
+    {
+      "name": "pubsub_shardnumsub_subscribed",
+      "now_ms": 0,
+      "argv": [
+        "PUBSUB",
+        "SHARDNUMSUB",
+        "shardch",
+        "other"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "shardch"
+          },
+          {
+            "kind": "integer",
+            "value": 1
+          },
+          {
+            "kind": "bulk",
+            "value": "other"
+          },
+          {
+            "kind": "integer",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "spublish_to_shard_subscriber",
+      "now_ms": 0,
+      "argv": [
+        "SPUBLISH",
+        "shardch",
+        "msg"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
       "name": "sunsubscribe_channel",
       "now_ms": 0,
       "argv": [
@@ -1151,7 +1212,7 @@
       }
     },
     {
-      "name": "spublish_standalone_zero",
+      "name": "spublish_shard_subscriber_count",
       "now_ms": 0,
       "argv": [
         "SPUBLISH",
@@ -1160,7 +1221,7 @@
       ],
       "expect": {
         "kind": "integer",
-        "value": 0
+        "value": 1
       }
     },
     {

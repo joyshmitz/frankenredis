@@ -310,6 +310,16 @@ mod tests {
                 requested_offset: ReplOffset(150)
             }
         );
+        // Test lower bound (inclusive)
+        assert_eq!(
+            decide_psync(&backlog, "replid-a", ReplOffset(100)),
+            PsyncDecision::Continue { requested_offset: ReplOffset(100) }
+        );
+        // Test upper bound (exclusive)
+        assert!(matches!(
+            decide_psync(&backlog, "replid-a", ReplOffset(200)),
+            PsyncDecision::FullResync { .. }
+        ));
     }
 
     #[test]
@@ -357,13 +367,13 @@ mod tests {
     }
 
     #[test]
-    fn fr_p2c_006_u005_psync_rejects_offset_past_backlog_end() {
+    fn fr_p2c_006_u005_psync_rejects_offset_at_backlog_end() {
         let backlog = BacklogWindow {
             replid: "replid-a".to_string(),
             start_offset: ReplOffset(100),
             end_offset: ReplOffset(200),
         };
-        let decision = decide_psync(&backlog, "replid-a", ReplOffset(201));
+        let decision = decide_psync(&backlog, "replid-a", ReplOffset(200));
         assert_eq!(
             decision,
             PsyncDecision::FullResync {

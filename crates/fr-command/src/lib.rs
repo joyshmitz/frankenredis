@@ -276,7 +276,7 @@ pub fn dispatch_argv(
         Some(CommandId::FcallRo) => return fcall_cmd(argv, store, now_ms),
         Some(CommandId::Ssubscribe) => return ssubscribe_cmd(argv, store),
         Some(CommandId::Sunsubscribe) => return sunsubscribe_cmd(argv, store),
-        Some(CommandId::Spublish) => return spublish_cmd(argv),
+        Some(CommandId::Spublish) => return spublish_cmd(argv, store),
         Some(CommandId::SortRo) => return sort_ro_cmd(argv, store, now_ms),
         Some(CommandId::Readonly) => return readonly_cmd(argv),
         Some(CommandId::Readwrite) => return readwrite_cmd(argv),
@@ -1269,18 +1269,24 @@ fn set(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
             );
         }
         ExpiryMode::Pxat(abs_ms) => {
-            store.set_with_abs_expiry(argv[1].clone(), argv[2].clone(), Some(abs_ms));
+            store.set_with_abs_expiry(argv[1].clone(), argv[2].clone(), Some(abs_ms), now_ms);
         }
         ExpiryMode::Exat(abs_sec) => {
             store.set_with_abs_expiry(
                 argv[1].clone(),
                 argv[2].clone(),
                 Some(abs_sec.saturating_mul(1000)),
+                now_ms,
             );
         }
         ExpiryMode::KeepTtl => {
             let existing_expiry = store.get_expires_at_ms(&argv[1], now_ms);
-            store.set_with_abs_expiry(argv[1].clone(), argv[2].clone(), existing_expiry);
+            store.set_with_abs_expiry(
+                argv[1].clone(),
+                argv[2].clone(),
+                existing_expiry,
+                now_ms,
+            );
         }
     }
 
@@ -5311,13 +5317,13 @@ fn sunsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Co
     Ok(RespFrame::Array(Some(replies)))
 }
 
-fn spublish_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn spublish_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
     // SPUBLISH shardchannel message
     if argv.len() != 3 {
         return Err(CommandError::WrongArity("SPUBLISH"));
     }
-    // No subscribers in standalone mode
-    Ok(RespFrame::Integer(0))
+    let receivers = store.spublish(&argv[1], &argv[2]);
+    Ok(RespFrame::Integer(receivers as i64))
 }
 
 fn parse_score_bound(arg: &[u8]) -> Result<ScoreBound, CommandError> {
@@ -6378,32 +6384,38 @@ struct LcsMatch {
     len: usize,
 }
 
+const LCS_MAX_DP_SIZE: usize = 16 * 1024 * 1024; // 16M entries = 64MB
+
 fn compute_lcs(a: &[u8], b: &[u8]) -> Vec<u8> {
     let m = a.len();
     let n = b.len();
     if m == 0 || n == 0 {
         return Vec::new();
     }
-    // DP table
-    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+    if m.saturating_mul(n) > LCS_MAX_DP_SIZE {
+        return Vec::new(); // Silent failure for extremely large strings to prevent DoS
+    }
+    // DP table: flat Vec for cache efficiency
+    let cols = n + 1;
+    let mut dp = vec![0u32; (m + 1) * cols];
     for i in 1..=m {
         for j in 1..=n {
             if a[i - 1] == b[j - 1] {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
+                dp[i * cols + j] = dp[(i - 1) * cols + (j - 1)] + 1;
             } else {
-                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+                dp[i * cols + j] = dp[(i - 1) * cols + j].max(dp[i * cols + (j - 1)]);
             }
         }
     }
     // Backtrack
-    let mut result = Vec::with_capacity(dp[m][n] as usize);
+    let mut result = Vec::with_capacity(dp[m * cols + n] as usize);
     let (mut i, mut j) = (m, n);
     while i > 0 && j > 0 {
         if a[i - 1] == b[j - 1] {
             result.push(a[i - 1]);
             i -= 1;
             j -= 1;
-        } else if dp[i - 1][j] > dp[i][j - 1] {
+        } else if dp[(i - 1) * cols + j] > dp[i * cols + (j - 1)] {
             i -= 1;
         } else {
             j -= 1;
@@ -6419,13 +6431,17 @@ fn compute_lcs_matches(a: &[u8], b: &[u8], min_match_len: usize) -> Vec<LcsMatch
     if m == 0 || n == 0 {
         return Vec::new();
     }
-    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+    if m.saturating_mul(n) > LCS_MAX_DP_SIZE {
+        return Vec::new();
+    }
+    let cols = n + 1;
+    let mut dp = vec![0u32; (m + 1) * cols];
     for i in 1..=m {
         for j in 1..=n {
             if a[i - 1] == b[j - 1] {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
+                dp[i * cols + j] = dp[(i - 1) * cols + (j - 1)] + 1;
             } else {
-                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+                dp[i * cols + j] = dp[(i - 1) * cols + j].max(dp[i * cols + (j - 1)]);
             }
         }
     }
@@ -6452,7 +6468,7 @@ fn compute_lcs_matches(a: &[u8], b: &[u8], min_match_len: usize) -> Vec<LcsMatch
                     len,
                 });
             }
-        } else if dp[i - 1][j] > dp[i][j - 1] {
+        } else if dp[(i - 1) * cols + j] > dp[i * cols + (j - 1)] {
             i -= 1;
         } else {
             j -= 1;
@@ -7221,6 +7237,16 @@ const COMMAND_TABLE: &[(&str, i64, &str, i64, i64, i64)] = &[
     ("sort_ro", -2, "readonly fast", 1, 1, 1),
     ("zrangestore", -5, "write denyoom", 1, 2, 1),
 ];
+
+/// Return the flags string for a given command name.
+#[must_use]
+pub fn get_command_flags(name: &[u8]) -> Option<&'static str> {
+    let name_str = std::str::from_utf8(name).ok()?;
+    COMMAND_TABLE
+        .iter()
+        .find(|&&(n, ..)| n.eq_ignore_ascii_case(name_str))
+        .map(|&(_, _, flags, ..)| flags)
+}
 
 /// Return commands that belong to the given ACL category.
 /// Redis maps commands to categories based on data type (string, hash, list, set,
@@ -8103,6 +8129,11 @@ pub fn pubsub_message_to_frame(msg: PubSubMessage) -> RespFrame {
             RespFrame::BulkString(Some(channel)),
             RespFrame::BulkString(Some(data)),
         ])),
+        PubSubMessage::SMessage { channel, data } => RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"smessage".to_vec())),
+            RespFrame::BulkString(Some(channel)),
+            RespFrame::BulkString(Some(data)),
+        ])),
     }
 }
 
@@ -8318,9 +8349,7 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         let mut result = Vec::new();
         for ch in &argv[2..] {
             result.push(RespFrame::BulkString(Some(ch.clone())));
-            let count =
-                if store.subscribed_shard_channels.contains(ch.as_slice()) { 1i64 } else { 0 };
-            result.push(RespFrame::Integer(count));
+            result.push(RespFrame::Integer(store.pubsub_shardnumsub_count(ch) as i64));
         }
         Ok(RespFrame::Array(Some(result)))
     } else if sub.eq_ignore_ascii_case("HELP") {
@@ -20981,6 +21010,31 @@ mod tests {
     }
 
     #[test]
+    fn spublish_to_shard_subscriber() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SSUBSCRIBE".to_vec(), b"shardch".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        let out = dispatch_argv(
+            &[b"SPUBLISH".to_vec(), b"shardch".to_vec(), b"msg".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::Integer(1));
+        assert_eq!(
+            store.drain_pending_pubsub(),
+            vec![fr_store::PubSubMessage::SMessage {
+                channel: b"shardch".to_vec(),
+                data: b"msg".to_vec(),
+            }]
+        );
+    }
+
+    #[test]
     fn ssubscribe_returns_confirmation() {
         let mut store = Store::new();
         let out = dispatch_argv(
@@ -20995,6 +21049,22 @@ mod tests {
             }
             other => panic!("expected array, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pubsub_message_to_frame_shard() {
+        let frame = pubsub_message_to_frame(fr_store::PubSubMessage::SMessage {
+            channel: b"shardch".to_vec(),
+            data: b"hello".to_vec(),
+        });
+        assert_eq!(
+            frame,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"smessage".to_vec())),
+                RespFrame::BulkString(Some(b"shardch".to_vec())),
+                RespFrame::BulkString(Some(b"hello".to_vec())),
+            ]))
+        );
     }
 
     #[test]

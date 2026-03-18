@@ -1267,6 +1267,7 @@ pub struct LuaState<'a> {
     globals: HashMap<String, LuaValue>,
     call_depth: usize,
     iterations: u64,
+    rng_seed: u64,
 }
 
 struct Scope {
@@ -1409,13 +1410,23 @@ impl<'a> LuaState<'a> {
         }
         globals.insert("cjson".to_string(), LuaValue::Table(cjson_table));
 
+        let rng_seed = store.rng_seed;
         Self {
             store,
             now_ms,
             globals,
             call_depth: 0,
             iterations: 0,
+            rng_seed,
         }
+    }
+
+    fn next_rand(&mut self) -> u64 {
+        self.rng_seed = self
+            .rng_seed
+            .wrapping_mul(0x5851_f42d_4c95_7f2d)
+            .wrapping_add(1);
+        self.rng_seed
     }
 
     pub fn set_keys_argv(&mut self, keys: Vec<LuaValue>, argv: Vec<LuaValue>) {
@@ -2032,7 +2043,7 @@ impl<'a> LuaState<'a> {
                     BinOp::Sub => a - b,
                     BinOp::Mul => a * b,
                     BinOp::Div => a / b,
-                    BinOp::Mod => a % b,
+                    BinOp::Mod => a - (a / b).floor() * b,
                     BinOp::Pow => a.powf(b),
                     _ => unreachable!(),
                 };
@@ -2490,17 +2501,38 @@ impl<'a> LuaState<'a> {
                 Ok(vec![LuaValue::Number(n.sqrt())])
             }
             "math.random" => {
-                // Deterministic for reproducibility in scripts
+                let r = self.next_rand();
                 match args.len() {
-                    0 => Ok(vec![LuaValue::Number(0.5)]),
+                    0 => {
+                        let f = (r as f64) / (u64::MAX as f64 + 1.0);
+                        Ok(vec![LuaValue::Number(f)])
+                    }
                     1 => {
-                        let m = args[0].to_number().unwrap_or(1.0) as i64;
-                        Ok(vec![LuaValue::Number((m / 2).max(1) as f64)])
+                        let m = args[0]
+                            .to_number()
+                            .ok_or("bad argument #1 to 'random' (number expected)")?
+                            as i64;
+                        if m < 1 {
+                            return Err("bad argument #1 to 'random' (interval is empty)".to_string());
+                        }
+                        let val = (r % (m as u64)) + 1;
+                        Ok(vec![LuaValue::Number(val as f64)])
                     }
                     _ => {
-                        let m = args[0].to_number().unwrap_or(1.0) as i64;
-                        let n = args[1].to_number().unwrap_or(1.0) as i64;
-                        Ok(vec![LuaValue::Number(((m + n) / 2) as f64)])
+                        let m = args[0]
+                            .to_number()
+                            .ok_or("bad argument #1 to 'random' (number expected)")?
+                            as i64;
+                        let n = args[1]
+                            .to_number()
+                            .ok_or("bad argument #2 to 'random' (number expected)")?
+                            as i64;
+                        if m > n {
+                            return Err("bad argument #1 to 'random' (interval is empty)".to_string());
+                        }
+                        let range = (n - m + 1) as u64;
+                        let val = (r % range) + m as u64;
+                        Ok(vec![LuaValue::Number(val as f64)])
                     }
                 }
             }
@@ -2592,7 +2624,11 @@ impl<'a> LuaState<'a> {
                 Ok(vec![LuaValue::Number(m * 2f64.powi(e))])
             }
             "math.randomseed" => {
-                // Seed is ignored — we use deterministic random for Redis scripting
+                if let Some(arg) = args.first() {
+                    if let Some(n) = arg.to_number() {
+                        self.rng_seed = n.to_bits();
+                    }
+                }
                 Ok(vec![LuaValue::Nil])
             }
             // ── OS library ───────────────────────────────────────────────
