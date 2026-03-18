@@ -434,13 +434,21 @@ fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
             break;
         }
 
-        match parse_frame(&conn.read_buf) {
-            Ok(parsed) => {
-                let consumed = parsed.consumed;
-                let response = runtime.execute_frame(parsed.frame.clone(), ts);
+        // Try inline command parsing first if the buffer doesn't start with
+        // a RESP prefix. redis-cli sends inline commands for simple operations.
+        let parse_result = if !conn.read_buf.is_empty() && conn.read_buf[0] != b'*' {
+            try_parse_inline(&conn.read_buf)
+        } else {
+            parse_frame(&conn.read_buf).map(|p| (p.frame, p.consumed))
+        };
+
+        match parse_result {
+            Ok((frame, consumed)) => {
+                let response = runtime.execute_frame(frame.clone(), ts);
+                let parsed_frame = frame;
 
                 // Check for QUIT command.
-                if is_quit_frame(&parsed.frame) {
+                if is_quit_frame(&parsed_frame) {
                     conn.write_buf.extend_from_slice(&response.to_bytes());
                     conn.closing = true;
                     conn.read_buf.drain(..consumed);
@@ -450,7 +458,7 @@ fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
                 // Check for blocking commands that returned nil — block the
                 // client instead of sending the nil response immediately.
                 if response == RespFrame::Array(None) || response == RespFrame::BulkString(None) {
-                    if let Some(blocked) = try_build_blocked_state(&parsed.frame, ts) {
+                    if let Some(blocked) = try_build_blocked_state(&parsed_frame, ts) {
                         conn.blocked = Some(blocked);
                         conn.read_buf.drain(..consumed);
                         break; // Stop processing — client is now blocked.
@@ -458,7 +466,7 @@ fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
                 }
 
                 conn.write_buf.extend_from_slice(&response.to_bytes());
-                if let Some(follow_up) = replication_follow_up_bytes(&parsed.frame, &response) {
+                if let Some(follow_up) = replication_follow_up_bytes(&parsed_frame, &response) {
                     conn.write_buf.extend_from_slice(&follow_up);
                 }
 
@@ -487,6 +495,103 @@ fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
 
     // Eagerly try to flush.
     let _ = conn.try_flush();
+}
+
+/// Try to parse an inline command (non-RESP). Inline commands are
+/// space-separated tokens terminated by \r\n or \n.
+/// Returns (frame, consumed_bytes) on success.
+fn try_parse_inline(buf: &[u8]) -> Result<(RespFrame, usize), fr_protocol::RespParseError> {
+    // Find the line terminator.
+    let newline_pos = buf.iter().position(|&b| b == b'\n');
+    let Some(nl) = newline_pos else {
+        return Err(fr_protocol::RespParseError::Incomplete);
+    };
+    let consumed = nl + 1;
+    let line_end = if nl > 0 && buf[nl - 1] == b'\r' {
+        nl - 1
+    } else {
+        nl
+    };
+    let line = &buf[..line_end];
+    if line.is_empty() {
+        // Empty line — skip it by returning a PING (or just ignore).
+        return Err(fr_protocol::RespParseError::Incomplete);
+    }
+
+    // Split on whitespace, respecting double-quoted strings.
+    let argv = split_inline_args(line);
+    if argv.is_empty() {
+        return Err(fr_protocol::RespParseError::Incomplete);
+    }
+
+    let frame = RespFrame::Array(Some(
+        argv.into_iter()
+            .map(|a| RespFrame::BulkString(Some(a)))
+            .collect(),
+    ));
+    Ok((frame, consumed))
+}
+
+/// Split inline command arguments, supporting double-quoted strings.
+fn split_inline_args(line: &[u8]) -> Vec<Vec<u8>> {
+    let mut args = Vec::new();
+    let mut i = 0;
+    while i < line.len() {
+        // Skip whitespace.
+        if line[i] == b' ' || line[i] == b'\t' {
+            i += 1;
+            continue;
+        }
+
+        if line[i] == b'"' {
+            // Quoted argument.
+            i += 1;
+            let mut arg = Vec::new();
+            while i < line.len() && line[i] != b'"' {
+                if line[i] == b'\\' && i + 1 < line.len() {
+                    // Handle escape sequences.
+                    i += 1;
+                    match line[i] {
+                        b'n' => arg.push(b'\n'),
+                        b'r' => arg.push(b'\r'),
+                        b't' => arg.push(b'\t'),
+                        b'"' => arg.push(b'"'),
+                        b'\\' => arg.push(b'\\'),
+                        other => {
+                            arg.push(b'\\');
+                            arg.push(other);
+                        }
+                    }
+                } else {
+                    arg.push(line[i]);
+                }
+                i += 1;
+            }
+            if i < line.len() {
+                i += 1; // Skip closing quote.
+            }
+            args.push(arg);
+        } else if line[i] == b'\'' {
+            // Single-quoted argument (no escape processing).
+            i += 1;
+            let start = i;
+            while i < line.len() && line[i] != b'\'' {
+                i += 1;
+            }
+            args.push(line[start..i].to_vec());
+            if i < line.len() {
+                i += 1;
+            }
+        } else {
+            // Unquoted argument.
+            let start = i;
+            while i < line.len() && line[i] != b' ' && line[i] != b'\t' {
+                i += 1;
+            }
+            args.push(line[start..i].to_vec());
+        }
+    }
+    args
 }
 
 pub(crate) fn replication_follow_up_bytes(frame: &RespFrame, response: &RespFrame) -> Option<Vec<u8>> {
