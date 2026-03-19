@@ -55,6 +55,10 @@ enum BlockingOp {
     BZpopMax { keys: Vec<Vec<u8>> },
     /// BZPOPMIN: pop min score from first available key.
     BZpopMin { keys: Vec<Vec<u8>> },
+    /// XREAD BLOCK: read from streams, blocking until data arrives.
+    BXread { argv: Vec<Vec<u8>> },
+    /// XREADGROUP BLOCK: read from stream consumer group, blocking.
+    BXreadgroup { argv: Vec<Vec<u8>> },
 }
 
 /// A client that is blocked waiting for data on one or more keys.
@@ -251,13 +255,14 @@ fn main() -> ExitCode {
     let mut clients: HashMap<Token, ClientConnection> = HashMap::new();
     let mut blocked_tokens: HashSet<Token> = HashSet::new();
     let mut closing_tokens: HashSet<Token> = HashSet::new();
+    let mut write_tokens: HashSet<Token> = HashSet::new();
     let mut next_token: usize = 1;
     let tick_budget = TickBudget::default();
 
     loop {
         // Use fr-eventloop's tick planner to determine poll timeout.
-        let has_blocked = clients.values().any(|c| c.blocked.is_some());
-        let pending_writes = clients.values().filter(|c| !c.write_buf.is_empty()).count();
+        let has_blocked = !blocked_tokens.is_empty();
+        let pending_writes = write_tokens.len();
         let tick_plan = plan_tick(0, pending_writes, tick_budget, EventLoopMode::Normal);
         let poll_timeout = if tick_plan.poll_timeout_ms == 0 || has_blocked {
             // When clients are blocked, use a short poll timeout so we
@@ -299,10 +304,17 @@ fn main() -> ExitCode {
                             &mut poll,
                             &mut blocked_tokens,
                             &mut closing_tokens,
+                            &mut write_tokens,
                         );
                     }
                     if event.is_writable() {
-                        handle_writable(token, &mut clients, &mut poll);
+                        handle_writable(
+                            token,
+                            &mut clients,
+                            &mut write_tokens,
+                            &mut closing_tokens,
+                            &mut poll,
+                        );
                     }
                 }
             }
@@ -320,6 +332,7 @@ fn main() -> ExitCode {
             &mut closing_tokens,
             &mut runtime,
             &mut poll,
+            &mut write_tokens,
         );
 
         // Clean up clients marked for closing whose write buffers are drained.
@@ -337,6 +350,7 @@ fn main() -> ExitCode {
             if let Some(mut conn) = clients.remove(&token) {
                 blocked_tokens.remove(&token);
                 closing_tokens.remove(&token);
+                write_tokens.remove(&token);
                 let _ = poll.registry().deregister(&mut conn.stream);
             }
         }
@@ -403,6 +417,7 @@ fn handle_readable(
     poll: &mut Poll,
     blocked_tokens: &mut HashSet<Token>,
     closing_tokens: &mut HashSet<Token>,
+    write_tokens: &mut HashSet<Token>,
 ) {
     let Some(conn) = clients.get_mut(&token) else {
         return;
@@ -458,7 +473,14 @@ fn handle_readable(
     let session = std::mem::take(&mut conn.session);
     let prev = runtime.swap_session(session);
 
-    process_buffered_frames(token, conn, runtime, blocked_tokens, closing_tokens);
+    process_buffered_frames(
+        token,
+        conn,
+        runtime,
+        blocked_tokens,
+        closing_tokens,
+        write_tokens,
+    );
 
     // Swap session back.
     let updated_session = runtime.swap_session(prev);
@@ -480,6 +502,7 @@ fn process_buffered_frames(
     runtime: &mut Runtime,
     blocked_tokens: &mut HashSet<Token>,
     closing_tokens: &mut HashSet<Token>,
+    write_tokens: &mut HashSet<Token>,
 ) {
     let ts = now_ms();
 
@@ -523,6 +546,7 @@ fn process_buffered_frames(
                 // Check for QUIT command.
                 if is_quit_frame(&parsed_frame) {
                     conn.write_buf.extend_from_slice(&response.to_bytes());
+                    write_tokens.insert(token);
                     conn.closing = true;
                     closing_tokens.insert(token);
                     conn.read_buf.drain(..consumed);
@@ -723,6 +747,31 @@ pub(crate) fn is_psync_frame(frame: &RespFrame) -> bool {
     false
 }
 
+/// Extract the BLOCK timeout from XREAD/XREADGROUP args and compute a deadline.
+fn parse_xread_block_deadline(items: &[RespFrame], now_ms: u64) -> Option<u64> {
+    for (i, item) in items.iter().enumerate() {
+        let RespFrame::BulkString(Some(arg)) = item else {
+            continue;
+        };
+        if !arg.eq_ignore_ascii_case(b"BLOCK") {
+            continue;
+        }
+        let RespFrame::BulkString(Some(timeout_bytes)) = items.get(i + 1)? else {
+            return None;
+        };
+        let ms: i64 = std::str::from_utf8(timeout_bytes).ok()?.parse().ok()?;
+        if ms < 0 {
+            return None;
+        }
+        return Some(if ms == 0 {
+            u64::MAX
+        } else {
+            now_ms.saturating_add(ms as u64)
+        });
+    }
+    None // BLOCK keyword not found
+}
+
 /// Parse a blocking command frame and build `BlockedState` if the command
 /// is a blocking operation with a non-zero timeout.
 fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedState> {
@@ -852,6 +901,21 @@ fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedStat
             },
             deadline_ms,
         })
+    } else if cmd.eq_ignore_ascii_case(b"XREAD") || cmd.eq_ignore_ascii_case(b"XREADGROUP") {
+        let deadline_ms = parse_xread_block_deadline(items, now_ms)?;
+        let argv: Vec<Vec<u8>> = items
+            .iter()
+            .filter_map(|f| match f {
+                RespFrame::BulkString(Some(b)) => Some(b.clone()),
+                _ => None,
+            })
+            .collect();
+        let op = if cmd.eq_ignore_ascii_case(b"XREAD") {
+            BlockingOp::BXread { argv }
+        } else {
+            BlockingOp::BXreadgroup { argv }
+        };
+        Some(BlockedState { op, deadline_ms })
     } else {
         None
     }
@@ -865,6 +929,7 @@ fn check_blocked_clients(
     closing_tokens: &mut HashSet<Token>,
     runtime: &mut Runtime,
     poll: &mut Poll,
+    write_tokens: &mut HashSet<Token>,
 ) {
     let ts = now_ms();
     let active_blocked: Vec<Token> = blocked_tokens.iter().copied().collect();
@@ -886,7 +951,9 @@ fn check_blocked_clients(
                 BlockingOp::BLpop { .. }
                 | BlockingOp::BRpop { .. }
                 | BlockingOp::BZpopMax { .. }
-                | BlockingOp::BZpopMin { .. } => RespFrame::Array(None),
+                | BlockingOp::BZpopMin { .. }
+                | BlockingOp::BXread { .. }
+                | BlockingOp::BXreadgroup { .. } => RespFrame::Array(None),
                 BlockingOp::BLmove { .. } => RespFrame::BulkString(None),
             };
             conn.write_buf.extend_from_slice(&nil_response.to_bytes());
@@ -897,7 +964,14 @@ fn check_blocked_clients(
             if !conn.read_buf.is_empty() {
                 let session = std::mem::take(&mut conn.session);
                 let prev = runtime.swap_session(session);
-                process_buffered_frames(token, conn, runtime, blocked_tokens, closing_tokens);
+                process_buffered_frames(
+                    token,
+                    conn,
+                    runtime,
+                    blocked_tokens,
+                    closing_tokens,
+                    write_tokens,
+                );
                 let updated_session = runtime.swap_session(prev);
                 conn.session = updated_session;
             }
@@ -919,7 +993,14 @@ fn check_blocked_clients(
 
             // Process any commands the client pipelined while blocked.
             if !conn.read_buf.is_empty() {
-                process_buffered_frames(token, conn, runtime, blocked_tokens, closing_tokens);
+                process_buffered_frames(
+                    token,
+                    conn,
+                    runtime,
+                    blocked_tokens,
+                    closing_tokens,
+                    write_tokens,
+                );
             }
         }
 
@@ -1070,6 +1151,21 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
                 None
             }
         }
+        BlockingOp::BXread { argv } | BlockingOp::BXreadgroup { argv } => {
+            // Re-execute the full XREAD/XREADGROUP command to check for new data.
+            let frame = RespFrame::Array(Some(
+                argv.iter()
+                    .map(|a| RespFrame::BulkString(Some(a.clone())))
+                    .collect(),
+            ));
+            let response = runtime.execute_frame(frame, now_ms);
+            // XREAD/XREADGROUP returns Array(None) when no data is available.
+            if response != RespFrame::Array(None) {
+                Some(response)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -1082,7 +1178,13 @@ fn is_quit_frame(frame: &RespFrame) -> bool {
     false
 }
 
-fn handle_writable(token: Token, clients: &mut HashMap<Token, ClientConnection>, poll: &mut Poll) {
+fn handle_writable(
+    token: Token,
+    clients: &mut HashMap<Token, ClientConnection>,
+    write_tokens: &mut HashSet<Token>,
+    closing_tokens: &mut HashSet<Token>,
+    poll: &mut Poll,
+) {
     let Some(conn) = clients.get_mut(&token) else {
         return;
     };
@@ -1090,6 +1192,7 @@ fn handle_writable(token: Token, clients: &mut HashMap<Token, ClientConnection>,
     match conn.try_flush() {
         Ok(true) => {
             // Write buffer fully drained — only need READABLE now.
+            write_tokens.remove(&token);
             let _ = poll
                 .registry()
                 .reregister(&mut conn.stream, token, Interest::READABLE);
@@ -1099,6 +1202,7 @@ fn handle_writable(token: Token, clients: &mut HashMap<Token, ClientConnection>,
         }
         Err(_) => {
             conn.closing = true;
+            closing_tokens.insert(token);
         }
     }
 }
