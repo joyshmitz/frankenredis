@@ -169,10 +169,33 @@ pub struct SortedSet {
     ordered: BTreeMap<ScoreMember, ()>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum MemberPart {
+    Min,
+    Actual(Vec<u8>),
+    Max,
+}
+
+impl MemberPart {
+    fn unwrap_actual(&self) -> &Vec<u8> {
+        match self {
+            MemberPart::Actual(v) => v,
+            _ => panic!("expected actual member in stored sorted set"),
+        }
+    }
+
+    fn into_actual(self) -> Vec<u8> {
+        match self {
+            MemberPart::Actual(v) => v,
+            _ => panic!("expected actual member in stored sorted set"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct ScoreMember {
     score: f64,
-    member: Vec<u8>,
+    member: MemberPart,
 }
 
 impl Eq for ScoreMember {}
@@ -195,15 +218,21 @@ impl ScoreMember {
     fn min_for_score(score: f64) -> Self {
         Self {
             score,
-            member: Vec::new(),
+            member: MemberPart::Min,
         }
     }
 
     fn max_for_score(score: f64) -> Self {
-        // High-water mark for member part.
         Self {
             score,
-            member: vec![255; 1024],
+            member: MemberPart::Max,
+        }
+    }
+
+    fn actual(score: f64, member: Vec<u8>) -> Self {
+        Self {
+            score,
+            member: MemberPart::Actual(member),
         }
     }
 }
@@ -229,21 +258,17 @@ impl SortedSet {
             if old_score == score {
                 return false;
             }
-            self.ordered.remove(&ScoreMember {
-                score: old_score,
-                member: member.clone(),
-            });
+            self.ordered
+                .remove(&ScoreMember::actual(old_score, member.clone()));
         }
-        self.ordered.insert(ScoreMember { score, member }, ());
+        self.ordered.insert(ScoreMember::actual(score, member), ());
         true
     }
 
     fn remove(&mut self, member: &[u8]) -> bool {
         if let Some(score) = self.dict.remove(member) {
-            self.ordered.remove(&ScoreMember {
-                score,
-                member: member.to_vec(),
-            });
+            self.ordered
+                .remove(&ScoreMember::actual(score, member.to_vec()));
             true
         } else {
             false
@@ -255,25 +280,34 @@ impl SortedSet {
     }
 
     pub fn iter_asc(&self) -> impl Iterator<Item = (&Vec<u8>, &f64)> {
-        self.ordered.keys().map(|sm| (&sm.member, &sm.score))
+        self.ordered
+            .keys()
+            .map(|sm| (sm.member.unwrap_actual(), &sm.score))
     }
 
     fn iter_desc(&self) -> impl Iterator<Item = (&Vec<u8>, &f64)> {
-        self.ordered.keys().rev().map(|sm| (&sm.member, &sm.score))
+        self.ordered
+            .keys()
+            .rev()
+            .map(|sm| (sm.member.unwrap_actual(), &sm.score))
     }
 
     fn pop_min(&mut self) -> Option<(Vec<u8>, f64)> {
         let sm = self.ordered.first_key_value()?.0.clone();
         self.ordered.remove(&sm);
-        self.dict.remove(&sm.member);
-        Some((sm.member, sm.score))
+        let score = sm.score;
+        let member = sm.member.into_actual();
+        self.dict.remove(&member);
+        Some((member, score))
     }
 
     fn pop_max(&mut self) -> Option<(Vec<u8>, f64)> {
         let sm = self.ordered.last_key_value()?.0.clone();
         self.ordered.remove(&sm);
-        self.dict.remove(&sm.member);
-        Some((sm.member, sm.score))
+        let score = sm.score;
+        let member = sm.member.into_actual();
+        self.dict.remove(&member);
+        Some((member, score))
     }
 
     /// Iterate over (member, score) pairs in hash-map order (unordered).
@@ -284,11 +318,6 @@ impl SortedSet {
     /// Return an iterator over the member keys.
     fn keys(&self) -> impl Iterator<Item = &Vec<u8>> {
         self.dict.keys()
-    }
-
-    /// Look up a score by member (delegates to dict).
-    fn get(&self, member: &[u8]) -> Option<&f64> {
-        self.dict.get(member)
     }
 }
 
@@ -991,8 +1020,7 @@ impl Store {
                 Ok(len)
             }
             None => {
-                let mut current = Vec::new();
-                current.resize(needed, 0);
+                let mut current = vec![0; needed];
                 current[offset..offset + value.len()].copy_from_slice(value);
                 let new_len = current.len();
                 self.entries.insert(
@@ -1039,16 +1067,13 @@ impl Store {
                 _ => Err(StoreError::WrongType),
             },
             None => {
-                let mut v = Vec::new();
-                v.resize(byte_idx + 1, 0);
+                let mut v = vec![0; byte_idx + 1];
                 let old_bit = false;
                 if value {
                     v[byte_idx] |= 1 << bit_idx;
                 }
-                self.entries.insert(
-                    key.to_vec(),
-                    Entry::new(Value::String(v), None, now_ms),
-                );
+                self.entries
+                    .insert(key.to_vec(), Entry::new(Value::String(v), None, now_ms));
                 self.dirty = self.dirty.saturating_add(1);
                 Ok(old_bit)
             }
@@ -1622,12 +1647,7 @@ impl Store {
 
         if keys_to_check.len() < sampled_keys_count {
             let remaining = sampled_keys_count - keys_to_check.len();
-            keys_to_check.extend(
-                self.entries
-                    .keys()
-                    .take(remaining)
-                    .cloned()
-            );
+            keys_to_check.extend(self.entries.keys().take(remaining).cloned());
         }
 
         let mut evicted_keys = 0usize;
@@ -1877,12 +1897,12 @@ impl Store {
         let Value::Hash(m) = &mut entry.value else {
             return Err(StoreError::WrongType);
         };
-        if m.contains_key(&field) {
-            Ok(false)
-        } else {
-            m.insert(field, value);
+        if let std::collections::btree_map::Entry::Vacant(slot) = m.entry(field) {
+            slot.insert(value);
             entry.touch(now_ms);
             Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -1965,7 +1985,7 @@ impl Store {
         // Actually, it's easier to just pick the random values we need inside the match if we can.
         // But we can't because of the borrow.
         // So let's handle the hash lookup first, get the fields, and then do the work.
-        
+
         let mut result_type = None;
         if let Some(entry) = self.entries.get_mut(key) {
             match &entry.value {
@@ -1973,7 +1993,8 @@ impl Store {
                     if m.is_empty() {
                         return Ok(Vec::new());
                     }
-                    let fields: Vec<(Vec<u8>, Vec<u8>)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let fields: Vec<(Vec<u8>, Vec<u8>)> =
+                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     entry.touch(now_ms);
                     result_type = Some(fields);
                 }
@@ -1982,24 +2003,38 @@ impl Store {
         }
 
         let fields = match result_type {
-            Some(f) => f,
-            None => return Ok(Vec::new()),
+            Some(f) if !f.is_empty() => f,
+            _ => return Ok(Vec::new()),
         };
 
         if count >= 0 {
             let n = (count as usize).min(fields.len());
-            let mut indices: Vec<usize> = (0..fields.len()).collect();
-            for i in 0..n {
-                let j = i + (self.next_rand() as usize % (fields.len() - i));
-                indices.swap(i, j);
+            // Use a more memory-efficient approach for small n
+            if n < fields.len() / 2 && n < 1024 {
+                let mut results = Vec::with_capacity(n);
+                let mut picked = HashSet::with_capacity(n);
+                while results.len() < n {
+                    let idx = (self.next_rand() as usize) % fields.len();
+                    if picked.insert(idx) {
+                        results.push(fields[idx].clone());
+                    }
+                }
+                Ok(results)
+            } else {
+                let mut indices: Vec<usize> = (0..fields.len()).collect();
+                for i in 0..n {
+                    let j = i + (self.next_rand() as usize % (fields.len() - i));
+                    indices.swap(i, j);
+                }
+                Ok(indices[..n]
+                    .iter()
+                    .map(|&idx| fields[idx].clone())
+                    .collect())
             }
-            Ok(indices[..n]
-                .iter()
-                .map(|&idx| fields[idx].clone())
-                .collect())
         } else {
             let abs_count = count.unsigned_abs() as usize;
-            let mut result = Vec::with_capacity(abs_count);
+            // Cap initial allocation to avoid DoS, but allow growth.
+            let mut result = Vec::with_capacity(abs_count.min(1024));
             for _ in 0..abs_count {
                 let idx = (self.next_rand() as usize) % fields.len();
                 result.push(fields[idx].clone());
@@ -2661,6 +2696,7 @@ impl Store {
                         }
                     }
                     entry.touch(now_ms);
+                    self.dirty = self.dirty.saturating_add(added);
                     Ok(added)
                 }
                 _ => Err(StoreError::WrongType),
@@ -2675,6 +2711,7 @@ impl Store {
                 }
                 self.entries
                     .insert(key.to_vec(), Entry::new(Value::Set(s), None, now_ms));
+                self.dirty = self.dirty.saturating_add(added);
                 Ok(added)
             }
         }
@@ -2698,6 +2735,7 @@ impl Store {
                     } else if removed > 0 {
                         entry.touch(now_ms);
                     }
+                    self.dirty = self.dirty.saturating_add(removed);
                     Ok(removed)
                 }
                 _ => Err(StoreError::WrongType),
@@ -3025,24 +3063,38 @@ impl Store {
         }
 
         let members = match result_data {
-            Some(m) => m,
-            None => return Ok(Vec::new()),
+            Some(m) if !m.is_empty() => m,
+            _ => return Ok(Vec::new()),
         };
 
         if count >= 0 {
             let n = (count as usize).min(members.len());
-            let mut indices: Vec<usize> = (0..members.len()).collect();
-            for i in 0..n {
-                let j = i + (self.next_rand() as usize % (members.len() - i));
-                indices.swap(i, j);
+            // Use a more memory-efficient approach for small n
+            if n < members.len() / 2 && n < 1024 {
+                let mut results = Vec::with_capacity(n);
+                let mut picked = HashSet::with_capacity(n);
+                while results.len() < n {
+                    let idx = (self.next_rand() as usize) % members.len();
+                    if picked.insert(idx) {
+                        results.push(members[idx].clone());
+                    }
+                }
+                Ok(results)
+            } else {
+                let mut indices: Vec<usize> = (0..members.len()).collect();
+                for i in 0..n {
+                    let j = i + (self.next_rand() as usize % (members.len() - i));
+                    indices.swap(i, j);
+                }
+                Ok(indices[..n]
+                    .iter()
+                    .map(|&idx| members[idx].clone())
+                    .collect())
             }
-            Ok(indices[..n]
-                .iter()
-                .map(|&idx| members[idx].clone())
-                .collect())
         } else {
             let abs_count = count.unsigned_abs() as usize;
-            let mut result = Vec::with_capacity(abs_count);
+            // Cap initial allocation to avoid DoS, but allow growth.
+            let mut result = Vec::with_capacity(abs_count.min(1024));
             for _ in 0..abs_count {
                 let idx = (self.next_rand() as usize) % members.len();
                 result.push(members[idx].clone());
@@ -3203,42 +3255,49 @@ impl Store {
             .entries
             .entry(key.to_vec())
             .or_insert_with(|| Entry::new(Value::SortedSet(SortedSet::new()), None, now_ms));
-        let Value::SortedSet(zs) = &mut entry.value else {
-            return Err(StoreError::WrongType);
-        };
-        let mut added = 0_usize;
-        let mut changed = 0_usize;
-        for (score, member) in members {
-            match zs.get_score(member) {
-                Some(old_score) => {
-                    // Existing member
-                    if opts.nx {
-                        continue; // NX: don't update existing
+        let (added, changed) = {
+            let Value::SortedSet(zs) = &mut entry.value else {
+                return Err(StoreError::WrongType);
+            };
+            let mut added = 0_usize;
+            let mut changed = 0_usize;
+            for (score, member) in members {
+                match zs.get_score(member) {
+                    Some(old_score) => {
+                        // Existing member
+                        if opts.nx {
+                            continue; // NX: don't update existing
+                        }
+                        let should_update = if opts.gt {
+                            *score > old_score
+                        } else if opts.lt {
+                            *score < old_score
+                        } else {
+                            true
+                        };
+                        if should_update && *score != old_score {
+                            zs.insert(member.clone(), *score);
+                            changed += 1;
+                        }
                     }
-                    let should_update = if opts.gt {
-                        *score > old_score
-                    } else if opts.lt {
-                        *score < old_score
-                    } else {
-                        true
-                    };
-                    if should_update && *score != old_score {
+                    None => {
+                        // New member
+                        if opts.xx {
+                            continue; // XX: don't add new
+                        }
                         zs.insert(member.clone(), *score);
-                        changed += 1;
+                        added += 1;
                     }
-                }
-                None => {
-                    // New member
-                    if opts.xx {
-                        continue; // XX: don't add new
-                    }
-                    zs.insert(member.clone(), *score);
-                    added += 1;
                 }
             }
-        }
+            (added, changed)
+        };
         if added > 0 || changed > 0 {
             entry.touch(now_ms);
+            let mutated_count = if opts.ch { added + changed } else { added };
+            if mutated_count > 0 {
+                self.dirty = self.dirty.saturating_add(mutated_count as u64);
+            }
         }
         if opts.ch {
             Ok((added + changed, changed))
@@ -3247,22 +3306,29 @@ impl Store {
         }
     }
 
-    /// Remove members. Returns count of members actually removed.
     pub fn zrem(&mut self, key: &[u8], members: &[&[u8]], now_ms: u64) -> Result<u64, StoreError> {
         self.drop_if_expired(key, now_ms);
         let Some(entry) = self.entries.get_mut(key) else {
             return Ok(0);
         };
-        let Value::SortedSet(zs) = &mut entry.value else {
-            return Err(StoreError::WrongType);
-        };
-        let mut removed = 0_u64;
-        for member in members {
-            if zs.remove(*member) {
-                removed += 1;
+        let (removed, is_empty) = {
+            let Value::SortedSet(zs) = &mut entry.value else {
+                return Err(StoreError::WrongType);
+            };
+            let mut removed = 0_u64;
+            for member in members {
+                if zs.remove(member) {
+                    removed += 1;
+                }
             }
+            (removed, zs.is_empty())
+        };
+
+        if removed > 0 {
+            entry.touch(now_ms);
+            self.dirty = self.dirty.saturating_add(removed);
         }
-        if zs.is_empty() {
+        if is_empty {
             self.entries.remove(key);
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
@@ -3379,7 +3445,7 @@ impl Store {
                     if s > e || s >= zs.len() {
                         return Ok(Vec::new());
                     }
-                    let count = (e - s + 1) as usize;
+                    let count = e - s + 1;
                     let result: Vec<Vec<u8>> = zs
                         .iter_asc()
                         .skip(s)
@@ -3413,7 +3479,7 @@ impl Store {
                     if s > e || s >= zs.len() {
                         return Ok(Vec::new());
                     }
-                    let count = (e - s + 1) as usize;
+                    let count = e - s + 1;
                     let result: Vec<Vec<u8>> = zs
                         .iter_desc()
                         .skip(s)
@@ -3453,7 +3519,7 @@ impl Store {
                     let result: Vec<Vec<u8>> = zs
                         .ordered
                         .range((lower, upper))
-                        .map(|(sm, _)| sm.member.clone())
+                        .map(|(sm, _)| sm.member.unwrap_actual().clone())
                         .collect();
                     entry.touch(now_ms);
                     Ok(result)
@@ -3488,7 +3554,7 @@ impl Store {
                     let result: Vec<(Vec<u8>, f64)> = zs
                         .ordered
                         .range((lower, upper))
-                        .map(|(sm, _)| (sm.member.clone(), sm.score))
+                        .map(|(sm, _)| (sm.member.unwrap_actual().clone(), sm.score))
                         .collect();
                     entry.touch(now_ms);
                     Ok(result)
@@ -3694,7 +3760,7 @@ impl Store {
                     if s > e || s >= zs.len() {
                         return Ok(Vec::new());
                     }
-                    let count = (e - s + 1) as usize;
+                    let count = e - s + 1;
                     let result: Vec<(Vec<u8>, f64)> = zs
                         .iter_asc()
                         .skip(s)
@@ -3727,7 +3793,7 @@ impl Store {
                     if s > e || s >= zs.len() {
                         return Ok(Vec::new());
                     }
-                    let count = (e - s + 1) as usize;
+                    let count = e - s + 1;
                     let result: Vec<(Vec<u8>, f64)> = zs
                         .iter_desc()
                         .skip(s)
@@ -3761,7 +3827,7 @@ impl Store {
                         .ordered
                         .range((lower, upper))
                         .rev()
-                        .map(|(sm, _)| sm.member.clone())
+                        .map(|(sm, _)| sm.member.unwrap_actual().clone())
                         .collect();
                     entry.touch(now_ms);
                     Ok(result)
@@ -3815,7 +3881,7 @@ impl Store {
                         .ordered
                         .range((lower, upper))
                         .rev()
-                        .map(|(sm, _)| (sm.member.clone(), sm.score))
+                        .map(|(sm, _)| (sm.member.unwrap_actual().clone(), sm.score))
                         .collect();
                     entry.touch(now_ms);
                     Ok(result)
@@ -4029,7 +4095,8 @@ impl Store {
             match &entry.value {
                 Value::SortedSet(zs) => {
                     if !zs.is_empty() {
-                        let members: Vec<(Vec<u8>, f64)> = zs.iter_asc().map(|(m, s)| (m.clone(), *s)).collect();
+                        let members: Vec<(Vec<u8>, f64)> =
+                            zs.iter_asc().map(|(m, s)| (m.clone(), *s)).collect();
                         entry.touch(now_ms);
                         result_data = Some(members);
                     }
@@ -4039,24 +4106,38 @@ impl Store {
         }
 
         let members = match result_data {
-            Some(m) => m,
-            None => return Ok(Vec::new()),
+            Some(m) if !m.is_empty() => m,
+            _ => return Ok(Vec::new()),
         };
 
         if count >= 0 {
             let n = (count as usize).min(members.len());
-            let mut indices: Vec<usize> = (0..members.len()).collect();
-            for i in 0..n {
-                let j = i + (self.next_rand() as usize % (members.len() - i));
-                indices.swap(i, j);
+            // Use a more memory-efficient approach for small n
+            if n < members.len() / 2 && n < 1024 {
+                let mut results = Vec::with_capacity(n);
+                let mut picked = HashSet::with_capacity(n);
+                while results.len() < n {
+                    let idx = (self.next_rand() as usize) % members.len();
+                    if picked.insert(idx) {
+                        results.push(members[idx].clone());
+                    }
+                }
+                Ok(results)
+            } else {
+                let mut indices: Vec<usize> = (0..members.len()).collect();
+                for i in 0..n {
+                    let j = i + (self.next_rand() as usize % (members.len() - i));
+                    indices.swap(i, j);
+                }
+                Ok(indices[..n]
+                    .iter()
+                    .map(|&idx| members[idx].clone())
+                    .collect())
             }
-            Ok(indices[..n]
-                .iter()
-                .map(|&idx| members[idx].clone())
-                .collect())
         } else {
             let abs_count = count.unsigned_abs() as usize;
-            let mut result = Vec::with_capacity(abs_count);
+            // Cap initial allocation to avoid DoS, but allow growth.
+            let mut result = Vec::with_capacity(abs_count.min(1024));
             for _ in 0..abs_count {
                 let idx = (self.next_rand() as usize) % members.len();
                 result.push(members[idx].clone());
@@ -4076,7 +4157,7 @@ impl Store {
             Some(entry) => match &entry.value {
                 Value::SortedSet(zs) => {
                     let result: Vec<Option<f64>> =
-                        members.iter().map(|m| zs.get_score(*m)).collect();
+                        members.iter().map(|m| zs.get_score(m)).collect();
                     entry.touch(now_ms);
                     Ok(result)
                 }
@@ -5235,7 +5316,9 @@ impl Store {
                     Value::String(v) => {
                         total_bytes = total_bytes.saturating_add(v.len());
                         if total_bytes > MAX_BITOP_TOTAL_BYTES {
-                            return Err(StoreError::GenericError("BITOP total input size exceeds limit".to_string()));
+                            return Err(StoreError::GenericError(
+                                "BITOP total input size exceeds limit".to_string(),
+                            ));
                         }
                         values.push(v.clone());
                     }
@@ -5353,11 +5436,7 @@ impl Store {
             self.stream_last_ids.remove(dest);
             self.entries.insert(
                 dest.to_vec(),
-                Entry::new(
-                    Value::SortedSet(SortedSet::new()),
-                    None,
-                    now_ms,
-                ),
+                Entry::new(Value::SortedSet(SortedSet::new()), None, now_ms),
             );
             return Ok(0);
         }
@@ -5451,7 +5530,7 @@ impl Store {
         for _ in 0..100 {
             let idx = (self.next_rand() as usize) % self.entries.len();
             let key = self.entries.keys().nth(idx).cloned()?;
-            
+
             // Check if it's expired. If so, drop it and try again.
             let should_evict = evaluate_expiry(
                 now_ms,
@@ -5540,10 +5619,10 @@ impl Store {
             if evaluate_expiry(now_ms, entry.expires_at_ms).should_evict {
                 continue;
             }
-            if let Some(pat) = pattern {
-                if !glob_match(pat, key) {
-                    continue;
-                }
+            if let Some(pat) = pattern
+                && !glob_match(pat, key)
+            {
+                continue;
             }
             result.push(key.clone());
             if result.len() >= batch_size {
@@ -5581,10 +5660,10 @@ impl Store {
 
                     for (field, value) in h.iter().skip(start) {
                         pos += 1;
-                        if let Some(pat) = pattern {
-                            if !glob_match(pat, field) {
-                                continue;
-                            }
+                        if let Some(pat) = pattern
+                            && !glob_match(pat, field)
+                        {
+                            continue;
                         }
                         result.push((field.clone(), value.clone()));
                         if result.len() >= batch_size {
@@ -5628,13 +5707,13 @@ impl Store {
                     let mut result = Vec::new();
                     let mut pos = start;
                     while pos < members.len() && result.len() < batch_size {
-                        if let Some(pat) = pattern {
-                            if glob_match(pat, members[pos]) {
-                                result.push(members[pos].clone());
-                            }
-                        } else {
-                            result.push(members[pos].clone());
+                        if let Some(pat) = pattern
+                            && !glob_match(pat, members[pos])
+                        {
+                            pos += 1;
+                            continue;
                         }
+                        result.push(members[pos].clone());
                         pos += 1;
                     }
 
@@ -5673,10 +5752,10 @@ impl Store {
 
                     for (member, score) in zs.iter_asc().skip(start) {
                         pos += 1;
-                        if let Some(pat) = pattern {
-                            if !glob_match(pat, member) {
-                                continue;
-                            }
+                        if let Some(pat) = pattern
+                            && !glob_match(pat, member)
+                        {
+                            continue;
                         }
                         result.push((member.clone(), *score));
                         if result.len() >= batch_size {
@@ -5896,21 +5975,15 @@ impl Store {
         format!("{hash:016x}")
     }
 
-    pub fn store_sorted_set(
-        &mut self,
-        dest: &[u8],
-        members: HashMap<Vec<u8>, f64>,
-    ) {
+    pub fn store_sorted_set(&mut self, dest: &[u8], members: HashMap<Vec<u8>, f64>) {
         let mut zs = SortedSet::new();
         for (m, s) in members {
             zs.insert(m, s);
         }
         self.stream_groups.remove(dest);
         self.stream_last_ids.remove(dest);
-        self.entries.insert(
-            dest.to_vec(),
-            Entry::new(Value::SortedSet(zs), None, 0),
-        );
+        self.entries
+            .insert(dest.to_vec(), Entry::new(Value::SortedSet(zs), None, 0));
     }
 
     pub fn memory_usage_for_key(&mut self, key: &[u8], now_ms: u64) -> Option<usize> {
@@ -8270,6 +8343,53 @@ mod tests {
         let added2 = store.zadd(b"z", &[(3.0, b"a".to_vec())], 0).unwrap();
         assert_eq!(added2, 0);
         assert_eq!(store.zscore(b"z", b"a", 0).unwrap(), Some(3.0));
+    }
+
+    #[test]
+    fn zrangebyscore_long_member_bug_repro() {
+        let mut store = Store::new();
+        let long_member = vec![255; 2000];
+        store
+            .zadd(
+                b"z",
+                &[
+                    (10.0, b"short".to_vec()),
+                    (10.0, long_member.clone()),
+                    (20.0, b"twenty".to_vec()),
+                ],
+                0,
+            )
+            .unwrap();
+
+        // 1. Exclusive lower bound bug: score > 10.0
+        let range = store
+            .zrangebyscore(
+                b"z",
+                ScoreBound::Exclusive(10.0),
+                ScoreBound::Inclusive(25.0),
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            range,
+            vec![b"twenty".to_vec()],
+            "Exclusive lower bound failed for long member"
+        );
+
+        // 2. Inclusive upper bound bug: score <= 10.0
+        let range2 = store
+            .zrangebyscore(
+                b"z",
+                ScoreBound::Inclusive(0.0),
+                ScoreBound::Inclusive(10.0),
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            range2,
+            vec![b"short".to_vec(), long_member],
+            "Inclusive upper bound failed for long member"
+        );
     }
 
     #[test]

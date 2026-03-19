@@ -28,7 +28,8 @@ pub enum LuaValue {
 #[derive(Clone, Debug)]
 pub struct LuaTable {
     pub array: Vec<LuaValue>,
-    pub hash: Vec<(LuaValue, LuaValue)>,
+    pub string_hash: HashMap<Vec<u8>, LuaValue>,
+    pub other_hash: Vec<(LuaValue, LuaValue)>,
 }
 
 #[derive(Clone, Debug)]
@@ -42,7 +43,8 @@ impl LuaTable {
     fn new() -> Self {
         Self {
             array: Vec::new(),
-            hash: Vec::new(),
+            string_hash: HashMap::new(),
+            other_hash: Vec::new(),
         }
     }
 
@@ -56,22 +58,22 @@ impl LuaTable {
                 self.hash_get(key)
             }
             LuaValue::Str(s) => {
-                // Check hash by string key
-                for (k, v) in &self.hash {
-                    if let LuaValue::Str(ks) = k
-                        && ks == s
-                    {
-                        return v.clone();
-                    }
+                if let Some(v) = self.string_hash.get(s) {
+                    return v.clone();
                 }
-                LuaValue::Nil
+                self.hash_get(key)
             }
             _ => self.hash_get(key),
         }
     }
 
     fn hash_get(&self, key: &LuaValue) -> LuaValue {
-        for (k, v) in &self.hash {
+        if let LuaValue::Str(s) = key
+            && let Some(v) = self.string_hash.get(s)
+        {
+            return v.clone();
+        }
+        for (k, v) in &self.other_hash {
             if lua_raw_equal(k, key) {
                 return v.clone();
             }
@@ -104,17 +106,37 @@ impl LuaTable {
     }
 
     fn hash_set(&mut self, key: LuaValue, value: LuaValue) {
-        for entry in &mut self.hash {
+        if let LuaValue::Str(s) = key {
+            self.string_hash.insert(s, value);
+            return;
+        }
+        for entry in &mut self.other_hash {
             if lua_raw_equal(&entry.0, &key) {
                 entry.1 = value;
                 return;
             }
         }
-        self.hash.push((key, value));
+        self.other_hash.push((key, value));
     }
 
     fn len(&self) -> usize {
         self.array.len()
+    }
+
+    /// Returns all hash pairs (string_hash + other_hash) as `(LuaValue, LuaValue)`.
+    fn hash_pairs(&self) -> Vec<(LuaValue, LuaValue)> {
+        let mut pairs: Vec<(LuaValue, LuaValue)> = self
+            .string_hash
+            .iter()
+            .map(|(k, v)| (LuaValue::Str(k.clone()), v.clone()))
+            .collect();
+        pairs.extend(self.other_hash.iter().cloned());
+        pairs
+    }
+
+    /// Returns true if the hash part (both string and other) is empty.
+    fn hash_is_empty(&self) -> bool {
+        self.string_hash.is_empty() && self.other_hash.is_empty()
     }
 }
 
@@ -1358,9 +1380,30 @@ impl<'a> LuaState<'a> {
         // Math library
         let mut math_table = LuaTable::new();
         for name in &[
-            "floor", "ceil", "abs", "max", "min", "sqrt", "huge", "random", "randomseed", "fmod",
-            "log", "log10", "exp", "pow", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-            "modf", "frexp", "ldexp",
+            "floor",
+            "ceil",
+            "abs",
+            "max",
+            "min",
+            "sqrt",
+            "huge",
+            "random",
+            "randomseed",
+            "fmod",
+            "log",
+            "log10",
+            "exp",
+            "pow",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "atan2",
+            "modf",
+            "frexp",
+            "ldexp",
         ] {
             math_table.set(
                 LuaValue::Str(name.as_bytes().to_vec()),
@@ -1493,10 +1536,7 @@ impl<'a> LuaState<'a> {
         );
         // Replication mode constants
         redis_table.set(LuaValue::Str(b"REPL_NONE".to_vec()), LuaValue::Number(0.0));
-        redis_table.set(
-            LuaValue::Str(b"REPL_SLAVE".to_vec()),
-            LuaValue::Number(1.0),
-        );
+        redis_table.set(LuaValue::Str(b"REPL_SLAVE".to_vec()), LuaValue::Number(1.0));
         redis_table.set(LuaValue::Str(b"REPL_AOF".to_vec()), LuaValue::Number(2.0));
         redis_table.set(LuaValue::Str(b"REPL_ALL".to_vec()), LuaValue::Number(3.0));
         self.globals
@@ -1680,12 +1720,7 @@ impl<'a> LuaState<'a> {
 
                 loop {
                     let mut iter_args = vec![state.clone(), control.clone()];
-                    let results = self.call_function(
-                        &iter_fn,
-                        &mut iter_args,
-                        env,
-                        varargs,
-                    )?;
+                    let results = self.call_function(&iter_fn, &mut iter_args, env, varargs)?;
                     // Update state from mutated args (needed for stateful iterators like gmatch)
                     state = iter_args[0].clone();
                     let first = results.first().cloned().unwrap_or(LuaValue::Nil);
@@ -1918,7 +1953,10 @@ impl<'a> LuaState<'a> {
                 // The inner `if` has a side-effect (set_existing_local) so must not be collapsed.
                 #[allow(clippy::collapsible_if)]
                 if let LuaValue::RustFunction(ref name) = func
-                    && matches!(name.as_str(), "table.sort" | "table.insert" | "table.remove" | "rawset")
+                    && matches!(
+                        name.as_str(),
+                        "table.sort" | "table.insert" | "table.remove" | "rawset"
+                    )
                     && let Some(Expr::Name(var_name)) = args.first()
                 {
                     if !env.set_existing_local(var_name, arg_vals[0].clone()) {
@@ -2265,10 +2303,8 @@ impl<'a> LuaState<'a> {
                             &mut Vec::new(),
                         ) {
                             Ok(handler_results) => {
-                                let transformed = handler_results
-                                    .into_iter()
-                                    .next()
-                                    .unwrap_or(err_val);
+                                let transformed =
+                                    handler_results.into_iter().next().unwrap_or(err_val);
                                 Ok(vec![LuaValue::Bool(false), transformed])
                             }
                             Err(_) => Ok(vec![LuaValue::Bool(false), err_val]),
@@ -2353,7 +2389,8 @@ impl<'a> LuaState<'a> {
                         if !t.array.is_empty() {
                             return Ok(vec![LuaValue::Number(1.0), t.array[0].clone()]);
                         }
-                        if let Some((k, v)) = t.hash.first() {
+                        let hash_pairs = t.hash_pairs();
+                        if let Some((k, v)) = hash_pairs.first() {
                             return Ok(vec![k.clone(), v.clone()]);
                         }
                         return Ok(vec![LuaValue::Nil]);
@@ -2369,17 +2406,19 @@ impl<'a> LuaState<'a> {
                                 ]);
                             }
                             // Past array, check hash
-                            if let Some((k, v)) = t.hash.first() {
+                            let hash_pairs = t.hash_pairs();
+                            if let Some((k, v)) = hash_pairs.first() {
                                 return Ok(vec![k.clone(), v.clone()]);
                             }
                             return Ok(vec![LuaValue::Nil]);
                         }
                     }
                     // Search in hash
+                    let hash_pairs = t.hash_pairs();
                     let mut found = false;
-                    for (i, (k, _v)) in t.hash.iter().enumerate() {
+                    for (i, (k, _v)) in hash_pairs.iter().enumerate() {
                         if found {
-                            return Ok(vec![t.hash[i].0.clone(), t.hash[i].1.clone()]);
+                            return Ok(vec![hash_pairs[i].0.clone(), hash_pairs[i].1.clone()]);
                         }
                         if lua_raw_equal(k, &key) {
                             found = true;
@@ -2513,7 +2552,9 @@ impl<'a> LuaState<'a> {
                             .ok_or("bad argument #1 to 'random' (number expected)")?
                             as i64;
                         if m < 1 {
-                            return Err("bad argument #1 to 'random' (interval is empty)".to_string());
+                            return Err(
+                                "bad argument #1 to 'random' (interval is empty)".to_string()
+                            );
                         }
                         let val = (r % (m as u64)) + 1;
                         Ok(vec![LuaValue::Number(val as f64)])
@@ -2528,7 +2569,9 @@ impl<'a> LuaState<'a> {
                             .ok_or("bad argument #2 to 'random' (number expected)")?
                             as i64;
                         if m > n {
-                            return Err("bad argument #1 to 'random' (interval is empty)".to_string());
+                            return Err(
+                                "bad argument #1 to 'random' (interval is empty)".to_string()
+                            );
                         }
                         let range = (n - m + 1) as u64;
                         let val = (r % range) + m as u64;
@@ -2624,10 +2667,10 @@ impl<'a> LuaState<'a> {
                 Ok(vec![LuaValue::Number(m * 2f64.powi(e))])
             }
             "math.randomseed" => {
-                if let Some(arg) = args.first() {
-                    if let Some(n) = arg.to_number() {
-                        self.rng_seed = n.to_bits();
-                    }
+                if let Some(arg) = args.first()
+                    && let Some(n) = arg.to_number()
+                {
+                    self.rng_seed = n.to_bits();
                 }
                 Ok(vec![LuaValue::Nil])
             }
@@ -2758,7 +2801,10 @@ impl<'a> LuaState<'a> {
                 let plain = args.get(3).map(|v| v.is_truthy()).unwrap_or(false);
                 if plain {
                     // Plain substring search
-                    if let Some(pos) = s[init..].windows(pattern.len().max(1)).position(|w| w == pattern.as_slice()) {
+                    if let Some(pos) = s[init..]
+                        .windows(pattern.len().max(1))
+                        .position(|w| w == pattern.as_slice())
+                    {
                         let start = init + pos + 1; // 1-indexed
                         let end = start + pattern.len() - 1;
                         Ok(vec![
@@ -2887,10 +2933,7 @@ impl<'a> LuaState<'a> {
                     .get(2)
                     .map(|a| a.to_display_string())
                     .unwrap_or_default();
-                let max_n = args
-                    .get(3)
-                    .and_then(|v| v.to_number())
-                    .map(|n| n as usize);
+                let max_n = args.get(3).and_then(|v| v.to_number()).map(|n| n as usize);
                 let mut result = Vec::new();
                 let mut pos = 0;
                 let mut count = 0usize;
@@ -2915,10 +2958,7 @@ impl<'a> LuaState<'a> {
                 if pos <= s.len() {
                     result.extend_from_slice(&s[pos..]);
                 }
-                Ok(vec![
-                    LuaValue::Str(result),
-                    LuaValue::Number(count as f64),
-                ])
+                Ok(vec![LuaValue::Str(result), LuaValue::Number(count as f64)])
             }
             // ── Table library ───────────────────────────────────────────
             "table.insert" => {
@@ -3006,12 +3046,8 @@ impl<'a> LuaState<'a> {
                             let mut j = i;
                             while j > 0 {
                                 let mut cmp_args = vec![key.clone(), arr[j - 1].clone()];
-                                let result = self.call_function(
-                                    &comp,
-                                    &mut cmp_args,
-                                    env,
-                                    &mut Vec::new(),
-                                )?;
+                                let result =
+                                    self.call_function(&comp, &mut cmp_args, env, &mut Vec::new())?;
                                 let key_before =
                                     result.first().map(|v| v.is_truthy()).unwrap_or(false);
                                 if !key_before {
@@ -3057,9 +3093,9 @@ impl<'a> LuaState<'a> {
                         max_n = t.array.len() as f64;
                     }
                     // Check hash part for numeric keys
-                    for (k, _) in &t.hash {
+                    for (k, _) in &t.other_hash {
                         if let LuaValue::Number(n) = k
-                            && *n > max_n
+                            && n > &max_n
                         {
                             max_n = *n;
                         }
@@ -3125,8 +3161,8 @@ impl<'a> LuaState<'a> {
 
 /// Result of a successful pattern match.
 struct LuaPatMatch {
-    start: usize,            // 0-indexed byte offset of match start
-    end: usize,              // 0-indexed exclusive end of match
+    start: usize, // 0-indexed byte offset of match start
+    end: usize,   // 0-indexed exclusive end of match
     captures: Vec<LuaCapture>,
 }
 
@@ -3187,7 +3223,11 @@ fn lua_pattern_element_len(pat: &[u8], pi: usize) -> usize {
     }
     match pat[pi] {
         b'%' => {
-            if pi + 1 < pat.len() { 2 } else { 1 }
+            if pi + 1 < pat.len() {
+                2
+            } else {
+                1
+            }
         }
         b'[' => {
             // Find closing ]
@@ -3693,7 +3733,11 @@ fn lua_string_format(fmt: &str, args: &[LuaValue]) -> Result<String, String> {
                         'x' | 'X' => {
                             let n = arg.to_number().unwrap_or(0.0) as u64;
                             let s = if conv == 'x' {
-                                if alt_form { format!("0x{n:x}") } else { format!("{n:x}") }
+                                if alt_form {
+                                    format!("0x{n:x}")
+                                } else {
+                                    format!("{n:x}")
+                                }
                             } else if alt_form {
                                 format!("0X{n:X}")
                             } else {
@@ -3744,7 +3788,10 @@ fn lua_fmt_pad(s: &str, width: Option<usize>, left_align: bool, pad: char) -> St
         let (sign, rest) = s.split_at(1);
         format!("{sign}{}{rest}", "0".repeat(padding))
     } else {
-        format!("{}{s}", std::iter::repeat_n(pad, padding).collect::<String>())
+        format!(
+            "{}{s}",
+            std::iter::repeat_n(pad, padding).collect::<String>()
+        )
     }
 }
 
@@ -3815,14 +3862,14 @@ fn lua_value_to_json(val: &LuaValue) -> String {
             out
         }
         LuaValue::Table(t) => {
-            if !t.array.is_empty() && t.hash.is_empty() {
+            if !t.array.is_empty() && t.hash_is_empty() {
                 // JSON array
                 let items: Vec<String> = t.array.iter().map(lua_value_to_json).collect();
                 format!("[{}]", items.join(","))
-            } else if t.array.is_empty() && !t.hash.is_empty() {
+            } else if t.array.is_empty() && !t.hash_is_empty() {
                 // JSON object
-                let pairs: Vec<String> = t
-                    .hash
+                let hash_pairs = t.hash_pairs();
+                let pairs: Vec<String> = hash_pairs
                     .iter()
                     .map(|(k, v)| {
                         let key_str = String::from_utf8_lossy(&k.to_display_string()).to_string();
@@ -3830,7 +3877,7 @@ fn lua_value_to_json(val: &LuaValue) -> String {
                     })
                     .collect();
                 format!("{{{}}}", pairs.join(","))
-            } else if t.array.is_empty() && t.hash.is_empty() {
+            } else if t.array.is_empty() && t.hash_is_empty() {
                 "{}".to_string()
             } else {
                 // Mixed — encode as object with numeric string keys for array part
@@ -3838,7 +3885,7 @@ fn lua_value_to_json(val: &LuaValue) -> String {
                 for (i, v) in t.array.iter().enumerate() {
                     pairs.push(format!("\"{}\":{}", i + 1, lua_value_to_json(v)));
                 }
-                for (k, v) in &t.hash {
+                for (k, v) in &t.hash_pairs() {
                     let key_str = String::from_utf8_lossy(&k.to_display_string()).to_string();
                     pairs.push(format!("\"{}\":{}", key_str, lua_value_to_json(v)));
                 }

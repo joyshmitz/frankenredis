@@ -1281,12 +1281,7 @@ fn set(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
         }
         ExpiryMode::KeepTtl => {
             let existing_expiry = store.get_expires_at_ms(&argv[1], now_ms);
-            store.set_with_abs_expiry(
-                argv[1].clone(),
-                argv[2].clone(),
-                existing_expiry,
-                now_ms,
-            );
+            store.set_with_abs_expiry(argv[1].clone(), argv[2].clone(), existing_expiry, now_ms);
         }
     }
 
@@ -7606,9 +7601,7 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 let step_val = if step == 0 { 1 } else { step };
                 let mut i = first_key;
                 while i <= actual_last && (i as usize) < cmd_argv.len() {
-                    keys.push(RespFrame::BulkString(Some(
-                        cmd_argv[i as usize].clone(),
-                    )));
+                    keys.push(RespFrame::BulkString(Some(cmd_argv[i as usize].clone())));
                     i += step_val;
                 }
                 Ok(RespFrame::Array(Some(keys)))
@@ -8338,8 +8331,7 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     } else if sub.eq_ignore_ascii_case("NUMPAT") {
         Ok(RespFrame::Integer(store.pubsub_numpat() as i64))
     } else if sub.eq_ignore_ascii_case("SHARDCHANNELS") {
-        let mut channels: Vec<Vec<u8>> =
-            store.subscribed_shard_channels.iter().cloned().collect();
+        let mut channels: Vec<Vec<u8>> = store.subscribed_shard_channels.iter().cloned().collect();
         if argv.len() > 2 {
             let pattern = &argv[2];
             channels.retain(|ch| glob_match(pattern, ch));
@@ -14942,8 +14934,7 @@ mod tests {
         assert_eq!(
             nogroup,
             RespFrame::Error(
-                "NOGROUP No such consumer group 'g-missing' for key name 's'"
-                    .to_string()
+                "NOGROUP No such consumer group 'g-missing' for key name 's'".to_string()
             )
         );
 
@@ -15472,9 +15463,7 @@ mod tests {
         .expect("xpending missing group");
         assert_eq!(
             missing,
-            RespFrame::Error(
-                "NOGROUP No such consumer group 'g1' for key name 's'".to_string()
-            )
+            RespFrame::Error("NOGROUP No such consumer group 'g1' for key name 's'".to_string())
         );
     }
 
@@ -15756,9 +15745,7 @@ mod tests {
         .expect("xclaim nogroup");
         assert_eq!(
             xclaim_missing,
-            RespFrame::Error(
-                "NOGROUP No such consumer group 'g1' for key name 's'".to_string()
-            )
+            RespFrame::Error("NOGROUP No such consumer group 'g1' for key name 's'".to_string())
         );
 
         let xautoclaim_missing = dispatch_argv(
@@ -15776,9 +15763,7 @@ mod tests {
         .expect("xautoclaim nogroup");
         assert_eq!(
             xautoclaim_missing,
-            RespFrame::Error(
-                "NOGROUP No such consumer group 'g1' for key name 's'".to_string()
-            )
+            RespFrame::Error("NOGROUP No such consumer group 'g1' for key name 's'".to_string())
         );
     }
 
@@ -16595,9 +16580,7 @@ mod tests {
         .expect("xgroup setid missing group");
         assert_eq!(
             nogroup,
-            RespFrame::Error(
-                "NOGROUP No such consumer group 'g1' for key name 's'".to_string()
-            )
+            RespFrame::Error("NOGROUP No such consumer group 'g1' for key name 's'".to_string())
         );
 
         let invalid_id = dispatch_argv(
@@ -16817,8 +16800,7 @@ mod tests {
         assert_eq!(
             missing_key,
             RespFrame::Error(
-                "NOGROUP No such consumer group 'g1' for key name 'missing'"
-                    .to_string()
+                "NOGROUP No such consumer group 'g1' for key name 'missing'".to_string()
             )
         );
 
@@ -16848,9 +16830,7 @@ mod tests {
         .expect("xgroup delconsumer missing group");
         assert_eq!(
             missing_group,
-            RespFrame::Error(
-                "NOGROUP No such consumer group 'g1' for key name 's'".to_string()
-            )
+            RespFrame::Error("NOGROUP No such consumer group 'g1' for key name 's'".to_string())
         );
 
         store.set(b"str".to_vec(), b"value".to_vec(), None, 0);
@@ -20635,10 +20615,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             out,
-            RespFrame::Array(Some(vec![
-                RespFrame::Integer(10),
-                RespFrame::Integer(20),
-            ]))
+            RespFrame::Array(Some(vec![RespFrame::Integer(10), RespFrame::Integer(20),]))
         );
     }
 

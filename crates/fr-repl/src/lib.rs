@@ -313,13 +313,17 @@ mod tests {
         // Test lower bound (inclusive)
         assert_eq!(
             decide_psync(&backlog, "replid-a", ReplOffset(100)),
-            PsyncDecision::Continue { requested_offset: ReplOffset(100) }
+            PsyncDecision::Continue {
+                requested_offset: ReplOffset(100)
+            }
         );
-        // Test upper bound (exclusive)
-        assert!(matches!(
+        // Test upper bound (inclusive)
+        assert_eq!(
             decide_psync(&backlog, "replid-a", ReplOffset(200)),
-            PsyncDecision::FullResync { .. }
-        ));
+            PsyncDecision::Continue {
+                requested_offset: ReplOffset(200)
+            }
+        );
     }
 
     #[test]
@@ -367,25 +371,28 @@ mod tests {
     }
 
     #[test]
-    fn fr_p2c_006_u005_psync_rejects_offset_at_backlog_end() {
+    fn fr_p2c_006_u005_psync_accepts_offset_at_backlog_end() {
         let backlog = BacklogWindow {
             replid: "replid-a".to_string(),
             start_offset: ReplOffset(100),
             end_offset: ReplOffset(200),
         };
+        // End offset is inclusive — a replica at the exact end should continue.
         let decision = decide_psync(&backlog, "replid-a", ReplOffset(200));
         assert_eq!(
             decision,
+            PsyncDecision::Continue {
+                requested_offset: ReplOffset(200)
+            }
+        );
+        // But one past the end should be rejected.
+        let decision_past = decide_psync(&backlog, "replid-a", ReplOffset(201));
+        assert_eq!(
+            decision_past,
             PsyncDecision::FullResync {
                 rejection: PsyncRejection::OffsetOutOfRange
             }
         );
-        if let PsyncDecision::FullResync { rejection } = decision {
-            assert_eq!(
-                rejection.reason_code(),
-                "repl.psync_fullresync_fallback_mismatch"
-            );
-        }
     }
 
     #[test]

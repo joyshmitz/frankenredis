@@ -444,14 +444,14 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
 
                 let value = match type_byte {
                     RDB_TYPE_STRING => {
-                        let (v, c) = rdb_decode_string(&data[cursor..])
-                            .ok_or(PersistError::InvalidFrame)?;
+                        let (v, c) =
+                            rdb_decode_string(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                         cursor += c;
                         RdbValue::String(v)
                     }
                     RDB_TYPE_LIST => {
-                        let (count, c) = rdb_decode_length(&data[cursor..])
-                            .ok_or(PersistError::InvalidFrame)?;
+                        let (count, c) =
+                            rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                         cursor += c;
                         let mut items = Vec::with_capacity(count);
                         for _ in 0..count {
@@ -463,8 +463,8 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                         RdbValue::List(items)
                     }
                     RDB_TYPE_SET => {
-                        let (count, c) = rdb_decode_length(&data[cursor..])
-                            .ok_or(PersistError::InvalidFrame)?;
+                        let (count, c) =
+                            rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                         cursor += c;
                         let mut members = Vec::with_capacity(count);
                         for _ in 0..count {
@@ -476,8 +476,8 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                         RdbValue::Set(members)
                     }
                     RDB_TYPE_HASH => {
-                        let (count, c) = rdb_decode_length(&data[cursor..])
-                            .ok_or(PersistError::InvalidFrame)?;
+                        let (count, c) =
+                            rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                         cursor += c;
                         let mut fields = Vec::with_capacity(count);
                         for _ in 0..count {
@@ -492,8 +492,8 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                         RdbValue::Hash(fields)
                     }
                     RDB_TYPE_ZSET => {
-                        let (count, c) = rdb_decode_length(&data[cursor..])
-                            .ok_or(PersistError::InvalidFrame)?;
+                        let (count, c) =
+                            rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                         cursor += c;
                         let mut members = Vec::with_capacity(count);
                         for _ in 0..count {
@@ -537,7 +537,11 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
 }
 
 /// Write an RDB snapshot to a file. Uses atomic rename for crash safety.
-pub fn write_rdb_file(path: &Path, entries: &[RdbEntry], aux: &[(&str, &str)]) -> Result<(), PersistError> {
+pub fn write_rdb_file(
+    path: &Path,
+    entries: &[RdbEntry],
+    aux: &[(&str, &str)],
+) -> Result<(), PersistError> {
     let encoded = encode_rdb(entries, aux);
     let tmp_path = path.with_extension("rdb.tmp");
     let mut file = std::fs::File::create(&tmp_path)?;
@@ -756,10 +760,7 @@ mod tests {
     fn rdb_round_trip_sorted_set() {
         let entries = vec![RdbEntry {
             key: b"myzset".to_vec(),
-            value: RdbValue::SortedSet(vec![
-                (b"alice".to_vec(), 1.5),
-                (b"bob".to_vec(), 2.0),
-            ]),
+            value: RdbValue::SortedSet(vec![(b"alice".to_vec(), 1.5), (b"bob".to_vec(), 2.0)]),
             expire_ms: None,
         }];
         let encoded = encode_rdb(&entries, &[]);
@@ -779,10 +780,7 @@ mod tests {
         let (decoded, aux_map) = decode_rdb(&encoded).expect("decode");
         assert_eq!(decoded, entries);
         assert_eq!(aux_map.get("redis-ver").map(String::as_str), Some("7.0.0"));
-        assert_eq!(
-            aux_map.get("ctime").map(String::as_str),
-            Some("1700000000")
-        );
+        assert_eq!(aux_map.get("ctime").map(String::as_str), Some("1700000000"));
     }
 
     #[test]
@@ -893,8 +891,7 @@ mod tests {
             },
         ];
 
-        super::write_rdb_file(&path, &entries, &[("redis-ver", "7.0.0")])
-            .expect("write");
+        super::write_rdb_file(&path, &entries, &[("redis-ver", "7.0.0")]).expect("write");
         let (loaded, aux) = super::read_rdb_file(&path).expect("read");
         assert_eq!(loaded, entries);
         assert_eq!(aux.get("redis-ver").map(String::as_str), Some("7.0.0"));

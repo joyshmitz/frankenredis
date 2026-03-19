@@ -6,14 +6,16 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::SocketAddr;
 use std::process::ExitCode;
 
 use fr_command::pubsub_message_to_frame;
 use fr_config::RuntimePolicy;
-use fr_eventloop::{EventLoopMode, TickBudget, plan_tick, validate_accept_path, validate_read_path};
+use fr_eventloop::{
+    EventLoopMode, TickBudget, plan_tick, validate_accept_path, validate_read_path,
+};
 use fr_protocol::RespFrame;
 use fr_runtime::{ClientSession, Runtime};
 use mio::net::{TcpListener, TcpStream};
@@ -36,6 +38,7 @@ const MAX_WRITE_BUFFER: usize = 1024 * 1024;
 
 /// Describes a blocked-on-list operation.
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 enum BlockingOp {
     /// BLPOP: pop from left of first available key.
     BLpop { keys: Vec<Vec<u8>> },
@@ -173,7 +176,9 @@ fn main() -> ExitCode {
                 println!("  --port <PORT>   Listen port (default: {DEFAULT_PORT})");
                 println!("  --mode <MODE>   Runtime mode: strict or hardened (default: hardened)");
                 println!("  --aof <PATH>    AOF persistence file path (enables persistence)");
-                println!("  --rdb <PATH>    RDB snapshot file path (enables SAVE/BGSAVE snapshots)");
+                println!(
+                    "  --rdb <PATH>    RDB snapshot file path (enables SAVE/BGSAVE snapshots)"
+                );
                 println!("  --help          Show this help");
                 return ExitCode::SUCCESS;
             }
@@ -244,6 +249,8 @@ fn main() -> ExitCode {
 
     let mut events = Events::with_capacity(1024);
     let mut clients: HashMap<Token, ClientConnection> = HashMap::new();
+    let mut blocked_tokens: HashSet<Token> = HashSet::new();
+    let mut closing_tokens: HashSet<Token> = HashSet::new();
     let mut next_token: usize = 1;
     let tick_budget = TickBudget::default();
 
@@ -255,7 +262,11 @@ fn main() -> ExitCode {
         let poll_timeout = if tick_plan.poll_timeout_ms == 0 || has_blocked {
             // When clients are blocked, use a short poll timeout so we
             // can check for available data and timeout expiry frequently.
-            Some(std::time::Duration::from_millis(if has_blocked { 100 } else { 0 }))
+            Some(std::time::Duration::from_millis(if has_blocked {
+                100
+            } else {
+                0
+            }))
         } else {
             Some(std::time::Duration::from_millis(tick_plan.poll_timeout_ms))
         };
@@ -281,7 +292,14 @@ fn main() -> ExitCode {
                 }
                 token => {
                     if event.is_readable() {
-                        handle_readable(token, &mut clients, &mut runtime, &mut poll);
+                        handle_readable(
+                            token,
+                            &mut clients,
+                            &mut runtime,
+                            &mut poll,
+                            &mut blocked_tokens,
+                            &mut closing_tokens,
+                        );
                     }
                     if event.is_writable() {
                         handle_writable(token, &mut clients, &mut poll);
@@ -291,23 +309,34 @@ fn main() -> ExitCode {
         }
 
         // Run active expiry cycle once per tick (fast cycle).
-        let _ = runtime.run_active_expire_cycle(
-            now_ms(),
-            fr_eventloop::ActiveExpireCycleKind::Fast,
-        );
+        let _ =
+            runtime.run_active_expire_cycle(now_ms(), fr_eventloop::ActiveExpireCycleKind::Fast);
 
         // Check blocked clients (BLPOP/BRPOP/BLMOVE) for available data
         // or timeout expiry.
-        check_blocked_clients(&mut clients, &mut runtime, &mut poll);
+        check_blocked_clients(
+            &mut clients,
+            &mut blocked_tokens,
+            &mut closing_tokens,
+            &mut runtime,
+            &mut poll,
+        );
 
         // Clean up clients marked for closing whose write buffers are drained.
-        let to_remove: Vec<Token> = clients
+        let to_remove: Vec<Token> = closing_tokens
             .iter()
-            .filter(|(_, c)| c.closing && c.write_buf.is_empty())
-            .map(|(&t, _)| t)
+            .filter(|&t| {
+                clients
+                    .get(t)
+                    .map(|c| c.write_buf.is_empty())
+                    .unwrap_or(true)
+            })
+            .copied()
             .collect();
         for token in to_remove {
             if let Some(mut conn) = clients.remove(&token) {
+                blocked_tokens.remove(&token);
+                closing_tokens.remove(&token);
                 let _ = poll.registry().deregister(&mut conn.stream);
             }
         }
@@ -324,13 +353,13 @@ fn accept_connections(
     loop {
         // Check maxclients gate via fr-eventloop before accepting.
         if let Err(e) = validate_accept_path(clients.len(), MAX_CLIENTS, true) {
-            eprintln!(
-                "warn: rejecting new connection: {} ({})",
-                e.reason_code(),
-                clients.len()
-            );
-            // Drain and drop the pending connection.
-            if let Ok((stream, _)) = listener.accept() {
+            // Drain ALL pending connections from the backlog.
+            while let Ok((stream, _)) = listener.accept() {
+                eprintln!(
+                    "warn: rejecting new connection: {} ({})",
+                    e.reason_code(),
+                    clients.len()
+                );
                 drop(stream);
             }
             break;
@@ -372,6 +401,8 @@ fn handle_readable(
     clients: &mut HashMap<Token, ClientConnection>,
     runtime: &mut Runtime,
     poll: &mut Poll,
+    blocked_tokens: &mut HashSet<Token>,
+    closing_tokens: &mut HashSet<Token>,
 ) {
     let Some(conn) = clients.get_mut(&token) else {
         return;
@@ -384,6 +415,7 @@ fn handle_readable(
             Ok(0) => {
                 // Client disconnected.
                 conn.closing = true;
+                closing_tokens.insert(token);
                 return;
             }
             Ok(n) => {
@@ -393,11 +425,9 @@ fn handle_readable(
                         conn.read_buf.extend_from_slice(&buf[..n]);
                     }
                     Err(e) => {
-                        eprintln!(
-                            "warn: client disconnected: {}",
-                            e.reason_code()
-                        );
+                        eprintln!("warn: client disconnected: {}", e.reason_code());
                         conn.closing = true;
+                        closing_tokens.insert(token);
                         return;
                     }
                 }
@@ -407,13 +437,10 @@ fn handle_readable(
             Err(e) => {
                 // Use fr-eventloop's fatal read error path.
                 if let Err(rpe) = validate_read_path(0, 0, QUERY_BUFFER_LIMIT, true) {
-                    eprintln!(
-                        "warn: client read error ({}): {}",
-                        rpe.reason_code(),
-                        e
-                    );
+                    eprintln!("warn: client read error ({}): {}", rpe.reason_code(), e);
                 }
                 conn.closing = true;
+                closing_tokens.insert(token);
                 return;
             }
         }
@@ -431,7 +458,7 @@ fn handle_readable(
     let session = std::mem::take(&mut conn.session);
     let prev = runtime.swap_session(session);
 
-    process_buffered_frames(conn, runtime);
+    process_buffered_frames(token, conn, runtime, blocked_tokens, closing_tokens);
 
     // Swap session back.
     let updated_session = runtime.swap_session(prev);
@@ -447,7 +474,13 @@ fn handle_readable(
     }
 }
 
-fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
+fn process_buffered_frames(
+    token: Token,
+    conn: &mut ClientConnection,
+    runtime: &mut Runtime,
+    blocked_tokens: &mut HashSet<Token>,
+    closing_tokens: &mut HashSet<Token>,
+) {
     let ts = now_ms();
 
     loop {
@@ -459,27 +492,28 @@ fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
         if conn.write_buf.len() > MAX_WRITE_BUFFER {
             eprintln!("warn: client write buffer exceeded limit, disconnecting");
             conn.closing = true;
+            closing_tokens.insert(token);
             break;
         }
 
         // Try inline command parsing only for true non-RESP input. RESP uses
         // multiple leading prefixes; treating every non-array prefix as inline
         // can misclassify protocol frames and break parsing.
-        let parse_result = if !conn.read_buf.is_empty()
-            && should_try_inline_parsing(conn.read_buf[0])
-        {
-            match try_parse_inline(&conn.read_buf) {
-                Ok(InlineParseResult::EmptyLine(consumed)) => {
-                    // Silently consume empty lines (Redis behavior).
-                    conn.read_buf.drain(..consumed);
-                    continue;
+        let parse_result =
+            if !conn.read_buf.is_empty() && should_try_inline_parsing(conn.read_buf[0]) {
+                match try_parse_inline(&conn.read_buf) {
+                    Ok(InlineParseResult::EmptyLine(consumed)) => {
+                        // Silently consume empty lines (Redis behavior).
+                        conn.read_buf.drain(..consumed);
+                        continue;
+                    }
+                    Ok(InlineParseResult::Command(frame, consumed)) => Ok((frame, consumed)),
+                    Err(e) => Err(e),
                 }
-                Ok(InlineParseResult::Command(frame, consumed)) => Ok((frame, consumed)),
-                Err(e) => Err(e),
-            }
-        } else {
-            fr_protocol::parse_frame_with_config(&conn.read_buf, &runtime.parser_config()).map(|p| (p.frame, p.consumed))
-        };
+            } else {
+                fr_protocol::parse_frame_with_config(&conn.read_buf, &runtime.parser_config())
+                    .map(|p| (p.frame, p.consumed))
+            };
 
         match parse_result {
             Ok((frame, consumed)) => {
@@ -490,18 +524,20 @@ fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
                 if is_quit_frame(&parsed_frame) {
                     conn.write_buf.extend_from_slice(&response.to_bytes());
                     conn.closing = true;
+                    closing_tokens.insert(token);
                     conn.read_buf.drain(..consumed);
                     break;
                 }
 
                 // Check for blocking commands that returned nil — block the
                 // client instead of sending the nil response immediately.
-                if response == RespFrame::Array(None) || response == RespFrame::BulkString(None) {
-                    if let Some(blocked) = try_build_blocked_state(&parsed_frame, ts) {
-                        conn.blocked = Some(blocked);
-                        conn.read_buf.drain(..consumed);
-                        break; // Stop processing — client is now blocked.
-                    }
+                if (response == RespFrame::Array(None) || response == RespFrame::BulkString(None))
+                    && let Some(blocked) = try_build_blocked_state(&parsed_frame, ts)
+                {
+                    conn.blocked = Some(blocked);
+                    blocked_tokens.insert(token);
+                    conn.read_buf.drain(..consumed);
+                    break; // Stop processing — client is now blocked.
                 }
 
                 conn.write_buf.extend_from_slice(&response.to_bytes());
@@ -527,6 +563,7 @@ fn process_buffered_frames(conn: &mut ClientConnection, runtime: &mut Runtime) {
                 let err_reply = RespFrame::Error("ERR Protocol error: invalid frame".to_string());
                 conn.write_buf.extend_from_slice(&err_reply.to_bytes());
                 conn.closing = true;
+                closing_tokens.insert(token);
                 break;
             }
         }
@@ -549,8 +586,20 @@ enum InlineParseResult {
 fn should_try_inline_parsing(first_byte: u8) -> bool {
     !matches!(
         first_byte,
-        b'+' | b'-' | b':' | b'$' | b'*' | b'~' | b'%' | b'#' | b',' | b'_' | b'(' | b'='
-            | b'|' | b'>' | b'!'
+        b'+' | b'-'
+            | b':'
+            | b'$'
+            | b'*'
+            | b'~'
+            | b'%'
+            | b'#'
+            | b','
+            | b'_'
+            | b'('
+            | b'='
+            | b'|'
+            | b'>'
+            | b'!'
     )
 }
 
@@ -645,7 +694,10 @@ fn split_inline_args(line: &[u8]) -> Vec<Vec<u8>> {
     args
 }
 
-pub(crate) fn replication_follow_up_bytes(frame: &RespFrame, response: &RespFrame) -> Option<Vec<u8>> {
+pub(crate) fn replication_follow_up_bytes(
+    frame: &RespFrame,
+    response: &RespFrame,
+) -> Option<Vec<u8>> {
     if !is_psync_frame(frame) {
         return None;
     }
@@ -681,7 +733,11 @@ fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedStat
         return None;
     };
 
-    if cmd.eq_ignore_ascii_case(b"BLPOP") || cmd.eq_ignore_ascii_case(b"BRPOP") || cmd.eq_ignore_ascii_case(b"BZPOPMAX") || cmd.eq_ignore_ascii_case(b"BZPOPMIN") {
+    if cmd.eq_ignore_ascii_case(b"BLPOP")
+        || cmd.eq_ignore_ascii_case(b"BRPOP")
+        || cmd.eq_ignore_ascii_case(b"BZPOPMAX")
+        || cmd.eq_ignore_ascii_case(b"BZPOPMIN")
+    {
         if items.len() < 3 {
             return None;
         }
@@ -690,10 +746,7 @@ fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedStat
             Some(RespFrame::BulkString(Some(b))) => b,
             _ => return None,
         };
-        let timeout_secs: f64 = std::str::from_utf8(timeout_bytes)
-            .ok()?
-            .parse()
-            .ok()?;
+        let timeout_secs: f64 = std::str::from_utf8(timeout_bytes).ok()?.parse().ok()?;
         if timeout_secs < 0.0 {
             return None;
         }
@@ -731,10 +784,7 @@ fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedStat
             RespFrame::BulkString(Some(b)) => b,
             _ => return None,
         };
-        let timeout_secs: f64 = std::str::from_utf8(timeout_bytes)
-            .ok()?
-            .parse()
-            .ok()?;
+        let timeout_secs: f64 = std::str::from_utf8(timeout_bytes).ok()?.parse().ok()?;
         if timeout_secs < 0.0 {
             return None;
         }
@@ -776,10 +826,7 @@ fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedStat
             RespFrame::BulkString(Some(b)) => b,
             _ => return None,
         };
-        let timeout_secs: f64 = std::str::from_utf8(timeout_bytes)
-            .ok()?
-            .parse()
-            .ok()?;
+        let timeout_secs: f64 = std::str::from_utf8(timeout_bytes).ok()?.parse().ok()?;
         if timeout_secs < 0.0 {
             return None;
         }
@@ -814,21 +861,21 @@ fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedStat
 /// their timeout has expired.
 fn check_blocked_clients(
     clients: &mut HashMap<Token, ClientConnection>,
+    blocked_tokens: &mut HashSet<Token>,
+    closing_tokens: &mut HashSet<Token>,
     runtime: &mut Runtime,
     poll: &mut Poll,
 ) {
     let ts = now_ms();
-    let blocked_tokens: Vec<Token> = clients
-        .iter()
-        .filter(|(_, c)| c.blocked.is_some())
-        .map(|(&t, _)| t)
-        .collect();
+    let active_blocked: Vec<Token> = blocked_tokens.iter().copied().collect();
 
-    for token in blocked_tokens {
+    for token in active_blocked {
         let Some(conn) = clients.get_mut(&token) else {
+            blocked_tokens.remove(&token);
             continue;
         };
         let Some(blocked) = &conn.blocked else {
+            blocked_tokens.remove(&token);
             continue;
         };
 
@@ -836,19 +883,21 @@ fn check_blocked_clients(
         if ts >= blocked.deadline_ms {
             // Timeout expired — send nil.
             let nil_response = match &blocked.op {
-                BlockingOp::BLpop { .. } | BlockingOp::BRpop { .. } | BlockingOp::BZpopMax { .. } | BlockingOp::BZpopMin { .. } => {
-                    RespFrame::Array(None)
-                }
+                BlockingOp::BLpop { .. }
+                | BlockingOp::BRpop { .. }
+                | BlockingOp::BZpopMax { .. }
+                | BlockingOp::BZpopMin { .. } => RespFrame::Array(None),
                 BlockingOp::BLmove { .. } => RespFrame::BulkString(None),
             };
             conn.write_buf.extend_from_slice(&nil_response.to_bytes());
             conn.blocked = None;
+            blocked_tokens.remove(&token);
 
             // Process any commands the client pipelined while blocked.
             if !conn.read_buf.is_empty() {
                 let session = std::mem::take(&mut conn.session);
                 let prev = runtime.swap_session(session);
-                process_buffered_frames(conn, runtime);
+                process_buffered_frames(token, conn, runtime, blocked_tokens, closing_tokens);
                 let updated_session = runtime.swap_session(prev);
                 conn.session = updated_session;
             }
@@ -866,10 +915,11 @@ fn check_blocked_clients(
         if let Some(response) = result {
             conn.write_buf.extend_from_slice(&response.to_bytes());
             conn.blocked = None;
+            blocked_tokens.remove(&token);
 
             // Process any commands the client pipelined while blocked.
             if !conn.read_buf.is_empty() {
-                process_buffered_frames(conn, runtime);
+                process_buffered_frames(token, conn, runtime, blocked_tokens, closing_tokens);
             }
         }
 
@@ -886,7 +936,11 @@ fn check_blocked_clients(
     }
 }
 
-fn flush_or_rearm_client(token: Token, conn: &mut ClientConnection, poll: &mut Poll) -> io::Result<()> {
+fn flush_or_rearm_client(
+    token: Token,
+    conn: &mut ClientConnection,
+    poll: &mut Poll,
+) -> io::Result<()> {
     if conn.write_buf.is_empty() {
         return Ok(());
     }
@@ -915,7 +969,7 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
         BlockingOp::BLpop { keys } => {
             for key in keys {
                 // Build LPOP command and execute.
-                let argv = vec![b"LPOP".to_vec(), key.clone()];
+                let argv = [b"LPOP".to_vec(), key.clone()];
                 let frame = RespFrame::Array(Some(
                     argv.iter()
                         .map(|a| RespFrame::BulkString(Some(a.clone())))
@@ -934,7 +988,7 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
         }
         BlockingOp::BRpop { keys } => {
             for key in keys {
-                let argv = vec![b"RPOP".to_vec(), key.clone()];
+                let argv = [b"RPOP".to_vec(), key.clone()];
                 let frame = RespFrame::Array(Some(
                     argv.iter()
                         .map(|a| RespFrame::BulkString(Some(a.clone())))
@@ -952,43 +1006,41 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
         }
         BlockingOp::BZpopMax { keys } => {
             for key in keys {
-                let argv = vec![b"ZPOPMAX".to_vec(), key.clone()];
+                let argv = [b"ZPOPMAX".to_vec(), key.clone()];
                 let frame = RespFrame::Array(Some(
                     argv.iter()
                         .map(|a| RespFrame::BulkString(Some(a.clone())))
                         .collect(),
                 ));
                 let response = runtime.execute_frame(frame, now_ms);
-                if response != RespFrame::Array(None) {
-                    // ZPOPMAX returns [member, score]. BZPOPMAX needs [key, member, score]
-                    if let RespFrame::Array(Some(mut items)) = response {
-                        if items.len() == 2 {
-                            let mut result = vec![RespFrame::BulkString(Some(key.clone()))];
-                            result.append(&mut items);
-                            return Some(RespFrame::Array(Some(result)));
-                        }
-                    }
+                // ZPOPMAX returns [member, score]. BZPOPMAX needs [key, member, score]
+                if response != RespFrame::Array(None)
+                    && let RespFrame::Array(Some(mut items)) = response
+                    && items.len() == 2
+                {
+                    let mut result = vec![RespFrame::BulkString(Some(key.clone()))];
+                    result.append(&mut items);
+                    return Some(RespFrame::Array(Some(result)));
                 }
             }
             None
         }
         BlockingOp::BZpopMin { keys } => {
             for key in keys {
-                let argv = vec![b"ZPOPMIN".to_vec(), key.clone()];
+                let argv = [b"ZPOPMIN".to_vec(), key.clone()];
                 let frame = RespFrame::Array(Some(
                     argv.iter()
                         .map(|a| RespFrame::BulkString(Some(a.clone())))
                         .collect(),
                 ));
                 let response = runtime.execute_frame(frame, now_ms);
-                if response != RespFrame::Array(None) {
-                    if let RespFrame::Array(Some(mut items)) = response {
-                        if items.len() == 2 {
-                            let mut result = vec![RespFrame::BulkString(Some(key.clone()))];
-                            result.append(&mut items);
-                            return Some(RespFrame::Array(Some(result)));
-                        }
-                    }
+                if response != RespFrame::Array(None)
+                    && let RespFrame::Array(Some(mut items)) = response
+                    && items.len() == 2
+                {
+                    let mut result = vec![RespFrame::BulkString(Some(key.clone()))];
+                    result.append(&mut items);
+                    return Some(RespFrame::Array(Some(result)));
                 }
             }
             None
@@ -999,7 +1051,7 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
             wherefrom,
             whereto,
         } => {
-            let argv = vec![
+            let argv = [
                 b"LMOVE".to_vec(),
                 source.clone(),
                 destination.clone(),
@@ -1185,8 +1237,8 @@ mod tests {
     #[test]
     fn inline_parser_gate_recognizes_all_resp_prefixes() {
         for prefix in [
-            b'+', b'-', b':', b'$', b'*', b'~', b'%', b'#', b',', b'_', b'(', b'=', b'|',
-            b'>', b'!',
+            b'+', b'-', b':', b'$', b'*', b'~', b'%', b'#', b',', b'_', b'(', b'=', b'|', b'>',
+            b'!',
         ] {
             assert!(
                 !should_try_inline_parsing(prefix),

@@ -2697,15 +2697,9 @@ mod tests {
             RespFrame::Array(Some(parts)) => {
                 assert_eq!(parts.len(), 14);
                 assert_eq!(parts[0], RespFrame::BulkString(Some(b"server".to_vec())));
-                assert_eq!(
-                    parts[1],
-                    RespFrame::BulkString(Some(b"redis".to_vec()))
-                );
+                assert_eq!(parts[1], RespFrame::BulkString(Some(b"redis".to_vec())));
                 assert_eq!(parts[2], RespFrame::BulkString(Some(b"version".to_vec())));
-                assert_eq!(
-                    parts[3],
-                    RespFrame::BulkString(Some(b"7.2.0".to_vec()))
-                );
+                assert_eq!(parts[3], RespFrame::BulkString(Some(b"7.2.0".to_vec())));
                 assert_eq!(parts[4], RespFrame::BulkString(Some(b"proto".to_vec())));
                 assert_eq!(parts[5], RespFrame::Integer(3));
                 assert_eq!(parts[6], RespFrame::BulkString(Some(b"id".to_vec())));
@@ -2716,10 +2710,7 @@ mod tests {
                     RespFrame::BulkString(Some(b"standalone".to_vec()))
                 );
                 assert_eq!(parts[10], RespFrame::BulkString(Some(b"role".to_vec())));
-                assert_eq!(
-                    parts[11],
-                    RespFrame::BulkString(Some(b"master".to_vec()))
-                );
+                assert_eq!(parts[11], RespFrame::BulkString(Some(b"master".to_vec())));
                 assert_eq!(parts[12], RespFrame::BulkString(Some(b"modules".to_vec())));
                 assert_eq!(parts[13], RespFrame::Array(Some(Vec::new())));
             }

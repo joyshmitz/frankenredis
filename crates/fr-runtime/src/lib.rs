@@ -1303,7 +1303,9 @@ impl Runtime {
     fn is_command_authorized(&self, argv: &[Vec<u8>]) -> bool {
         let username = self.session.current_user_name();
         let Some(user) = self.server.auth_state.get_user(username) else {
-            return false;
+            // User was deleted while session is still active — Redis allows
+            // existing connections to continue operating until re-authentication.
+            return true;
         };
 
         if user.full_access {
@@ -1311,33 +1313,31 @@ impl Runtime {
         }
 
         // Special check for other runtime-only commands.
-        if let Some(cmd) = argv.first() {
-            if let Some(special) = classify_runtime_special_command(cmd) {
-                match special {
-                    RuntimeSpecialCommand::Config
-                    | RuntimeSpecialCommand::Client
-                    | RuntimeSpecialCommand::Save
-                    | RuntimeSpecialCommand::Bgsave
-                    | RuntimeSpecialCommand::Bgrewriteaof
-                    | RuntimeSpecialCommand::Shutdown => return false,
-                    _ => {}
-                }
-            }
+        if let Some(cmd) = argv.first()
+            && let Some(
+                RuntimeSpecialCommand::Config
+                | RuntimeSpecialCommand::Client
+                | RuntimeSpecialCommand::Save
+                | RuntimeSpecialCommand::Bgsave
+                | RuntimeSpecialCommand::Bgrewriteaof
+                | RuntimeSpecialCommand::Shutdown,
+            ) = classify_runtime_special_command(cmd)
+        {
+            return false;
         }
 
         // If user doesn't have full access, they can only run non-dangerous commands.
-        if let Some(cmd) = argv.first() {
-            if let Some(flags) = fr_command::get_command_flags(cmd) {
-                let flag_list: Vec<&str> = flags.split_whitespace().collect();
-                if flag_list.contains(&"admin") || flag_list.contains(&"dangerous") {
-                    return false;
-                }
+        if let Some(cmd) = argv.first()
+            && let Some(flags) = fr_command::get_command_flags(cmd)
+        {
+            let flag_list: Vec<&str> = flags.split_whitespace().collect();
+            if flag_list.contains(&"admin") || flag_list.contains(&"dangerous") {
+                return false;
             }
         }
 
         true
     }
-
 
     #[must_use]
     pub fn is_cluster_read_only(&self) -> bool {
@@ -5465,7 +5465,10 @@ mod tests {
             result,
             RespFrame::SimpleString("Background saving started".to_string())
         );
-        assert!(rdb_path.exists(), "BGSAVE should write the configured RDB file");
+        assert!(
+            rdb_path.exists(),
+            "BGSAVE should write the configured RDB file"
+        );
 
         let (entries, aux) = fr_persist::read_rdb_file(&rdb_path).expect("read rdb");
         assert_eq!(aux.get("frankenredis"), Some(&"true".to_string()));
