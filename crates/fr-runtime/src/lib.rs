@@ -153,6 +153,8 @@ const CONFIG_STATIC_PARAMS: &[(&str, &str)] = &[
     // Encoding thresholds
     ("list-max-listpack-size", "-2"),
     ("list-max-ziplist-size", "-2"),
+    ("list-max-listpack-entries", "128"),
+    ("list-max-listpack-value", "64"),
     ("list-compress-depth", "0"),
     ("set-max-intset-entries", "512"),
     ("set-max-listpack-entries", "128"),
@@ -2298,6 +2300,14 @@ impl Runtime {
                 self.server.store.hash_max_listpack_value,
             ),
             (
+                "list-max-listpack-entries",
+                self.server.store.list_max_listpack_entries,
+            ),
+            (
+                "list-max-listpack-value",
+                self.server.store.list_max_listpack_value,
+            ),
+            (
                 "set-max-intset-entries",
                 self.server.store.set_max_intset_entries,
             ),
@@ -2403,6 +2413,8 @@ impl Runtime {
                 || name == "zset-max-ziplist-value"
                 || name == "list-max-listpack-size"
                 || name == "list-max-ziplist-size"
+                || name == "list-max-listpack-entries"
+                || name == "list-max-listpack-value"
             {
                 continue;
             }
@@ -2546,6 +2558,8 @@ impl Runtime {
                 || parameter.eq_ignore_ascii_case("hash-max-listpack-value")
                 || parameter.eq_ignore_ascii_case("hash-max-ziplist-entries")
                 || parameter.eq_ignore_ascii_case("hash-max-ziplist-value")
+                || parameter.eq_ignore_ascii_case("list-max-listpack-entries")
+                || parameter.eq_ignore_ascii_case("list-max-listpack-value")
                 || parameter.eq_ignore_ascii_case("set-max-intset-entries")
                 || parameter.eq_ignore_ascii_case("set-max-listpack-entries")
                 || parameter.eq_ignore_ascii_case("zset-max-listpack-entries")
@@ -2572,6 +2586,10 @@ impl Runtime {
                     || parameter.eq_ignore_ascii_case("hash-max-ziplist-value")
                 {
                     "hash-max-listpack-value"
+                } else if parameter.eq_ignore_ascii_case("list-max-listpack-entries") {
+                    "list-max-listpack-entries"
+                } else if parameter.eq_ignore_ascii_case("list-max-listpack-value") {
+                    "list-max-listpack-value"
                 } else if parameter.eq_ignore_ascii_case("set-max-intset-entries") {
                     "set-max-intset-entries"
                 } else if parameter.eq_ignore_ascii_case("set-max-listpack-entries") {
@@ -2636,6 +2654,8 @@ impl Runtime {
             match param {
                 "hash-max-listpack-entries" => self.server.store.hash_max_listpack_entries = value,
                 "hash-max-listpack-value" => self.server.store.hash_max_listpack_value = value,
+                "list-max-listpack-entries" => self.server.store.list_max_listpack_entries = value,
+                "list-max-listpack-value" => self.server.store.list_max_listpack_value = value,
                 "set-max-intset-entries" => self.server.store.set_max_intset_entries = value,
                 "set-max-listpack-entries" => self.server.store.set_max_listpack_entries = value,
                 "zset-max-listpack-entries" => self.server.store.zset_max_listpack_entries = value,

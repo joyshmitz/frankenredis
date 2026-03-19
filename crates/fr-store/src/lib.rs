@@ -545,6 +545,8 @@ pub struct Store {
     pub hash_max_listpack_entries: usize,
     pub hash_max_listpack_value: usize,
     pub list_max_listpack_size: i64,
+    pub list_max_listpack_entries: usize,
+    pub list_max_listpack_value: usize,
     pub set_max_intset_entries: usize,
     pub set_max_listpack_entries: usize,
     pub zset_max_listpack_entries: usize,
@@ -576,6 +578,8 @@ impl Default for Store {
             hash_max_listpack_entries: 128,
             hash_max_listpack_value: 64,
             list_max_listpack_size: -2,
+            list_max_listpack_entries: 128,
+            list_max_listpack_value: 64,
             set_max_intset_entries: 512,
             set_max_listpack_entries: 128,
             zset_max_listpack_entries: 128,
@@ -1329,22 +1333,9 @@ impl Store {
                 }
             }
             Value::List(l) => {
-                // list-max-listpack-size: positive = max entries, negative = max bytes per node
-                // -1=4kb, -2=8kb, -3=16kb, -4=32kb, -5=64kb
-                let fits_listpack = if self.list_max_listpack_size >= 0 {
-                    l.len() <= self.list_max_listpack_size as usize
-                } else {
-                    let max_bytes: usize = match self.list_max_listpack_size {
-                        -1 => 4096,
-                        -2 => 8192,
-                        -3 => 16384,
-                        -4 => 32768,
-                        _ => 65536, // -5 and below
-                    };
-                    let total: usize = l.iter().map(|v| v.len() + 11).sum(); // 11 bytes overhead per entry
-                    total <= max_bytes
-                };
-                if fits_listpack {
+                if l.len() <= self.list_max_listpack_entries
+                    && l.iter().all(|v| v.len() <= self.list_max_listpack_value)
+                {
                     "listpack"
                 } else {
                     "quicklist"

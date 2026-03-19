@@ -125,10 +125,15 @@ impl LuaTable {
 
     /// Returns all hash pairs (string_hash + other_hash) as `(LuaValue, LuaValue)`.
     fn hash_pairs(&self) -> Vec<(LuaValue, LuaValue)> {
-        let mut pairs: Vec<(LuaValue, LuaValue)> = self
-            .string_hash
-            .iter()
-            .map(|(k, v)| (LuaValue::Str(k.clone()), v.clone()))
+        let mut string_keys: Vec<&Vec<u8>> = self.string_hash.keys().collect();
+        string_keys.sort();
+        let mut pairs: Vec<(LuaValue, LuaValue)> = string_keys
+            .into_iter()
+            .filter_map(|k| {
+                self.string_hash
+                    .get(k)
+                    .map(|v| (LuaValue::Str(k.clone()), v.clone()))
+            })
             .collect();
         pairs.extend(self.other_hash.iter().cloned());
         pairs
@@ -3859,6 +3864,23 @@ fn lua_fmt_g(n: f64, prec: usize, upper: bool) -> String {
 
 // ── cjson helpers ───────────────────────────────────────────────────────
 
+fn json_escape_bytes(bytes: &[u8]) -> String {
+    let s = String::from_utf8_lossy(bytes);
+    let mut out = String::from('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn lua_value_to_json(val: &LuaValue) -> String {
     match val {
         LuaValue::Nil => "null".to_string(),
@@ -3870,22 +3892,7 @@ fn lua_value_to_json(val: &LuaValue) -> String {
                 format!("{n}")
             }
         }
-        LuaValue::Str(s) => {
-            let s = String::from_utf8_lossy(s);
-            let mut out = String::from('"');
-            for c in s.chars() {
-                match c {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    _ => out.push(c),
-                }
-            }
-            out.push('"');
-            out
-        }
+        LuaValue::Str(s) => json_escape_bytes(s),
         LuaValue::Table(t) => {
             if !t.array.is_empty() && t.hash_is_empty() {
                 // JSON array
@@ -3897,8 +3904,8 @@ fn lua_value_to_json(val: &LuaValue) -> String {
                 let pairs: Vec<String> = hash_pairs
                     .iter()
                     .map(|(k, v)| {
-                        let key_str = String::from_utf8_lossy(&k.to_display_string()).to_string();
-                        format!("\"{}\":{}", key_str, lua_value_to_json(v))
+                        let key_json = json_escape_bytes(&k.to_display_string());
+                        format!("{key_json}:{}", lua_value_to_json(v))
                     })
                     .collect();
                 format!("{{{}}}", pairs.join(","))
@@ -3911,8 +3918,8 @@ fn lua_value_to_json(val: &LuaValue) -> String {
                     pairs.push(format!("\"{}\":{}", i + 1, lua_value_to_json(v)));
                 }
                 for (k, v) in &t.hash_pairs() {
-                    let key_str = String::from_utf8_lossy(&k.to_display_string()).to_string();
-                    pairs.push(format!("\"{}\":{}", key_str, lua_value_to_json(v)));
+                    let key_json = json_escape_bytes(&k.to_display_string());
+                    pairs.push(format!("{key_json}:{}", lua_value_to_json(v)));
                 }
                 format!("{{{}}}", pairs.join(","))
             }
@@ -4069,4 +4076,35 @@ pub fn eval_script(
 
     let result = state.execute(script)?;
     Ok(lua_to_resp(&result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LuaTable, LuaValue, lua_value_to_json};
+
+    #[test]
+    fn cjson_encode_escapes_object_keys() {
+        let mut table = LuaTable::new();
+        table.set(
+            LuaValue::Str(b"say\"hi\\there\n".to_vec()),
+            LuaValue::Number(1.0),
+        );
+
+        assert_eq!(
+            lua_value_to_json(&LuaValue::Table(table)),
+            "{\"say\\\"hi\\\\there\\n\":1}"
+        );
+    }
+
+    #[test]
+    fn cjson_encode_sorts_string_hash_keys() {
+        let mut table = LuaTable::new();
+        table.set(LuaValue::Str(b"z".to_vec()), LuaValue::Number(1.0));
+        table.set(LuaValue::Str(b"a".to_vec()), LuaValue::Number(2.0));
+
+        assert_eq!(
+            lua_value_to_json(&LuaValue::Table(table)),
+            "{\"a\":2,\"z\":1}"
+        );
+    }
 }
