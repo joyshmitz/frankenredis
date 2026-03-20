@@ -1,0 +1,4 @@
+phase2c_schema_gate=target-local/debug/phase2c_schema_gate
+benchmark_script=artifacts/optimization/phase2c-gate/run_gate_bench.sh
+benchmark_corpus=artifacts/optimization/phase2c-gate/bench_packets
+round_id=round_dir_scan_mask

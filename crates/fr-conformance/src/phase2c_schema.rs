@@ -1242,7 +1242,11 @@ mod tests {
     }
 
     fn optimization_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/optimization/phase2c-gate")
+        // Tests must not depend on ignored local `artifacts/` state. Keep a
+        // tracked optimization-gate fixture pack under crate fixtures and let
+        // the CLI continue to validate the live artifact root separately.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/optimization_gate/phase2c-gate")
     }
 
     fn test_packet_dirs() -> Vec<PathBuf> {

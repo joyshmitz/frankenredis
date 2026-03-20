@@ -1,0 +1,22 @@
+{
+  "claim_id": "fr-conformance.phase2c-gate.dir-scan-mask.v1",
+  "evidence_id": "evidence.phase2c-gate.round_dir_scan_mask.v1",
+  "delta_percent": 34.33919012769063,
+  "baseline": {
+    "hyperfine": "baseline_hyperfine.json",
+    "strace": "baseline_strace.txt",
+    "stdout_sha256": "182c09ebb9e72981539752f05ab4cf07c80f1a1886b73e5ad146cf28a24ce214",
+    "mean_seconds": 0.038657504599999996
+  },
+  "after": {
+    "hyperfine": "after_hyperfine.json",
+    "strace": "after_strace.txt",
+    "stdout_sha256": "182c09ebb9e72981539752f05ab4cf07c80f1a1886b73e5ad146cf28a24ce214",
+    "mean_seconds": 0.0253820074
+  },
+  "isomorphism": "isomorphism_check.txt",
+  "source_files": [
+    "crates/fr-conformance/src/phase2c_schema.rs",
+    "crates/fr-conformance/src/bin/phase2c_schema_gate.rs"
+  ]
+}
