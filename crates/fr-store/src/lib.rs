@@ -255,7 +255,7 @@ impl SortedSet {
 
     fn insert(&mut self, member: Vec<u8>, score: f64) -> bool {
         if let Some(old_score) = self.dict.insert(member.clone(), score) {
-            if old_score == score {
+            if old_score.total_cmp(&score).is_eq() {
                 return false;
             }
             self.ordered
@@ -1271,9 +1271,14 @@ impl Store {
         let end_idx = (e + 1).min(bytes.len());
         let slice = &bytes[s..end_idx];
         for (byte_offset, &byte) in slice.iter().enumerate() {
-            for bit_offset in 0..8u32 {
-                let b = (byte >> (7 - bit_offset)) & 1 == 1;
-                if b == bit {
+            if bit {
+                if byte != 0 {
+                    let bit_offset = byte.leading_zeros();
+                    return Ok(((s + byte_offset) * 8 + bit_offset as usize) as i64);
+                }
+            } else {
+                if byte != 0xFF {
+                    let bit_offset = (!byte).leading_zeros();
                     return Ok(((s + byte_offset) * 8 + bit_offset as usize) as i64);
                 }
             }
@@ -3651,6 +3656,9 @@ impl Store {
             return Err(StoreError::WrongType);
         };
         let new_score = zs.get_score(&member).unwrap_or(0.0) + delta;
+        if new_score.is_nan() || new_score.is_infinite() {
+            return Err(StoreError::IncrFloatNaN);
+        }
         zs.insert(member, new_score);
         entry.touch(now_ms);
         Ok(new_score)
