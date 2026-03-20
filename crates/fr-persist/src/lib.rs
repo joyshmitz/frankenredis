@@ -188,9 +188,12 @@ fn rdb_encode_length(buf: &mut Vec<u8>, len: usize) {
     } else if len < 16384 {
         buf.push(0x40 | ((len >> 8) as u8));
         buf.push((len & 0xFF) as u8);
-    } else {
+    } else if len <= u32::MAX as usize {
         buf.push(0x80);
         buf.extend_from_slice(&(len as u32).to_be_bytes());
+    } else {
+        buf.push(0x81);
+        buf.extend_from_slice(&(len as u64).to_be_bytes());
     }
 }
 
@@ -327,11 +330,23 @@ fn rdb_decode_length(data: &[u8]) -> Option<(usize, usize)> {
             Some((len, 2))
         }
         2 => {
-            if data.len() < 5 {
-                return None;
+            if first == 0x80 {
+                if data.len() < 5 {
+                    return None;
+                }
+                let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+                Some((len, 5))
+            } else if first == 0x81 {
+                if data.len() < 9 {
+                    return None;
+                }
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&data[1..9]);
+                let len = u64::from_be_bytes(bytes) as usize;
+                Some((len, 9))
+            } else {
+                None // Unhandled special encodings
             }
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-            Some((len, 5))
         }
         3 => {
             // Special encoding (integers or LZF)
