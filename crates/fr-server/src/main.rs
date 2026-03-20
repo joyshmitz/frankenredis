@@ -288,6 +288,8 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
 
+        let ts = now_ms();
+
         for event in events.iter() {
             match event.token() {
                 LISTENER => {
@@ -309,6 +311,7 @@ fn main() -> ExitCode {
                             &mut blocked_tokens,
                             &mut closing_tokens,
                             &mut write_tokens,
+                            ts,
                         );
                     }
                     if event.is_writable() {
@@ -326,7 +329,7 @@ fn main() -> ExitCode {
 
         // Run active expiry cycle once per tick (fast cycle).
         let _ =
-            runtime.run_active_expire_cycle(now_ms(), fr_eventloop::ActiveExpireCycleKind::Fast);
+            runtime.run_active_expire_cycle(ts, fr_eventloop::ActiveExpireCycleKind::Fast);
 
         // Check blocked clients (BLPOP/BRPOP/BLMOVE) for available data
         // or timeout expiry.
@@ -337,6 +340,7 @@ fn main() -> ExitCode {
             &mut runtime,
             &mut poll,
             &mut write_tokens,
+            ts,
         );
 
         // Clean up clients marked for closing whose write buffers are drained.
@@ -426,6 +430,7 @@ fn handle_readable(
     blocked_tokens: &mut HashSet<Token>,
     closing_tokens: &mut HashSet<Token>,
     write_tokens: &mut HashSet<Token>,
+    ts: u64,
 ) {
     let Some(conn) = clients.get_mut(&token) else {
         return;
@@ -488,6 +493,7 @@ fn handle_readable(
         blocked_tokens,
         closing_tokens,
         write_tokens,
+        ts,
     );
 
     // Swap session back.
@@ -511,9 +517,8 @@ fn process_buffered_frames(
     blocked_tokens: &mut HashSet<Token>,
     closing_tokens: &mut HashSet<Token>,
     write_tokens: &mut HashSet<Token>,
+    ts: u64,
 ) {
-    let ts = now_ms();
-
     loop {
         if conn.read_buf.is_empty() || conn.closing {
             break;
@@ -950,8 +955,8 @@ fn check_blocked_clients(
     runtime: &mut Runtime,
     poll: &mut Poll,
     write_tokens: &mut HashSet<Token>,
+    ts: u64,
 ) {
-    let ts = now_ms();
     let active_blocked: Vec<Token> = blocked_tokens.iter().copied().collect();
 
     for token in active_blocked {
@@ -993,6 +998,7 @@ fn check_blocked_clients(
                     blocked_tokens,
                     closing_tokens,
                     write_tokens,
+                    ts,
                 );
                 let updated_session = runtime.swap_session(prev);
                 conn.session = updated_session;
@@ -1023,6 +1029,7 @@ fn check_blocked_clients(
                     blocked_tokens,
                     closing_tokens,
                     write_tokens,
+                    ts,
                 );
             }
         }

@@ -52,7 +52,7 @@ impl LuaTable {
         match key {
             LuaValue::Number(n) => {
                 let idx = *n as usize;
-                if idx >= 1 && idx <= self.array.len() && (*n - idx as f64).abs() < f64::EPSILON {
+                if idx >= 1 && idx <= self.array.len() && *n == idx as f64 {
                     return self.array[idx - 1].clone();
                 }
                 self.hash_get(key)
@@ -85,7 +85,7 @@ impl LuaTable {
         match &key {
             LuaValue::Number(n) => {
                 let idx = *n as usize;
-                if idx >= 1 && (*n - idx as f64).abs() < f64::EPSILON {
+                if idx >= 1 && *n == idx as f64 {
                     if idx <= self.array.len() {
                         self.array[idx - 1] = value;
                         return;
@@ -149,7 +149,7 @@ fn lua_raw_equal(a: &LuaValue, b: &LuaValue) -> bool {
     match (a, b) {
         (LuaValue::Nil, LuaValue::Nil) => true,
         (LuaValue::Bool(x), LuaValue::Bool(y)) => x == y,
-        (LuaValue::Number(x), LuaValue::Number(y)) => (x - y).abs() < f64::EPSILON,
+        (LuaValue::Number(x), LuaValue::Number(y)) => x == y,
         (LuaValue::Str(x), LuaValue::Str(y)) => x == y,
         _ => false,
     }
@@ -4114,7 +4114,7 @@ pub fn eval_script(
 
 #[cfg(test)]
 mod tests {
-    use super::{LuaTable, LuaValue, json_to_lua_value, lua_value_to_json};
+    use super::{LuaTable, LuaValue, json_to_lua_value, lua_raw_equal, lua_value_to_json};
 
     #[test]
     fn cjson_encode_escapes_object_keys() {
@@ -4128,6 +4128,31 @@ mod tests {
             lua_value_to_json(&LuaValue::Table(table)),
             "{\"say\\\"hi\\\\there\\n\":1}"
         );
+    }
+
+    #[test]
+    fn lua_number_equality_is_exact() {
+        assert!(lua_raw_equal(&LuaValue::Number(1.0), &LuaValue::Number(1.0)));
+        assert!(!lua_raw_equal(
+            &LuaValue::Number(1.0),
+            &LuaValue::Number(1.0 + f64::EPSILON)
+        ));
+        assert!(!lua_raw_equal(
+            &LuaValue::Number(f64::NAN),
+            &LuaValue::Number(f64::NAN)
+        ));
+    }
+
+    #[test]
+    fn lua_table_numeric_keys_do_not_use_epsilon_matching() {
+        let mut table = LuaTable::new();
+        table.set(LuaValue::Number(1.0), LuaValue::Str(b"exact".to_vec()));
+
+        let exact = table.get(&LuaValue::Number(1.0));
+        assert!(matches!(exact, LuaValue::Str(ref bytes) if bytes == b"exact"));
+
+        let near = table.get(&LuaValue::Number(1.0 + f64::EPSILON));
+        assert!(matches!(near, LuaValue::Nil));
     }
 
     #[test]
