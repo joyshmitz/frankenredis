@@ -328,8 +328,7 @@ fn main() -> ExitCode {
         }
 
         // Run active expiry cycle once per tick (fast cycle).
-        let _ =
-            runtime.run_active_expire_cycle(ts, fr_eventloop::ActiveExpireCycleKind::Fast);
+        let _ = runtime.run_active_expire_cycle(ts, fr_eventloop::ActiveExpireCycleKind::Fast);
 
         // Check blocked clients (BLPOP/BRPOP/BLMOVE) for available data
         // or timeout expiry.

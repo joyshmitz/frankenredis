@@ -8452,8 +8452,8 @@ mod tests {
                 ScoreBound::Inclusive(f64::NEG_INFINITY),
                 ScoreBound::Inclusive(f64::INFINITY),
                 0,
-        )
-        .unwrap();
+            )
+            .unwrap();
         assert_eq!(pairs, vec![(b"a".to_vec(), 0.0)]);
     }
 

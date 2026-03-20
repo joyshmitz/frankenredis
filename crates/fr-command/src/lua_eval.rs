@@ -2253,7 +2253,28 @@ impl<'a> LuaState<'a> {
             }
             "tonumber" => {
                 let val = args.first().cloned().unwrap_or(LuaValue::Nil);
-                let base = args.get(1).and_then(|b| b.to_number()).map(|b| b as u32);
+                let base = match args.get(1) {
+                    Some(base_value) => {
+                        let Some(base) = base_value.to_number() else {
+                            return Err(
+                                "bad argument #2 to 'tonumber' (base out of range)".to_string()
+                            );
+                        };
+                        if !base.is_finite() || base.fract() != 0.0 {
+                            return Err(
+                                "bad argument #2 to 'tonumber' (base out of range)".to_string()
+                            );
+                        }
+                        let base = base as u32;
+                        if !(2..=36).contains(&base) {
+                            return Err(
+                                "bad argument #2 to 'tonumber' (base out of range)".to_string()
+                            );
+                        }
+                        Some(base)
+                    }
+                    None => None,
+                };
                 match &val {
                     LuaValue::Number(n) => Ok(vec![LuaValue::Number(*n)]),
                     LuaValue::Str(s) => {
@@ -4114,7 +4135,12 @@ pub fn eval_script(
 
 #[cfg(test)]
 mod tests {
-    use super::{LuaTable, LuaValue, json_to_lua_value, lua_raw_equal, lua_value_to_json};
+    use fr_protocol::RespFrame;
+    use fr_store::Store;
+
+    use super::{
+        LuaTable, LuaValue, eval_script, json_to_lua_value, lua_raw_equal, lua_value_to_json,
+    };
 
     #[test]
     fn cjson_encode_escapes_object_keys() {
@@ -4132,7 +4158,10 @@ mod tests {
 
     #[test]
     fn lua_number_equality_is_exact() {
-        assert!(lua_raw_equal(&LuaValue::Number(1.0), &LuaValue::Number(1.0)));
+        assert!(lua_raw_equal(
+            &LuaValue::Number(1.0),
+            &LuaValue::Number(1.0)
+        ));
         assert!(!lua_raw_equal(
             &LuaValue::Number(1.0),
             &LuaValue::Number(1.0 + f64::EPSILON)
@@ -4153,6 +4182,38 @@ mod tests {
 
         let near = table.get(&LuaValue::Number(1.0 + f64::EPSILON));
         assert!(matches!(near, LuaValue::Nil));
+    }
+
+    #[test]
+    fn tonumber_rejects_out_of_range_base_without_panicking() {
+        let mut store = Store::new();
+        let result = eval_script(b"return tonumber('10', 1)", &[], &[], &mut store, 0);
+
+        assert!(matches!(result, Err(ref err) if err.contains("base out of range")));
+    }
+
+    #[test]
+    fn tonumber_rejects_non_integer_base() {
+        let mut store = Store::new();
+        let result = eval_script(b"return tonumber('10', 2.5)", &[], &[], &mut store, 0);
+
+        assert!(matches!(result, Err(ref err) if err.contains("base out of range")));
+    }
+
+    #[test]
+    fn tonumber_rejects_non_numeric_base() {
+        let mut store = Store::new();
+        let result = eval_script(b"return tonumber('10', 'x')", &[], &[], &mut store, 0);
+
+        assert!(matches!(result, Err(ref err) if err.contains("base out of range")));
+    }
+
+    #[test]
+    fn tonumber_accepts_valid_explicit_base() {
+        let mut store = Store::new();
+        let result = eval_script(b"return tonumber('10', 16)", &[], &[], &mut store, 0);
+
+        assert!(matches!(result, Ok(RespFrame::Integer(16))));
     }
 
     #[test]
