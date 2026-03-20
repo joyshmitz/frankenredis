@@ -392,6 +392,10 @@ fn accept_connections(
                     *next_token = 1;
                 }
 
+                if let Err(e) = stream.set_nodelay(true) {
+                    eprintln!("warn: failed to set TCP_NODELAY: {e}");
+                }
+
                 if let Err(e) = poll.registry().register(
                     &mut stream,
                     token,
@@ -1032,6 +1036,7 @@ fn check_blocked_clients(
 
             // Process any commands the client pipelined while blocked.
             if !conn.read_buf.is_empty() {
+                // The session is already swapped in here.
                 process_buffered_frames(
                     token,
                     conn,
