@@ -523,6 +523,74 @@
       }
     },
     {
+      "name": "hello_reset_to_2",
+      "now_ms": 103,
+      "argv": [
+        "HELLO",
+        "2"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "server"
+          },
+          {
+            "kind": "bulk",
+            "value": "redis"
+          },
+          {
+            "kind": "bulk",
+            "value": "version"
+          },
+          {
+            "kind": "bulk",
+            "value": "7.2.0"
+          },
+          {
+            "kind": "bulk",
+            "value": "proto"
+          },
+          {
+            "kind": "integer",
+            "value": 2
+          },
+          {
+            "kind": "bulk",
+            "value": "id"
+          },
+          {
+            "kind": "any_integer"
+          },
+          {
+            "kind": "bulk",
+            "value": "mode"
+          },
+          {
+            "kind": "bulk",
+            "value": "standalone"
+          },
+          {
+            "kind": "bulk",
+            "value": "role"
+          },
+          {
+            "kind": "bulk",
+            "value": "master"
+          },
+          {
+            "kind": "bulk",
+            "value": "modules"
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
       "name": "hello_no_version_returns_info",
       "now_ms": 104,
       "argv": [

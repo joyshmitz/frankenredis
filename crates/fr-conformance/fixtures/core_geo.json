@@ -541,8 +541,8 @@
         "km"
       ],
       "expect": {
-        "kind": "array",
-        "value": []
+        "kind": "error",
+        "value": "ERR could not decode requested zset member"
       }
     },
     {

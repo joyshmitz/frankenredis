@@ -1922,6 +1922,8 @@ const GEO_LONG_MIN: f64 = -180.0;
 const GEO_LONG_MAX: f64 = 180.0;
 const GEO_LAT_MIN: f64 = -85.051_128_78;
 const GEO_LAT_MAX: f64 = 85.051_128_78;
+const GEO_STANDARD_LAT_MIN: f64 = -90.0;
+const GEO_STANDARD_LAT_MAX: f64 = 90.0;
 const GEO_EARTH_RADIUS_IN_METERS: f64 = 6_372_797.560_856;
 const GEO_BASE32_ALPHABET: &[u8; 32] = b"0123456789bcdefghjkmnpqrstuvwxyz";
 
@@ -2000,7 +2002,7 @@ fn geo_encode(
     let scale = (1_u64 << u32::from(step)) as f64;
     let lat_offset = ((latitude - lat_min) / (lat_max - lat_min) * scale) as u32;
     let long_offset = ((longitude - long_min) / (long_max - long_min) * scale) as u32;
-    Some(geo_interleave64(long_offset, lat_offset))
+    Some(geo_interleave64(lat_offset, long_offset))
 }
 
 #[inline]
@@ -2022,8 +2024,8 @@ fn geo_decode(bits: u64, long_min: f64, long_max: f64, lat_min: f64, lat_max: f6
     let scale = (1_u64 << step) as f64;
     let hash_sep = geo_deinterleave64(bits);
 
-    let ilono = hash_sep as u32;
-    let ilato = (hash_sep >> 32) as u32;
+    let ilato = hash_sep as u32;
+    let ilono = (hash_sep >> 32) as u32;
     let lat_scale = lat_max - lat_min;
     let long_scale = long_max - long_min;
 
@@ -2115,8 +2117,8 @@ fn geo_hash_string_from_score(score: f64) -> Option<Vec<u8>> {
         latitude,
         GEO_LONG_MIN,
         GEO_LONG_MAX,
-        GEO_LAT_MIN,
-        GEO_LAT_MAX,
+        GEO_STANDARD_LAT_MIN,
+        GEO_STANDARD_LAT_MAX,
         GEO_STEP_MAX,
     )?;
 
