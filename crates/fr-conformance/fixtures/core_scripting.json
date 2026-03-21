@@ -1396,6 +1396,32 @@
       }
     },
     {
+      "name": "eval_table_concat_rejects_non_numeric_start",
+      "now_ms": 100,
+      "argv": [
+        "EVAL",
+        "return table.concat({'a', 'b'}, ',', 'x')",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Error running script: bad argument #3 to 'concat' (number expected, got string)"
+      }
+    },
+    {
+      "name": "eval_table_concat_rejects_non_numeric_end",
+      "now_ms": 100,
+      "argv": [
+        "EVAL",
+        "return table.concat({'a', 'b'}, ',', 1, 'x')",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Error running script: bad argument #4 to 'concat' (number expected, got string)"
+      }
+    },
+    {
       "name": "eval_select_function",
       "now_ms": 100,
       "argv": [
@@ -1589,6 +1615,19 @@
       }
     },
     {
+      "name": "eval_table_insert_rejects_non_numeric_position",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local t = {1, 2}\ntable.insert(t, 'x', 3)",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Error running script: bad argument #2 to 'insert' (number expected, got string)"
+      }
+    },
+    {
       "name": "eval_table_remove_last",
       "now_ms": 0,
       "argv": [
@@ -1612,6 +1651,19 @@
       "expect": {
         "kind": "error",
         "value": "ERR Error running script: bad argument #1 to 'remove' (table expected, got number)"
+      }
+    },
+    {
+      "name": "eval_table_remove_rejects_non_numeric_position",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "local t = {1, 2}\nreturn table.remove(t, 'x')",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Error running script: bad argument #2 to 'remove' (number expected, got string)"
       }
     },
     {

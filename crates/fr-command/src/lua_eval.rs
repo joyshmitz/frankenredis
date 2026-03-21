@@ -162,6 +162,13 @@ fn lua_bad_table_arg(function: &str, index: usize, value: &LuaValue) -> String {
     )
 }
 
+fn lua_bad_number_arg(function: &str, index: usize, value: &LuaValue) -> String {
+    format!(
+        "bad argument #{index} to '{function}' (number expected, got {})",
+        value.type_name()
+    )
+}
+
 fn lua_table_arg<'a>(
     function: &str,
     index: usize,
@@ -170,6 +177,25 @@ fn lua_table_arg<'a>(
     match value {
         LuaValue::Table(table) => Ok(table),
         _ => Err(lua_bad_table_arg(function, index, value)),
+    }
+}
+
+fn lua_required_integer_arg(function: &str, index: usize, value: &LuaValue) -> Result<i64, String> {
+    match value.to_number() {
+        Some(number) if number.is_finite() => Ok(number as i64),
+        _ => Err(lua_bad_number_arg(function, index, value)),
+    }
+}
+
+fn lua_optional_integer_arg(
+    function: &str,
+    index: usize,
+    value: Option<&LuaValue>,
+    default: i64,
+) -> Result<i64, String> {
+    match value {
+        None | Some(LuaValue::Nil) => Ok(default),
+        Some(value) => lua_required_integer_arg(function, index, value),
     }
 }
 
@@ -3090,13 +3116,12 @@ impl<'a> LuaState<'a> {
                     }
                 } else if args.len() >= 3 {
                     // table.insert(t, pos, value)
-                    let pos = args[1].to_number().unwrap_or(1.0) as usize;
+                    let pos = lua_required_integer_arg("insert", 2, &args[1])? as usize;
                     let val = args[2].clone();
                     if let LuaValue::Table(ref mut t) = args[0] {
                         if pos < 1 || pos > t.array.len() + 1 {
                             return Err(
-                                "bad argument #2 to 'insert' (position out of bounds)"
-                                    .to_string(),
+                                "bad argument #2 to 'insert' (position out of bounds)".to_string()
                             );
                         }
                         let idx = pos.saturating_sub(1);
@@ -3110,10 +3135,14 @@ impl<'a> LuaState<'a> {
                 if !matches!(table, LuaValue::Table(_)) {
                     return Err(lua_bad_table_arg("remove", 1, &table));
                 }
-                // Read pos arg before mutably borrowing args[0].
-                let pos_arg = args.get(1).and_then(|v| v.to_number());
+                let pos_arg = args.get(1).cloned();
                 if let LuaValue::Table(ref mut t) = args[0] {
-                    let pos = pos_arg.unwrap_or(t.array.len() as f64) as usize;
+                    let pos = lua_optional_integer_arg(
+                        "remove",
+                        2,
+                        pos_arg.as_ref(),
+                        t.array.len() as i64,
+                    )? as usize;
                     let removed = if pos >= 1 && pos <= t.array.len() {
                         t.array.remove(pos - 1)
                     } else {
@@ -3130,11 +3159,9 @@ impl<'a> LuaState<'a> {
                     .get(1)
                     .map(|a| a.to_display_string())
                     .unwrap_or_default();
-                let start = args.get(2).and_then(|v| v.to_number()).unwrap_or(1.0) as usize;
-                let end = args
-                    .get(3)
-                    .and_then(|v| v.to_number())
-                    .unwrap_or(t.array.len() as f64) as usize;
+                let start = lua_optional_integer_arg("concat", 3, args.get(2), 1)? as usize;
+                let end = lua_optional_integer_arg("concat", 4, args.get(3), t.array.len() as i64)?
+                    as usize;
                 let mut parts: Vec<Vec<u8>> = Vec::new();
                 for i in start..=end {
                     if i >= 1 && i <= t.array.len() {
@@ -4390,9 +4417,29 @@ mod tests {
     #[test]
     fn table_insert_rejects_out_of_bounds_position() {
         let mut store = Store::new();
-        let result = eval_script(b"local t = {1, 2}\ntable.insert(t, 4, 3)", &[], &[], &mut store, 0);
+        let result = eval_script(
+            b"local t = {1, 2}\ntable.insert(t, 4, 3)",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
 
         assert!(matches!(result, Err(ref err) if err.contains("position out of bounds")));
+    }
+
+    #[test]
+    fn table_insert_rejects_non_numeric_position() {
+        let mut store = Store::new();
+        let result = eval_script(
+            b"local t = {1, 2}\ntable.insert(t, 'x', 3)",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+
+        assert!(matches!(result, Err(ref err) if err.contains("bad argument #2 to 'insert'")));
     }
 
     #[test]
@@ -4404,11 +4451,53 @@ mod tests {
     }
 
     #[test]
+    fn table_remove_rejects_non_numeric_position() {
+        let mut store = Store::new();
+        let result = eval_script(
+            b"local t = {1, 2}\nreturn table.remove(t, 'x')",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+
+        assert!(matches!(result, Err(ref err) if err.contains("bad argument #2 to 'remove'")));
+    }
+
+    #[test]
     fn table_concat_rejects_non_table_argument() {
         let mut store = Store::new();
         let result = eval_script(b"return table.concat(42, ',')", &[], &[], &mut store, 0);
 
         assert!(matches!(result, Err(ref err) if err.contains("bad argument #1 to 'concat'")));
+    }
+
+    #[test]
+    fn table_concat_rejects_non_numeric_start() {
+        let mut store = Store::new();
+        let result = eval_script(
+            b"return table.concat({'a', 'b'}, ',', 'x')",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+
+        assert!(matches!(result, Err(ref err) if err.contains("bad argument #3 to 'concat'")));
+    }
+
+    #[test]
+    fn table_concat_rejects_non_numeric_end() {
+        let mut store = Store::new();
+        let result = eval_script(
+            b"return table.concat({'a', 'b'}, ',', 1, 'x')",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+
+        assert!(matches!(result, Err(ref err) if err.contains("bad argument #4 to 'concat'")));
     }
 
     #[test]
