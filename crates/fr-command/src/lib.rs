@@ -2160,8 +2160,15 @@ fn geo_decode_score(score: f64) -> Option<(f64, f64)> {
 fn parse_geo_f64(arg: &[u8]) -> Result<f64, RespFrame> {
     let text = std::str::from_utf8(arg)
         .map_err(|_| RespFrame::Error("ERR value is not a valid float".to_string()))?;
-    text.parse::<f64>()
-        .map_err(|_| RespFrame::Error("ERR value is not a valid float".to_string()))
+    let val = text
+        .parse::<f64>()
+        .map_err(|_| RespFrame::Error("ERR value is not a valid float".to_string()))?;
+    if val.is_nan() {
+        return Err(RespFrame::Error(
+            "ERR value is not a valid float".to_string(),
+        ));
+    }
+    Ok(val)
 }
 
 #[inline]
@@ -5527,19 +5534,25 @@ fn spublish_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Comman
 
 fn parse_score_bound(arg: &[u8]) -> Result<ScoreBound, CommandError> {
     let text = std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
-    if text == "-inf" {
+    if text.eq_ignore_ascii_case("-inf") {
         Ok(ScoreBound::Inclusive(f64::NEG_INFINITY))
-    } else if text == "+inf" || text == "inf" {
+    } else if text.eq_ignore_ascii_case("+inf") || text.eq_ignore_ascii_case("inf") {
         Ok(ScoreBound::Inclusive(f64::INFINITY))
     } else if let Some(rest) = text.strip_prefix('(') {
         let val = rest
             .parse::<f64>()
             .map_err(|_| CommandError::InvalidInteger)?;
+        if val.is_nan() {
+            return Err(CommandError::InvalidInteger);
+        }
         Ok(ScoreBound::Exclusive(val))
     } else {
         let val = text
             .parse::<f64>()
             .map_err(|_| CommandError::InvalidInteger)?;
+        if val.is_nan() {
+            return Err(CommandError::InvalidInteger);
+        }
         Ok(ScoreBound::Inclusive(val))
     }
 }
@@ -6873,6 +6886,11 @@ fn parse_zstore_args(
                     .map_err(|_| CommandError::InvalidInteger)?
                     .parse::<f64>()
                     .map_err(|_| CommandError::InvalidInteger)?;
+                if w.is_nan() {
+                    return Err(CommandError::Custom(
+                        "ERR weight value is not a float".to_string(),
+                    ));
+                }
                 weights.push(w);
                 i += 1;
             }
@@ -16269,12 +16287,24 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("xinfo unsupported subcommand");
-        assert!(matches!(syntax, CommandError::SyntaxError));
+        .expect_err("xinfo help with extra args");
+        assert!(matches!(
+            syntax,
+            CommandError::WrongSubcommandArity {
+                command: "XINFO",
+                ..
+            }
+        ));
 
         let arity = dispatch_argv(&[b"XINFO".to_vec(), b"STREAM".to_vec()], &mut store, 0)
             .expect_err("xinfo arity");
-        assert!(matches!(arity, CommandError::WrongArity("XINFO")));
+        assert!(matches!(
+            arity,
+            CommandError::WrongSubcommandArity {
+                command: "XINFO",
+                ..
+            }
+        ));
 
         store.set(b"str".to_vec(), b"value".to_vec(), None, 0);
         let wrongtype = dispatch_argv(
@@ -16494,7 +16524,13 @@ mod tests {
             0,
         )
         .expect_err("xinfo consumers arity");
-        assert!(matches!(arity, CommandError::WrongArity("XINFO")));
+        assert!(matches!(
+            arity,
+            CommandError::WrongSubcommandArity {
+                command: "XINFO",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -16688,8 +16724,14 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("xgroup unsupported subcommand");
-        assert!(matches!(syntax, CommandError::SyntaxError));
+        .expect_err("xgroup help with extra args");
+        assert!(matches!(
+            syntax,
+            CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                ..
+            }
+        ));
 
         let arity = dispatch_argv(
             &[
@@ -16702,7 +16744,13 @@ mod tests {
             0,
         )
         .expect_err("xgroup arity");
-        assert!(matches!(arity, CommandError::WrongArity("XGROUP")));
+        assert!(matches!(
+            arity,
+            CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                ..
+            }
+        ));
 
         store.set(b"str".to_vec(), b"value".to_vec(), None, 0);
         let wrongtype = dispatch_argv(
@@ -16827,7 +16875,13 @@ mod tests {
             0,
         )
         .expect_err("xgroup destroy arity");
-        assert!(matches!(arity, CommandError::WrongArity("XGROUP")));
+        assert!(matches!(
+            arity,
+            CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -17024,7 +17078,13 @@ mod tests {
             0,
         )
         .expect_err("xgroup setid arity");
-        assert!(matches!(arity, CommandError::WrongArity("XGROUP")));
+        assert!(matches!(
+            arity,
+            CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                ..
+            }
+        ));
 
         store.set(b"str".to_vec(), b"value".to_vec(), None, 0);
         let wrongtype = dispatch_argv(
@@ -17273,7 +17333,13 @@ mod tests {
             0,
         )
         .expect_err("xgroup createconsumer arity");
-        assert!(matches!(arity_create, CommandError::WrongArity("XGROUP")));
+        assert!(matches!(
+            arity_create,
+            CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                ..
+            }
+        ));
 
         let arity_del = dispatch_argv(
             &[
@@ -17286,7 +17352,13 @@ mod tests {
             0,
         )
         .expect_err("xgroup delconsumer arity");
-        assert!(matches!(arity_del, CommandError::WrongArity("XGROUP")));
+        assert!(matches!(
+            arity_del,
+            CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                ..
+            }
+        ));
     }
 
     // ── String extension command tests ──────────────────────────────────
