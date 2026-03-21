@@ -3381,14 +3381,10 @@ impl Runtime {
             ])));
         }
         if replies.len() == 1 {
-            return replies.into_iter().next().expect("single reply");
+            replies.into_iter().next().expect("single reply")
+        } else {
+            RespFrame::Array(Some(replies))
         }
-        // For multiple channels, concatenate the individual replies
-        let mut combined = Vec::new();
-        for reply in replies {
-            combined.extend_from_slice(&reply.to_bytes());
-        }
-        RespFrame::BulkString(Some(combined))
     }
 
     fn handle_unsubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -3420,11 +3416,7 @@ impl Runtime {
             if replies.len() == 1 {
                 return replies.into_iter().next().expect("single reply");
             }
-            let mut combined = Vec::new();
-            for reply in replies {
-                combined.extend_from_slice(&reply.to_bytes());
-            }
-            return RespFrame::BulkString(Some(combined));
+            return RespFrame::Array(Some(replies));
         }
         let mut replies = Vec::new();
         for channel in &argv[1..] {
@@ -3438,11 +3430,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        let mut combined = Vec::new();
-        for reply in replies {
-            combined.extend_from_slice(&reply.to_bytes());
-        }
-        RespFrame::BulkString(Some(combined))
+        RespFrame::Array(Some(replies))
     }
 
     fn handle_psubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -3461,11 +3449,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        let mut combined = Vec::new();
-        for reply in replies {
-            combined.extend_from_slice(&reply.to_bytes());
-        }
-        RespFrame::BulkString(Some(combined))
+        RespFrame::Array(Some(replies))
     }
 
     fn handle_punsubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -3496,11 +3480,7 @@ impl Runtime {
             if replies.len() == 1 {
                 return replies.into_iter().next().expect("single reply");
             }
-            let mut combined = Vec::new();
-            for reply in replies {
-                combined.extend_from_slice(&reply.to_bytes());
-            }
-            return RespFrame::BulkString(Some(combined));
+            return RespFrame::Array(Some(replies));
         }
         let mut replies = Vec::new();
         for pattern in &argv[1..] {
@@ -3514,11 +3494,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        let mut combined = Vec::new();
-        for reply in replies {
-            combined.extend_from_slice(&reply.to_bytes());
-        }
-        RespFrame::BulkString(Some(combined))
+        RespFrame::Array(Some(replies))
     }
 
     fn handle_publish_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -3545,11 +3521,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        let mut combined = Vec::new();
-        for reply in replies {
-            combined.extend_from_slice(&reply.to_bytes());
-        }
-        RespFrame::BulkString(Some(combined))
+        RespFrame::Array(Some(replies))
     }
 
     fn handle_sunsubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -3580,11 +3552,7 @@ impl Runtime {
             if replies.len() == 1 {
                 return replies.into_iter().next().expect("single reply");
             }
-            let mut combined = Vec::new();
-            for reply in replies {
-                combined.extend_from_slice(&reply.to_bytes());
-            }
-            return RespFrame::BulkString(Some(combined));
+            return RespFrame::Array(Some(replies));
         }
         let mut replies = Vec::new();
         for channel in &argv[1..] {
@@ -3598,11 +3566,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        let mut combined = Vec::new();
-        for reply in replies {
-            combined.extend_from_slice(&reply.to_bytes());
-        }
-        RespFrame::BulkString(Some(combined))
+        RespFrame::Array(Some(replies))
     }
 
     fn handle_spublish_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
