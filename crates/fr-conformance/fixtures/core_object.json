@@ -202,7 +202,7 @@
       "argv": ["OBJECT", "BOGUS", "somekey"],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for OBJECT BOGUS"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try OBJECT HELP."
       }
     },
     {
@@ -220,7 +220,7 @@
       "argv": ["OBJECT", "ENCODING"],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'object' command"
+        "value": "ERR wrong number of arguments for 'object|encoding' subcommand"
       }
     },
 

@@ -285,7 +285,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'command|BOGUS'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try COMMAND HELP."
       }
     },
     {
@@ -417,7 +417,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'config' command"
+        "value": "ERR wrong number of arguments for 'config|get' subcommand"
       }
     },
     {
@@ -429,7 +429,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for CONFIG BOGUS"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try CONFIG HELP."
       }
     },
     {
@@ -708,7 +708,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'object' command"
+        "value": "ERR wrong number of arguments for 'object|encoding' subcommand"
       }
     },
     {
@@ -721,7 +721,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for OBJECT BOGUS"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try OBJECT HELP."
       }
     },
     {
@@ -964,7 +964,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'latency|BOGUS'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try LATENCY HELP."
       }
     },
     {
@@ -1013,7 +1013,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for DEBUG BOGUS"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try DEBUG HELP."
       }
     },
     {
@@ -1170,7 +1170,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'slowlog|BOGUS'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try SLOWLOG HELP."
       }
     },
     {
@@ -1431,7 +1431,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for DEBUG NOSUCH"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try DEBUG HELP."
       }
     },
     {
@@ -1443,7 +1443,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'memory|NOSUCH'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try MEMORY HELP."
       }
     },
     {
@@ -1455,7 +1455,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'latency|NOSUCH'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try LATENCY HELP."
       }
     },
     {
@@ -1500,7 +1500,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'command|NOSUCH'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try COMMAND HELP."
       }
     },
     {
@@ -1793,7 +1793,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'slowlog|NOSUCH'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try SLOWLOG HELP."
       }
     },
     {
@@ -1882,7 +1882,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'memory|NOSUCH'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try MEMORY HELP."
       }
     },
     {
@@ -1959,7 +1959,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'command|NOSUCH'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try COMMAND HELP."
       }
     },
     {

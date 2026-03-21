@@ -443,7 +443,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'pubsub|NOSUCHSUB'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuchsub'. Try PUBSUB HELP."
       }
     },
     {

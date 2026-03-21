@@ -671,7 +671,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for FUNCTION NOSUCH"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try FUNCTION HELP."
       }
     },
     {
@@ -1085,7 +1085,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'script|NOSUCH'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try SCRIPT HELP."
       }
     },
     {
@@ -1223,7 +1223,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'script|exists' command"
+        "value": "ERR wrong number of arguments for 'script|exists' subcommand"
       }
     },
     {
@@ -1235,7 +1235,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'script|load' command"
+        "value": "ERR wrong number of arguments for 'script|load' subcommand"
       }
     },
     {

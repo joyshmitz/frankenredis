@@ -754,7 +754,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'config' command"
+        "value": "ERR wrong number of arguments for 'config|get' subcommand"
       }
     },
     {
@@ -767,7 +767,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'config' command"
+        "value": "ERR wrong number of arguments for 'config|set' subcommand"
       }
     },
     {
@@ -780,7 +780,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'config' command"
+        "value": "ERR wrong number of arguments for 'config|resetstat' subcommand"
       }
     },
     {
@@ -792,7 +792,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for CONFIG NOSUCH"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try CONFIG HELP."
       }
     },
     {
@@ -1314,7 +1314,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'config' command"
+        "value": "ERR wrong number of arguments for 'config|rewrite' subcommand"
       }
     },
     {
@@ -1414,7 +1414,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for CONFIG FOOBAR"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'foobar'. Try CONFIG HELP."
       }
     },
     {
@@ -1426,7 +1426,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for CONFIG NOSUCH"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try CONFIG HELP."
       }
     },
     {
@@ -1435,13 +1435,11 @@
       "argv": [
         "CONFIG",
         "SET",
-        "maxmemory",
-        "100",
-        "hz"
+        "foo"
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'config' command"
+        "value": "ERR wrong number of arguments for 'config|set' subcommand"
       }
     },
     {
@@ -2021,7 +2019,7 @@
       "argv": ["CONFIG", "BOGUS"],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for CONFIG BOGUS"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try CONFIG HELP."
       }
     },
 

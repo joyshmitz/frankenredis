@@ -1290,7 +1290,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'command|NOSUCH'"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try COMMAND HELP."
       }
     },
     {
@@ -1341,7 +1341,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for DEBUG NOSUCH"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try DEBUG HELP."
       }
     },
     {
@@ -1464,7 +1464,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for OBJECT NOSUCH"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try OBJECT HELP."
       }
     },
     {
@@ -1886,7 +1886,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for OBJECT NOPE"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'nope'. Try OBJECT HELP."
       }
     },
     {

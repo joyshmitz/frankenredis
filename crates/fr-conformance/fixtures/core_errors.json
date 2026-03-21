@@ -1077,7 +1077,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unknown subcommand or wrong number of arguments for OBJECT BADSUBCMD"
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'badsubcmd'. Try OBJECT HELP."
       }
     },
     {

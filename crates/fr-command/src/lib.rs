@@ -18,6 +18,14 @@ pub enum CommandError {
         args_preview: Option<String>,
     },
     WrongArity(&'static str),
+    WrongSubcommandArity {
+        command: &'static str,
+        subcommand: String,
+    },
+    UnknownSubcommand {
+        command: &'static str,
+        subcommand: String,
+    },
     InvalidInteger,
     SyntaxError,
     NoSuchKey,
@@ -48,6 +56,22 @@ impl CommandError {
             CommandError::WrongArity(cmd) => RespFrame::Error(format!(
                 "ERR wrong number of arguments for '{}' command",
                 cmd.to_ascii_lowercase()
+            )),
+            CommandError::WrongSubcommandArity {
+                command,
+                subcommand,
+            } => RespFrame::Error(format!(
+                "ERR wrong number of arguments for '{}|{}' subcommand",
+                command.to_ascii_lowercase(),
+                subcommand.to_ascii_lowercase()
+            )),
+            CommandError::UnknownSubcommand {
+                command,
+                subcommand,
+            } => RespFrame::Error(format!(
+                "ERR Unknown subcommand or wrong number of arguments for '{}'. Try {} HELP.",
+                subcommand.to_ascii_lowercase(),
+                command.to_ascii_uppercase()
             )),
             CommandError::InvalidInteger => {
                 RespFrame::Error("ERR value is not an integer or out of range".to_string())
@@ -4232,10 +4256,17 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("XGROUP"));
     }
+    let sub = match std::str::from_utf8(&argv[1]) {
+        Ok(s) => s,
+        Err(_) => return Err(CommandError::InvalidUtf8Argument),
+    };
 
-    if eq_ascii_command(&argv[1], b"CREATE") {
+    if sub.eq_ignore_ascii_case("CREATE") {
         if argv.len() != 5 && argv.len() != 6 {
-            return Err(CommandError::WrongArity("XGROUP"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                subcommand: sub.to_string(),
+            });
         }
 
         let mkstream = if argv.len() == 6 {
@@ -4271,9 +4302,12 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         };
     }
 
-    if eq_ascii_command(&argv[1], b"DESTROY") {
+    if sub.eq_ignore_ascii_case("DESTROY") {
         if argv.len() != 4 {
-            return Err(CommandError::WrongArity("XGROUP"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                subcommand: sub.to_string(),
+            });
         }
         return match store.xgroup_destroy(&argv[2], &argv[3], now_ms) {
             Ok(removed) => Ok(RespFrame::Integer(if removed { 1 } else { 0 })),
@@ -4281,9 +4315,12 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         };
     }
 
-    if eq_ascii_command(&argv[1], b"SETID") {
+    if sub.eq_ignore_ascii_case("SETID") {
         if argv.len() != 5 {
-            return Err(CommandError::WrongArity("XGROUP"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                subcommand: sub.to_string(),
+            });
         }
         let last_delivered_id = if eq_ascii_command(&argv[4], b"$") {
             store.xlast_id(&argv[2], now_ms)?.unwrap_or((0, 0))
@@ -4306,9 +4343,12 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         };
     }
 
-    if eq_ascii_command(&argv[1], b"CREATECONSUMER") {
+    if sub.eq_ignore_ascii_case("CREATECONSUMER") {
         if argv.len() != 5 {
-            return Err(CommandError::WrongArity("XGROUP"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                subcommand: sub.to_string(),
+            });
         }
         return match store.xgroup_createconsumer(&argv[2], &argv[3], &argv[4], now_ms) {
             Ok(Some(created)) => Ok(RespFrame::Integer(if created { 1 } else { 0 })),
@@ -4317,9 +4357,12 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         };
     }
 
-    if eq_ascii_command(&argv[1], b"DELCONSUMER") {
+    if sub.eq_ignore_ascii_case("DELCONSUMER") {
         if argv.len() != 5 {
-            return Err(CommandError::WrongArity("XGROUP"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                subcommand: sub.to_string(),
+            });
         }
         return match store.xgroup_delconsumer(&argv[2], &argv[3], &argv[4], now_ms) {
             Ok(Some(deleted_pending)) => Ok(RespFrame::Integer(
@@ -4330,7 +4373,34 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         };
     }
 
-    Err(CommandError::SyntaxError)
+    if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "XGROUP",
+                subcommand: "HELP".to_string(),
+            });
+        }
+        return Ok(RespFrame::Array(Some(vec![
+            hello_bulk("XGROUP <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_bulk("CREATE <key> <groupname> <id-or-$> [MKSTREAM]"),
+            hello_bulk("    Create a new consumer group."),
+            hello_bulk("CREATECONSUMER <key> <groupname> <consumername>"),
+            hello_bulk("    Create a new consumer in the specified group."),
+            hello_bulk("DELCONSUMER <key> <groupname> <consumername>"),
+            hello_bulk("    Remove a consumer from the specified group."),
+            hello_bulk("DESTROY <key> <groupname>"),
+            hello_bulk("    Destroy a consumer group."),
+            hello_bulk("SETID <key> <groupname> <id-or-$>"),
+            hello_bulk("    Set the consumer group last delivered ID."),
+            hello_bulk("HELP"),
+            hello_bulk("    Print this help."),
+        ])));
+    }
+
+    Err(CommandError::UnknownSubcommand {
+        command: "XGROUP",
+        subcommand: sub.to_string(),
+    })
 }
 
 fn xreadgroup_nogroup_error(key: &[u8], group: &[u8]) -> RespFrame {
@@ -4385,9 +4455,16 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("XINFO"));
     }
-    if eq_ascii_command(&argv[1], b"CONSUMERS") {
+    let sub = match std::str::from_utf8(&argv[1]) {
+        Ok(s) => s,
+        Err(_) => return Err(CommandError::InvalidUtf8Argument),
+    };
+    if sub.eq_ignore_ascii_case("CONSUMERS") {
         if argv.len() != 4 {
-            return Err(CommandError::WrongArity("XINFO"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "XINFO",
+                subcommand: sub.to_string(),
+            });
         }
         let consumers = match store.xinfo_consumers(&argv[2], &argv[3], now_ms) {
             Ok(Some(consumers)) => consumers,
@@ -4401,9 +4478,12 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
             .collect();
         return Ok(RespFrame::Array(Some(out)));
     }
-    if eq_ascii_command(&argv[1], b"GROUPS") {
+    if sub.eq_ignore_ascii_case("GROUPS") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongArity("XINFO"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "XINFO",
+                subcommand: sub.to_string(),
+            });
         }
         let Some(groups) = store.xinfo_groups(&argv[2], now_ms)? else {
             return Err(CommandError::NoSuchKey);
@@ -4419,17 +4499,45 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         }
         return Ok(RespFrame::Array(Some(out)));
     }
-    if !eq_ascii_command(&argv[1], b"STREAM") {
-        return Err(CommandError::SyntaxError);
+    if !sub.eq_ignore_ascii_case("STREAM") {
+        if sub.eq_ignore_ascii_case("HELP") {
+            if argv.len() != 2 {
+                return Err(CommandError::WrongSubcommandArity {
+                    command: "XINFO",
+                    subcommand: "HELP".to_string(),
+                });
+            }
+            return Ok(RespFrame::Array(Some(vec![
+                hello_bulk("XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+                hello_bulk("CONSUMERS <key> <groupname>"),
+                hello_bulk("    Show consumers of <groupname>."),
+                hello_bulk("GROUPS <key>"),
+                hello_bulk("    Show groups of stream <key>."),
+                hello_bulk("STREAM <key> [FULL [COUNT <count>]]"),
+                hello_bulk("    Show information about stream <key>."),
+                hello_bulk("HELP"),
+                hello_bulk("    Print this help."),
+            ])));
+        }
+        return Err(CommandError::UnknownSubcommand {
+            command: "XINFO",
+            subcommand: sub.to_string(),
+        });
     }
 
     // XINFO STREAM key [FULL [COUNT count]]
     let full_mode = argv.len() >= 4 && eq_ascii_command(&argv[3], b"FULL");
     if !full_mode && argv.len() != 3 {
-        return Err(CommandError::WrongArity("XINFO"));
+        return Err(CommandError::WrongSubcommandArity {
+            command: "XINFO",
+            subcommand: sub.to_string(),
+        });
     }
     if full_mode && argv.len() != 4 && argv.len() != 6 {
-        return Err(CommandError::WrongArity("XINFO"));
+        return Err(CommandError::WrongSubcommandArity {
+            command: "XINFO",
+            subcommand: sub.to_string(),
+        });
     }
     let full_count: usize = if full_mode && argv.len() == 6 {
         if !eq_ascii_command(&argv[4], b"COUNT") {
@@ -4837,6 +4945,12 @@ fn cluster_cmd(
         let count = store.count_keys_in_slot(slot, now_ms);
         Ok(RespFrame::Integer(count as i64))
     } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CLUSTER",
+                subcommand: "HELP".to_string(),
+            });
+        }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"CLUSTER INFO".to_vec())),
             RespFrame::BulkString(Some(b"CLUSTER MYID".to_vec())),
@@ -5189,6 +5303,12 @@ fn function_cmd(
             Err(e) => Err(CommandError::Store(e)),
         }
     } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "FUNCTION",
+                subcommand: "HELP".to_string(),
+            });
+        }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
                 b"FUNCTION LOAD [REPLACE] function-code - Load a library.".to_vec(),
@@ -5210,9 +5330,10 @@ fn function_cmd(
             RespFrame::BulkString(Some(b"FUNCTION HELP - Return this help.".to_vec())),
         ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR Unknown subcommand or wrong number of arguments for FUNCTION {sub}"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "FUNCTION",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -7716,9 +7837,10 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             ))),
         }
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR unknown subcommand or wrong number of arguments for 'command|{sub}'"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "COMMAND",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -7752,7 +7874,10 @@ fn config_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("GET") {
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("CONFIG"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: sub.to_string(),
+            });
         }
         // Return empty array for all CONFIG GET queries (stub)
         Ok(RespFrame::Array(Some(Vec::new())))
@@ -7761,10 +7886,31 @@ fn config_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         || sub.eq_ignore_ascii_case("REWRITE")
     {
         Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: "HELP".to_string(),
+            });
+        }
+        Ok(RespFrame::Array(Some(vec![
+            hello_bulk("CONFIG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_bulk("GET <pattern> [<pattern> ...]"),
+            hello_bulk("    Return configuration parameters matching the specified patterns."),
+            hello_bulk("SET <parameter> <value> [<parameter> <value> ...]"),
+            hello_bulk("    Set configuration parameters to the specified values."),
+            hello_bulk("RESETSTAT"),
+            hello_bulk("    Reset statistics reported by INFO."),
+            hello_bulk("REWRITE"),
+            hello_bulk("    Rewrite the configuration file with the current in-memory settings."),
+            hello_bulk("HELP"),
+            hello_bulk("    Print this help."),
+        ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR Unknown subcommand or wrong number of arguments for CONFIG {sub}"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "CONFIG",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -7795,7 +7941,10 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     } else if sub.eq_ignore_ascii_case("PAUSE") {
         // CLIENT PAUSE timeout [WRITE|ALL]
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("CLIENT"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: sub.to_string(),
+            });
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("UNPAUSE") {
@@ -7803,19 +7952,26 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     } else if sub.eq_ignore_ascii_case("TRACKING") {
         // CLIENT TRACKING ON|OFF [REDIRECT id] [PREFIX prefix ...] [BCAST] [OPTIN] [OPTOUT] [NOLOOP]
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("CLIENT"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: sub.to_string(),
+            });
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("CACHING") {
         // CLIENT CACHING YES|NO
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("CLIENT"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: sub.to_string(),
+            });
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR Unknown subcommand or wrong number of arguments for CLIENT {sub}"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "CLIENT",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -8006,7 +8162,10 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("ENCODING") {
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("OBJECT"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "OBJECT",
+                subcommand: sub.to_string(),
+            });
         }
         let encoding = store.object_encoding(&argv[2], now_ms);
         match encoding {
@@ -8015,7 +8174,10 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         }
     } else if sub.eq_ignore_ascii_case("REFCOUNT") {
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("OBJECT"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "OBJECT",
+                subcommand: sub.to_string(),
+            });
         }
         if store.exists(&argv[2], now_ms) {
             Ok(RespFrame::Integer(1))
@@ -8024,7 +8186,10 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         }
     } else if sub.eq_ignore_ascii_case("IDLETIME") {
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("OBJECT"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "OBJECT",
+                subcommand: sub.to_string(),
+            });
         }
         match store.object_idletime(&argv[2], now_ms) {
             Some(idle_secs) => Ok(RespFrame::Integer(idle_secs as i64)),
@@ -8033,7 +8198,10 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     } else if sub.eq_ignore_ascii_case("FREQ") {
         // LFU frequency counter - returns 0 since we don't track frequency
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("OBJECT"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "OBJECT",
+                subcommand: sub.to_string(),
+            });
         }
         if store.exists(&argv[2], now_ms) {
             Ok(RespFrame::Integer(0))
@@ -8041,6 +8209,12 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             Ok(RespFrame::Error("ERR no such key".to_string()))
         }
     } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "OBJECT",
+                subcommand: "HELP".to_string(),
+            });
+        }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
                 b"OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_vec(),
@@ -8060,9 +8234,10 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             )),
         ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR Unknown subcommand or wrong number of arguments for OBJECT {sub}"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "OBJECT",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -8086,6 +8261,12 @@ fn slowlog_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     } else if sub.eq_ignore_ascii_case("RESET") {
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "SLOWLOG",
+                subcommand: "HELP".to_string(),
+            });
+        }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
                 b"SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
@@ -8100,9 +8281,10 @@ fn slowlog_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
         ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR Unknown subcommand or wrong number of arguments for SLOWLOG {sub}"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "SLOWLOG",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -8113,7 +8295,10 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("USAGE") {
         if argv.len() < 3 || argv.len() > 5 {
-            return Err(CommandError::WrongArity("MEMORY|USAGE"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MEMORY",
+                subcommand: "USAGE".to_string(),
+            });
         }
         // Optional SAMPLES count (ignored, we do full scan)
         if argv.len() > 3 {
@@ -8149,6 +8334,12 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             b"peak.allocated:0\r\ntotal.allocated:0\r\nstartup.allocated:0\r\nreplication.backlog:0\r\nclients.slaves:0\r\nclients.normal:0\r\naof.buffer:0\r\n".to_vec(),
         )))
     } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MEMORY",
+                subcommand: "HELP".to_string(),
+            });
+        }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
                 b"MEMORY <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
@@ -8173,9 +8364,10 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
         ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR unknown subcommand or wrong number of arguments for 'memory|{sub}'"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "MEMORY",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -8456,6 +8648,12 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         }
         Ok(RespFrame::Array(Some(result)))
     } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "PUBSUB",
+                subcommand: "HELP".to_string(),
+            });
+        }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
                 b"PUBSUB <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
@@ -8473,9 +8671,10 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
         ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR unknown subcommand or wrong number of arguments for 'pubsub|{sub}'"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "PUBSUB",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -8838,13 +9037,19 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("LOAD") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongArity("SCRIPT|LOAD"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "SCRIPT",
+                subcommand: "LOAD".to_string(),
+            });
         }
         let sha1 = store.script_load(&argv[2]);
         Ok(RespFrame::BulkString(Some(sha1.into_bytes())))
     } else if sub.eq_ignore_ascii_case("EXISTS") {
         if argv.len() < 3 {
-            return Err(CommandError::WrongArity("SCRIPT|EXISTS"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "SCRIPT",
+                subcommand: "EXISTS".to_string(),
+            });
         }
         let sha1s: Vec<&[u8]> = argv[2..].iter().map(Vec::as_slice).collect();
         let results: Vec<RespFrame> = store
@@ -8855,7 +9060,10 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::Array(Some(results)))
     } else if sub.eq_ignore_ascii_case("FLUSH") {
         if argv.len() > 3 {
-            return Err(CommandError::WrongArity("SCRIPT"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "SCRIPT",
+                subcommand: "FLUSH".to_string(),
+            });
         }
         if argv.len() == 3 {
             let mode = std::str::from_utf8(&argv[2]).unwrap_or("");
@@ -8872,6 +9080,12 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             "NOTBUSY No scripts in execution right now.".to_string(),
         ))
     } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "SCRIPT",
+                subcommand: "HELP".to_string(),
+            });
+        }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
                 b"SCRIPT <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
@@ -8891,9 +9105,10 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
         ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR unknown subcommand or wrong number of arguments for 'script|{sub}'"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "SCRIPT",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -8910,9 +9125,10 @@ fn debug_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     {
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR Unknown subcommand or wrong number of arguments for DEBUG {sub}"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "DEBUG",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -8962,6 +9178,12 @@ fn latency_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     } else if sub.eq_ignore_ascii_case("GRAPH") {
         Ok(RespFrame::BulkString(None))
     } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "LATENCY",
+                subcommand: "HELP".to_string(),
+            });
+        }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
                 b"LATENCY <subcommand> [<arg> ...]. Subcommands are:".to_vec(),
@@ -8979,9 +9201,10 @@ fn latency_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
         ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR unknown subcommand or wrong number of arguments for 'latency|{sub}'"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "LATENCY",
+            subcommand: sub.to_string(),
+        })
     }
 }
 
@@ -22744,4 +22967,8 @@ mod tests {
         let out = dispatch_argv(&[b"PSYNC".to_vec(), b"?".to_vec()], &mut store, 0);
         assert!(out.is_err());
     }
+}
+
+fn hello_bulk(s: &str) -> RespFrame {
+    RespFrame::BulkString(Some(s.as_bytes().to_vec()))
 }

@@ -2211,7 +2211,7 @@ impl Runtime {
 
     fn handle_acl_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() < 2 {
-            return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+            return CommandError::WrongArity("ACL").to_resp();
         }
         let sub = match std::str::from_utf8(&argv[1]) {
             Ok(s) => s,
@@ -2238,19 +2238,38 @@ impl Runtime {
             self.handle_acl_log(argv)
         } else if sub.eq_ignore_ascii_case("SAVE") || sub.eq_ignore_ascii_case("LOAD") {
             if argv.len() != 2 {
-                return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+                return CommandError::WrongSubcommandArity {
+                    command: "ACL",
+                    subcommand: sub.to_string(),
+                }
+                .to_resp();
             }
             RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("HELP") {
+            if argv.len() != 2 {
+                return CommandError::WrongSubcommandArity {
+                    command: "ACL",
+                    subcommand: "HELP".to_string(),
+                }
+                .to_resp();
+            }
             self.handle_acl_help()
         } else {
-            RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string())
+            CommandError::UnknownSubcommand {
+                command: "ACL",
+                subcommand: sub.to_string(),
+            }
+            .to_resp()
         }
     }
 
     fn handle_acl_whoami(&self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() != 2 {
-            return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "WHOAMI".to_string(),
+            }
+            .to_resp();
         }
         let username = self.session.current_user_name();
         RespFrame::BulkString(Some(username.to_vec()))
@@ -2258,7 +2277,11 @@ impl Runtime {
 
     fn handle_acl_list(&self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() != 2 {
-            return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "LIST".to_string(),
+            }
+            .to_resp();
         }
         let entries = self.server.auth_state.acl_list_entries();
         RespFrame::Array(Some(
@@ -2271,7 +2294,11 @@ impl Runtime {
 
     fn handle_acl_users(&self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() != 2 {
-            return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "USERS".to_string(),
+            }
+            .to_resp();
         }
         let names = self.server.auth_state.user_names();
         RespFrame::Array(Some(
@@ -2284,7 +2311,11 @@ impl Runtime {
 
     fn handle_acl_setuser(&mut self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() < 3 {
-            return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "SETUSER".to_string(),
+            }
+            .to_resp();
         }
         let username = argv[2].clone();
         let rules: Vec<&[u8]> = argv[3..].iter().map(Vec::as_slice).collect();
@@ -2296,7 +2327,11 @@ impl Runtime {
 
     fn handle_acl_deluser(&mut self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() < 3 {
-            return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "DELUSER".to_string(),
+            }
+            .to_resp();
         }
         let mut deleted = 0i64;
         for username in &argv[2..] {
@@ -2312,7 +2347,11 @@ impl Runtime {
 
     fn handle_acl_getuser(&self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() != 3 {
-            return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "GETUSER".to_string(),
+            }
+            .to_resp();
         }
         let Some(user) = self.server.auth_state.get_user(&argv[2]) else {
             return RespFrame::BulkString(None);
@@ -2395,7 +2434,11 @@ impl Runtime {
                 RespFrame::Error(format!("ERR Unknown ACL cat category '{cat}'"))
             }
         } else {
-            RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string())
+            CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "CAT".to_string(),
+            }
+            .to_resp()
         }
     }
 
@@ -2413,7 +2456,11 @@ impl Runtime {
         } else if argv.len() == 2 {
             256
         } else {
-            return RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string());
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "GENPASS".to_string(),
+            }
+            .to_resp();
         };
 
         let hex_chars = bits.div_ceil(4);
@@ -2454,11 +2501,19 @@ impl Runtime {
             } else {
                 match sub.parse::<i64>() {
                     Ok(_) => RespFrame::Array(Some(Vec::new())),
-                    Err(_) => RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string()),
+                    Err(_) => CommandError::UnknownSubcommand {
+                        command: "ACL",
+                        subcommand: "LOG".to_string(),
+                    }
+                    .to_resp(),
                 }
             }
         } else {
-            RespFrame::Error(ACL_UNKNOWN_SUBCOMMAND_ERROR.to_string())
+            CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "LOG".to_string(),
+            }
+            .to_resp()
         }
     }
 
@@ -2511,7 +2566,11 @@ impl Runtime {
         }
         if sub.eq_ignore_ascii_case("RESETSTAT") {
             if argv.len() != 2 {
-                return CommandError::WrongArity("CONFIG").to_resp();
+                return CommandError::WrongSubcommandArity {
+                    command: "CONFIG",
+                    subcommand: "RESETSTAT".to_string(),
+                }
+                .to_resp();
             }
             // Reset tracked statistics: clear slowlog, reset next ID, reset config overrides
             self.server.reset_slowlog();
@@ -2519,18 +2578,28 @@ impl Runtime {
         }
         if sub.eq_ignore_ascii_case("REWRITE") {
             if argv.len() != 2 {
-                return CommandError::WrongArity("CONFIG").to_resp();
+                return CommandError::WrongSubcommandArity {
+                    command: "CONFIG",
+                    subcommand: "REWRITE".to_string(),
+                }
+                .to_resp();
             }
             return RespFrame::SimpleString("OK".to_string());
         }
-        RespFrame::Error(format!(
-            "ERR Unknown subcommand or wrong number of arguments for CONFIG {sub}",
-        ))
+        CommandError::UnknownSubcommand {
+            command: "CONFIG",
+            subcommand: sub.to_string(),
+        }
+        .to_resp()
     }
 
     fn handle_config_get(&self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() < 3 {
-            return CommandError::WrongArity("CONFIG").to_resp();
+            return CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: "GET".to_string(),
+            }
+            .to_resp();
         }
         let mut entries = Vec::new();
         // Redis 7+ supports multiple patterns: CONFIG GET pattern1 pattern2 ...
@@ -2739,7 +2808,11 @@ impl Runtime {
 
     fn handle_config_set(&mut self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() < 4 || !argv.len().is_multiple_of(2) {
-            return CommandError::WrongArity("CONFIG").to_resp();
+            return CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: "SET".to_string(),
+            }
+            .to_resp();
         }
 
         let mut next_requirepass: Option<Option<Vec<u8>>> = None;
@@ -3186,9 +3259,11 @@ impl Runtime {
             }
             RespFrame::SimpleString("OK".to_string())
         } else {
-            RespFrame::Error(format!(
-                "ERR Unknown subcommand or wrong number of arguments for CLIENT {sub}",
-            ))
+            CommandError::UnknownSubcommand {
+                command: "CLIENT",
+                subcommand: sub.to_string(),
+            }
+            .to_resp()
         }
     }
 
@@ -3247,6 +3322,13 @@ impl Runtime {
             self.server.reset_slowlog();
             RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("HELP") {
+            if argv.len() != 2 {
+                return CommandError::WrongSubcommandArity {
+                    command: "SLOWLOG",
+                    subcommand: "HELP".to_string(),
+                }
+                .to_resp();
+            }
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(
                     b"SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
@@ -3261,9 +3343,11 @@ impl Runtime {
                 RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
             ]))
         } else {
-            RespFrame::Error(format!(
-                "ERR unknown subcommand or wrong number of arguments for 'slowlog|{sub}'"
-            ))
+            CommandError::UnknownSubcommand {
+                command: "SLOWLOG",
+                subcommand: sub.to_string(),
+            }
+            .to_resp()
         }
     }
 

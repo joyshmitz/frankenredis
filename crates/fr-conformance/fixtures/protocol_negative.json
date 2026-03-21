@@ -258,6 +258,48 @@
       "now_ms": 0,
       "raw_request": "*1\r\n$4\r\nPING\r\n",
       "expect": { "kind": "simple", "value": "PONG" }
+    },
+    {
+      "name": "bulk_length_overflow",
+      "now_ms": 0,
+      "raw_request": "$8388609\r\n",
+      "expect": { "kind": "error", "value": "ERR Protocol error: bulk length exceeds limit" },
+      "expect_threat": {
+        "threat_class": "parser_abuse",
+        "severity": "s0",
+        "decision_action": "fail_closed",
+        "reason_code": "protocol_parse_failure",
+        "subsystem": "protocol",
+        "action": "parse_failure"
+      }
+    },
+    {
+      "name": "multibulk_length_overflow",
+      "now_ms": 0,
+      "raw_request": "*1025\r\n",
+      "expect": { "kind": "error", "value": "ERR Protocol error: multibulk length exceeds limit" },
+      "expect_threat": {
+        "threat_class": "parser_abuse",
+        "severity": "s0",
+        "decision_action": "fail_closed",
+        "reason_code": "protocol_parse_failure",
+        "subsystem": "protocol",
+        "action": "parse_failure"
+      }
+    },
+    {
+      "name": "recursion_depth_limit_exceeded",
+      "now_ms": 0,
+      "raw_request": "*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n*1\r\n:42\r\n",
+      "expect": { "kind": "error", "value": "ERR Protocol error: recursion depth limit exceeded" },
+      "expect_threat": {
+        "threat_class": "parser_abuse",
+        "severity": "s0",
+        "decision_action": "fail_closed",
+        "reason_code": "protocol_parse_failure",
+        "subsystem": "protocol",
+        "action": "parse_failure"
+      }
     }
   ]
 }

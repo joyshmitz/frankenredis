@@ -370,7 +370,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'badcmd'. Try ACL HELP."
       }
     },
     {
@@ -381,7 +381,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR wrong number of arguments for 'acl' command"
       }
     },
     {
@@ -559,7 +559,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR wrong number of arguments for 'acl|whoami' subcommand"
       }
     },
     {
@@ -1038,7 +1038,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR wrong number of arguments for 'acl|genpass' subcommand"
       }
     },
     {
@@ -1050,7 +1050,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR wrong number of arguments for 'acl|deluser' subcommand"
       }
     },
     {
@@ -1062,7 +1062,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR wrong number of arguments for 'acl|getuser' subcommand"
       }
     },
     {
@@ -1074,7 +1074,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR wrong number of arguments for 'acl|setuser' subcommand"
       }
     },
     {
@@ -1087,7 +1087,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR wrong number of arguments for 'acl|save' subcommand"
       }
     },
     {
@@ -1100,7 +1100,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR wrong number of arguments for 'acl|load' subcommand"
       }
     },
     {
@@ -1113,7 +1113,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP."
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'log'. Try ACL HELP."
       }
     },
     {
