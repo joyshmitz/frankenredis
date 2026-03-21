@@ -357,7 +357,7 @@ fn rdb_decode_length(data: &[u8]) -> Option<(usize, usize)> {
 fn rdb_decode_string(data: &[u8]) -> Option<(Vec<u8>, usize)> {
     let first = *data.first()?;
     let encoding = (first & 0xC0) >> 6;
-    
+
     if encoding == 3 {
         // Special encoding (integers or LZF)
         match first & 0x3F {
@@ -421,9 +421,11 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
             RDB_TYPE_STRING | RDB_TYPE_LIST | RDB_TYPE_SET | RDB_TYPE_HASH | RDB_TYPE_ZSET
         );
         let is_expiry_opcode = matches!(opcode, RDB_OPCODE_EXPIRETIME_MS | 0xFD);
+        let is_eviction_opcode = matches!(opcode, 0xF8 | 0xF9);
 
-        if !is_type_byte && !is_expiry_opcode && pending_expire_ms.is_some() {
-            // In a well-formed RDB, expiry must be followed by a type byte.
+        if !is_type_byte && !is_expiry_opcode && !is_eviction_opcode && pending_expire_ms.is_some()
+        {
+            // In a well-formed RDB, expiry/eviction data must be followed by a type byte.
             // If we see SELECTDB or something else here, the file is malformed.
             return Err(PersistError::InvalidFrame);
         }
@@ -496,6 +498,19 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                 );
                 cursor += 4;
                 pending_expire_ms = Some(u64::from(secs) * 1000);
+            }
+            0xF8 => {
+                // RDB_OPCODE_IDLE
+                let (_, consumed) =
+                    rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
+                cursor += consumed;
+            }
+            0xF9 => {
+                // RDB_OPCODE_FREQ
+                if cursor >= data.len() {
+                    return Err(PersistError::InvalidFrame);
+                }
+                cursor += 1;
             }
             type_byte @ (RDB_TYPE_STRING | RDB_TYPE_LIST | RDB_TYPE_SET | RDB_TYPE_HASH
             | RDB_TYPE_ZSET) => {

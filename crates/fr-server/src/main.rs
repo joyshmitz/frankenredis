@@ -257,6 +257,7 @@ fn main() -> ExitCode {
 
     let mut events = Events::with_capacity(1024);
     let mut clients: HashMap<Token, ClientConnection> = HashMap::new();
+    let mut client_id_to_token: HashMap<u64, Token> = HashMap::new();
     let mut blocked_tokens: HashSet<Token> = HashSet::new();
     let mut closing_tokens: HashSet<Token> = HashSet::new();
     let mut write_tokens: HashSet<Token> = HashSet::new();
@@ -297,6 +298,7 @@ fn main() -> ExitCode {
                         &listener,
                         &mut poll,
                         &mut clients,
+                        &mut client_id_to_token,
                         &mut next_token,
                         &runtime,
                     );
@@ -343,7 +345,13 @@ fn main() -> ExitCode {
         );
 
         // Deliver pending Pub/Sub messages to subscribed clients.
-        deliver_pubsub_messages(&mut clients, &mut runtime, &mut poll, &mut write_tokens);
+        deliver_pubsub_messages(
+            &mut clients,
+            &client_id_to_token,
+            &mut runtime,
+            &mut poll,
+            &mut write_tokens,
+        );
 
         // Clean up clients marked for closing whose write buffers are drained.
         let to_remove: Vec<Token> = closing_tokens
@@ -361,6 +369,7 @@ fn main() -> ExitCode {
                 blocked_tokens.remove(&token);
                 closing_tokens.remove(&token);
                 write_tokens.remove(&token);
+                client_id_to_token.remove(&conn.session.client_id);
                 // Clean up Pub/Sub subscriptions for this client.
                 runtime.pubsub_cleanup_client(conn.session.client_id);
                 let _ = poll.registry().deregister(&mut conn.stream);
@@ -373,6 +382,7 @@ fn accept_connections(
     listener: &TcpListener,
     poll: &mut Poll,
     clients: &mut HashMap<Token, ClientConnection>,
+    client_id_to_token: &mut HashMap<u64, Token>,
     next_token: &mut usize,
     runtime: &Runtime,
 ) {
@@ -414,7 +424,9 @@ fn accept_connections(
                 }
 
                 let session = runtime.new_session();
+                let client_id = session.client_id;
                 clients.insert(token, ClientConnection::new(stream, session));
+                client_id_to_token.insert(client_id, token);
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => break,
             Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -1221,6 +1233,7 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
 /// Deliver pending Pub/Sub messages to all subscribed clients.
 fn deliver_pubsub_messages(
     clients: &mut HashMap<Token, ClientConnection>,
+    client_id_to_token: &HashMap<u64, Token>,
     runtime: &mut Runtime,
     poll: &mut Poll,
     write_tokens: &mut HashSet<Token>,
@@ -1236,11 +1249,11 @@ fn deliver_pubsub_messages(
             continue;
         }
 
-        // Find the connection with this client_id
-        let Some((&token, conn)) = clients
-            .iter_mut()
-            .find(|(_, c)| c.session.client_id == client_id)
-        else {
+        let Some(&token) = client_id_to_token.get(&client_id) else {
+            continue;
+        };
+
+        let Some(conn) = clients.get_mut(&token) else {
             continue;
         };
 
