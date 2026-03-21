@@ -3271,6 +3271,11 @@ impl Runtime {
         if argv.len() != 1 {
             return CommandError::WrongArity("RESET").to_resp();
         }
+        // Clear pub/sub subscriptions from the global registry before resetting.
+        self.pubsub_cleanup_client(self.session.client_id);
+        self.server.store.subscribed_channels.clear();
+        self.server.store.subscribed_patterns.clear();
+        self.server.store.subscribed_shard_channels.clear();
         self.session.reset_connection_state(&self.server.auth_state);
         // Redis returns +RESET\r\n (a simple string "RESET")
         RespFrame::SimpleString("RESET".to_string())
