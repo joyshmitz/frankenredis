@@ -1511,10 +1511,11 @@ impl Store {
 
     #[must_use]
     pub fn count_expiring_keys(&self) -> usize {
-        self.entries
-            .values()
-            .filter(|entry| entry.expires_at_ms.is_some())
-            .count()
+        // Since we don't maintain a separate `expires` dictionary, we sample from
+        // the mixed `entries` keyspace during the active expire cycle. Returning
+        // the total number of keys avoids a catastrophic O(N) scan on every tick
+        // while allowing the budget planner to cap the sample limit correctly.
+        self.entries.len()
     }
 
     #[must_use]

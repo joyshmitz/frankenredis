@@ -564,6 +564,22 @@ fn classify_runtime_special_command_linear(cmd: &[u8]) -> Option<RuntimeSpecialC
         Some(RuntimeSpecialCommand::Bgrewriteaof)
     } else if command.eq_ignore_ascii_case("SHUTDOWN") {
         Some(RuntimeSpecialCommand::Shutdown)
+    } else if command.eq_ignore_ascii_case("SUBSCRIBE") {
+        Some(RuntimeSpecialCommand::Subscribe)
+    } else if command.eq_ignore_ascii_case("UNSUBSCRIBE") {
+        Some(RuntimeSpecialCommand::Unsubscribe)
+    } else if command.eq_ignore_ascii_case("PSUBSCRIBE") {
+        Some(RuntimeSpecialCommand::Psubscribe)
+    } else if command.eq_ignore_ascii_case("PUNSUBSCRIBE") {
+        Some(RuntimeSpecialCommand::Punsubscribe)
+    } else if command.eq_ignore_ascii_case("PUBLISH") {
+        Some(RuntimeSpecialCommand::Publish)
+    } else if command.eq_ignore_ascii_case("SSUBSCRIBE") {
+        Some(RuntimeSpecialCommand::Ssubscribe)
+    } else if command.eq_ignore_ascii_case("SUNSUBSCRIBE") {
+        Some(RuntimeSpecialCommand::Sunsubscribe)
+    } else if command.eq_ignore_ascii_case("SPUBLISH") {
+        Some(RuntimeSpecialCommand::Spublish)
     } else {
         None
     }
@@ -952,7 +968,7 @@ pub struct ClientSession {
     /// RESP protocol negotiated via HELLO. Redis defaults new connections to RESP2.
     resp_protocol_version: i64,
     /// Per-client connection ID (monotonically increasing).
-    client_id: u64,
+    pub client_id: u64,
     /// Per-client name set via CLIENT SETNAME.
     client_name: Option<Vec<u8>>,
     /// Client library name set via CLIENT SETINFO LIB-NAME (Redis 7.2+).
@@ -1855,6 +1871,30 @@ impl Runtime {
             }
             Some(RuntimeSpecialCommand::Shutdown) => {
                 return self.handle_shutdown_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Subscribe) => {
+                return self.handle_subscribe_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Unsubscribe) => {
+                return self.handle_unsubscribe_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Psubscribe) => {
+                return self.handle_psubscribe_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Punsubscribe) => {
+                return self.handle_punsubscribe_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Publish) => {
+                return self.handle_publish_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Ssubscribe) => {
+                return self.handle_ssubscribe_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Sunsubscribe) => {
+                return self.handle_sunsubscribe_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Spublish) => {
+                return self.handle_spublish_command(&argv);
             }
             _ => {}
         }
@@ -3331,6 +3371,254 @@ impl Runtime {
         }
         // In standalone mode, acknowledge but don't actually shut down
         RespFrame::SimpleString("OK".to_string())
+    }
+
+    // ── Pub/Sub command handlers (use global registry) ─────────────
+
+    fn handle_subscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() < 2 {
+            return CommandError::WrongArity("SUBSCRIBE").to_resp();
+        }
+        let mut replies = Vec::new();
+        for channel in &argv[1..] {
+            let count = self.pubsub_subscribe(channel.clone());
+            replies.push(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                RespFrame::BulkString(Some(channel.clone())),
+                RespFrame::Integer(count as i64),
+            ])));
+        }
+        if replies.len() == 1 {
+            return replies.into_iter().next().expect("single reply");
+        }
+        // For multiple channels, concatenate the individual replies
+        let mut combined = Vec::new();
+        for reply in replies {
+            combined.extend_from_slice(&reply.to_bytes());
+        }
+        RespFrame::BulkString(Some(combined))
+    }
+
+    fn handle_unsubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() < 2 {
+            // Unsubscribe from all channels
+            let channels: Vec<Vec<u8>> = self
+                .server
+                .store
+                .subscribed_channels
+                .iter()
+                .cloned()
+                .collect();
+            if channels.is_empty() {
+                return RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"unsubscribe".to_vec())),
+                    RespFrame::BulkString(None),
+                    RespFrame::Integer(0),
+                ]));
+            }
+            let mut replies = Vec::new();
+            for ch in channels {
+                let count = self.pubsub_unsubscribe(&ch);
+                replies.push(RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"unsubscribe".to_vec())),
+                    RespFrame::BulkString(Some(ch)),
+                    RespFrame::Integer(count as i64),
+                ])));
+            }
+            if replies.len() == 1 {
+                return replies.into_iter().next().expect("single reply");
+            }
+            let mut combined = Vec::new();
+            for reply in replies {
+                combined.extend_from_slice(&reply.to_bytes());
+            }
+            return RespFrame::BulkString(Some(combined));
+        }
+        let mut replies = Vec::new();
+        for channel in &argv[1..] {
+            let count = self.pubsub_unsubscribe(channel);
+            replies.push(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"unsubscribe".to_vec())),
+                RespFrame::BulkString(Some(channel.clone())),
+                RespFrame::Integer(count as i64),
+            ])));
+        }
+        if replies.len() == 1 {
+            return replies.into_iter().next().expect("single reply");
+        }
+        let mut combined = Vec::new();
+        for reply in replies {
+            combined.extend_from_slice(&reply.to_bytes());
+        }
+        RespFrame::BulkString(Some(combined))
+    }
+
+    fn handle_psubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() < 2 {
+            return CommandError::WrongArity("PSUBSCRIBE").to_resp();
+        }
+        let mut replies = Vec::new();
+        for pattern in &argv[1..] {
+            let count = self.pubsub_psubscribe(pattern.clone());
+            replies.push(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"psubscribe".to_vec())),
+                RespFrame::BulkString(Some(pattern.clone())),
+                RespFrame::Integer(count as i64),
+            ])));
+        }
+        if replies.len() == 1 {
+            return replies.into_iter().next().expect("single reply");
+        }
+        let mut combined = Vec::new();
+        for reply in replies {
+            combined.extend_from_slice(&reply.to_bytes());
+        }
+        RespFrame::BulkString(Some(combined))
+    }
+
+    fn handle_punsubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() < 2 {
+            let patterns: Vec<Vec<u8>> = self
+                .server
+                .store
+                .subscribed_patterns
+                .iter()
+                .cloned()
+                .collect();
+            if patterns.is_empty() {
+                return RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"punsubscribe".to_vec())),
+                    RespFrame::BulkString(None),
+                    RespFrame::Integer(0),
+                ]));
+            }
+            let mut replies = Vec::new();
+            for pat in patterns {
+                let count = self.pubsub_punsubscribe(&pat);
+                replies.push(RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"punsubscribe".to_vec())),
+                    RespFrame::BulkString(Some(pat)),
+                    RespFrame::Integer(count as i64),
+                ])));
+            }
+            if replies.len() == 1 {
+                return replies.into_iter().next().expect("single reply");
+            }
+            let mut combined = Vec::new();
+            for reply in replies {
+                combined.extend_from_slice(&reply.to_bytes());
+            }
+            return RespFrame::BulkString(Some(combined));
+        }
+        let mut replies = Vec::new();
+        for pattern in &argv[1..] {
+            let count = self.pubsub_punsubscribe(pattern);
+            replies.push(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"punsubscribe".to_vec())),
+                RespFrame::BulkString(Some(pattern.clone())),
+                RespFrame::Integer(count as i64),
+            ])));
+        }
+        if replies.len() == 1 {
+            return replies.into_iter().next().expect("single reply");
+        }
+        let mut combined = Vec::new();
+        for reply in replies {
+            combined.extend_from_slice(&reply.to_bytes());
+        }
+        RespFrame::BulkString(Some(combined))
+    }
+
+    fn handle_publish_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() != 3 {
+            return CommandError::WrongArity("PUBLISH").to_resp();
+        }
+        let receivers = self.pubsub_publish(&argv[1], &argv[2]);
+        RespFrame::Integer(receivers as i64)
+    }
+
+    fn handle_ssubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() < 2 {
+            return CommandError::WrongArity("SSUBSCRIBE").to_resp();
+        }
+        let mut replies = Vec::new();
+        for channel in &argv[1..] {
+            let count = self.pubsub_ssubscribe(channel.clone());
+            replies.push(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"ssubscribe".to_vec())),
+                RespFrame::BulkString(Some(channel.clone())),
+                RespFrame::Integer(count as i64),
+            ])));
+        }
+        if replies.len() == 1 {
+            return replies.into_iter().next().expect("single reply");
+        }
+        let mut combined = Vec::new();
+        for reply in replies {
+            combined.extend_from_slice(&reply.to_bytes());
+        }
+        RespFrame::BulkString(Some(combined))
+    }
+
+    fn handle_sunsubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() < 2 {
+            let channels: Vec<Vec<u8>> = self
+                .server
+                .store
+                .subscribed_shard_channels
+                .iter()
+                .cloned()
+                .collect();
+            if channels.is_empty() {
+                return RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"sunsubscribe".to_vec())),
+                    RespFrame::BulkString(None),
+                    RespFrame::Integer(0),
+                ]));
+            }
+            let mut replies = Vec::new();
+            for ch in channels {
+                let count = self.pubsub_sunsubscribe(&ch);
+                replies.push(RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"sunsubscribe".to_vec())),
+                    RespFrame::BulkString(Some(ch)),
+                    RespFrame::Integer(count as i64),
+                ])));
+            }
+            if replies.len() == 1 {
+                return replies.into_iter().next().expect("single reply");
+            }
+            let mut combined = Vec::new();
+            for reply in replies {
+                combined.extend_from_slice(&reply.to_bytes());
+            }
+            return RespFrame::BulkString(Some(combined));
+        }
+        let mut replies = Vec::new();
+        for channel in &argv[1..] {
+            let count = self.pubsub_sunsubscribe(channel);
+            replies.push(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"sunsubscribe".to_vec())),
+                RespFrame::BulkString(Some(channel.clone())),
+                RespFrame::Integer(count as i64),
+            ])));
+        }
+        if replies.len() == 1 {
+            return replies.into_iter().next().expect("single reply");
+        }
+        let mut combined = Vec::new();
+        for reply in replies {
+            combined.extend_from_slice(&reply.to_bytes());
+        }
+        RespFrame::BulkString(Some(combined))
+    }
+
+    fn handle_spublish_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() != 3 {
+            return CommandError::WrongArity("SPUBLISH").to_resp();
+        }
+        let receivers = self.pubsub_spublish(&argv[1], &argv[2]);
+        RespFrame::Integer(receivers as i64)
     }
 
     fn handle_cluster_command(&mut self, argv: &[Vec<u8>], now_ms: u64) -> RespFrame {

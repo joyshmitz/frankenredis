@@ -342,6 +342,9 @@ fn main() -> ExitCode {
             ts,
         );
 
+        // Deliver pending Pub/Sub messages to subscribed clients.
+        deliver_pubsub_messages(&mut clients, &mut runtime, &mut poll, &mut write_tokens);
+
         // Clean up clients marked for closing whose write buffers are drained.
         let to_remove: Vec<Token> = closing_tokens
             .iter()
@@ -1210,6 +1213,46 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
                 None
             }
         }
+    }
+}
+
+/// Deliver pending Pub/Sub messages to all subscribed clients.
+fn deliver_pubsub_messages(
+    clients: &mut HashMap<Token, ClientConnection>,
+    runtime: &mut Runtime,
+    poll: &mut Poll,
+    write_tokens: &mut HashSet<Token>,
+) {
+    let pending_client_ids = runtime.pubsub_clients_with_pending();
+    if pending_client_ids.is_empty() {
+        return;
+    }
+
+    for &client_id in &pending_client_ids {
+        let msgs = runtime.drain_pubsub_for_client(client_id);
+        if msgs.is_empty() {
+            continue;
+        }
+
+        // Find the connection with this client_id
+        let Some((&token, conn)) = clients
+            .iter_mut()
+            .find(|(_, c)| c.session.client_id == client_id)
+        else {
+            continue;
+        };
+
+        for msg in msgs {
+            let frame = pubsub_message_to_frame(msg);
+            conn.write_buf.extend_from_slice(&frame.to_bytes());
+        }
+
+        write_tokens.insert(token);
+        let _ = poll.registry().reregister(
+            &mut conn.stream,
+            token,
+            Interest::READABLE | Interest::WRITABLE,
+        );
     }
 }
 
