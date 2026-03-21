@@ -568,6 +568,9 @@ pub struct Store {
 
     /// Current recursion depth of Lua script execution.
     pub script_nesting_level: usize,
+
+    /// Number of keys currently tracked in the expires set.
+    pub expires_count: usize,
 }
 
 impl Default for Store {
@@ -595,6 +598,7 @@ impl Default for Store {
             rng_seed: 0xDEADBEEF_C0FFEE11,
             dirty: 0,
             script_nesting_level: 0,
+            expires_count: 0,
         }
     }
 }
@@ -686,8 +690,7 @@ impl Store {
         let expires_at_ms = px_ttl_ms.map(|ttl| now_ms.saturating_add(ttl));
         self.stream_groups.remove(key.as_slice());
         self.stream_last_ids.remove(key.as_slice());
-        self.entries
-            .insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
+        self.internal_entries_insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
         self.dirty += 1;
     }
 
@@ -701,8 +704,7 @@ impl Store {
     ) {
         self.stream_groups.remove(key.as_slice());
         self.stream_last_ids.remove(key.as_slice());
-        self.entries
-            .insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
+        self.internal_entries_insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
         self.dirty += 1;
     }
 
@@ -716,7 +718,7 @@ impl Store {
         let mut removed = 0_u64;
         for key in keys {
             self.drop_if_expired(key, now_ms);
-            if self.entries.remove(key.as_slice()).is_some() {
+            if self.internal_entries_remove(key.as_slice()).is_some() {
                 self.stream_groups.remove(key.as_slice());
                 self.stream_last_ids.remove(key.as_slice());
                 removed = removed.saturating_add(1);
@@ -746,7 +748,7 @@ impl Store {
             None => (0_i64, None),
         };
         let next = current.checked_add(1).ok_or(StoreError::IntegerOverflow)?;
-        self.entries.insert(
+        self.internal_entries_insert(
             key.to_vec(),
             Entry::new(
                 Value::String(next.to_string().into_bytes()),
@@ -775,7 +777,7 @@ impl Store {
             return false;
         }
         if milliseconds <= 0 {
-            self.entries.remove(key);
+            self.internal_entries_remove(key);
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
             self.dirty += 1;
@@ -785,6 +787,9 @@ impl Store {
         let ttl_ms = u64::try_from(milliseconds).unwrap_or(u64::MAX);
         let expires_at_ms = now_ms.saturating_add(ttl_ms);
         if let Some(entry) = self.entries.get_mut(key) {
+            if entry.expires_at_ms.is_none() {
+                self.expires_count = self.expires_count.saturating_add(1);
+            }
             entry.expires_at_ms = Some(expires_at_ms);
             self.dirty += 1;
         }
@@ -798,7 +803,7 @@ impl Store {
         }
 
         if i128::from(when_ms) <= i128::from(now_ms) {
-            self.entries.remove(key);
+            self.internal_entries_remove(key);
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
             self.dirty += 1;
@@ -807,6 +812,9 @@ impl Store {
 
         let expires_at_ms = u64::try_from(when_ms).unwrap_or(u64::MAX);
         if let Some(entry) = self.entries.get_mut(key) {
+            if entry.expires_at_ms.is_none() {
+                self.expires_count = self.expires_count.saturating_add(1);
+            }
             entry.expires_at_ms = Some(expires_at_ms);
             self.dirty += 1;
         }
@@ -821,7 +829,7 @@ impl Store {
         };
         let decision = evaluate_expiry(now_ms, entry.expires_at_ms);
         if decision.should_evict {
-            self.entries.remove(key);
+            self.internal_entries_remove(key);
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
             return PttlValue::KeyMissing;
@@ -848,7 +856,7 @@ impl Store {
             }
         } else {
             let len = value.len();
-            self.entries.insert(
+            self.internal_entries_insert(
                 key.to_vec(),
                 Entry::new(Value::String(value.to_vec()), None, now_ms),
             );
@@ -899,8 +907,7 @@ impl Store {
         if self.entries.contains_key(&key) {
             return false;
         }
-        self.entries
-            .insert(key, Entry::new(Value::String(value), None, now_ms));
+        self.internal_entries_insert(key, Entry::new(Value::String(value), None, now_ms));
         self.dirty += 1;
         true
     }
@@ -919,8 +926,7 @@ impl Store {
             },
             None => (None, None),
         };
-        self.entries
-            .insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
+        self.internal_entries_insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
         self.dirty += 1;
         Ok(old)
     }
@@ -937,7 +943,7 @@ impl Store {
         let next = current
             .checked_add(delta)
             .ok_or(StoreError::IntegerOverflow)?;
-        self.entries.insert(
+        self.internal_entries_insert(
             key.to_vec(),
             Entry::new(
                 Value::String(next.to_string().into_bytes()),
@@ -962,7 +968,7 @@ impl Store {
         if next.is_nan() {
             return Err(StoreError::IncrFloatNaN);
         }
-        self.entries.insert(
+        self.internal_entries_insert(
             key.to_vec(),
             Entry::new(
                 Value::String(next.to_string().into_bytes()),
@@ -983,7 +989,7 @@ impl Store {
             },
             None => return Ok(None),
         }
-        let Some(entry) = self.entries.remove(key) else {
+        let Some(entry) = self.internal_entries_remove(key) else {
             return Ok(None);
         };
         self.stream_groups.remove(key);
@@ -1057,7 +1063,7 @@ impl Store {
                 let mut current = vec![0; needed];
                 current[offset..offset + value.len()].copy_from_slice(value);
                 let new_len = current.len();
-                self.entries.insert(
+                self.internal_entries_insert(
                     key.to_vec(),
                     Entry::new(Value::String(current), None, now_ms),
                 );
@@ -1106,8 +1112,10 @@ impl Store {
                 if value {
                     v[byte_idx] |= 1 << bit_idx;
                 }
-                self.entries
-                    .insert(key.to_vec(), Entry::new(Value::String(v), None, now_ms));
+                self.internal_entries_insert(
+                    key.to_vec(),
+                    Entry::new(Value::String(v), None, now_ms),
+                );
                 self.dirty = self.dirty.saturating_add(1);
                 Ok(old_bit)
             }
@@ -1197,7 +1205,7 @@ impl Store {
             self.dirty = self.dirty.saturating_add(1);
         }
 
-        self.entries.insert(
+        self.internal_entries_insert(
             key.to_vec(),
             Entry::new(Value::String(bytes), expires_at_ms, now_ms),
         );
@@ -1305,6 +1313,7 @@ impl Store {
             && entry.expires_at_ms.is_some()
         {
             entry.expires_at_ms = None;
+            self.expires_count = self.expires_count.saturating_sub(1);
             self.dirty = self.dirty.saturating_add(1);
             return true;
         }
@@ -1424,13 +1433,15 @@ impl Store {
 
     pub fn rename(&mut self, key: &[u8], newkey: &[u8], now_ms: u64) -> Result<(), StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self.entries.remove(key).ok_or(StoreError::KeyNotFound)?;
+        let entry = self
+            .internal_entries_remove(key)
+            .ok_or(StoreError::KeyNotFound)?;
         let moved_groups = self.stream_groups.remove(key);
         let moved_last_id = self.stream_last_ids.remove(key);
-        self.entries.remove(newkey);
+        self.internal_entries_remove(newkey);
         self.stream_groups.remove(newkey);
         self.stream_last_ids.remove(newkey);
-        self.entries.insert(newkey.to_vec(), entry);
+        self.internal_entries_insert(newkey.to_vec(), entry);
         if let Some(groups) = moved_groups {
             self.stream_groups.insert(newkey.to_vec(), groups);
         }
@@ -1450,12 +1461,12 @@ impl Store {
         if self.entries.contains_key(newkey) {
             return Ok(false);
         }
-        let Some(entry) = self.entries.remove(key) else {
+        let Some(entry) = self.internal_entries_remove(key) else {
             return Err(StoreError::KeyNotFound);
         };
         let moved_groups = self.stream_groups.remove(key);
         let moved_last_id = self.stream_last_ids.remove(key);
-        self.entries.insert(newkey.to_vec(), entry);
+        self.internal_entries_insert(newkey.to_vec(), entry);
         if let Some(groups) = moved_groups {
             self.stream_groups.insert(newkey.to_vec(), groups);
         }
@@ -1470,16 +1481,21 @@ impl Store {
     pub fn keys_matching(&mut self, pattern: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
         // Reap expired keys efficiently first.
         let mut reaped = 0_u64;
+        let mut reaped_with_expiry = 0usize;
         self.entries.retain(|key, entry| {
             if evaluate_expiry(now_ms, entry.expires_at_ms).should_evict {
                 self.stream_groups.remove(key.as_slice());
                 self.stream_last_ids.remove(key.as_slice());
+                if entry.expires_at_ms.is_some() {
+                    reaped_with_expiry += 1;
+                }
                 reaped += 1;
                 false
             } else {
                 true
             }
         });
+        self.expires_count = self.expires_count.saturating_sub(reaped_with_expiry);
         self.dirty = self.dirty.saturating_add(reaped);
         let mut result: Vec<Vec<u8>> = self
             .entries
@@ -1495,27 +1511,53 @@ impl Store {
     pub fn dbsize(&mut self, now_ms: u64) -> usize {
         // Reap expired keys efficiently first.
         let mut reaped = 0_u64;
+        let mut reaped_with_expiry = 0usize;
         self.entries.retain(|key, entry| {
             if evaluate_expiry(now_ms, entry.expires_at_ms).should_evict {
                 self.stream_groups.remove(key.as_slice());
                 self.stream_last_ids.remove(key.as_slice());
+                if entry.expires_at_ms.is_some() {
+                    reaped_with_expiry += 1;
+                }
                 reaped += 1;
                 false
             } else {
                 true
             }
         });
+        self.expires_count = self.expires_count.saturating_sub(reaped_with_expiry);
         self.dirty = self.dirty.saturating_add(reaped);
         self.entries.len()
     }
 
     #[must_use]
     pub fn count_expiring_keys(&self) -> usize {
-        // Since we don't maintain a separate `expires` dictionary, we sample from
-        // the mixed `entries` keyspace during the active expire cycle. Returning
-        // the total number of keys avoids a catastrophic O(N) scan on every tick
-        // while allowing the budget planner to cap the sample limit correctly.
-        self.entries.len()
+        self.expires_count
+    }
+
+    fn internal_entries_insert(&mut self, key: Vec<u8>, entry: Entry) -> Option<Entry> {
+        if entry.expires_at_ms.is_some() {
+            self.expires_count = self.expires_count.saturating_add(1);
+        }
+        if let Some(old) = self.entries.insert(key, entry) {
+            if old.expires_at_ms.is_some() {
+                self.expires_count = self.expires_count.saturating_sub(1);
+            }
+            Some(old)
+        } else {
+            None
+        }
+    }
+
+    fn internal_entries_remove(&mut self, key: &[u8]) -> Option<Entry> {
+        if let Some(entry) = self.entries.remove(key) {
+            if entry.expires_at_ms.is_some() {
+                self.expires_count = self.expires_count.saturating_sub(1);
+            }
+            Some(entry)
+        } else {
+            None
+        }
     }
 
     #[must_use]
@@ -1610,7 +1652,7 @@ impl Store {
                 let Some(candidate) = self.select_eviction_candidate(now_ms) else {
                     break;
                 };
-                if self.entries.remove(candidate.as_slice()).is_some() {
+                if self.internal_entries_remove(candidate.as_slice()).is_some() {
                     self.stream_groups.remove(candidate.as_slice());
                     self.stream_last_ids.remove(candidate.as_slice());
                     evicted_keys = evicted_keys.saturating_add(1);
@@ -1709,7 +1751,7 @@ impl Store {
             )
             .should_evict;
             if should_evict {
-                self.entries.remove(key);
+                self.internal_entries_remove(key);
                 self.stream_groups.remove(key.as_slice());
                 self.stream_last_ids.remove(key.as_slice());
                 evicted_keys = evicted_keys.saturating_add(1);
@@ -1733,6 +1775,7 @@ impl Store {
         self.entries.clear();
         self.stream_groups.clear();
         self.stream_last_ids.clear();
+        self.expires_count = 0;
         self.dirty += 1;
     }
 
@@ -1799,7 +1842,7 @@ impl Store {
                     self.dirty = self.dirty.saturating_add(removed);
                 }
                 if is_empty {
-                    self.entries.remove(key);
+                    self.internal_entries_remove(key);
                     self.stream_groups.remove(key);
                     self.stream_last_ids.remove(key);
                 }
@@ -2182,7 +2225,7 @@ impl Store {
                         self.dirty = self.dirty.saturating_add(1);
                     }
                     if l.is_empty() {
-                        self.entries.remove(key);
+                        self.internal_entries_remove(key);
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if val.is_some() {
@@ -2206,7 +2249,7 @@ impl Store {
                         self.dirty = self.dirty.saturating_add(1);
                     }
                     if l.is_empty() {
-                        self.entries.remove(key);
+                        self.internal_entries_remove(key);
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if val.is_some() {
@@ -2501,7 +2544,7 @@ impl Store {
                     if removed > 0 {
                         self.dirty = self.dirty.saturating_add(removed);
                         if l.is_empty() {
-                            self.entries.remove(key);
+                            self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
                             self.stream_last_ids.remove(key);
                         } else {
@@ -2570,7 +2613,7 @@ impl Store {
             && let Value::List(l) = &entry.value
             && l.is_empty()
         {
-            self.entries.remove(source);
+            self.internal_entries_remove(source);
             self.stream_groups.remove(source);
             self.stream_last_ids.remove(source);
         }
@@ -2587,7 +2630,7 @@ impl Store {
             None => {
                 let mut l = VecDeque::new();
                 l.push_front(val.clone());
-                self.entries.insert(
+                self.internal_entries_insert(
                     destination.to_vec(),
                     Entry::new(Value::List(l), source_ttl, now_ms),
                 );
@@ -2622,7 +2665,7 @@ impl Store {
                     }
                     let removed = old_len - l.len();
                     if l.is_empty() {
-                        self.entries.remove(key);
+                        self.internal_entries_remove(key);
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if removed > 0 {
@@ -2741,7 +2784,7 @@ impl Store {
             && let Value::List(l) = &entry.value
             && l.is_empty()
         {
-            self.entries.remove(source);
+            self.internal_entries_remove(source);
             self.stream_groups.remove(source);
             self.stream_last_ids.remove(source);
         }
@@ -2765,7 +2808,7 @@ impl Store {
                 } else {
                     l.push_back(val.clone());
                 }
-                self.entries.insert(
+                self.internal_entries_insert(
                     destination.to_vec(),
                     Entry::new(Value::List(l), source_ttl, now_ms),
                 );
@@ -2827,7 +2870,7 @@ impl Store {
                         }
                     }
                     if s.is_empty() {
-                        self.entries.remove(key);
+                        self.internal_entries_remove(key);
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if removed > 0 {
@@ -3091,7 +3134,7 @@ impl Store {
             None => Ok(None),
         }?;
         if should_remove_key {
-            self.entries.remove(key);
+            self.internal_entries_remove(key);
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
         }
@@ -3253,7 +3296,7 @@ impl Store {
 
         // Clean up empty source
         if source_empty {
-            self.entries.remove(source);
+            self.internal_entries_remove(source);
             self.stream_groups.remove(source);
             self.stream_last_ids.remove(source);
         }
@@ -3270,12 +3313,12 @@ impl Store {
     ) -> Result<usize, StoreError> {
         let result = self.sinter(keys, now_ms)?;
         let count = result.len();
-        self.entries.remove(destination);
+        self.internal_entries_remove(destination);
         self.stream_groups.remove(destination);
         self.stream_last_ids.remove(destination);
         if !result.is_empty() {
             let set: BTreeSet<Vec<u8>> = result.into_iter().collect();
-            self.entries.insert(
+            self.internal_entries_insert(
                 destination.to_vec(),
                 Entry::new(Value::Set(set), None, now_ms),
             );
@@ -3292,12 +3335,12 @@ impl Store {
     ) -> Result<usize, StoreError> {
         let result = self.sunion(keys, now_ms)?;
         let count = result.len();
-        self.entries.remove(destination);
+        self.internal_entries_remove(destination);
         self.stream_groups.remove(destination);
         self.stream_last_ids.remove(destination);
         if !result.is_empty() {
             let set: BTreeSet<Vec<u8>> = result.into_iter().collect();
-            self.entries.insert(
+            self.internal_entries_insert(
                 destination.to_vec(),
                 Entry::new(Value::Set(set), None, now_ms),
             );
@@ -3314,12 +3357,12 @@ impl Store {
     ) -> Result<usize, StoreError> {
         let result = self.sdiff(keys, now_ms)?;
         let count = result.len();
-        self.entries.remove(destination);
+        self.internal_entries_remove(destination);
         self.stream_groups.remove(destination);
         self.stream_last_ids.remove(destination);
         if !result.is_empty() {
             let set: BTreeSet<Vec<u8>> = result.into_iter().collect();
-            self.entries.insert(
+            self.internal_entries_insert(
                 destination.to_vec(),
                 Entry::new(Value::Set(set), None, now_ms),
             );
@@ -3428,7 +3471,7 @@ impl Store {
             self.dirty = self.dirty.saturating_add(removed);
         }
         if is_empty {
-            self.entries.remove(key);
+            self.internal_entries_remove(key);
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
         }
@@ -3750,7 +3793,7 @@ impl Store {
         if result.is_some() {
             self.dirty = self.dirty.saturating_add(1);
             if is_empty {
-                self.entries.remove(key);
+                self.internal_entries_remove(key);
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
             } else {
@@ -3778,7 +3821,7 @@ impl Store {
         if result.is_some() {
             self.dirty = self.dirty.saturating_add(1);
             if is_empty {
-                self.entries.remove(key);
+                self.internal_entries_remove(key);
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
             } else {
@@ -3813,7 +3856,7 @@ impl Store {
         if !result.is_empty() {
             entry.touch(now_ms);
             if is_empty {
-                self.entries.remove(key);
+                self.internal_entries_remove(key);
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
             }
@@ -3846,7 +3889,7 @@ impl Store {
         if !result.is_empty() {
             entry.touch(now_ms);
             if is_empty {
-                self.entries.remove(key);
+                self.internal_entries_remove(key);
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
             }
@@ -4085,7 +4128,7 @@ impl Store {
                     if removed_count > 0 {
                         entry.touch(now_ms);
                         if is_empty {
-                            self.entries.remove(key);
+                            self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
                             self.stream_last_ids.remove(key);
                         }
@@ -4122,7 +4165,7 @@ impl Store {
                     if removed_count > 0 {
                         entry.touch(now_ms);
                         if is_empty {
-                            self.entries.remove(key);
+                            self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
                             self.stream_last_ids.remove(key);
                         }
@@ -4159,7 +4202,7 @@ impl Store {
                     if removed_count > 0 {
                         entry.touch(now_ms);
                         if is_empty {
-                            self.entries.remove(key);
+                            self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
                             self.stream_last_ids.remove(key);
                         }
@@ -4322,7 +4365,7 @@ impl Store {
                 entries.insert(id, fields.to_vec());
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
-                self.entries.insert(
+                self.internal_entries_insert(
                     key.to_vec(),
                     Entry::new(Value::Stream(entries), None, now_ms),
                 );
@@ -5002,7 +5045,7 @@ impl Store {
             }
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
-            self.entries.insert(
+            self.internal_entries_insert(
                 key.to_vec(),
                 Entry::new(Value::Stream(BTreeMap::new()), None, now_ms),
             );
@@ -5301,7 +5344,7 @@ impl Store {
             let data = hll_encode(&registers);
             let mut entry = Entry::new(Value::String(data), expires_at, now_ms);
             entry.touch(now_ms);
-            self.entries.insert(key.to_vec(), entry);
+            self.internal_entries_insert(key.to_vec(), entry);
             self.dirty = self.dirty.saturating_add(1);
         }
         Ok(created || modified)
@@ -5385,7 +5428,7 @@ impl Store {
         let data = hll_encode(&merged);
         let mut entry = Entry::new(Value::String(data), existing_ttl, now_ms);
         entry.touch(now_ms);
-        self.entries.insert(dest.to_vec(), entry);
+        self.internal_entries_insert(dest.to_vec(), entry);
         self.dirty = self.dirty.saturating_add(1);
         Ok(())
     }
@@ -5396,8 +5439,7 @@ impl Store {
             self.entries.get(key).and_then(|entry| entry.expires_at_ms),
         )
         .should_evict;
-        if should_evict {
-            self.entries.remove(key);
+        if should_evict && self.internal_entries_remove(key).is_some() {
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
             self.dirty = self.dirty.saturating_add(1);
@@ -5417,6 +5459,13 @@ impl Store {
                 Value::String(v) => {
                     let result = v.clone();
                     if let Some(exp) = new_expires_at_ms {
+                        let was_exp = entry.expires_at_ms.is_some();
+                        let is_exp = exp.is_some();
+                        if was_exp && !is_exp {
+                            self.expires_count = self.expires_count.saturating_sub(1);
+                        } else if !was_exp && is_exp {
+                            self.expires_count = self.expires_count.saturating_add(1);
+                        }
                         entry.expires_at_ms = exp;
                     }
                     Ok(Some(result))
@@ -5493,7 +5542,7 @@ impl Store {
         let len = result.len();
         self.stream_groups.remove(dest);
         self.stream_last_ids.remove(dest);
-        self.entries.insert(
+        self.internal_entries_insert(
             dest.to_vec(),
             Entry::new(Value::String(result), None, now_ms),
         );
@@ -5546,7 +5595,7 @@ impl Store {
         }
         self.stream_groups.remove(dest);
         self.stream_last_ids.remove(dest);
-        self.entries.insert(
+        self.internal_entries_insert(
             dest.to_vec(),
             Entry::new(Value::SortedSet(zs), None, now_ms),
         );
@@ -5566,7 +5615,7 @@ impl Store {
         if keys.is_empty() {
             self.stream_groups.remove(dest);
             self.stream_last_ids.remove(dest);
-            self.entries.insert(
+            self.internal_entries_insert(
                 dest.to_vec(),
                 Entry::new(Value::SortedSet(SortedSet::new()), None, now_ms),
             );
@@ -5621,7 +5670,7 @@ impl Store {
         }
         self.stream_groups.remove(dest);
         self.stream_last_ids.remove(dest);
-        self.entries.insert(
+        self.internal_entries_insert(
             dest.to_vec(),
             Entry::new(Value::SortedSet(zs), None, now_ms),
         );
@@ -5672,7 +5721,7 @@ impl Store {
             )
             .should_evict;
             if should_evict {
-                self.entries.remove(&key);
+                self.internal_entries_remove(&key);
                 self.stream_groups.remove(key.as_slice());
                 self.stream_last_ids.remove(key.as_slice());
                 self.dirty = self.dirty.saturating_add(1);
@@ -5698,7 +5747,7 @@ impl Store {
         }
         let reaped = expired_keys.len() as u64;
         for key in expired_keys {
-            self.entries.remove(&key);
+            self.internal_entries_remove(&key);
             self.stream_groups.remove(key.as_slice());
             self.stream_last_ids.remove(key.as_slice());
         }
@@ -5951,7 +6000,7 @@ impl Store {
         if let Some(&last_id) = self.stream_last_ids.get(source) {
             self.stream_last_ids.insert(destination.to_vec(), last_id);
         }
-        self.entries.insert(destination.to_vec(), entry);
+        self.internal_entries_insert(destination.to_vec(), entry);
         Ok(true)
     }
 
@@ -5982,7 +6031,7 @@ impl Store {
     pub fn store_as_list(&mut self, key: Vec<u8>, elements: Vec<Vec<u8>>) {
         self.stream_groups.remove(key.as_slice());
         self.stream_last_ids.remove(key.as_slice());
-        self.entries.insert(
+        self.internal_entries_insert(
             key,
             Entry::new(Value::List(elements.into_iter().collect()), None, 0),
         );
