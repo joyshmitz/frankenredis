@@ -1109,6 +1109,11 @@ impl Runtime {
         self.server.set_rdb_path(path);
     }
 
+    /// Set the server listen port (for INFO server section).
+    pub fn set_server_port(&mut self, port: u16) {
+        self.server.store.server_port = port;
+    }
+
     /// Load and replay AOF records from the configured path, restoring store state.
     ///
     /// Each AOF record is dispatched through the command router as if it were

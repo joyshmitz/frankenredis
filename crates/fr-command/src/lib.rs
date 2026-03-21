@@ -7033,9 +7033,9 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("monotonic_clock:POSIX clock_gettime\r\n");
         info.push_str("multiplexing_api:epoll\r\n");
         info.push_str("gcc_version:0.0.0\r\n");
-        info.push_str("process_id:1\r\n");
-        info.push_str("run_id:00000000000000000000000000000000\r\n");
-        info.push_str("tcp_port:6379\r\n");
+        info.push_str(&format!("process_id:{}\r\n", store.server_pid));
+        info.push_str(&format!("run_id:{}\r\n", store.server_run_id));
+        info.push_str(&format!("tcp_port:{}\r\n", store.server_port));
         let uptime_s = now_ms / 1000;
         info.push_str(&format!("uptime_in_seconds:{uptime_s}\r\n"));
         info.push_str(&format!("uptime_in_days:{}\r\n", uptime_s / 86400));

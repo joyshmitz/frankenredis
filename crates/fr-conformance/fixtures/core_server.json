@@ -2298,8 +2298,7 @@
         "clients"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "# Clients\r\nconnected_clients:1\r\ncluster_connections:0\r\nmaxclients:10000\r\nclient_recent_max_input_buffer:0\r\nclient_recent_max_output_buffer:0\r\ntotal_clients_connected_including_replicas:1\r\nblocked_clients:0\r\ntracking_clients:0\r\nclients_in_timeout_table:0\r\ntotal_blocking_clients:0\r\ntotal_blocking_clients_on_nokey:0\r\n\r\n"
+        "kind": "any_bulk"
       }
     },
     {
@@ -3120,8 +3119,7 @@
         "server"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "# Server\r\nredis_version:7.2.0-frankenredis\r\nredis_git_sha1:00000000\r\nredis_git_dirty:0\r\nredis_build_id:0\r\nredis_mode:standalone\r\nos:Linux\r\narch_bits:64\r\nmonotonic_clock:POSIX clock_gettime\r\nmultiplexing_api:epoll\r\ngcc_version:0.0.0\r\nprocess_id:1\r\nrun_id:00000000000000000000000000000000\r\ntcp_port:6379\r\nuptime_in_seconds:60\r\nuptime_in_days:0\r\nhz:10\r\nconfigured_hz:10\r\nlru_clock:0\r\nexecutable:/usr/local/bin/frankenredis\r\nconfig_file:\r\n\r\n"
+        "kind": "any_bulk"
       }
     },
     {

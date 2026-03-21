@@ -3,7 +3,6 @@
 use fr_expire::evaluate_expiry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ops::Bound::{Excluded, Included, Unbounded};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type StreamId = (u64, u64);
 pub type StreamField = (Vec<u8>, Vec<u8>);
@@ -586,25 +585,6 @@ pub struct Store {
     pub stat_total_connections_received: u64,
     /// Number of currently connected clients.
     pub stat_connected_clients: u64,
-}
-
-fn generate_run_id() -> String {
-    let now_nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut state = now_nanos ^ u128::from(std::process::id());
-    let mut out = String::with_capacity(40);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    for _ in 0..40 {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        out.push(HEX[(state as usize) & 0x0f] as char);
-    }
-
-    out
 }
 
 impl Default for Store {

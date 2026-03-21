@@ -204,6 +204,7 @@ fn main() -> ExitCode {
         _ => RuntimePolicy::hardened(),
     };
     let mut runtime = Runtime::new(policy);
+    runtime.set_server_port(port);
 
     // Configure and load AOF persistence if requested.
     if let Some(path) = &aof_path {
