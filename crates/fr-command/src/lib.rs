@@ -4961,9 +4961,10 @@ fn cluster_cmd(
             RespFrame::BulkString(Some(b"CLUSTER RESET".to_vec())),
         ])))
     } else {
-        Ok(RespFrame::Error(format!(
-            "ERR Unknown subcommand or wrong number of arguments for CLUSTER {sub}"
-        )))
+        Err(CommandError::UnknownSubcommand {
+            command: "CLUSTER",
+            subcommand: sub.to_string(),
+        })
     }
 }
 

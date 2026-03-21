@@ -1409,6 +1409,19 @@
       }
     },
     {
+      "name": "eval_select_zero_index_errors",
+      "now_ms": 100,
+      "argv": [
+        "EVAL",
+        "return select(0, 'a', 'b', 'c')",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Error running script: bad argument #1 to 'select' (index out of range)"
+      }
+    },
+    {
       "name": "eval_type_number",
       "now_ms": 100,
       "argv": [
