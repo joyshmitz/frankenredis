@@ -762,6 +762,14 @@ pub struct ServerState {
     pubsub_shard_subs: HashMap<Vec<u8>, HashSet<u64>>,
     /// Per-client outbox: client_id → pending messages for delivery.
     pubsub_outbox: HashMap<u64, Vec<fr_store::PubSubMessage>>,
+    /// Inverse mapping: client_id → set of channels they are subscribed to.
+    pubsub_client_channels: HashMap<u64, HashSet<Vec<u8>>>,
+    /// Inverse mapping: client_id → set of patterns they are subscribed to.
+    pubsub_client_patterns: HashMap<u64, HashSet<Vec<u8>>>,
+    /// Inverse mapping: client_id → set of shard channels they are subscribed to.
+    pubsub_client_shard_channels: HashMap<u64, HashSet<Vec<u8>>>,
+    /// Keys that were modified in the current tick and may unblock clients.
+    pub ready_keys: HashSet<Vec<u8>>,
 }
 
 impl Default for ServerState {
@@ -797,6 +805,10 @@ impl Default for ServerState {
             pubsub_pattern_subs: HashMap::new(),
             pubsub_shard_subs: HashMap::new(),
             pubsub_outbox: HashMap::new(),
+            pubsub_client_channels: HashMap::new(),
+            pubsub_client_patterns: HashMap::new(),
+            pubsub_client_shard_channels: HashMap::new(),
+            ready_keys: HashSet::new(),
         }
     }
 }
@@ -1323,7 +1335,9 @@ impl Runtime {
     /// Swap the active client session, returning the previous one.
     /// Used by multi-client servers to switch between per-connection sessions
     /// before executing commands.
-    pub fn swap_session(&mut self, session: ClientSession) -> ClientSession {
+    pub fn swap_session(&mut self, mut session: ClientSession) -> ClientSession {
+        // Ensure the new session is correctly associated with this server's state.
+        session.refresh_authentication_for_server(&self.server.auth_state, true);
         std::mem::replace(&mut self.session, session)
     }
 
@@ -1345,8 +1359,8 @@ impl Runtime {
         // single-session tests), then drain from the global outbox.
         let mut msgs = self.server.store.drain_pending_pubsub();
         let client_id = self.session.client_id;
-        if let Some(outbox) = self.server.pubsub_outbox.get_mut(&client_id) {
-            msgs.append(outbox);
+        if let Some(outbox) = self.server.pubsub_outbox.remove(&client_id) {
+            msgs.extend(outbox);
         }
         msgs
     }
@@ -1361,17 +1375,12 @@ impl Runtime {
     }
 
     /// Return all client IDs that have pending pub/sub messages.
-    pub fn pubsub_clients_with_pending(&self) -> Vec<u64> {
+    pub fn pubsub_clients_with_pending(&self) -> HashSet<u64> {
         self.server
             .pubsub_outbox
-            .keys()
-            .copied()
-            .filter(|id| {
-                self.server
-                    .pubsub_outbox
-                    .get(id)
-                    .is_some_and(|v| !v.is_empty())
-            })
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(&id, _)| id)
             .collect()
     }
 
@@ -1383,9 +1392,14 @@ impl Runtime {
         self.server.store.subscribe(channel.clone());
         self.server
             .pubsub_channel_subs
-            .entry(channel)
+            .entry(channel.clone())
             .or_default()
             .insert(client_id);
+        self.server
+            .pubsub_client_channels
+            .entry(client_id)
+            .or_default()
+            .insert(channel);
         self.pubsub_sub_count()
     }
 
@@ -1398,6 +1412,12 @@ impl Runtime {
                 self.server.pubsub_channel_subs.remove(channel);
             }
         }
+        if let Some(channels) = self.server.pubsub_client_channels.get_mut(&client_id) {
+            channels.remove(channel);
+            if channels.is_empty() {
+                self.server.pubsub_client_channels.remove(&client_id);
+            }
+        }
         self.server.store.unsubscribe(channel);
         self.pubsub_sub_count()
     }
@@ -1408,9 +1428,14 @@ impl Runtime {
         self.server.store.psubscribe(pattern.clone());
         self.server
             .pubsub_pattern_subs
-            .entry(pattern)
+            .entry(pattern.clone())
             .or_default()
             .insert(client_id);
+        self.server
+            .pubsub_client_patterns
+            .entry(client_id)
+            .or_default()
+            .insert(pattern);
         self.pubsub_sub_count()
     }
 
@@ -1423,6 +1448,12 @@ impl Runtime {
                 self.server.pubsub_pattern_subs.remove(pattern);
             }
         }
+        if let Some(patterns) = self.server.pubsub_client_patterns.get_mut(&client_id) {
+            patterns.remove(pattern);
+            if patterns.is_empty() {
+                self.server.pubsub_client_patterns.remove(&client_id);
+            }
+        }
         self.server.store.punsubscribe(pattern);
         self.pubsub_sub_count()
     }
@@ -1433,9 +1464,14 @@ impl Runtime {
         self.server.store.ssubscribe(channel.clone());
         self.server
             .pubsub_shard_subs
-            .entry(channel)
+            .entry(channel.clone())
             .or_default()
             .insert(client_id);
+        self.server
+            .pubsub_client_shard_channels
+            .entry(client_id)
+            .or_default()
+            .insert(channel);
         self.server.store.subscribed_shard_channels.len()
     }
 
@@ -1446,6 +1482,12 @@ impl Runtime {
             subs.remove(&client_id);
             if subs.is_empty() {
                 self.server.pubsub_shard_subs.remove(channel);
+            }
+        }
+        if let Some(channels) = self.server.pubsub_client_shard_channels.get_mut(&client_id) {
+            channels.remove(channel);
+            if channels.is_empty() {
+                self.server.pubsub_client_shard_channels.remove(&client_id);
             }
         }
         self.server.store.sunsubscribe(channel);
@@ -1473,26 +1515,21 @@ impl Runtime {
         }
 
         // Pattern subscribers — each matching pattern produces a pmessage
-        let matching: Vec<(Vec<u8>, Vec<u64>)> = self
-            .server
-            .pubsub_pattern_subs
-            .iter()
-            .filter(|(pattern, _)| fr_store::glob_match(pattern, channel))
-            .map(|(pattern, clients)| (pattern.clone(), clients.iter().copied().collect()))
-            .collect();
-
-        for (pattern, client_ids) in matching {
-            for client_id in client_ids {
-                self.server
-                    .pubsub_outbox
-                    .entry(client_id)
-                    .or_default()
-                    .push(fr_store::PubSubMessage::PMessage {
-                        pattern: pattern.clone(),
-                        channel: channel.to_vec(),
-                        data: message.to_vec(),
-                    });
-                receivers += 1;
+        // OPTIMIZATION: Avoid intermediate allocations and excessive cloning.
+        for (pattern, client_ids) in &self.server.pubsub_pattern_subs {
+            if fr_store::glob_match(pattern, channel) {
+                for &client_id in client_ids {
+                    self.server
+                        .pubsub_outbox
+                        .entry(client_id)
+                        .or_default()
+                        .push(fr_store::PubSubMessage::PMessage {
+                            pattern: pattern.clone(),
+                            channel: channel.to_vec(),
+                            data: message.to_vec(),
+                        });
+                    receivers += 1;
+                }
             }
         }
 
@@ -1520,18 +1557,36 @@ impl Runtime {
 
     /// Remove all subscriptions for a client (called on disconnect).
     pub fn pubsub_cleanup_client(&mut self, client_id: u64) {
-        self.server.pubsub_channel_subs.retain(|_, clients| {
-            clients.remove(&client_id);
-            !clients.is_empty()
-        });
-        self.server.pubsub_pattern_subs.retain(|_, clients| {
-            clients.remove(&client_id);
-            !clients.is_empty()
-        });
-        self.server.pubsub_shard_subs.retain(|_, clients| {
-            clients.remove(&client_id);
-            !clients.is_empty()
-        });
+        if let Some(channels) = self.server.pubsub_client_channels.remove(&client_id) {
+            for ch in channels {
+                if let Some(subs) = self.server.pubsub_channel_subs.get_mut(&ch) {
+                    subs.remove(&client_id);
+                    if subs.is_empty() {
+                        self.server.pubsub_channel_subs.remove(&ch);
+                    }
+                }
+            }
+        }
+        if let Some(patterns) = self.server.pubsub_client_patterns.remove(&client_id) {
+            for pat in patterns {
+                if let Some(subs) = self.server.pubsub_pattern_subs.get_mut(&pat) {
+                    subs.remove(&client_id);
+                    if subs.is_empty() {
+                        self.server.pubsub_pattern_subs.remove(&pat);
+                    }
+                }
+            }
+        }
+        if let Some(shard_channels) = self.server.pubsub_client_shard_channels.remove(&client_id) {
+            for ch in shard_channels {
+                if let Some(subs) = self.server.pubsub_shard_subs.get_mut(&ch) {
+                    subs.remove(&client_id);
+                    if subs.is_empty() {
+                        self.server.pubsub_shard_subs.remove(&ch);
+                    }
+                }
+            }
+        }
         self.server.pubsub_outbox.remove(&client_id);
     }
 
@@ -1978,11 +2033,26 @@ impl Runtime {
             Ok(reply) => {
                 if dirty_after > dirty_before {
                     self.capture_aof_record(&argv);
+                    // Optimized blocking: track keys modified by write commands
+                    // so the event loop only checks clients waiting on these keys.
+                    for key in fr_command::command_keys(&argv) {
+                        self.server.ready_keys.insert(key);
+                    }
                 }
                 reply
             }
             Err(err) => (err).to_resp(),
         }
+    }
+
+    /// Clear the set of keys that were modified in the current tick.
+    pub fn clear_ready_keys(&mut self) {
+        self.server.ready_keys.clear();
+    }
+
+    /// Return and clear the set of keys that were modified in the current tick.
+    pub fn drain_ready_keys(&mut self) -> HashSet<Vec<u8>> {
+        std::mem::take(&mut self.server.ready_keys)
     }
 
     pub fn execute_bytes(&mut self, input: &[u8], now_ms: u64) -> Vec<u8> {

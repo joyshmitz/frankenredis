@@ -5,7 +5,7 @@
 // while, repeat/until, tables, function calls/definitions, redis.call/pcall,
 // KEYS/ARGV, and standard library functions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use fr_protocol::RespFrame;
 use fr_store::Store;
@@ -30,7 +30,34 @@ pub struct LuaTable {
     pub array: Vec<LuaValue>,
     pub string_hash: HashMap<Vec<u8>, LuaValue>,
     pub other_hash: Vec<(LuaValue, LuaValue)>,
+    /// Set of keys in `other_hash` for fast O(1) existence checks.
+    pub other_keys: HashSet<LuaHashKey>,
 }
+
+#[derive(Clone, Debug)]
+pub struct LuaHashKey(pub LuaValue);
+
+impl std::hash::Hash for LuaHashKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match &self.0 {
+            LuaValue::Nil => 0.hash(state),
+            LuaValue::Bool(b) => b.hash(state),
+            LuaValue::Number(n) => n.to_bits().hash(state),
+            LuaValue::Str(s) => s.hash(state),
+            LuaValue::Table(_) => "table".hash(state),
+            LuaValue::Function(_) => "func".hash(state),
+            LuaValue::RustFunction(n) => n.hash(state),
+        }
+    }
+}
+
+impl PartialEq for LuaHashKey {
+    fn eq(&self, other: &Self) -> bool {
+        lua_raw_equal(&self.0, &other.0)
+    }
+}
+
+impl Eq for LuaHashKey {}
 
 #[derive(Clone, Debug)]
 pub struct LuaFunc {
@@ -45,6 +72,7 @@ impl LuaTable {
             array: Vec::new(),
             string_hash: HashMap::new(),
             other_hash: Vec::new(),
+            other_keys: HashSet::new(),
         }
     }
 
@@ -72,6 +100,10 @@ impl LuaTable {
             && let Some(v) = self.string_hash.get(s)
         {
             return v.clone();
+        }
+        // O(1) fast-fail if key is not in other_hash.
+        if !self.other_keys.contains(&LuaHashKey(key.clone())) {
+            return LuaValue::Nil;
         }
         for (k, v) in &self.other_hash {
             if lua_raw_equal(k, key) {
@@ -110,6 +142,7 @@ impl LuaTable {
             self.string_hash.insert(s, value);
             return;
         }
+        self.other_keys.insert(LuaHashKey(key.clone()));
         for entry in &mut self.other_hash {
             if lua_raw_equal(&entry.0, &key) {
                 entry.1 = value;

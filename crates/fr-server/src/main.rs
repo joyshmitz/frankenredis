@@ -65,6 +65,40 @@ enum BlockingOp {
     BXreadgroup { argv: Vec<Vec<u8>> },
 }
 
+impl BlockingOp {
+    fn keys(&self) -> Vec<Vec<u8>> {
+        match self {
+            BlockingOp::BLpop { keys }
+            | BlockingOp::BRpop { keys }
+            | BlockingOp::BZpopMax { keys }
+            | BlockingOp::BZpopMin { keys } => keys.clone(),
+            BlockingOp::BLmove { source, .. } => vec![source.clone()],
+            BlockingOp::BLmpop { argv } | BlockingOp::BZmpop { argv } => {
+                // argv: [timeout, numkeys, key, ..., LEFT|RIGHT, COUNT]
+                if argv.len() < 3 {
+                    return Vec::new();
+                }
+                let num_keys: usize = std::str::from_utf8(&argv[2])
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                argv.iter().skip(3).take(num_keys).cloned().collect()
+            }
+            BlockingOp::BXread { argv } | BlockingOp::BXreadgroup { argv } => {
+                // XREAD [COUNT n] [BLOCK ms] STREAMS key [key ...] id [id ...]
+                let streams_idx = argv.iter().position(|a| a.eq_ignore_ascii_case(b"STREAMS"));
+                if let Some(idx) = streams_idx {
+                    let remaining = &argv[idx + 1..];
+                    let num_keys = remaining.len() / 2;
+                    remaining.iter().take(num_keys).cloned().collect()
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
+}
+
 /// A client that is blocked waiting for data on one or more keys.
 struct BlockedState {
     op: BlockingOp,
@@ -599,13 +633,21 @@ fn process_buffered_frames(
                 if (response == RespFrame::Array(None) || response == RespFrame::BulkString(None))
                     && let Some(blocked) = try_build_blocked_state(&parsed_frame, ts)
                 {
-                    conn.blocked = Some(blocked);
-                    blocked_tokens.insert(token);
-                    conn.read_buf.drain(..consumed);
-                    break; // Stop processing — client is now blocked.
+                    // Redis behavior: if the keys already have data, we shouldn't block.
+                    // try_build_blocked_state only returns Some if it's a blocking command.
+                    if let Some(immediate_response) = try_fulfill_blocked(&blocked.op, runtime, ts)
+                    {
+                        conn.write_buf
+                            .extend_from_slice(&immediate_response.to_bytes());
+                    } else {
+                        conn.blocked = Some(blocked);
+                        blocked_tokens.insert(token);
+                        conn.read_buf.drain(..consumed);
+                        break; // Stop processing — client is now blocked.
+                    }
+                } else {
+                    conn.write_buf.extend_from_slice(&response.to_bytes());
                 }
-
-                conn.write_buf.extend_from_slice(&response.to_bytes());
                 if let Some(follow_up) = replication_follow_up_bytes(&parsed_frame, &response) {
                     conn.write_buf.extend_from_slice(&follow_up);
                 }
@@ -985,6 +1027,12 @@ fn check_blocked_clients(
     write_tokens: &mut HashSet<Token>,
     ts: u64,
 ) {
+    if blocked_tokens.is_empty() {
+        runtime.clear_ready_keys();
+        return;
+    }
+
+    let ready_keys = runtime.drain_ready_keys();
     let active_blocked: Vec<Token> = blocked_tokens.iter().copied().collect();
 
     for token in active_blocked {
@@ -996,6 +1044,20 @@ fn check_blocked_clients(
             blocked_tokens.remove(&token);
             continue;
         };
+
+        let mut should_check = ts >= blocked.deadline_ms;
+        if !should_check {
+            for key in blocked.op.keys() {
+                if ready_keys.contains(&key) {
+                    should_check = true;
+                    break;
+                }
+            }
+        }
+
+        if !should_check {
+            continue;
+        }
 
         // Check timeout first.
         if ts >= blocked.deadline_ms {
