@@ -86,15 +86,15 @@
       }
     },
     {
-      "name": "select_db1_error",
+      "name": "select_db1_ok",
       "now_ms": 11,
       "argv": [
         "SELECT",
         "1"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR DB index is out of range"
+        "kind": "simple",
+        "value": "OK"
       }
     },
     {
@@ -891,7 +891,7 @@
       }
     },
     {
-      "name": "swapdb_nonzero_error",
+      "name": "swapdb_nonzero_ok",
       "now_ms": 301,
       "argv": [
         "SWAPDB",
@@ -899,8 +899,8 @@
         "1"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR invalid DB index"
+        "kind": "simple",
+        "value": "OK"
       }
     },
     {

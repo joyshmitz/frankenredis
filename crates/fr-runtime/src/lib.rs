@@ -384,6 +384,8 @@ enum RuntimeSpecialCommand {
     Ssubscribe,
     Sunsubscribe,
     Spublish,
+    Select,
+    Swapdb,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -440,6 +442,10 @@ fn classify_runtime_special_command(cmd: &[u8]) -> Option<RuntimeSpecialCommand>
                 Some(RuntimeSpecialCommand::Client)
             } else if eq_ascii_token(cmd, b"BGSAVE") {
                 Some(RuntimeSpecialCommand::Bgsave)
+            } else if eq_ascii_token(cmd, b"SELECT") {
+                Some(RuntimeSpecialCommand::Select)
+            } else if eq_ascii_token(cmd, b"SWAPDB") {
+                Some(RuntimeSpecialCommand::Swapdb)
             } else {
                 None
             }
@@ -581,6 +587,10 @@ fn classify_runtime_special_command_linear(cmd: &[u8]) -> Option<RuntimeSpecialC
         Some(RuntimeSpecialCommand::Sunsubscribe)
     } else if command.eq_ignore_ascii_case("SPUBLISH") {
         Some(RuntimeSpecialCommand::Spublish)
+    } else if command.eq_ignore_ascii_case("SELECT") {
+        Some(RuntimeSpecialCommand::Select)
+    } else if command.eq_ignore_ascii_case("SWAPDB") {
+        Some(RuntimeSpecialCommand::Swapdb)
     } else {
         None
     }
@@ -715,6 +725,9 @@ impl EvidenceLedger {
 }
 
 /// State that belongs to the long-lived server process rather than a client.
+/// Number of databases (matches Redis default).
+pub const NUM_DATABASES: usize = 16;
+
 #[derive(Debug)]
 pub struct ServerState {
     store: Store,
@@ -1967,6 +1980,12 @@ impl Runtime {
             }
             Some(RuntimeSpecialCommand::Spublish) => {
                 return self.handle_spublish_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Select) => {
+                return self.handle_select_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Swapdb) => {
+                return self.handle_swapdb_command(&argv);
             }
             _ => {}
         }
@@ -3762,6 +3781,58 @@ impl Runtime {
         }
         let receivers = self.pubsub_spublish(&argv[1], &argv[2]);
         RespFrame::Integer(receivers as i64)
+    }
+
+    fn handle_select_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() != 2 {
+            return CommandError::WrongArity("SELECT").to_resp();
+        }
+        let parsed = match std::str::from_utf8(&argv[1])
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+        {
+            Some(n) => n,
+            None => {
+                return RespFrame::Error("ERR value is not an integer or out of range".to_string());
+            }
+        };
+        let db = if (0..NUM_DATABASES as i64).contains(&parsed) {
+            parsed as usize
+        } else {
+            return RespFrame::Error("ERR DB index is out of range".to_string());
+        };
+        self.session.selected_db = db;
+        RespFrame::SimpleString("OK".to_string())
+    }
+
+    fn handle_swapdb_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() != 3 {
+            return CommandError::WrongArity("SWAPDB").to_resp();
+        }
+        let parse_db = |arg: &[u8]| -> Result<usize, RespFrame> {
+            let n = std::str::from_utf8(arg)
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+                .ok_or_else(|| {
+                    RespFrame::Error("ERR value is not an integer or out of range".to_string())
+                })?;
+            if (0..NUM_DATABASES as i64).contains(&n) {
+                Ok(n as usize)
+            } else {
+                Err(RespFrame::Error("ERR invalid DB index".to_string()))
+            }
+        };
+        let db1 = match parse_db(&argv[1]) {
+            Ok(n) => n,
+            Err(e) => return e,
+        };
+        let db2 = match parse_db(&argv[2]) {
+            Ok(n) => n,
+            Err(e) => return e,
+        };
+        // In single-store mode, SWAPDB is a no-op (all DBs share the same namespace).
+        let _ = (db1, db2);
+        RespFrame::SimpleString("OK".to_string())
     }
 
     fn handle_cluster_command(&mut self, argv: &[Vec<u8>], now_ms: u64) -> RespFrame {

@@ -5551,7 +5551,7 @@ impl Store {
                     *byte = first.get(i).copied().unwrap_or(0);
                 }
             }
-            
+
             let is_and = eq_ascii_ci(op, b"AND");
             let is_or = eq_ascii_ci(op, b"OR");
             let is_xor = eq_ascii_ci(op, b"XOR");
@@ -8807,9 +8807,13 @@ mod tests {
         assert_eq!(score, 5.0);
         let score = store.zincrby(b"z", b"m".to_vec(), 2.5, 0).unwrap();
         assert_eq!(score, 7.5);
-        let inf = store.zincrby(b"z", b"m".to_vec(), f64::INFINITY, 0).unwrap();
+        let inf = store
+            .zincrby(b"z", b"m".to_vec(), f64::INFINITY, 0)
+            .unwrap();
         assert_eq!(inf, f64::INFINITY);
-        let nan_err = store.zincrby(b"z", b"m".to_vec(), f64::NEG_INFINITY, 0).unwrap_err();
+        let nan_err = store
+            .zincrby(b"z", b"m".to_vec(), f64::NEG_INFINITY, 0)
+            .unwrap_err();
         assert_eq!(nan_err, StoreError::IncrFloatNaN);
     }
 
