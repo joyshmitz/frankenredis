@@ -3784,7 +3784,9 @@ impl Store {
             return Err(StoreError::WrongType);
         };
         let new_score = zs.get_score(&member).unwrap_or(0.0) + delta;
-        if new_score.is_nan() || new_score.is_infinite() {
+        // Redis allows infinity results from ZINCRBY.
+        // Only NaN is rejected (e.g., inf + (-inf) = NaN).
+        if new_score.is_nan() {
             return Err(StoreError::IncrFloatNaN);
         }
         zs.insert(member, new_score);
@@ -8805,6 +8807,10 @@ mod tests {
         assert_eq!(score, 5.0);
         let score = store.zincrby(b"z", b"m".to_vec(), 2.5, 0).unwrap();
         assert_eq!(score, 7.5);
+        let inf = store.zincrby(b"z", b"m".to_vec(), f64::INFINITY, 0).unwrap();
+        assert_eq!(inf, f64::INFINITY);
+        let nan_err = store.zincrby(b"z", b"m".to_vec(), f64::NEG_INFINITY, 0).unwrap_err();
+        assert_eq!(nan_err, StoreError::IncrFloatNaN);
     }
 
     #[test]
