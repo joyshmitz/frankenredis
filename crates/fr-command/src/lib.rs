@@ -37,6 +37,67 @@ fn hello_bulk(s: &str) -> RespFrame {
     RespFrame::BulkString(Some(s.as_bytes().to_vec()))
 }
 
+/// Return the list of key names referenced by the command.
+pub fn command_keys(argv: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let Some(raw_cmd) = argv.first() else {
+        return Vec::new();
+    };
+    let cmd_name = match std::str::from_utf8(raw_cmd) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    // Handle special cases not fully described by first/last/step in COMMAND_TABLE.
+    if cmd_name.eq_ignore_ascii_case("EVAL") || cmd_name.eq_ignore_ascii_case("EVALSHA") {
+        if argv.len() < 3 {
+            return Vec::new();
+        }
+        let num_keys: usize = std::str::from_utf8(&argv[2])
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        return argv.iter().skip(3).take(num_keys).cloned().collect();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("XREAD") || cmd_name.eq_ignore_ascii_case("XREADGROUP") {
+        let streams_idx = argv.iter().position(|a| a.eq_ignore_ascii_case(b"STREAMS"));
+        if let Some(idx) = streams_idx {
+            let remaining = &argv[idx + 1..];
+            let num_keys = remaining.len() / 2;
+            return remaining.iter().take(num_keys).cloned().collect();
+        }
+        return Vec::new();
+    }
+
+    for &(name, _arity, _flags, first, last, step) in COMMAND_TABLE {
+        if name.eq_ignore_ascii_case(cmd_name) {
+            if first == 0 {
+                return Vec::new();
+            }
+            let first_idx = first as usize;
+            let last_idx = if last < 0 {
+                let len_i64 = argv.len() as i64;
+                (len_i64 + last) as usize
+            } else {
+                last as usize
+            };
+            let step = step.max(1) as usize;
+
+            let mut keys = Vec::new();
+            let mut i = first_idx;
+            while i < argv.len() && i <= last_idx {
+                if let Some(key) = argv.get(i) {
+                    keys.push(key.clone());
+                }
+                i += step;
+            }
+            return keys;
+        }
+    }
+
+    Vec::new()
+}
+
 impl CommandError {
     pub fn to_resp(&self) -> RespFrame {
         match self {
@@ -480,6 +541,9 @@ pub fn is_write_command(cmd: &[u8]) -> bool {
             | CommandId::Xack
             | CommandId::Xsetid
             | CommandId::Zrangestore
+            | CommandId::Bitfield
+            | CommandId::Blmove
+            | CommandId::Geosearchstore
     )
 }
 
@@ -6557,14 +6621,12 @@ fn lcs(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
         }
     }
 
-    let lcs_result = compute_lcs(&a, &b);
-
     if len_only {
-        return Ok(RespFrame::Integer(lcs_result.len() as i64));
+        return Ok(RespFrame::Integer(compute_lcs_len(&a, &b) as i64));
     }
 
     if idx_mode {
-        let matches = compute_lcs_matches(&a, &b, min_match_len);
+        let matches = compute_lcs_matches(&a, &b, min_match_len)?;
         let mut match_frames = Vec::new();
         for m in &matches {
             let a_range = RespFrame::Array(Some(vec![
@@ -6589,10 +6651,11 @@ fn lcs(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
             RespFrame::BulkString(Some(b"matches".to_vec())),
             RespFrame::Array(Some(match_frames)),
             RespFrame::BulkString(Some(b"len".to_vec())),
-            RespFrame::Integer(lcs_result.len() as i64),
+            RespFrame::Integer(compute_lcs_len(&a, &b) as i64),
         ])));
     }
 
+    let lcs_result = compute_lcs(&a, &b)?;
     Ok(RespFrame::BulkString(Some(lcs_result)))
 }
 
@@ -6606,14 +6669,38 @@ struct LcsMatch {
 
 const LCS_MAX_DP_SIZE: usize = 16 * 1024 * 1024; // 16M entries = 64MB
 
-fn compute_lcs(a: &[u8], b: &[u8]) -> Vec<u8> {
+fn compute_lcs_len(a: &[u8], b: &[u8]) -> usize {
+    let (a, b) = if a.len() < b.len() { (a, b) } else { (b, a) };
     let m = a.len();
     let n = b.len();
     if m == 0 || n == 0 {
-        return Vec::new();
+        return 0;
+    }
+    let mut prev = vec![0u32; m + 1];
+    let mut curr = vec![0u32; m + 1];
+    for j in 1..=n {
+        for i in 1..=m {
+            if a[i - 1] == b[j - 1] {
+                curr[i] = prev[i - 1] + 1;
+            } else {
+                curr[i] = curr[i - 1].max(prev[i]);
+            }
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[m] as usize
+}
+
+fn compute_lcs(a: &[u8], b: &[u8]) -> Result<Vec<u8>, CommandError> {
+    let m = a.len();
+    let n = b.len();
+    if m == 0 || n == 0 {
+        return Ok(Vec::new());
     }
     if m.saturating_mul(n) > LCS_MAX_DP_SIZE {
-        return Vec::new(); // Silent failure for extremely large strings to prevent DoS
+        return Err(CommandError::Custom(
+            "ERR The strings are too long to compute the LCS without LEN flag.".to_string(),
+        ));
     }
     // DP table: flat Vec for cache efficiency
     let cols = n + 1;
@@ -6642,17 +6729,23 @@ fn compute_lcs(a: &[u8], b: &[u8]) -> Vec<u8> {
         }
     }
     result.reverse();
-    result
+    Ok(result)
 }
 
-fn compute_lcs_matches(a: &[u8], b: &[u8], min_match_len: usize) -> Vec<LcsMatch> {
+fn compute_lcs_matches(
+    a: &[u8],
+    b: &[u8],
+    min_match_len: usize,
+) -> Result<Vec<LcsMatch>, CommandError> {
     let m = a.len();
     let n = b.len();
     if m == 0 || n == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     if m.saturating_mul(n) > LCS_MAX_DP_SIZE {
-        return Vec::new();
+        return Err(CommandError::Custom(
+            "ERR The strings are too long to compute the LCS without LEN flag.".to_string(),
+        ));
     }
     let cols = n + 1;
     let mut dp = vec![0u32; (m + 1) * cols];
@@ -6694,7 +6787,7 @@ fn compute_lcs_matches(a: &[u8], b: &[u8], min_match_len: usize) -> Vec<LcsMatch
             j -= 1;
         }
     }
-    segments
+    Ok(segments)
 }
 
 fn lmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
