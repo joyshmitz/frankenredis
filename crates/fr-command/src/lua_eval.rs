@@ -122,7 +122,9 @@ impl LuaTable {
                         self.array[idx - 1] = value;
                         return;
                     } else if idx == self.array.len() + 1 {
-                        self.array.push(value);
+                        if !matches!(value, LuaValue::Nil) {
+                            self.array.push(value);
+                        }
                         return;
                     }
                 }
@@ -138,6 +140,15 @@ impl LuaTable {
     }
 
     fn hash_set(&mut self, key: LuaValue, value: LuaValue) {
+        if matches!(value, LuaValue::Nil) {
+            if let LuaValue::Str(s) = key {
+                self.string_hash.remove(&s);
+            } else {
+                self.other_keys.remove(&LuaHashKey(key.clone()));
+                self.other_hash.retain(|entry| !lua_raw_equal(&entry.0, &key));
+            }
+            return;
+        }
         if let LuaValue::Str(s) = key {
             self.string_hash.insert(s, value);
             return;
