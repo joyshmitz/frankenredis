@@ -115,7 +115,9 @@ dependencies = [
  "fr-command",
  "fr-config",
  "fr-eventloop",
+ "fr-persist",
  "fr-protocol",
+ "fr-repl",
  "fr-runtime",
  "mio",
 ]

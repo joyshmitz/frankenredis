@@ -72,9 +72,27 @@ pub fn command_key_indexes(argv: &[Vec<u8>]) -> Vec<usize> {
         if let Some(idx) = streams_idx {
             let remaining = &argv[idx + 1..];
             let num_keys = remaining.len() / 2;
-            return (idx + 1..argv.len()).take(num_keys).collect();
+            let mut keys = Vec::with_capacity(num_keys);
+            for i in 0..num_keys {
+                keys.push(idx + 1 + i);
+            }
+            return keys;
         }
         return Vec::new();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("XSETID") {
+        if argv.len() < 2 {
+            return Vec::new();
+        }
+        return vec![1];
+    }
+
+    if cmd_name.eq_ignore_ascii_case("RESTORE") {
+        if argv.len() < 2 {
+            return Vec::new();
+        }
+        return vec![1];
     }
 
     if cmd_name.eq_ignore_ascii_case("ZUNIONSTORE")
@@ -93,18 +111,184 @@ pub fn command_key_indexes(argv: &[Vec<u8>]) -> Vec<usize> {
         return keys;
     }
 
+    if cmd_name.eq_ignore_ascii_case("ZUNION")
+        || cmd_name.eq_ignore_ascii_case("ZINTER")
+        || cmd_name.eq_ignore_ascii_case("ZDIFF")
+        || cmd_name.eq_ignore_ascii_case("ZINTERCARD")
+        || cmd_name.eq_ignore_ascii_case("SINTERCARD")
+    {
+        if argv.len() < 2 {
+            return Vec::new();
+        }
+        let num_keys: usize = std::str::from_utf8(&argv[1])
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        return (2..argv.len()).take(num_keys).collect();
+    }
+
     if cmd_name.eq_ignore_ascii_case("SINTERSTORE")
         || cmd_name.eq_ignore_ascii_case("SUNIONSTORE")
         || cmd_name.eq_ignore_ascii_case("SDIFFSTORE")
     {
+        if argv.len() < 3 {
+            if argv.len() == 2 {
+                return vec![1];
+            }
+            return Vec::new();
+        }
         return (1..argv.len()).collect();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("MSET") || cmd_name.eq_ignore_ascii_case("MSETNX") {
+        return (1..argv.len()).step_by(2).collect();
     }
 
     if cmd_name.eq_ignore_ascii_case("BITOP") {
         if argv.len() < 4 {
             return Vec::new();
         }
+        // BITOP operation destkey src_key [src_key ...]
         return (2..argv.len()).collect();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("SINTER")
+        || cmd_name.eq_ignore_ascii_case("SUNION")
+        || cmd_name.eq_ignore_ascii_case("SDIFF")
+    {
+        return (1..argv.len()).collect();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("SORT") || cmd_name.eq_ignore_ascii_case("SORT_RO") {
+        if argv.len() < 2 {
+            return Vec::new();
+        }
+        let mut keys = vec![1];
+        let mut i = 2;
+        while i < argv.len() {
+            if let Ok(s) = std::str::from_utf8(&argv[i]) {
+                if s.eq_ignore_ascii_case("STORE") && i + 1 < argv.len() {
+                    keys.push(i + 1);
+                    i += 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        return keys;
+    }
+
+    if cmd_name.eq_ignore_ascii_case("GEORADIUS") || cmd_name.eq_ignore_ascii_case("GEORADIUSBYMEMBER") {
+        if argv.len() < 2 {
+            return Vec::new();
+        }
+        let mut keys = vec![1];
+        let mut i = 2;
+        while i < argv.len() {
+            if let Ok(s) = std::str::from_utf8(&argv[i]) {
+                if (s.eq_ignore_ascii_case("STORE") || s.eq_ignore_ascii_case("STOREDIST"))
+                    && i + 1 < argv.len()
+                {
+                    keys.push(i + 1);
+                    i += 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        return keys;
+    }
+
+    if cmd_name.eq_ignore_ascii_case("GEOSEARCH") || cmd_name.eq_ignore_ascii_case("GEOSEARCHSTORE") {
+        if argv.len() < 3 {
+            // Both take at least 'key' or 'destination source'
+            if argv.len() == 2 {
+                return vec![1];
+            }
+            return Vec::new();
+        }
+        if cmd_name.eq_ignore_ascii_case("GEOSEARCH") {
+            return vec![1];
+        } else {
+            return vec![1, 2];
+        }
+    }
+
+    if cmd_name.eq_ignore_ascii_case("XINFO") || cmd_name.eq_ignore_ascii_case("XGROUP") {
+        if argv.len() < 3 {
+            return Vec::new();
+        }
+        return vec![2];
+    }
+
+    if cmd_name.eq_ignore_ascii_case("XACK")
+        || cmd_name.eq_ignore_ascii_case("XCLAIM")
+        || cmd_name.eq_ignore_ascii_case("XAUTOCLAIM")
+        || cmd_name.eq_ignore_ascii_case("XPENDING")
+    {
+        if argv.len() < 2 {
+            return Vec::new();
+        }
+        return vec![1];
+    }
+
+    if cmd_name.eq_ignore_ascii_case("OBJECT") {
+        if argv.len() < 3 {
+            return Vec::new();
+        }
+        return vec![2];
+    }
+
+    if cmd_name.eq_ignore_ascii_case("MEMORY") {
+        if argv.len() < 3 {
+            return Vec::new();
+        }
+        if let Ok(sub) = std::str::from_utf8(&argv[1]) {
+            if sub.eq_ignore_ascii_case("USAGE") {
+                return vec![2];
+            }
+        }
+        return Vec::new();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("LMPOP") || cmd_name.eq_ignore_ascii_case("ZMPOP") {
+        if argv.len() < 2 {
+            return Vec::new();
+        }
+        let num_keys: usize = std::str::from_utf8(&argv[1])
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        return (2..argv.len()).take(num_keys).collect();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("BLMPOP") || cmd_name.eq_ignore_ascii_case("BZMPOP") {
+        if argv.len() < 3 {
+            return Vec::new();
+        }
+        let num_keys: usize = std::str::from_utf8(&argv[2])
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        return (3..argv.len()).take(num_keys).collect();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("SMOVE")
+        || cmd_name.eq_ignore_ascii_case("RENAME")
+        || cmd_name.eq_ignore_ascii_case("RENAMENX")
+        || cmd_name.eq_ignore_ascii_case("COPY")
+        || cmd_name.eq_ignore_ascii_case("LMOVE")
+        || cmd_name.eq_ignore_ascii_case("BLMOVE")
+        || cmd_name.eq_ignore_ascii_case("RPOPLPUSH")
+        || cmd_name.eq_ignore_ascii_case("BRPOPLPUSH")
+    {
+        if argv.len() < 3 {
+            if argv.len() == 2 {
+                return vec![1];
+            }
+            return Vec::new();
+        }
+        return vec![1, 2];
     }
 
     for &(name, _arity, _flags, first, last, step) in COMMAND_TABLE {

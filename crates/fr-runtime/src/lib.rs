@@ -1594,6 +1594,19 @@ impl Runtime {
     }
 
     #[must_use]
+    pub fn replication_primary_offset(&self) -> ReplOffset {
+        self.server.replication_ack_state.primary_offset
+    }
+
+    #[must_use]
+    pub fn is_replica(&self, client_id: u64) -> bool {
+        self.server
+            .replication_runtime_state
+            .replicas
+            .contains_key(&client_id)
+    }
+
+    #[must_use]
     pub fn replica_ack_frame(&self) -> Option<RespFrame> {
         let ReplicationRoleState::Replica { .. } = &self.server.replication_runtime_state.role
         else {
@@ -2354,7 +2367,11 @@ impl Runtime {
         match result {
             Ok(reply) => {
                 if dirty_after > dirty_before {
-                    self.capture_aof_record(&argv);
+                    // Record AOF only for non-special commands (special ones record themselves)
+                    if special_command.is_none() {
+                        self.capture_aof_record(&argv);
+                    }
+
                     // Optimized blocking: track keys modified by write commands
                     // so the event loop only checks clients waiting on these keys.
                     let cmd_keys = fr_command::command_keys(&argv);
@@ -2520,7 +2537,13 @@ impl Runtime {
             || cmd.eq_ignore_ascii_case(b"LTRIM")
             || cmd.eq_ignore_ascii_case(b"LREM")
             || cmd.eq_ignore_ascii_case(b"LMOVE")
+            || cmd.eq_ignore_ascii_case(b"BLMOVE")
             || cmd.eq_ignore_ascii_case(b"RPOPLPUSH")
+            || cmd.eq_ignore_ascii_case(b"BRPOPLPUSH")
+            || cmd.eq_ignore_ascii_case(b"BLPOP")
+            || cmd.eq_ignore_ascii_case(b"BRPOP")
+            || cmd.eq_ignore_ascii_case(b"LMPOP")
+            || cmd.eq_ignore_ascii_case(b"BLMPOP")
         {
             fr_store::NOTIFY_LIST
         } else if cmd.eq_ignore_ascii_case(b"SADD")
@@ -2549,6 +2572,10 @@ impl Runtime {
             || cmd.eq_ignore_ascii_case(b"ZINTERSTORE")
             || cmd.eq_ignore_ascii_case(b"ZUNIONSTORE")
             || cmd.eq_ignore_ascii_case(b"ZDIFFSTORE")
+            || cmd.eq_ignore_ascii_case(b"ZMPOP")
+            || cmd.eq_ignore_ascii_case(b"BZMPOP")
+            || cmd.eq_ignore_ascii_case(b"BZPOPMIN")
+            || cmd.eq_ignore_ascii_case(b"BZPOPMAX")
         {
             fr_store::NOTIFY_ZSET
         } else if cmd.eq_ignore_ascii_case(b"XADD")
@@ -2574,6 +2601,11 @@ impl Runtime {
             RespFrame::BulkString(Some(bytes)) => {
                 if let Some((_, logical)) = decode_db_key(bytes) {
                     *bytes = logical.to_vec();
+                }
+            }
+            RespFrame::SimpleString(s) => {
+                if let Some((_, logical)) = decode_db_key(s.as_bytes()) {
+                    *s = String::from_utf8_lossy(logical).to_string();
                 }
             }
             RespFrame::Array(Some(frames)) => {
@@ -4696,23 +4728,43 @@ impl Runtime {
         argv: &[Vec<u8>],
         now_ms: u64,
     ) -> Result<RespFrame, CommandError> {
-        if argv.len() == 2
-            && std::str::from_utf8(&argv[1])
-                .is_ok_and(|section| section.eq_ignore_ascii_case("replication"))
-        {
-            return Ok(self.handle_info_replication_section());
-        }
-        if argv.len() == 2
-            && std::str::from_utf8(&argv[1])
-                .is_ok_and(|section| section.eq_ignore_ascii_case("keyspace"))
-        {
-            return Ok(self.handle_info_keyspace_section(now_ms));
+        let section = if argv.len() >= 2 {
+            std::str::from_utf8(&argv[1]).ok()
+        } else {
+            None
+        };
+
+        let is_all = section.is_none() || section.is_some_and(|s| s.eq_ignore_ascii_case("all"));
+        let is_replication = is_all || section.is_some_and(|s| s.eq_ignore_ascii_case("replication"));
+        let is_keyspace = is_all || section.is_some_and(|s| s.eq_ignore_ascii_case("keyspace"));
+
+        if section.is_some() && !is_replication && !is_keyspace {
+            let namespaced = self.namespace_argv_for_selected_db(argv);
+            let mut reply = dispatch_argv(&namespaced, &mut self.server.store, now_ms)?;
+            self.strip_db_prefixes_from_frame(&mut reply);
+            return Ok(reply);
         }
 
-        let namespaced = self.namespace_argv_for_selected_db(argv);
-        let mut reply = dispatch_argv(&namespaced, &mut self.server.store, now_ms)?;
-        self.strip_db_prefixes_from_frame(&mut reply);
-        Ok(reply)
+        let mut info = Vec::new();
+        if is_replication {
+            if let RespFrame::BulkString(Some(bytes)) = self.handle_info_replication_section() {
+                info.extend_from_slice(&bytes);
+            }
+        }
+        if is_keyspace {
+            if let RespFrame::BulkString(Some(bytes)) = self.handle_info_keyspace_section(now_ms) {
+                info.extend_from_slice(&bytes);
+            }
+        }
+
+        if info.is_empty() {
+            let namespaced = self.namespace_argv_for_selected_db(argv);
+            let mut reply = dispatch_argv(&namespaced, &mut self.server.store, now_ms)?;
+            self.strip_db_prefixes_from_frame(&mut reply);
+            return Ok(reply);
+        }
+
+        Ok(RespFrame::BulkString(Some(info)))
     }
 
     fn handle_info_keyspace_section(&mut self, _now_ms: u64) -> RespFrame {
@@ -4743,6 +4795,18 @@ impl Runtime {
 
         let mut info = String::from("# Replication\r\n");
         info.push_str(&format!("role:{role}\r\n"));
+
+        if matches!(self.server.replication_runtime_state.role, ReplicationRoleState::Master) {
+            for (i, replica) in self.server.replication_runtime_state.replicas.values().enumerate() {
+                let ip = replica.ip_address.as_deref().unwrap_or("127.0.0.1");
+                let port = replica.listening_port;
+                let state = "online"; // We only track registered replicas
+                let offset = replica.ack_offset.0;
+                let lag = self.server.replication_ack_state.primary_offset.0.saturating_sub(offset);
+                info.push_str(&format!("slave{i}:ip={ip},port={port},state={state},offset={offset},lag={lag}\r\n"));
+            }
+        }
+
         info.push_str(&format!("connected_slaves:{connected_replicas}\r\n"));
         info.push_str("master_failover_state:no-failover\r\n");
         info.push_str(&format!("master_replid:{}\r\n", backlog.replid));
@@ -4956,6 +5020,13 @@ impl Runtime {
             if argv.len() != 3 {
                 return CommandError::WrongArity("REPLCONF").to_resp();
             }
+            if matches!(
+                self.server.replication_runtime_state.role,
+                ReplicationRoleState::Replica { .. }
+            ) {
+                // Slaves don't accept ACKs from master
+                return RespFrame::SimpleString("OK".to_string());
+            }
             let offset = match parse_i64_arg(&argv[2]) {
                 Ok(value) if value >= 0 => value as u64,
                 _ => return CommandError::InvalidInteger.to_resp(),
@@ -4979,6 +5050,12 @@ impl Runtime {
         } else if sub.eq_ignore_ascii_case("FACK") {
             if argv.len() != 3 {
                 return CommandError::WrongArity("REPLCONF").to_resp();
+            }
+            if matches!(
+                self.server.replication_runtime_state.role,
+                ReplicationRoleState::Replica { .. }
+            ) {
+                return RespFrame::SimpleString("OK".to_string());
             }
             let offset = match parse_i64_arg(&argv[2]) {
                 Ok(value) if value >= 0 => ReplOffset(value as u64),
@@ -5035,7 +5112,11 @@ impl Runtime {
                     .ip_address = Some(String::from_utf8_lossy(&argv[2]).into_owned());
             }
             RespFrame::SimpleString("OK".to_string())
+        } else if sub.eq_ignore_ascii_case("capa") {
+            // Acknowledge capabilities, e.g. "psync2", "eof"
+            RespFrame::SimpleString("OK".to_string())
         } else {
+            // Unknown REPLCONF options are ignored for compatibility
             RespFrame::SimpleString("OK".to_string())
         }
     }
@@ -5172,7 +5253,8 @@ impl Runtime {
 
             let _ = self.run_active_expire_cycle(now_ms, ActiveExpireCycleKind::Fast);
             match self.execute_db_scoped_command(argv, now_ms) {
-                Ok(reply) => {
+                Ok(mut reply) => {
+                    self.strip_db_prefixes_from_frame(&mut reply);
                     self.capture_aof_record(argv);
                     results.push(reply);
                 }

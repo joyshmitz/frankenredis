@@ -18,6 +18,7 @@ use fr_eventloop::{
     EventLoopMode, TickBudget, plan_tick, validate_accept_path, validate_read_path,
 };
 use fr_protocol::{ParserConfig, RespFrame, RespParseError};
+use fr_repl::ReplOffset;
 use fr_runtime::{ClientSession, Runtime};
 use mio::net::{TcpListener, TcpStream};
 use mio::{Events, Interest, Poll, Token};
@@ -119,6 +120,8 @@ struct ClientConnection {
     closing: bool,
     /// If set, the client is blocked waiting for data.
     blocked: Option<BlockedState>,
+    /// If set, this client is a replica and this is the last offset sent to it.
+    replication_sent_offset: Option<ReplOffset>,
 }
 
 struct ReplicaPrimaryConnection {
@@ -156,6 +159,7 @@ impl ClientConnection {
             write_buf: Vec::new(),
             closing: false,
             blocked: None,
+            replication_sent_offset: None,
         }
     }
 
@@ -412,6 +416,9 @@ fn main() -> ExitCode {
             &mut write_tokens,
             ts,
         );
+
+        // Deliver pending replication writes to connected replicas.
+        propagate_writes_to_replicas(&mut clients, &mut runtime, &mut write_tokens);
 
         // Deliver pending Pub/Sub messages to subscribed clients.
         deliver_pubsub_messages(
@@ -686,6 +693,9 @@ fn process_buffered_frames(
                     replication_follow_up_bytes(runtime, &parsed_frame, &response, ts)
                 {
                     conn.write_buf.extend_from_slice(&follow_up);
+                    if runtime.is_replica(conn.session.client_id) {
+                        conn.replication_sent_offset = Some(runtime.replication_primary_offset());
+                    }
                 }
 
                 // Drain and deliver any pending pub/sub messages (including
@@ -1684,6 +1694,26 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
     }
 }
 
+fn propagate_writes_to_replicas(
+    clients: &mut HashMap<Token, ClientConnection>,
+    runtime: &mut Runtime,
+    write_tokens: &mut HashSet<Token>,
+) {
+    let primary_offset = runtime.replication_primary_offset();
+    for (&token, conn) in clients.iter_mut() {
+        if let Some(sent_offset) = conn.replication_sent_offset {
+            if sent_offset < primary_offset {
+                let bytes = runtime.encoded_aof_stream_from_offset(sent_offset.0);
+                if !bytes.is_empty() {
+                    conn.write_buf.extend_from_slice(&bytes);
+                    write_tokens.insert(token);
+                }
+                conn.replication_sent_offset = Some(primary_offset);
+            }
+        }
+    }
+}
+
 /// Deliver pending Pub/Sub messages to all subscribed clients.
 fn deliver_pubsub_messages(
     clients: &mut HashMap<Token, ClientConnection>,
@@ -2418,5 +2448,90 @@ mod tests {
 
         assert!(should_try_inline_parsing(b'P'));
         assert!(should_try_inline_parsing(b' '));
+    }
+
+    #[test]
+    fn master_to_replica_streaming_propagate_writes() {
+        use std::collections::{HashMap, HashSet};
+        use std::net::{TcpListener, TcpStream};
+        use mio::Token;
+        use fr_protocol::RespFrame;
+        use fr_persist::{AofRecord, encode_aof_stream};
+        use fr_runtime::Runtime;
+        use crate::{ClientConnection, propagate_writes_to_replicas, replication_follow_up_bytes};
+
+        let mut runtime = Runtime::default_strict();
+        let ts = 1000;
+
+        // 1. Setup a "replica" client connection.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+        let (_server_stream, _server_addr) = listener.accept().unwrap();
+
+        let replica_session = runtime.new_session();
+        let replica_id = replica_session.client_id;
+        let mut replica_conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), replica_session);
+
+        // 2. Perform PSYNC to mark as replica and set initial sent_offset.
+        let psync_frame = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"PSYNC".to_vec())),
+            RespFrame::BulkString(Some(b"?".to_vec())),
+            RespFrame::BulkString(Some(b"-1".to_vec())),
+        ]));
+
+        let prev = runtime.swap_session(std::mem::take(&mut replica_conn.session));
+        let response = runtime.execute_frame(psync_frame.clone(), ts);
+
+        if let Some(follow_up) = replication_follow_up_bytes(&mut runtime, &psync_frame, &response, ts) {
+            replica_conn.write_buf.extend_from_slice(&follow_up);
+            if runtime.is_replica(replica_id) {
+                replica_conn.replication_sent_offset = Some(runtime.replication_primary_offset());
+            }
+        }
+        replica_conn.session = runtime.swap_session(prev);
+
+        assert!(replica_conn.replication_sent_offset.is_some());
+        let initial_offset = replica_conn.replication_sent_offset.unwrap();
+
+        // Clear the write_buf so we only see the new data.
+        replica_conn.write_buf.clear();
+
+        // 3. Perform a write command from a DIFFERENT client.
+        let other_session = runtime.new_session();
+        let prev = runtime.swap_session(other_session);
+        let _set_response = runtime.execute_frame(
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"SET".to_vec())),
+                RespFrame::BulkString(Some(b"foo".to_vec())),
+                RespFrame::BulkString(Some(b"bar".to_vec())),
+            ])),
+            ts + 1,
+        );
+        let _ = runtime.swap_session(prev);
+
+        assert!(runtime.replication_primary_offset() > initial_offset);
+
+        // 4. Propagate writes.
+        let mut clients = HashMap::new();
+        let token = Token(1);
+        clients.insert(token, replica_conn);
+        let mut write_tokens = HashSet::new();
+
+        propagate_writes_to_replicas(&mut clients, &mut runtime, &mut write_tokens);
+
+        // 5. Verify replica received the write.
+        let conn = clients.get(&token).unwrap();
+        assert!(write_tokens.contains(&token));
+
+        let expected_bytes = encode_aof_stream(&[AofRecord {
+            argv: vec![b"SET".to_vec(), b"foo".to_vec(), b"bar".to_vec()],
+        }]);
+
+        assert_eq!(conn.write_buf, expected_bytes);
+        assert_eq!(
+            conn.replication_sent_offset,
+            Some(runtime.replication_primary_offset())
+        );
     }
 }
