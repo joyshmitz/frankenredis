@@ -634,9 +634,12 @@ impl ValueType {
     }
 }
 
+pub const NUM_DATABASES: usize = 16;
+
 #[derive(Debug)]
 pub struct Store {
     entries: BTreeMap<Vec<u8>, Entry>,
+    db_key_counts: [usize; NUM_DATABASES],
     stream_groups: HashMap<Vec<u8>, StreamGroupState>,
     /// Per-stream last-generated-id set by XSETID (may be higher than max entry).
     stream_last_ids: HashMap<Vec<u8>, StreamId>,
@@ -732,6 +735,7 @@ impl Default for Store {
     fn default() -> Self {
         Self {
             entries: BTreeMap::new(),
+            db_key_counts: [0; NUM_DATABASES],
             stream_groups: HashMap::new(),
             stream_last_ids: HashMap::new(),
             script_cache: HashMap::new(),
@@ -1681,11 +1685,21 @@ impl Store {
     }
 
     #[must_use]
+    pub fn dbsize_in_db(&self, db: usize) -> usize {
+        if db < NUM_DATABASES {
+            self.db_key_counts[db]
+        } else {
+            0
+        }
+    }
+
+    #[must_use]
     pub fn count_expiring_keys(&self) -> usize {
         self.expires_count
     }
 
     fn internal_entries_insert(&mut self, key: Vec<u8>, entry: Entry) -> Option<Entry> {
+        let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
         if entry.expires_at_ms.is_some() {
             self.expires_count = self.expires_count.saturating_add(1);
         }
@@ -1695,12 +1709,19 @@ impl Store {
             }
             Some(old)
         } else {
+            if db < NUM_DATABASES {
+                self.db_key_counts[db] = self.db_key_counts[db].saturating_add(1);
+            }
             None
         }
     }
 
     fn internal_entries_remove(&mut self, key: &[u8]) -> Option<Entry> {
         if let Some(entry) = self.entries.remove(key) {
+            let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
+            if db < NUM_DATABASES {
+                self.db_key_counts[db] = self.db_key_counts[db].saturating_sub(1);
+            }
             if entry.expires_at_ms.is_some() {
                 self.expires_count = self.expires_count.saturating_sub(1);
             }
@@ -1806,6 +1827,8 @@ impl Store {
                     self.stream_groups.remove(candidate.as_slice());
                     self.stream_last_ids.remove(candidate.as_slice());
                     evicted_keys = evicted_keys.saturating_add(1);
+                    // Emit evicted keyspace notification
+                    self.notify_keyspace_event(NOTIFY_EVICTED, "evicted", &candidate, 0);
                 }
             }
 
@@ -1926,6 +1949,7 @@ impl Store {
         self.stream_groups.clear();
         self.stream_last_ids.clear();
         self.expires_count = 0;
+        self.db_key_counts = [0; NUM_DATABASES];
         self.dirty += 1;
     }
 
