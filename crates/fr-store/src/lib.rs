@@ -498,11 +498,11 @@ pub enum ValueType {
     Stream,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveExpireCycleResult {
     pub sampled_keys: usize,
     pub evicted_keys: usize,
-    pub next_cursor: usize,
+    pub next_cursor: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -640,6 +640,7 @@ pub const NUM_DATABASES: usize = 16;
 pub struct Store {
     entries: BTreeMap<Vec<u8>, Entry>,
     db_key_counts: [usize; NUM_DATABASES],
+    db_expires_counts: [usize; NUM_DATABASES],
     stream_groups: HashMap<Vec<u8>, StreamGroupState>,
     /// Per-stream last-generated-id set by XSETID (may be higher than max entry).
     stream_last_ids: HashMap<Vec<u8>, StreamId>,
@@ -736,6 +737,7 @@ impl Default for Store {
         Self {
             entries: BTreeMap::new(),
             db_key_counts: [0; NUM_DATABASES],
+            db_expires_counts: [0; NUM_DATABASES],
             stream_groups: HashMap::new(),
             stream_last_ids: HashMap::new(),
             script_cache: HashMap::new(),
@@ -956,6 +958,10 @@ impl Store {
         if let Some(entry) = self.entries.get_mut(key) {
             if entry.expires_at_ms.is_none() {
                 self.expires_count = self.expires_count.saturating_add(1);
+                let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
+                if db < NUM_DATABASES {
+                    self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
+                }
             }
             entry.expires_at_ms = Some(expires_at_ms);
             self.dirty += 1;
@@ -981,6 +987,10 @@ impl Store {
         if let Some(entry) = self.entries.get_mut(key) {
             if entry.expires_at_ms.is_none() {
                 self.expires_count = self.expires_count.saturating_add(1);
+                let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
+                if db < NUM_DATABASES {
+                    self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
+                }
             }
             entry.expires_at_ms = Some(expires_at_ms);
             self.dirty += 1;
@@ -1483,6 +1493,10 @@ impl Store {
         {
             entry.expires_at_ms = None;
             self.expires_count = self.expires_count.saturating_sub(1);
+            let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
+            if db < NUM_DATABASES {
+                self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
+            }
             self.dirty = self.dirty.saturating_add(1);
             return true;
         }
@@ -1647,30 +1661,102 @@ impl Store {
     }
 
     #[must_use]
-    pub fn keys_matching(&mut self, pattern: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
-        // Reap expired keys efficiently first.
-        let mut reaped = 0_u64;
-        let mut reaped_with_expiry = 0usize;
-        self.entries.retain(|key, entry| {
-            if evaluate_expiry(now_ms, entry.expires_at_ms).should_evict {
-                self.stream_groups.remove(key.as_slice());
-                self.stream_last_ids.remove(key.as_slice());
-                if entry.expires_at_ms.is_some() {
-                    reaped_with_expiry += 1;
-                }
-                reaped += 1;
-                false
-            } else {
-                true
+    pub fn keys_in_db(&mut self, db: usize, now_ms: u64) -> Vec<Vec<u8>> {
+        if db == 0 {
+            let physical_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
+            for key in &physical_keys {
+                self.drop_if_expired(key, now_ms);
             }
-        });
-        self.expires_count = self.expires_count.saturating_sub(reaped_with_expiry);
-        self.dirty = self.dirty.saturating_add(reaped);
+            return self
+                .entries
+                .keys()
+                .filter(|k| decode_db_key(k).is_none())
+                .cloned()
+                .collect();
+        }
+
+        let prefix = encode_db_key(db, b"");
+        let physical_keys: Vec<Vec<u8>> = self
+            .entries
+            .range(prefix.clone()..)
+            .take_while(|(k, _)| k.starts_with(&prefix))
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        for key in &physical_keys {
+            self.drop_if_expired(key, now_ms);
+        }
+
+        self.entries
+            .range(prefix.clone()..)
+            .take_while(|(k, _)| k.starts_with(&prefix))
+            .map(|(k, _)| {
+                let (_, logical) = decode_db_key(k).expect("well-formed DB key");
+                logical.to_vec()
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn keys_matching(&mut self, pattern: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
+        // Fallback to O(N) scan across all databases if DB index is not known.
+        // This is primarily for unit tests and direct fr-command usage.
+        let physical_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
+        for key in &physical_keys {
+            self.drop_if_expired(key, now_ms);
+        }
+
         let mut result: Vec<Vec<u8>> = self
             .entries
             .keys()
             .filter(|key| glob_match(pattern, key))
             .cloned()
+            .collect();
+        result.sort();
+        result
+    }
+
+    #[must_use]
+    pub fn keys_matching_in_db(&mut self, db: usize, pattern: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
+        if db == 0 {
+            let physical_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
+            for key in &physical_keys {
+                self.drop_if_expired(key, now_ms);
+            }
+            let mut result: Vec<Vec<u8>> = self
+                .entries
+                .keys()
+                .filter(|k| decode_db_key(k).is_none() && glob_match(pattern, k))
+                .cloned()
+                .collect();
+            result.sort();
+            return result;
+        }
+
+        let prefix = encode_db_key(db, b"");
+        let physical_keys: Vec<Vec<u8>> = self
+            .entries
+            .range(prefix.clone()..)
+            .take_while(|(k, _)| k.starts_with(&prefix))
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        for key in &physical_keys {
+            self.drop_if_expired(key, now_ms);
+        }
+
+        let mut result: Vec<Vec<u8>> = self
+            .entries
+            .range(prefix.clone()..)
+            .take_while(|(k, _)| k.starts_with(&prefix))
+            .filter_map(|(k, _)| {
+                let (_, logical) = decode_db_key(k).expect("well-formed DB key");
+                if glob_match(pattern, logical) {
+                    Some(logical.to_vec())
+                } else {
+                    None
+                }
+            })
             .collect();
         result.sort();
         result
@@ -1694,18 +1780,46 @@ impl Store {
     }
 
     #[must_use]
+    pub fn expires_in_db(&self, db: usize) -> usize {
+        if db < NUM_DATABASES {
+            self.db_expires_counts[db]
+        } else {
+            0
+        }
+    }
+
+    #[must_use]
     pub fn count_expiring_keys(&self) -> usize {
         self.expires_count
+    }
+
+    fn internal_entry(&mut self, key: Vec<u8>, default_value: Value, now_ms: u64) -> &mut Entry {
+        let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
+        match self.entries.entry(key) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                if db < NUM_DATABASES {
+                    self.db_key_counts[db] = self.db_key_counts[db].saturating_add(1);
+                }
+                entry.insert(Entry::new(default_value, None, now_ms))
+            }
+        }
     }
 
     fn internal_entries_insert(&mut self, key: Vec<u8>, entry: Entry) -> Option<Entry> {
         let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
         if entry.expires_at_ms.is_some() {
             self.expires_count = self.expires_count.saturating_add(1);
+            if db < NUM_DATABASES {
+                self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
+            }
         }
         if let Some(old) = self.entries.insert(key, entry) {
             if old.expires_at_ms.is_some() {
                 self.expires_count = self.expires_count.saturating_sub(1);
+                if db < NUM_DATABASES {
+                    self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
+                }
             }
             Some(old)
         } else {
@@ -1724,6 +1838,9 @@ impl Store {
             }
             if entry.expires_at_ms.is_some() {
                 self.expires_count = self.expires_count.saturating_sub(1);
+                if db < NUM_DATABASES {
+                    self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
+                }
             }
             Some(entry)
         } else {
@@ -1796,7 +1913,7 @@ impl Store {
         }
 
         let sample_limit = sample_limit.max(1);
-        let mut cursor = 0usize;
+        let mut cursor: Option<Vec<u8>> = None;
         let mut sampled_keys = 0usize;
         let mut evicted_keys = 0usize;
         let mut bytes_freed = 0usize;
@@ -1814,7 +1931,7 @@ impl Store {
                 };
             }
 
-            let cycle = self.run_active_expire_cycle(now_ms, cursor, sample_limit);
+            let cycle = self.run_active_expire_cycle(now_ms, cursor.clone(), sample_limit);
             sampled_keys = sampled_keys.saturating_add(cycle.sampled_keys);
             evicted_keys = evicted_keys.saturating_add(cycle.evicted_keys);
             cursor = cycle.next_cursor;
@@ -1875,46 +1992,30 @@ impl Store {
     pub fn run_active_expire_cycle(
         &mut self,
         now_ms: u64,
-        start_cursor: usize,
+        start_cursor: Option<Vec<u8>>,
         sample_limit: usize,
     ) -> ActiveExpireCycleResult {
         if sample_limit == 0 || self.entries.is_empty() {
             return ActiveExpireCycleResult {
                 sampled_keys: 0,
                 evicted_keys: 0,
-                next_cursor: if self.entries.is_empty() {
-                    0
-                } else {
-                    start_cursor % self.entries.len()
-                },
+                next_cursor: None,
             };
         }
 
-        let key_count = self.entries.len();
-        let normalized_start = start_cursor % key_count;
-        let sampled_keys_count = sample_limit.min(key_count);
-
-        // Identify the next key anchor before we start evicting.
-        let next_key_anchor = self
-            .entries
-            .keys()
-            .nth((normalized_start + sampled_keys_count) % key_count)
-            .cloned();
-
-        // Collect keys to check by skipping to the cursor.
-        // BTreeMap iteration doesn't wrap, so we may need two passes.
-        let mut keys_to_check: Vec<Vec<u8>> = self
-            .entries
-            .keys()
-            .skip(normalized_start)
-            .take(sampled_keys_count)
-            .cloned()
-            .collect();
-
-        if keys_to_check.len() < sampled_keys_count {
-            let remaining = sampled_keys_count - keys_to_check.len();
-            keys_to_check.extend(self.entries.keys().take(remaining).cloned());
-        }
+        let keys_to_check: Vec<Vec<u8>> = match start_cursor {
+            Some(ref k) => {
+                let mut it = self.entries.range(k.clone()..).map(|(k, _)| k.clone());
+                let mut collected: Vec<Vec<u8>> = it.by_ref().take(sample_limit).collect();
+                if collected.len() < sample_limit {
+                    // Wrap around
+                    let remaining = sample_limit - collected.len();
+                    collected.extend(self.entries.keys().take(remaining).cloned());
+                }
+                collected
+            }
+            None => self.entries.keys().take(sample_limit).cloned().collect(),
+        };
 
         let mut evicted_keys = 0usize;
         for key in &keys_to_check {
@@ -1931,16 +2032,17 @@ impl Store {
             }
         }
 
+        let next_cursor = keys_to_check.last().and_then(|last| {
+            self.entries
+                .range((Excluded(last.clone()), Unbounded))
+                .next()
+                .map(|(k, _)| k.clone())
+        });
+
         ActiveExpireCycleResult {
-            sampled_keys: sampled_keys_count,
+            sampled_keys: keys_to_check.len(),
             evicted_keys,
-            next_cursor: if self.entries.is_empty() {
-                0
-            } else if let Some(anchor) = next_key_anchor {
-                self.entries.keys().position(|k| k == &anchor).unwrap_or(0)
-            } else {
-                0
-            },
+            next_cursor,
         }
     }
 
@@ -1950,6 +2052,7 @@ impl Store {
         self.stream_last_ids.clear();
         self.expires_count = 0;
         self.db_key_counts = [0; NUM_DATABASES];
+        self.db_expires_counts = [0; NUM_DATABASES];
         self.dirty += 1;
     }
 
@@ -2161,10 +2264,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<bool, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self
-            .entries
-            .entry(key.to_vec())
-            .or_insert_with(|| Entry::new(Value::Hash(BTreeMap::new()), None, now_ms));
+        let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
         let Value::Hash(m) = &mut entry.value else {
             return Err(StoreError::WrongType);
         };
@@ -2334,10 +2434,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<i64, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self
-            .entries
-            .entry(key.to_vec())
-            .or_insert_with(|| Entry::new(Value::Hash(BTreeMap::new()), None, now_ms));
+        let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
         let Value::Hash(m) = &mut entry.value else {
             return Err(StoreError::WrongType);
         };
@@ -2362,10 +2459,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<bool, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self
-            .entries
-            .entry(key.to_vec())
-            .or_insert_with(|| Entry::new(Value::Hash(BTreeMap::new()), None, now_ms));
+        let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
         let Value::Hash(m) = &mut entry.value else {
             return Err(StoreError::WrongType);
         };
@@ -2402,10 +2496,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<f64, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self
-            .entries
-            .entry(key.to_vec())
-            .or_insert_with(|| Entry::new(Value::Hash(BTreeMap::new()), None, now_ms));
+        let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
         let Value::Hash(m) = &mut entry.value else {
             return Err(StoreError::WrongType);
         };
@@ -2547,8 +2638,10 @@ impl Store {
                     l.push_front(v.clone());
                 }
                 let len = l.len();
-                self.entries
-                    .insert(key.to_vec(), Entry::new(Value::List(l), None, now_ms));
+                self.internal_entries_insert(
+                    key.to_vec(),
+                    Entry::new(Value::List(l), None, now_ms),
+                );
                 self.dirty = self.dirty.saturating_add(values.len() as u64);
                 Ok(len)
             }
@@ -2581,8 +2674,10 @@ impl Store {
                     l.push_back(v.clone());
                 }
                 let len = l.len();
-                self.entries
-                    .insert(key.to_vec(), Entry::new(Value::List(l), None, now_ms));
+                self.internal_entries_insert(
+                    key.to_vec(),
+                    Entry::new(Value::List(l), None, now_ms),
+                );
                 self.dirty = self.dirty.saturating_add(values.len() as u64);
                 Ok(len)
             }
@@ -3229,8 +3324,10 @@ impl Store {
                         added += 1;
                     }
                 }
-                self.entries
-                    .insert(key.to_vec(), Entry::new(Value::Set(s), None, now_ms));
+                self.internal_entries_insert(
+                    key.to_vec(),
+                    Entry::new(Value::Set(s), None, now_ms),
+                );
                 self.dirty = self.dirty.saturating_add(added);
                 Ok(added)
             }
@@ -3776,10 +3873,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<(usize, usize), StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self
-            .entries
-            .entry(key.to_vec())
-            .or_insert_with(|| Entry::new(Value::SortedSet(SortedSet::new()), None, now_ms));
+        let entry = self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
         let (added, changed) = {
             let Value::SortedSet(zs) = &mut entry.value else {
                 return Err(StoreError::WrongType);
@@ -4141,10 +4235,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<f64, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self
-            .entries
-            .entry(key.to_vec())
-            .or_insert_with(|| Entry::new(Value::SortedSet(SortedSet::new()), None, now_ms));
+        let entry = self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
         let Value::SortedSet(zs) = &mut entry.value else {
             return Err(StoreError::WrongType);
         };
@@ -5854,10 +5945,21 @@ impl Store {
                     if let Some(exp) = new_expires_at_ms {
                         let was_exp = entry.expires_at_ms.is_some();
                         let is_exp = exp.is_some();
-                        if was_exp && !is_exp {
-                            self.expires_count = self.expires_count.saturating_sub(1);
-                        } else if !was_exp && is_exp {
-                            self.expires_count = self.expires_count.saturating_add(1);
+                        if was_exp != is_exp {
+                            let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
+                            if is_exp {
+                                self.expires_count = self.expires_count.saturating_add(1);
+                                if db < NUM_DATABASES {
+                                    self.db_expires_counts[db] =
+                                        self.db_expires_counts[db].saturating_add(1);
+                                }
+                            } else {
+                                self.expires_count = self.expires_count.saturating_sub(1);
+                                if db < NUM_DATABASES {
+                                    self.db_expires_counts[db] =
+                                        self.db_expires_counts[db].saturating_sub(1);
+                                }
+                            }
                         }
                         entry.expires_at_ms = exp;
                     }
@@ -6178,21 +6280,7 @@ impl Store {
 
     #[must_use]
     pub fn randomkey_in_db(&mut self, db: usize, now_ms: u64) -> Option<Vec<u8>> {
-        let all_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
-        for key in &all_keys {
-            self.drop_if_expired(key, now_ms);
-        }
-
-        let matching: Vec<Vec<u8>> = self
-            .entries
-            .keys()
-            .filter(|key| {
-                decode_db_key(key)
-                    .map(|(entry_db, _)| entry_db == db)
-                    .unwrap_or(db == 0)
-            })
-            .cloned()
-            .collect();
+        let matching = self.keys_in_db(db, now_ms);
         if matching.is_empty() {
             return None;
         }
@@ -7370,8 +7458,7 @@ impl Store {
         } else {
             None
         };
-        self.entries
-            .insert(key.to_vec(), Entry::new(value, expires_at_ms, now_ms));
+        self.internal_entries_insert(key.to_vec(), Entry::new(value, expires_at_ms, now_ms));
         Ok(())
     }
 
@@ -8159,7 +8246,8 @@ fn match_character_class(pattern: &[u8], pi: usize, ch: u8) -> Option<(bool, usi
 #[cfg(test)]
 mod tests {
     use super::{
-        EvictionLoopFailure, EvictionLoopStatus, EvictionSafetyGateState, MaxmemoryPolicy,
+        decode_db_key, encode_db_key, EvictionLoopFailure, EvictionLoopStatus,
+ EvictionSafetyGateState, MaxmemoryPolicy,
         MaxmemoryPressureLevel, PttlValue, ScoreBound, Store, StoreError, StreamAutoClaimOptions,
         StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply, StreamGroupReadCursor,
         StreamGroupReadOptions, StreamPendingEntry, ValueType,
@@ -8289,10 +8377,10 @@ mod tests {
         store.set(b"b".to_vec(), b"2".to_vec(), Some(1), 0);
         store.set(b"c".to_vec(), b"3".to_vec(), None, 0);
 
-        let result = store.run_active_expire_cycle(10, 0, 10);
+        let result = store.run_active_expire_cycle(10, None, 10);
         assert_eq!(result.sampled_keys, 3);
         assert_eq!(result.evicted_keys, 2);
-        assert_eq!(store.dbsize(10), 1);
+        assert_eq!(store.dbsize_in_db(0), 1);
         assert_eq!(store.get(b"c", 10).unwrap(), Some(b"3".to_vec()));
     }
 
@@ -8304,12 +8392,12 @@ mod tests {
         store.set(b"c".to_vec(), b"3".to_vec(), Some(1), 0);
         store.set(b"d".to_vec(), b"4".to_vec(), None, 0);
 
-        let first = store.run_active_expire_cycle(10, 0, 2);
+        let first = store.run_active_expire_cycle(10, None, 2);
         assert_eq!(first.sampled_keys, 2);
         assert_eq!(first.evicted_keys, 1);
-        assert_eq!(first.next_cursor, 1);
+        assert_eq!(first.next_cursor, Some(b"c".to_vec()));
 
-        let second = store.run_active_expire_cycle(10, first.next_cursor, 2);
+        let second = store.run_active_expire_cycle(10, first.next_cursor.clone(), 2);
         assert_eq!(second.sampled_keys, 2);
         assert_eq!(second.evicted_keys, 1);
     }
@@ -8378,7 +8466,7 @@ mod tests {
         let mut store = Store::new();
         store.set(b"a".to_vec(), vec![b'x'; 96], None, 0);
         store.set(b"b".to_vec(), vec![b'y'; 96], None, 0);
-        let before_dbsize = store.dbsize(0);
+        let before_dbsize = store.dbsize_in_db(0);
 
         let result = store.run_bounded_eviction_loop(
             0,
@@ -8397,7 +8485,7 @@ mod tests {
             result.failure,
             Some(EvictionLoopFailure::SafetyGateSuppressed)
         );
-        assert_eq!(store.dbsize(0), before_dbsize);
+        assert_eq!(store.dbsize_in_db(0), before_dbsize);
         assert_eq!(result.evicted_keys, 0);
     }
 
@@ -8567,57 +8655,57 @@ mod tests {
     #[test]
     fn keys_matching_with_glob() {
         let mut store = Store::new();
-        store.set(b"hello".to_vec(), b"1".to_vec(), None, 0);
-        store.set(b"hallo".to_vec(), b"2".to_vec(), None, 0);
-        store.set(b"world".to_vec(), b"3".to_vec(), None, 0);
-        let result = store.keys_matching(b"h?llo", 0);
+        store.set(encode_db_key(0, b"hello"), b"1".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"hallo"), b"2".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"world"), b"3".to_vec(), None, 0);
+        let result = store.keys_matching_in_db(0, b"h?llo", 0);
         assert_eq!(result, vec![b"hallo".to_vec(), b"hello".to_vec()]);
-        let result = store.keys_matching(b"*", 0);
+        let result = store.keys_matching_in_db(0, b"*", 0);
         assert_eq!(result.len(), 3);
-        let result = store.keys_matching(b"h*", 0);
+        let result = store.keys_matching_in_db(0, b"h*", 0);
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn keys_matching_malformed_class_contract_matches_redis() {
         let mut store = Store::new();
-        store.set(b"a".to_vec(), b"1".to_vec(), None, 0);
-        store.set(b"b".to_vec(), b"2".to_vec(), None, 0);
-        store.set(b"c".to_vec(), b"3".to_vec(), None, 0);
-        store.set(b"[abc".to_vec(), b"1".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"a"), b"1".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"b"), b"2".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"c"), b"3".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"[abc"), b"1".to_vec(), None, 0);
         // Redis treats malformed "[abc" as a class of bytes {'a','b','c'}.
         assert_eq!(
-            store.keys_matching(b"[abc", 0),
+            store.keys_matching_in_db(0, b"[abc", 0),
             vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
         );
         // The malformed class does not match literal '[' prefixed keys.
-        assert!(!store.keys_matching(b"[abc", 0).iter().any(|k| k == b"[abc"));
+        assert!(!store.keys_matching_in_db(0, b"[abc", 0).iter().any(|k| k == b"[abc"));
         // "[a-" is malformed too; with this key set Redis matches only 'a'.
-        assert_eq!(store.keys_matching(b"[a-", 0), vec![b"a".to_vec()]);
+        assert_eq!(store.keys_matching_in_db(0, b"[a-", 0), vec![b"a".to_vec()]);
     }
 
     #[test]
     fn keys_matching_range_and_escape_contract_matches_redis() {
         let mut store = Store::new();
-        store.set(b"!".to_vec(), b"0".to_vec(), None, 0);
-        store.set(b"a".to_vec(), b"1".to_vec(), None, 0);
-        store.set(b"b".to_vec(), b"6".to_vec(), None, 0);
-        store.set(b"m".to_vec(), b"2".to_vec(), None, 0);
-        store.set(b"z".to_vec(), b"3".to_vec(), None, 0);
-        store.set(b"-".to_vec(), b"4".to_vec(), None, 0);
-        store.set(b"]".to_vec(), b"5".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"!"), b"0".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"a"), b"1".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"b"), b"6".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"m"), b"2".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"z"), b"3".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"-"), b"4".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"]"), b"5".to_vec(), None, 0);
 
         assert_eq!(
-            store.keys_matching(b"[z-a]", 0),
+            store.keys_matching_in_db(0, b"[z-a]", 0),
             vec![b"a".to_vec(), b"b".to_vec(), b"m".to_vec(), b"z".to_vec()]
         );
-        assert_eq!(store.keys_matching(b"[\\-]", 0), vec![b"-".to_vec()]);
+        assert_eq!(store.keys_matching_in_db(0, b"[\\-]", 0), vec![b"-".to_vec()]);
         assert_eq!(
-            store.keys_matching(b"[a-]", 0),
+            store.keys_matching_in_db(0, b"[a-]", 0),
             vec![b"]".to_vec(), b"a".to_vec()]
         );
         assert_eq!(
-            store.keys_matching(b"[!a]", 0),
+            store.keys_matching_in_db(0, b"[!a]", 0),
             vec![b"!".to_vec(), b"a".to_vec()]
         );
     }
@@ -8625,11 +8713,11 @@ mod tests {
     #[test]
     fn keys_matching_skips_expired_entries() {
         let mut store = Store::new();
-        store.set(b"live".to_vec(), b"1".to_vec(), None, 0);
-        store.set(b"soon".to_vec(), b"2".to_vec(), Some(50), 0);
-        store.set(b"later".to_vec(), b"3".to_vec(), Some(500), 0);
+        store.set(encode_db_key(0, b"live"), b"1".to_vec(), None, 0);
+        store.set(encode_db_key(0, b"soon"), b"2".to_vec(), Some(50), 0);
+        store.set(encode_db_key(0, b"later"), b"3".to_vec(), Some(500), 0);
 
-        let result = store.keys_matching(b"*", 100);
+        let result = store.keys_matching_in_db(0, b"*", 100);
         assert_eq!(result, vec![b"later".to_vec(), b"live".to_vec()]);
     }
 
@@ -8638,16 +8726,16 @@ mod tests {
         let mut store = Store::new();
         store.set(b"a".to_vec(), b"1".to_vec(), None, 0);
         store.set(b"b".to_vec(), b"2".to_vec(), Some(100), 0);
-        assert_eq!(store.dbsize(0), 2);
+        assert_eq!(store.dbsize_in_db(0), 2);
 
         // dbsize is O(1) and does not actively reap expired keys.
         // It should still return 2 even if 'b' is logically expired,
         // until 'b' is actively or lazily reaped.
-        assert_eq!(store.dbsize(200), 2);
+        assert_eq!(store.dbsize_in_db(0), 2);
 
         // Lazy reap
         store.get(b"b", 200).unwrap();
-        assert_eq!(store.dbsize(200), 1);
+        assert_eq!(store.dbsize_in_db(0), 1);
     }
 
     #[test]

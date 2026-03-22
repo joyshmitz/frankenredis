@@ -77,6 +77,36 @@ pub fn command_key_indexes(argv: &[Vec<u8>]) -> Vec<usize> {
         return Vec::new();
     }
 
+    if cmd_name.eq_ignore_ascii_case("ZUNIONSTORE")
+        || cmd_name.eq_ignore_ascii_case("ZINTERSTORE")
+        || cmd_name.eq_ignore_ascii_case("ZDIFFSTORE")
+    {
+        if argv.len() < 3 {
+            return Vec::new();
+        }
+        let num_keys: usize = std::str::from_utf8(&argv[2])
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let mut keys = vec![1]; // destination key
+        keys.extend((3..argv.len()).take(num_keys));
+        return keys;
+    }
+
+    if cmd_name.eq_ignore_ascii_case("SINTERSTORE")
+        || cmd_name.eq_ignore_ascii_case("SUNIONSTORE")
+        || cmd_name.eq_ignore_ascii_case("SDIFFSTORE")
+    {
+        return (1..argv.len()).collect();
+    }
+
+    if cmd_name.eq_ignore_ascii_case("BITOP") {
+        if argv.len() < 4 {
+            return Vec::new();
+        }
+        return (2..argv.len()).collect();
+    }
+
     for &(name, _arity, _flags, first, last, step) in COMMAND_TABLE {
         if name.eq_ignore_ascii_case(cmd_name) {
             if first == 0 {

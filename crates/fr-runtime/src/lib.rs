@@ -882,7 +882,7 @@ pub struct ServerState {
     eviction_safety_gate: EvictionSafetyGateState,
     last_eviction_loop: Option<EvictionLoopResult>,
     active_expire_db_cursor: usize,
-    active_expire_key_cursor: usize,
+    active_expire_key_cursor: Option<Vec<u8>>,
     active_expire_budget: ActiveExpireCycleBudget,
     last_active_expire_cycle: Option<ActiveExpireCycleStats>,
     /// Server hz (timer interrupt frequency).
@@ -945,7 +945,7 @@ impl Default for ServerState {
             eviction_safety_gate: EvictionSafetyGateState::default(),
             last_eviction_loop: None,
             active_expire_db_cursor: 0,
-            active_expire_key_cursor: 0,
+            active_expire_key_cursor: None,
             active_expire_budget: ActiveExpireCycleBudget::default(),
             last_active_expire_cycle: None,
             hz: 10,
@@ -1011,7 +1011,7 @@ impl ServerState {
         );
         let cycle_result = self.store.run_active_expire_cycle(
             now_ms,
-            self.active_expire_key_cursor,
+            self.active_expire_key_cursor.clone(),
             plan.sample_limit,
         );
         self.active_expire_db_cursor = plan.next_db_index;
