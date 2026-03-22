@@ -9340,13 +9340,10 @@ fn move_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     if !(0..16).contains(&db) {
         return Ok(RespFrame::Error("ERR out of range".to_string()));
     }
-    // In single-namespace mode, all DBs share the same store.
-    // MOVE returns 0 if key doesn't exist, 1 if it does (no actual move needed).
-    if store.exists(&argv[1], now_ms) {
-        Ok(RespFrame::Integer(0)) // key "already exists" in target DB (shared namespace)
-    } else {
-        Ok(RespFrame::Integer(0)) // key doesn't exist
-    }
+    let _ = store.exists(&argv[1], now_ms);
+    // In single-namespace mode, all DBs share the same store, so MOVE cannot
+    // succeed as a cross-db transfer at this layer.
+    Ok(RespFrame::Integer(0))
 }
 
 fn latency_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
