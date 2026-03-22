@@ -5810,6 +5810,8 @@ impl Store {
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
             self.dirty = self.dirty.saturating_add(1);
+            // Emit expired keyspace notification
+            self.notify_keyspace_event(NOTIFY_EXPIRED, "expired", key, 0);
         }
     }
 
