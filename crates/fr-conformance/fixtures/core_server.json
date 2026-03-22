@@ -1030,7 +1030,7 @@
       }
     },
     {
-      "name": "swapdb_invalid_db",
+      "name": "swapdb_valid_db",
       "now_ms": 19001,
       "argv": [
         "SWAPDB",
@@ -1038,8 +1038,8 @@
         "1"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR invalid DB index"
+        "kind": "simple",
+        "value": "OK"
       }
     },
     {

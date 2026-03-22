@@ -890,15 +890,15 @@
       }
     },
     {
-      "name": "select_db1_out_of_range",
+      "name": "select_db1_ok",
       "now_ms": 9,
       "argv": [
         "SELECT",
         "1"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR DB index is out of range"
+        "kind": "simple",
+        "value": "OK"
       }
     },
     {
