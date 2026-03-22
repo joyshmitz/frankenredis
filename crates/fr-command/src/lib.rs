@@ -7305,7 +7305,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("role:master\r\n");
         info.push_str("connected_slaves:0\r\n");
         info.push_str("master_failover_state:no-failover\r\n");
-        info.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
+        info.push_str(&format!("master_replid:{}\r\n", store.server_run_id));
         info.push_str("master_replid2:0000000000000000000000000000000000000000\r\n");
         info.push_str("master_repl_offset:0\r\n");
         info.push_str("second_repl_offset:-1\r\n");
