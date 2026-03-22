@@ -853,6 +853,18 @@
       "name": "verify_db_copy",
       "now_ms": 0,
       "argv": [
+        "SELECT",
+        "5"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "verify_db_copy_value",
+      "now_ms": 0,
+      "argv": [
         "GET",
         "db_dst"
       ],
@@ -863,6 +875,18 @@
     },
     {
       "name": "copy_with_db_and_replace",
+      "now_ms": 0,
+      "argv": [
+        "SELECT",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "copy_with_db_and_replace_value",
       "now_ms": 0,
       "argv": [
         "COPY",

@@ -587,6 +587,33 @@ pub struct Store {
     pub stat_connected_clients: u64,
 }
 
+const DB_NAMESPACE_PREFIX: &[u8] = b"\0frdb\0";
+
+#[must_use]
+pub fn encode_db_key(db: usize, key: &[u8]) -> Vec<u8> {
+    if db == 0 {
+        return key.to_vec();
+    }
+    let mut encoded =
+        Vec::with_capacity(DB_NAMESPACE_PREFIX.len() + std::mem::size_of::<u64>() + key.len());
+    encoded.extend_from_slice(DB_NAMESPACE_PREFIX);
+    encoded.extend_from_slice(&(db as u64).to_be_bytes());
+    encoded.extend_from_slice(key);
+    encoded
+}
+
+#[must_use]
+pub fn decode_db_key(key: &[u8]) -> Option<(usize, &[u8])> {
+    let db_len = std::mem::size_of::<u64>();
+    let prefix_len = DB_NAMESPACE_PREFIX.len() + db_len;
+    if key.len() < prefix_len || !key.starts_with(DB_NAMESPACE_PREFIX) {
+        return None;
+    }
+    let db_bytes: [u8; 8] = key[DB_NAMESPACE_PREFIX.len()..prefix_len].try_into().ok()?;
+    let db = usize::try_from(u64::from_be_bytes(db_bytes)).ok()?;
+    Some((db, &key[prefix_len..]))
+}
+
 impl Default for Store {
     fn default() -> Self {
         Self {
@@ -1784,6 +1811,204 @@ impl Store {
         self.stream_last_ids.clear();
         self.expires_count = 0;
         self.dirty += 1;
+    }
+
+    pub fn flush_prefix(&mut self, prefix: &[u8]) -> u64 {
+        let keys: Vec<Vec<u8>> = self
+            .entries
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect();
+        let removed = keys.len() as u64;
+        for key in keys {
+            self.internal_entries_remove(&key);
+            self.stream_groups.remove(key.as_slice());
+            self.stream_last_ids.remove(key.as_slice());
+        }
+        self.dirty = self.dirty.saturating_add(removed.max(1));
+        removed
+    }
+
+    pub fn flush_database(&mut self, db: usize) -> u64 {
+        let keys: Vec<Vec<u8>> = self
+            .entries
+            .keys()
+            .filter(|key| {
+                decode_db_key(key)
+                    .map(|(entry_db, _)| entry_db == db)
+                    .unwrap_or(db == 0)
+            })
+            .cloned()
+            .collect();
+        let removed = keys.len() as u64;
+        for key in keys {
+            self.internal_entries_remove(&key);
+            self.stream_groups.remove(key.as_slice());
+            self.stream_last_ids.remove(key.as_slice());
+        }
+        self.dirty = self.dirty.saturating_add(removed.max(1));
+        removed
+    }
+
+    pub fn swap_prefixes(&mut self, left_prefix: &[u8], right_prefix: &[u8]) -> u64 {
+        if left_prefix == right_prefix {
+            self.dirty = self.dirty.saturating_add(1);
+            return 0;
+        }
+
+        let left_keys: Vec<Vec<u8>> = self
+            .entries
+            .keys()
+            .filter(|key| key.starts_with(left_prefix))
+            .cloned()
+            .collect();
+        let right_keys: Vec<Vec<u8>> = self
+            .entries
+            .keys()
+            .filter(|key| key.starts_with(right_prefix))
+            .cloned()
+            .collect();
+
+        let left_count = left_keys.len();
+        let right_count = right_keys.len();
+
+        let mut left_entries = Vec::with_capacity(left_count);
+        for key in left_keys {
+            let Some(entry) = self.internal_entries_remove(&key) else {
+                continue;
+            };
+            let groups = self.stream_groups.remove(key.as_slice());
+            let last_id = self.stream_last_ids.remove(key.as_slice());
+            left_entries.push((key, entry, groups, last_id));
+        }
+
+        let mut right_entries = Vec::with_capacity(right_count);
+        for key in right_keys {
+            let Some(entry) = self.internal_entries_remove(&key) else {
+                continue;
+            };
+            let groups = self.stream_groups.remove(key.as_slice());
+            let last_id = self.stream_last_ids.remove(key.as_slice());
+            right_entries.push((key, entry, groups, last_id));
+        }
+
+        for (key, entry, groups, last_id) in left_entries {
+            let mut swapped = Vec::with_capacity(
+                right_prefix.len() + key.len().saturating_sub(left_prefix.len()),
+            );
+            swapped.extend_from_slice(right_prefix);
+            swapped.extend_from_slice(&key[left_prefix.len()..]);
+            self.internal_entries_insert(swapped.clone(), entry);
+            if let Some(groups) = groups {
+                self.stream_groups.insert(swapped.clone(), groups);
+            }
+            if let Some(last_id) = last_id {
+                self.stream_last_ids.insert(swapped, last_id);
+            }
+        }
+
+        for (key, entry, groups, last_id) in right_entries {
+            let mut swapped = Vec::with_capacity(
+                left_prefix.len() + key.len().saturating_sub(right_prefix.len()),
+            );
+            swapped.extend_from_slice(left_prefix);
+            swapped.extend_from_slice(&key[right_prefix.len()..]);
+            self.internal_entries_insert(swapped.clone(), entry);
+            if let Some(groups) = groups {
+                self.stream_groups.insert(swapped.clone(), groups);
+            }
+            if let Some(last_id) = last_id {
+                self.stream_last_ids.insert(swapped, last_id);
+            }
+        }
+
+        let touched = (left_count + right_count) as u64;
+        self.dirty = self.dirty.saturating_add(touched.max(1));
+        touched
+    }
+
+    pub fn swap_databases(&mut self, left_db: usize, right_db: usize) -> u64 {
+        if left_db == right_db {
+            self.dirty = self.dirty.saturating_add(1);
+            return 0;
+        }
+
+        let left_keys: Vec<Vec<u8>> = self
+            .entries
+            .keys()
+            .filter(|key| {
+                decode_db_key(key)
+                    .map(|(db, _)| db == left_db)
+                    .unwrap_or(left_db == 0)
+            })
+            .cloned()
+            .collect();
+        let right_keys: Vec<Vec<u8>> = self
+            .entries
+            .keys()
+            .filter(|key| {
+                decode_db_key(key)
+                    .map(|(db, _)| db == right_db)
+                    .unwrap_or(right_db == 0)
+            })
+            .cloned()
+            .collect();
+
+        let left_count = left_keys.len();
+        let right_count = right_keys.len();
+
+        let mut left_entries = Vec::with_capacity(left_count);
+        for key in left_keys {
+            let Some(entry) = self.internal_entries_remove(&key) else {
+                continue;
+            };
+            let logical = decode_db_key(&key)
+                .map(|(_, logical)| logical.to_vec())
+                .unwrap_or(key.clone());
+            let groups = self.stream_groups.remove(key.as_slice());
+            let last_id = self.stream_last_ids.remove(key.as_slice());
+            left_entries.push((logical, entry, groups, last_id));
+        }
+
+        let mut right_entries = Vec::with_capacity(right_count);
+        for key in right_keys {
+            let Some(entry) = self.internal_entries_remove(&key) else {
+                continue;
+            };
+            let logical = decode_db_key(&key)
+                .map(|(_, logical)| logical.to_vec())
+                .unwrap_or(key.clone());
+            let groups = self.stream_groups.remove(key.as_slice());
+            let last_id = self.stream_last_ids.remove(key.as_slice());
+            right_entries.push((logical, entry, groups, last_id));
+        }
+
+        for (logical, entry, groups, last_id) in left_entries {
+            let swapped = encode_db_key(right_db, &logical);
+            self.internal_entries_insert(swapped.clone(), entry);
+            if let Some(groups) = groups {
+                self.stream_groups.insert(swapped.clone(), groups);
+            }
+            if let Some(last_id) = last_id {
+                self.stream_last_ids.insert(swapped, last_id);
+            }
+        }
+
+        for (logical, entry, groups, last_id) in right_entries {
+            let swapped = encode_db_key(left_db, &logical);
+            self.internal_entries_insert(swapped.clone(), entry);
+            if let Some(groups) = groups {
+                self.stream_groups.insert(swapped.clone(), groups);
+            }
+            if let Some(last_id) = last_id {
+                self.stream_last_ids.insert(swapped, last_id);
+            }
+        }
+
+        let touched = (left_count + right_count) as u64;
+        self.dirty = self.dirty.saturating_add(touched.max(1));
+        touched
     }
 
     // ── Hash operations ─────────────────────────────────────────
@@ -5789,6 +6014,50 @@ impl Store {
         result
     }
 
+    #[must_use]
+    pub fn randomkey_with_prefix(&mut self, prefix: &[u8], now_ms: u64) -> Option<Vec<u8>> {
+        let all_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
+        for key in &all_keys {
+            self.drop_if_expired(key, now_ms);
+        }
+
+        let matching: Vec<Vec<u8>> = self
+            .entries
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect();
+        if matching.is_empty() {
+            return None;
+        }
+        let idx = (self.next_rand() as usize) % matching.len();
+        matching.get(idx).cloned()
+    }
+
+    #[must_use]
+    pub fn randomkey_in_db(&mut self, db: usize, now_ms: u64) -> Option<Vec<u8>> {
+        let all_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
+        for key in &all_keys {
+            self.drop_if_expired(key, now_ms);
+        }
+
+        let matching: Vec<Vec<u8>> = self
+            .entries
+            .keys()
+            .filter(|key| {
+                decode_db_key(key)
+                    .map(|(entry_db, _)| entry_db == db)
+                    .unwrap_or(db == 0)
+            })
+            .cloned()
+            .collect();
+        if matching.is_empty() {
+            return None;
+        }
+        let idx = (self.next_rand() as usize) % matching.len();
+        matching.get(idx).cloned()
+    }
+
     /// Return up to `count` keys that hash to the given cluster slot.
     #[must_use]
     pub fn keys_in_slot(&mut self, slot: u16, count: usize, now_ms: u64) -> Vec<Vec<u8>> {
@@ -6968,21 +7237,35 @@ impl Store {
         let mut commands = Vec::new();
 
         // Snapshot the remaining keys (sorted for deterministic output).
-        let mut keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
-        keys.sort();
+        let mut keys: Vec<(usize, Vec<u8>, Vec<u8>)> = self
+            .entries
+            .keys()
+            .map(|physical| {
+                let (db, logical) = decode_db_key(physical).unwrap_or((0, physical.as_slice()));
+                (db, logical.to_vec(), physical.clone())
+            })
+            .collect();
+        keys.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
 
-        for key in keys {
-            let Some(entry) = self.entries.get(&key) else {
+        let mut current_db = 0usize;
+
+        for (db, logical_key, physical_key) in keys {
+            let Some(entry) = self.entries.get(&physical_key) else {
                 continue;
             };
 
+            if db != current_db {
+                commands.push(vec![b"SELECT".to_vec(), db.to_string().into_bytes()]);
+                current_db = db;
+            }
+
             match &entry.value {
                 Value::String(v) => {
-                    commands.push(vec![b"SET".to_vec(), key.clone(), v.clone()]);
+                    commands.push(vec![b"SET".to_vec(), logical_key.clone(), v.clone()]);
                 }
                 Value::Hash(h) => {
                     if !h.is_empty() {
-                        let mut argv = vec![b"HSET".to_vec(), key.clone()];
+                        let mut argv = vec![b"HSET".to_vec(), logical_key.clone()];
                         // Sort fields for deterministic output.
                         let mut fields: Vec<(&Vec<u8>, &Vec<u8>)> = h.iter().collect();
                         fields.sort_by(|a, b| a.0.cmp(b.0));
@@ -6995,7 +7278,7 @@ impl Store {
                 }
                 Value::List(l) => {
                     if !l.is_empty() {
-                        let mut argv = vec![b"RPUSH".to_vec(), key.clone()];
+                        let mut argv = vec![b"RPUSH".to_vec(), logical_key.clone()];
                         for item in l {
                             argv.push(item.clone());
                         }
@@ -7004,7 +7287,7 @@ impl Store {
                 }
                 Value::Set(s) => {
                     if !s.is_empty() {
-                        let mut argv = vec![b"SADD".to_vec(), key.clone()];
+                        let mut argv = vec![b"SADD".to_vec(), logical_key.clone()];
                         // Sort members for deterministic output.
                         let mut members: Vec<&Vec<u8>> = s.iter().collect();
                         members.sort();
@@ -7016,7 +7299,7 @@ impl Store {
                 }
                 Value::SortedSet(zs) => {
                     if !zs.is_empty() {
-                        let mut argv = vec![b"ZADD".to_vec(), key.clone()];
+                        let mut argv = vec![b"ZADD".to_vec(), logical_key.clone()];
                         // Sort by score then member for deterministic output.
                         let mut pairs: Vec<(&Vec<u8>, &f64)> = zs.iter().collect();
                         pairs.sort_by(|a, b| {
@@ -7035,7 +7318,7 @@ impl Store {
                     // Each stream entry becomes a separate XADD command.
                     for ((ms, seq), fields) in entries {
                         let id = format!("{ms}-{seq}");
-                        let mut argv = vec![b"XADD".to_vec(), key.clone(), id.into_bytes()];
+                        let mut argv = vec![b"XADD".to_vec(), logical_key.clone(), id.into_bytes()];
                         for (fname, fval) in fields {
                             argv.push(fname.clone());
                             argv.push(fval.clone());
@@ -7044,13 +7327,17 @@ impl Store {
                     }
 
                     // Emit XSETID to preserve the last-generated-id.
-                    if let Some(&(ms, seq)) = self.stream_last_ids.get(&key) {
+                    if let Some(&(ms, seq)) = self.stream_last_ids.get(&physical_key) {
                         let id = format!("{ms}-{seq}");
-                        commands.push(vec![b"XSETID".to_vec(), key.clone(), id.into_bytes()]);
+                        commands.push(vec![
+                            b"XSETID".to_vec(),
+                            logical_key.clone(),
+                            id.into_bytes(),
+                        ]);
                     }
 
                     // Emit XGROUP CREATE for each consumer group.
-                    if let Some(groups) = self.stream_groups.get(&key) {
+                    if let Some(groups) = self.stream_groups.get(&physical_key) {
                         let mut group_names: Vec<&Vec<u8>> = groups.keys().collect();
                         group_names.sort();
                         for group_name in group_names {
@@ -7060,7 +7347,7 @@ impl Store {
                             commands.push(vec![
                                 b"XGROUP".to_vec(),
                                 b"CREATE".to_vec(),
-                                key.clone(),
+                                logical_key.clone(),
                                 group_name.clone(),
                                 id.into_bytes(),
                             ]);
@@ -7073,7 +7360,7 @@ impl Store {
             if let Some(exp_ms) = entry.expires_at_ms {
                 commands.push(vec![
                     b"PEXPIREAT".to_vec(),
-                    key.clone(),
+                    logical_key.clone(),
                     exp_ms.to_string().into_bytes(),
                 ]);
             }

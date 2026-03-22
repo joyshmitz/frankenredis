@@ -436,7 +436,7 @@
       ],
       "expect": {
         "kind": "simple",
-        "value": "OK Already a master"
+        "value": "OK"
       }
     },
     {
@@ -521,7 +521,7 @@
       ],
       "expect": {
         "kind": "simple",
-        "value": "OK Already a master"
+        "value": "OK"
       }
     },
     {

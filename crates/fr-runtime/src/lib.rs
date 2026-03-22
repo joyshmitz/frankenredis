@@ -23,13 +23,16 @@ use fr_eventloop::{
 };
 use fr_persist::{
     AofRecord, PersistError, RdbEntry, RdbValue, argv_to_aof_records, decode_aof_stream,
-    encode_aof_stream, write_aof_file, write_rdb_file,
+    encode_aof_stream, encode_rdb, write_aof_file, write_rdb_file,
 };
 use fr_protocol::{RespFrame, RespParseError};
-use fr_repl::{ReplOffset, WaitAofThreshold, WaitThreshold, evaluate_wait, evaluate_waitaof};
+use fr_repl::{
+    BacklogWindow, ReplOffset, WaitAofThreshold, WaitThreshold, decide_psync, evaluate_wait,
+    evaluate_waitaof,
+};
 use fr_store::{
     EvictionLoopFailure, EvictionLoopResult, EvictionLoopStatus, EvictionSafetyGateState,
-    MaxmemoryPolicy, Store, glob_match,
+    MaxmemoryPolicy, Store, decode_db_key, encode_db_key, glob_match,
 };
 
 static PACKET_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -44,6 +47,7 @@ const CLUSTER_UNKNOWN_SUBCOMMAND_ERROR: &str =
 const ACL_UNKNOWN_SUBCOMMAND_ERROR: &str =
     "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP.";
 const DEFAULT_ACLLOG_MAX_LEN: i64 = 128;
+const DEFAULT_REPL_BACKLOG_SIZE: u64 = 1_048_576;
 
 /// Static configuration parameters returned by CONFIG GET.
 /// These represent sensible defaults for a standalone FrankenRedis instance.
@@ -363,6 +367,10 @@ enum RuntimeSpecialCommand {
     Cluster,
     Wait,
     Waitaof,
+    Role,
+    Replicaof,
+    Slaveof,
+    Sync,
     Multi,
     Exec,
     Discard,
@@ -384,6 +392,8 @@ enum RuntimeSpecialCommand {
     Ssubscribe,
     Sunsubscribe,
     Spublish,
+    Replconf,
+    Psync,
     Select,
     Swapdb,
 }
@@ -408,6 +418,10 @@ fn classify_runtime_special_command(cmd: &[u8]) -> Option<RuntimeSpecialCommand>
         4 => {
             if eq_ascii_token(cmd, b"AUTH") {
                 Some(RuntimeSpecialCommand::Auth)
+            } else if eq_ascii_token(cmd, b"ROLE") {
+                Some(RuntimeSpecialCommand::Role)
+            } else if eq_ascii_token(cmd, b"SYNC") {
+                Some(RuntimeSpecialCommand::Sync)
             } else if eq_ascii_token(cmd, b"WAIT") {
                 Some(RuntimeSpecialCommand::Wait)
             } else if eq_ascii_token(cmd, b"EXEC") {
@@ -423,6 +437,8 @@ fn classify_runtime_special_command(cmd: &[u8]) -> Option<RuntimeSpecialCommand>
         5 => {
             if eq_ascii_token(cmd, b"HELLO") {
                 Some(RuntimeSpecialCommand::Hello)
+            } else if eq_ascii_token(cmd, b"PSYNC") {
+                Some(RuntimeSpecialCommand::Psync)
             } else if eq_ascii_token(cmd, b"MULTI") {
                 Some(RuntimeSpecialCommand::Multi)
             } else if eq_ascii_token(cmd, b"WATCH") {
@@ -453,6 +469,8 @@ fn classify_runtime_special_command(cmd: &[u8]) -> Option<RuntimeSpecialCommand>
         7 => {
             if eq_ascii_token(cmd, b"CLUSTER") {
                 Some(RuntimeSpecialCommand::Cluster)
+            } else if eq_ascii_token(cmd, b"SLAVEOF") {
+                Some(RuntimeSpecialCommand::Slaveof)
             } else if eq_ascii_token(cmd, b"WAITAOF") {
                 Some(RuntimeSpecialCommand::Waitaof)
             } else if eq_ascii_token(cmd, b"DISCARD") {
@@ -472,6 +490,8 @@ fn classify_runtime_special_command(cmd: &[u8]) -> Option<RuntimeSpecialCommand>
                 Some(RuntimeSpecialCommand::Readonly)
             } else if eq_ascii_token(cmd, b"LASTSAVE") {
                 Some(RuntimeSpecialCommand::Lastsave)
+            } else if eq_ascii_token(cmd, b"REPLCONF") {
+                Some(RuntimeSpecialCommand::Replconf)
             } else if eq_ascii_token(cmd, b"SHUTDOWN") {
                 Some(RuntimeSpecialCommand::Shutdown)
             } else if eq_ascii_token(cmd, b"SPUBLISH") {
@@ -483,6 +503,8 @@ fn classify_runtime_special_command(cmd: &[u8]) -> Option<RuntimeSpecialCommand>
         9 => {
             if eq_ascii_token(cmd, b"READWRITE") {
                 Some(RuntimeSpecialCommand::Readwrite)
+            } else if eq_ascii_token(cmd, b"REPLICAOF") {
+                Some(RuntimeSpecialCommand::Replicaof)
             } else if eq_ascii_token(cmd, b"SUBSCRIBE") {
                 Some(RuntimeSpecialCommand::Subscribe)
             } else {
@@ -529,8 +551,20 @@ fn classify_runtime_special_command_linear(cmd: &[u8]) -> Option<RuntimeSpecialC
         Some(RuntimeSpecialCommand::Config)
     } else if command.eq_ignore_ascii_case("AUTH") {
         Some(RuntimeSpecialCommand::Auth)
+    } else if command.eq_ignore_ascii_case("REPLCONF") {
+        Some(RuntimeSpecialCommand::Replconf)
+    } else if command.eq_ignore_ascii_case("PSYNC") {
+        Some(RuntimeSpecialCommand::Psync)
     } else if command.eq_ignore_ascii_case("HELLO") {
         Some(RuntimeSpecialCommand::Hello)
+    } else if command.eq_ignore_ascii_case("ROLE") {
+        Some(RuntimeSpecialCommand::Role)
+    } else if command.eq_ignore_ascii_case("REPLICAOF") {
+        Some(RuntimeSpecialCommand::Replicaof)
+    } else if command.eq_ignore_ascii_case("SLAVEOF") {
+        Some(RuntimeSpecialCommand::Slaveof)
+    } else if command.eq_ignore_ascii_case("SYNC") {
+        Some(RuntimeSpecialCommand::Sync)
     } else if command.eq_ignore_ascii_case("ASKING") {
         Some(RuntimeSpecialCommand::Asking)
     } else if command.eq_ignore_ascii_case("READONLY") {
@@ -645,6 +679,27 @@ fn eq_ascii_token(lhs: &[u8], rhs: &[u8]) -> bool {
     lhs.eq_ignore_ascii_case(rhs)
 }
 
+#[allow(dead_code)]
+fn increment_run_id_hex(current: &str) -> String {
+    let parsed = u128::from_str_radix(current, 16).unwrap_or(0);
+    format!("{:040x}", parsed.saturating_add(1))
+}
+
+#[inline]
+fn parse_db_index_arg(arg: &[u8], out_of_range_message: &'static str) -> Result<usize, RespFrame> {
+    let parsed = std::str::from_utf8(arg)
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or_else(|| {
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        })?;
+    if (0..NUM_DATABASES as i64).contains(&parsed) {
+        Ok(parsed as usize)
+    } else {
+        Err(RespFrame::Error(out_of_range_message.to_string()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ClusterClientState {
     mode: ClusterClientMode,
@@ -666,6 +721,90 @@ struct ReplicationAckState {
     local_fsync_offset: ReplOffset,
     replica_ack_offsets: Vec<ReplOffset>,
     replica_fsync_offsets: Vec<ReplOffset>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ReplicaState {
+    ack_offset: ReplOffset,
+    fsync_offset: ReplOffset,
+    listening_port: u16,
+    ip_address: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReplicationRoleState {
+    Master,
+    Replica {
+        host: String,
+        port: u16,
+        state: &'static str,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplicationRuntimeState {
+    role: ReplicationRoleState,
+    backlog: BacklogWindow,
+    replicas: BTreeMap<u64, ReplicaState>,
+}
+
+impl ReplicationRuntimeState {
+    fn new(replid: String) -> Self {
+        Self {
+            role: ReplicationRoleState::Master,
+            backlog: BacklogWindow {
+                replid,
+                start_offset: ReplOffset(0),
+                end_offset: ReplOffset(0),
+            },
+            replicas: BTreeMap::new(),
+        }
+    }
+
+    fn ensure_replica(&mut self, client_id: u64) -> &mut ReplicaState {
+        self.replicas.entry(client_id).or_default()
+    }
+
+    fn update_backlog_window(&mut self, end_offset: ReplOffset) {
+        let start = if end_offset.0 >= DEFAULT_REPL_BACKLOG_SIZE {
+            ReplOffset(end_offset.0 - DEFAULT_REPL_BACKLOG_SIZE + 1)
+        } else {
+            ReplOffset(0)
+        };
+        self.backlog.start_offset = start;
+        self.backlog.end_offset = end_offset;
+    }
+
+    fn replica_ack_offsets(&self) -> Vec<ReplOffset> {
+        self.replicas
+            .values()
+            .map(|replica| replica.ack_offset)
+            .collect()
+    }
+
+    fn replica_fsync_offsets(&self) -> Vec<ReplOffset> {
+        self.replicas
+            .values()
+            .map(|replica| replica.fsync_offset)
+            .collect()
+    }
+
+    fn backlog_histlen(&self) -> u64 {
+        self.backlog
+            .end_offset
+            .0
+            .saturating_sub(self.backlog.start_offset.0)
+            .saturating_add(u64::from(self.backlog.end_offset.0 > 0))
+    }
+
+    #[allow(dead_code)]
+    fn rotate_backlog_identity(&mut self) {
+        let next_replid = increment_run_id_hex(&self.backlog.replid);
+        let current_offset = self.backlog.end_offset;
+        self.backlog
+            .rotate(next_replid, current_offset, current_offset);
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -732,6 +871,8 @@ pub const NUM_DATABASES: usize = 16;
 pub struct ServerState {
     store: Store,
     aof_records: Vec<AofRecord>,
+    aof_selected_db: usize,
+    replication_runtime_state: ReplicationRuntimeState,
     evidence: EvidenceLedger,
     auth_state: AuthState,
     tls_state: TlsRuntimeState,
@@ -787,9 +928,14 @@ pub struct ServerState {
 
 impl Default for ServerState {
     fn default() -> Self {
+        let store = Store::new();
         Self {
-            store: Store::new(),
+            replication_runtime_state: ReplicationRuntimeState::new(
+                "0000000000000000000000000000000000000000".to_string(),
+            ),
+            store,
             aof_records: Vec::new(),
+            aof_selected_db: 0,
             evidence: EvidenceLedger::default(),
             auth_state: AuthState::default(),
             tls_state: TlsRuntimeState::default(),
@@ -931,14 +1077,25 @@ impl ServerState {
     ) {
         self.replication_ack_state.primary_offset = ReplOffset(primary_offset);
         self.replication_ack_state.local_fsync_offset = ReplOffset(local_fsync_offset);
-        self.replication_ack_state.replica_ack_offsets = replica_ack_offsets
-            .iter()
-            .map(|offset| ReplOffset(*offset))
-            .collect();
-        self.replication_ack_state.replica_fsync_offsets = replica_fsync_offsets
-            .iter()
-            .map(|offset| ReplOffset(*offset))
-            .collect();
+        self.replication_runtime_state.replicas.clear();
+        let replica_count = replica_ack_offsets.len().max(replica_fsync_offsets.len());
+        for index in 0..replica_count {
+            let replica = self
+                .replication_runtime_state
+                .replicas
+                .entry(index as u64)
+                .or_default();
+            replica.ack_offset = ReplOffset(*replica_ack_offsets.get(index).unwrap_or(&0));
+            replica.fsync_offset = ReplOffset(*replica_fsync_offsets.get(index).unwrap_or(&0));
+        }
+        self.refresh_replica_ack_snapshots();
+    }
+
+    fn refresh_replica_ack_snapshots(&mut self) {
+        self.replication_ack_state.replica_ack_offsets =
+            self.replication_runtime_state.replica_ack_offsets();
+        self.replication_ack_state.replica_fsync_offsets =
+            self.replication_runtime_state.replica_fsync_offsets();
     }
 
     fn reset_slowlog(&mut self) {
@@ -979,6 +1136,8 @@ impl ServerState {
             .0
             .saturating_add(1);
         self.replication_ack_state.local_fsync_offset = self.replication_ack_state.primary_offset;
+        self.replication_runtime_state
+            .update_backlog_window(self.replication_ack_state.primary_offset);
     }
 }
 
@@ -1144,7 +1303,35 @@ impl Runtime {
     /// Each AOF record is dispatched through the command router as if it were
     /// a client command. Returns the number of records replayed, or an error.
     pub fn load_aof(&mut self, now_ms: u64) -> Result<usize, PersistError> {
-        self.server.load_aof(now_ms)
+        let path = match &self.server.aof_path {
+            Some(path) => path.clone(),
+            None => return Ok(0),
+        };
+        let records = fr_persist::read_aof_file(&path)?;
+        let count = records.len();
+        let original_store = std::mem::replace(&mut self.server.store, Store::new());
+        let original_records = std::mem::take(&mut self.server.aof_records);
+        let original_aof_db = self.server.aof_selected_db;
+        let original_db = self.session.selected_db;
+
+        self.server.aof_selected_db = 0;
+        self.session.selected_db = 0;
+        for (index, record) in records.iter().enumerate() {
+            let replay_now_ms = now_ms.saturating_add(index as u64);
+            let reply = self.execute_frame(record.to_resp_frame(), replay_now_ms);
+            if matches!(reply, RespFrame::Error(_)) {
+                self.server.store = original_store;
+                self.server.aof_records = original_records;
+                self.server.aof_selected_db = original_aof_db;
+                self.session.selected_db = original_db;
+                return Err(PersistError::InvalidFrame);
+            }
+        }
+
+        self.server.aof_records = records;
+        self.server.aof_selected_db = self.session.selected_db;
+        self.session.selected_db = original_db;
+        Ok(count)
     }
 
     #[must_use]
@@ -1296,6 +1483,21 @@ impl Runtime {
     #[must_use]
     pub fn encoded_aof_stream(&self) -> Vec<u8> {
         encode_aof_stream(&self.server.aof_records)
+    }
+
+    #[must_use]
+    pub fn encoded_aof_stream_from_offset(&self, offset: u64) -> Vec<u8> {
+        let start = usize::try_from(offset).unwrap_or(usize::MAX);
+        encode_aof_stream(self.server.aof_records.get(start..).unwrap_or(&[]))
+    }
+
+    #[must_use]
+    pub fn encoded_rdb_snapshot(&mut self, now_ms: u64) -> Vec<u8> {
+        let entries = store_to_rdb_entries(&mut self.server.store, now_ms);
+        encode_rdb(
+            &entries,
+            &[("redis-ver", "7.0.0"), ("frankenredis", "true")],
+        )
     }
 
     pub fn replay_aof_stream(
@@ -1922,6 +2124,14 @@ impl Runtime {
             Some(RuntimeSpecialCommand::Acl) => return self.handle_acl_command(&argv),
             Some(RuntimeSpecialCommand::Config) => return self.handle_config_command(&argv),
             Some(RuntimeSpecialCommand::Client) => return self.handle_client_command(&argv),
+            Some(RuntimeSpecialCommand::Role) => return self.handle_role_command(&argv),
+            Some(RuntimeSpecialCommand::Replconf) => return self.handle_replconf_command(&argv),
+            Some(RuntimeSpecialCommand::Psync) | Some(RuntimeSpecialCommand::Sync) => {
+                return self.handle_psync_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Replicaof) | Some(RuntimeSpecialCommand::Slaveof) => {
+                return self.handle_replicaof_command(&argv);
+            }
             Some(RuntimeSpecialCommand::Asking) => return self.handle_asking_command(&argv),
             Some(RuntimeSpecialCommand::Readonly) => return self.handle_readonly_command(&argv),
             Some(RuntimeSpecialCommand::Readwrite) => return self.handle_readwrite_command(&argv),
@@ -2024,7 +2234,7 @@ impl Runtime {
         let _ = self.run_active_expire_cycle(now_ms, ActiveExpireCycleKind::Fast);
         let dirty_before = self.server.store.dirty;
         let start = Instant::now();
-        let result = dispatch_argv(&argv, &mut self.server.store, now_ms);
+        let result = self.execute_db_scoped_command(&argv, now_ms);
         let elapsed_us = start.elapsed().as_micros() as u64;
         let dirty_after = self.server.store.dirty;
         self.record_slowlog(&argv, elapsed_us, now_ms);
@@ -2189,6 +2399,15 @@ impl Runtime {
     }
 
     fn capture_aof_record(&mut self, argv: &[Vec<u8>]) {
+        if Runtime::command_advances_replication_offset(argv)
+            && self.server.aof_selected_db != self.session.selected_db
+        {
+            self.server.capture_aof_record(&[
+                b"SELECT".to_vec(),
+                self.session.selected_db.to_string().into_bytes(),
+            ]);
+            self.server.aof_selected_db = self.session.selected_db;
+        }
         self.server.capture_aof_record(argv);
     }
 
@@ -2196,10 +2415,80 @@ impl Runtime {
         let Some(command) = argv.first() else {
             return false;
         };
-        if eq_ascii_token(command, b"MULTI") || eq_ascii_token(command, b"EXEC") {
+        if eq_ascii_token(command, b"MULTI")
+            || eq_ascii_token(command, b"EXEC")
+            || eq_ascii_token(command, b"SELECT")
+            || eq_ascii_token(command, b"SWAPDB")
+        {
             return true;
         }
         fr_command::is_write_command(command)
+    }
+
+    fn namespace_argv_for_selected_db(&self, argv: &[Vec<u8>]) -> Vec<Vec<u8>> {
+        let mut rewritten = argv.to_vec();
+        for idx in fr_command::command_key_indexes(argv) {
+            if let Some(arg) = rewritten.get_mut(idx) {
+                *arg = encode_db_key(self.session.selected_db, arg);
+            }
+        }
+        rewritten
+    }
+
+    fn expire_stale_keys(&mut self, now_ms: u64) {
+        let keys = self.server.store.all_keys();
+        for key in keys {
+            self.server.store.expire_key_if_stale(&key, now_ms);
+        }
+    }
+
+    fn logical_keys_in_selected_db(&mut self, now_ms: u64) -> Vec<Vec<u8>> {
+        self.expire_stale_keys(now_ms);
+        let mut keys = Vec::new();
+        for physical in self.server.store.all_keys() {
+            let (db, logical) = decode_db_key(&physical).unwrap_or((0, physical.as_slice()));
+            if db == self.session.selected_db {
+                keys.push(logical.to_vec());
+            }
+        }
+        keys.sort();
+        keys
+    }
+
+    fn execute_db_scoped_command(
+        &mut self,
+        argv: &[Vec<u8>],
+        now_ms: u64,
+    ) -> Result<RespFrame, CommandError> {
+        let Some(command) = argv.first() else {
+            return Err(CommandError::InvalidCommandFrame);
+        };
+        if eq_ascii_token(command, b"KEYS") {
+            return self.handle_db_keys_command(argv, now_ms);
+        }
+        if eq_ascii_token(command, b"DBSIZE") {
+            return self.handle_dbsize_command(argv);
+        }
+        if eq_ascii_token(command, b"FLUSHDB") {
+            return self.handle_flushdb_command(argv);
+        }
+        if eq_ascii_token(command, b"RANDOMKEY") {
+            return self.handle_randomkey_command(argv, now_ms);
+        }
+        if eq_ascii_token(command, b"SCAN") {
+            return self.handle_scan_command(argv, now_ms);
+        }
+        if eq_ascii_token(command, b"MOVE") {
+            return self.handle_move_command(argv, now_ms);
+        }
+        if eq_ascii_token(command, b"COPY") {
+            return self.handle_copy_command(argv, now_ms);
+        }
+        if eq_ascii_token(command, b"INFO") {
+            return self.handle_info_command(argv, now_ms);
+        }
+        let namespaced = self.namespace_argv_for_selected_db(argv);
+        dispatch_argv(&namespaced, &mut self.server.store, now_ms)
     }
 
     fn handle_auth_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -3787,19 +4076,9 @@ impl Runtime {
         if argv.len() != 2 {
             return CommandError::WrongArity("SELECT").to_resp();
         }
-        let parsed = match std::str::from_utf8(&argv[1])
-            .ok()
-            .and_then(|s| s.parse::<i64>().ok())
-        {
-            Some(n) => n,
-            None => {
-                return RespFrame::Error("ERR value is not an integer or out of range".to_string());
-            }
-        };
-        let db = if (0..NUM_DATABASES as i64).contains(&parsed) {
-            parsed as usize
-        } else {
-            return RespFrame::Error("ERR DB index is out of range".to_string());
+        let db = match parse_db_index_arg(&argv[1], "ERR DB index is out of range") {
+            Ok(db) => db,
+            Err(reply) => return reply,
         };
         self.session.selected_db = db;
         RespFrame::SimpleString("OK".to_string())
@@ -3809,30 +4088,344 @@ impl Runtime {
         if argv.len() != 3 {
             return CommandError::WrongArity("SWAPDB").to_resp();
         }
-        let parse_db = |arg: &[u8]| -> Result<usize, RespFrame> {
-            let n = std::str::from_utf8(arg)
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
-                .ok_or_else(|| {
-                    RespFrame::Error("ERR value is not an integer or out of range".to_string())
-                })?;
-            if (0..NUM_DATABASES as i64).contains(&n) {
-                Ok(n as usize)
-            } else {
-                Err(RespFrame::Error("ERR invalid DB index".to_string()))
-            }
-        };
-        let db1 = match parse_db(&argv[1]) {
+        let db1 = match parse_db_index_arg(&argv[1], "ERR invalid DB index") {
             Ok(n) => n,
             Err(e) => return e,
         };
-        let db2 = match parse_db(&argv[2]) {
+        let db2 = match parse_db_index_arg(&argv[2], "ERR invalid DB index") {
             Ok(n) => n,
             Err(e) => return e,
         };
-        // In single-store mode, SWAPDB is a no-op (all DBs share the same namespace).
-        let _ = (db1, db2);
+        self.server.store.swap_databases(db1, db2);
+        self.capture_aof_record(argv);
         RespFrame::SimpleString("OK".to_string())
+    }
+
+    fn handle_db_keys_command(
+        &mut self,
+        argv: &[Vec<u8>],
+        now_ms: u64,
+    ) -> Result<RespFrame, CommandError> {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongArity("KEYS"));
+        }
+        let frames = self
+            .logical_keys_in_selected_db(now_ms)
+            .into_iter()
+            .filter(|key| glob_match(&argv[1], key))
+            .map(|key| RespFrame::BulkString(Some(key)))
+            .collect();
+        Ok(RespFrame::Array(Some(frames)))
+    }
+
+    fn handle_dbsize_command(&mut self, argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+        if argv.len() != 1 {
+            return Err(CommandError::WrongArity("DBSIZE"));
+        }
+        let size = self
+            .server
+            .store
+            .all_keys()
+            .into_iter()
+            .filter(|physical| {
+                decode_db_key(physical)
+                    .map(|(db, _)| db == self.session.selected_db)
+                    .unwrap_or(self.session.selected_db == 0)
+            })
+            .count();
+        Ok(RespFrame::Integer(i64::try_from(size).unwrap_or(i64::MAX)))
+    }
+
+    fn handle_flushdb_command(&mut self, argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+        if argv.len() > 2 {
+            return Err(CommandError::WrongArity("FLUSHDB"));
+        }
+        self.server.store.flush_database(self.session.selected_db);
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    }
+
+    fn handle_randomkey_command(
+        &mut self,
+        argv: &[Vec<u8>],
+        now_ms: u64,
+    ) -> Result<RespFrame, CommandError> {
+        if argv.len() != 1 {
+            return Err(CommandError::WrongArity("RANDOMKEY"));
+        }
+        let Some(physical) = self
+            .server
+            .store
+            .randomkey_in_db(self.session.selected_db, now_ms)
+        else {
+            return Ok(RespFrame::BulkString(None));
+        };
+        let logical = decode_db_key(&physical)
+            .map(|(_, logical)| logical.to_vec())
+            .unwrap_or(physical);
+        Ok(RespFrame::BulkString(Some(logical)))
+    }
+
+    fn handle_scan_command(
+        &mut self,
+        argv: &[Vec<u8>],
+        now_ms: u64,
+    ) -> Result<RespFrame, CommandError> {
+        if argv.len() < 2 {
+            return Err(CommandError::WrongArity("SCAN"));
+        }
+        let cursor = std::str::from_utf8(&argv[1])
+            .map_err(|_| CommandError::InvalidInteger)?
+            .parse::<usize>()
+            .map_err(|_| CommandError::InvalidInteger)?;
+
+        let mut pattern: Option<&[u8]> = None;
+        let mut count: usize = 10;
+        let mut type_filter: Option<&[u8]> = None;
+        let mut i = 2;
+        while i < argv.len() {
+            let keyword =
+                std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+            if keyword.eq_ignore_ascii_case("MATCH") {
+                if i + 1 >= argv.len() {
+                    return Err(CommandError::SyntaxError);
+                }
+                pattern = Some(argv[i + 1].as_slice());
+                i += 2;
+            } else if keyword.eq_ignore_ascii_case("COUNT") {
+                if i + 1 >= argv.len() {
+                    return Err(CommandError::SyntaxError);
+                }
+                let parsed = std::str::from_utf8(&argv[i + 1])
+                    .map_err(|_| CommandError::InvalidInteger)?
+                    .parse::<i64>()
+                    .map_err(|_| CommandError::InvalidInteger)?;
+                if parsed <= 0 {
+                    return Err(CommandError::InvalidInteger);
+                }
+                count = parsed as usize;
+                i += 2;
+            } else if keyword.eq_ignore_ascii_case("TYPE") {
+                if i + 1 >= argv.len() {
+                    return Err(CommandError::SyntaxError);
+                }
+                type_filter = Some(argv[i + 1].as_slice());
+                i += 2;
+            } else {
+                return Err(CommandError::SyntaxError);
+            }
+        }
+
+        let physical_keys = self.server.store.all_keys();
+        for physical in &physical_keys {
+            self.server.store.expire_key_if_stale(physical, now_ms);
+        }
+
+        let mut logical = Vec::new();
+        for physical in self.server.store.all_keys() {
+            let (db, logical_key) = decode_db_key(&physical).unwrap_or((0, physical.as_slice()));
+            if db != self.session.selected_db {
+                continue;
+            }
+            if let Some(expected_pattern) = pattern
+                && !glob_match(expected_pattern, logical_key)
+            {
+                continue;
+            }
+            if let Some(expected_type) = type_filter {
+                let expected = std::str::from_utf8(expected_type).unwrap_or("");
+                if self
+                    .server
+                    .store
+                    .key_type(&physical, now_ms)
+                    .is_none_or(|actual| !actual.eq_ignore_ascii_case(expected))
+                {
+                    continue;
+                }
+            }
+            logical.push(logical_key.to_vec());
+        }
+        logical.sort();
+
+        if cursor >= logical.len() {
+            return Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"0".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ])));
+        }
+
+        let end = cursor.saturating_add(count.max(1)).min(logical.len());
+        let next_cursor = if end >= logical.len() { 0 } else { end };
+        let batch = logical[cursor..end]
+            .iter()
+            .cloned()
+            .map(|key| RespFrame::BulkString(Some(key)))
+            .collect();
+        Ok(RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(next_cursor.to_string().into_bytes())),
+            RespFrame::Array(Some(batch)),
+        ])))
+    }
+
+    fn handle_move_command(
+        &mut self,
+        argv: &[Vec<u8>],
+        now_ms: u64,
+    ) -> Result<RespFrame, CommandError> {
+        if argv.len() != 3 {
+            return Err(CommandError::WrongArity("MOVE"));
+        }
+        let target_db =
+            parse_db_index_arg(&argv[2], "ERR DB index is out of range").map_err(|reply| {
+                match reply {
+                    RespFrame::Error(message) => CommandError::Custom(message),
+                    _ => CommandError::InvalidInteger,
+                }
+            })?;
+        if target_db == self.session.selected_db {
+            return Ok(RespFrame::Integer(0));
+        }
+        let source = encode_db_key(self.session.selected_db, &argv[1]);
+        let destination = encode_db_key(target_db, &argv[1]);
+        if !self.server.store.exists(&source, now_ms)
+            || self.server.store.exists(&destination, now_ms)
+        {
+            return Ok(RespFrame::Integer(0));
+        }
+        self.server
+            .store
+            .copy(&source, &destination, false, now_ms)
+            .map_err(CommandError::Store)?;
+        self.server.store.del(&[source], now_ms);
+        Ok(RespFrame::Integer(1))
+    }
+
+    fn handle_copy_command(
+        &mut self,
+        argv: &[Vec<u8>],
+        now_ms: u64,
+    ) -> Result<RespFrame, CommandError> {
+        if argv.len() < 3 {
+            return Err(CommandError::WrongArity("COPY"));
+        }
+        let source = encode_db_key(self.session.selected_db, &argv[1]);
+        let mut destination_db = self.session.selected_db;
+        let mut replace = false;
+        let mut i = 3;
+        while i < argv.len() {
+            let arg = std::str::from_utf8(&argv[i]).unwrap_or("");
+            if arg.eq_ignore_ascii_case("REPLACE") {
+                replace = true;
+                i += 1;
+                continue;
+            }
+            if arg.eq_ignore_ascii_case("DB") {
+                if i + 1 >= argv.len() {
+                    return Err(CommandError::SyntaxError);
+                }
+                destination_db = parse_db_index_arg(&argv[i + 1], "ERR DB index is out of range")
+                    .map_err(|reply| match reply {
+                    RespFrame::Error(message) => CommandError::Custom(message),
+                    _ => CommandError::InvalidInteger,
+                })?;
+                i += 2;
+                continue;
+            }
+            return Err(CommandError::SyntaxError);
+        }
+        let destination = encode_db_key(destination_db, &argv[2]);
+        let copied = self
+            .server
+            .store
+            .copy(&source, &destination, replace, now_ms)
+            .map_err(CommandError::Store)?;
+        Ok(RespFrame::Integer(i64::from(copied)))
+    }
+
+    fn handle_info_command(
+        &mut self,
+        argv: &[Vec<u8>],
+        now_ms: u64,
+    ) -> Result<RespFrame, CommandError> {
+        if argv.len() == 2
+            && std::str::from_utf8(&argv[1])
+                .is_ok_and(|section| section.eq_ignore_ascii_case("replication"))
+        {
+            return Ok(self.handle_info_replication_section());
+        }
+        if argv.len() == 2
+            && std::str::from_utf8(&argv[1])
+                .is_ok_and(|section| section.eq_ignore_ascii_case("keyspace"))
+        {
+            return Ok(self.handle_info_keyspace_section(now_ms));
+        }
+
+        let namespaced = self.namespace_argv_for_selected_db(argv);
+        dispatch_argv(&namespaced, &mut self.server.store, now_ms)
+    }
+
+    fn handle_info_keyspace_section(&mut self, now_ms: u64) -> RespFrame {
+        self.expire_stale_keys(now_ms);
+        let mut per_db: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+        for key in self.server.store.all_keys() {
+            let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
+            let expires = self
+                .server
+                .store
+                .get_value_and_expiry(&key)
+                .and_then(|(_, expiry)| expiry)
+                .is_some();
+            let entry = per_db.entry(db).or_insert((0, 0));
+            entry.0 = entry.0.saturating_add(1);
+            if expires {
+                entry.1 = entry.1.saturating_add(1);
+            }
+        }
+
+        let mut info = String::from("# Keyspace\r\n");
+        for (db, (keys, expires)) in per_db {
+            if keys > 0 {
+                info.push_str(&format!(
+                    "db{db}:keys={keys},expires={expires},avg_ttl=0\r\n"
+                ));
+            }
+        }
+        info.push_str("\r\n");
+        RespFrame::BulkString(Some(info.into_bytes()))
+    }
+
+    fn handle_info_replication_section(&mut self) -> RespFrame {
+        self.server.refresh_replica_ack_snapshots();
+        let backlog = &self.server.replication_runtime_state.backlog;
+        let connected_replicas = self.server.replication_runtime_state.replicas.len();
+        let backlog_active = usize::from(connected_replicas > 0);
+        let backlog_histlen = self.server.replication_runtime_state.backlog_histlen();
+        let role = match self.server.replication_runtime_state.role {
+            ReplicationRoleState::Master => "master",
+            ReplicationRoleState::Replica { .. } => "slave",
+        };
+
+        let mut info = String::from("# Replication\r\n");
+        info.push_str(&format!("role:{role}\r\n"));
+        info.push_str(&format!("connected_slaves:{connected_replicas}\r\n"));
+        info.push_str("master_failover_state:no-failover\r\n");
+        info.push_str(&format!("master_replid:{}\r\n", backlog.replid));
+        info.push_str("master_replid2:0000000000000000000000000000000000000000\r\n");
+        info.push_str(&format!(
+            "master_repl_offset:{}\r\n",
+            self.server.replication_ack_state.primary_offset.0
+        ));
+        info.push_str("second_repl_offset:-1\r\n");
+        info.push_str(&format!("repl_backlog_active:{backlog_active}\r\n"));
+        info.push_str(&format!(
+            "repl_backlog_size:{DEFAULT_REPL_BACKLOG_SIZE}\r\n"
+        ));
+        info.push_str(&format!(
+            "repl_backlog_first_byte_offset:{}\r\n",
+            backlog.start_offset.0
+        ));
+        info.push_str(&format!("repl_backlog_histlen:{backlog_histlen}\r\n"));
+        info.push_str("\r\n");
+        RespFrame::BulkString(Some(info.into_bytes()))
     }
 
     fn handle_cluster_command(&mut self, argv: &[Vec<u8>], now_ms: u64) -> RespFrame {
@@ -3934,6 +4527,234 @@ impl Runtime {
         ]))
     }
 
+    fn handle_role_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() != 1 {
+            return CommandError::WrongArity("ROLE").to_resp();
+        }
+        self.server.refresh_replica_ack_snapshots();
+        match &self.server.replication_runtime_state.role {
+            ReplicationRoleState::Master => {
+                let replicas = self
+                    .server
+                    .replication_runtime_state
+                    .replicas
+                    .values()
+                    .map(|replica| {
+                        RespFrame::Array(Some(vec![
+                            hello_bulk(replica.ip_address.as_deref().unwrap_or("")),
+                            RespFrame::Integer(i64::from(replica.listening_port)),
+                            RespFrame::Integer(
+                                i64::try_from(replica.ack_offset.0).unwrap_or(i64::MAX),
+                            ),
+                        ]))
+                    })
+                    .collect();
+                RespFrame::Array(Some(vec![
+                    hello_bulk("master"),
+                    RespFrame::Integer(0),
+                    RespFrame::Array(Some(replicas)),
+                ]))
+            }
+            ReplicationRoleState::Replica { host, port, state } => RespFrame::Array(Some(vec![
+                hello_bulk("slave"),
+                hello_bulk(host),
+                RespFrame::Integer(i64::from(*port)),
+                hello_bulk(state),
+                RespFrame::Integer(
+                    i64::try_from(self.server.replication_ack_state.primary_offset.0)
+                        .unwrap_or(i64::MAX),
+                ),
+            ])),
+        }
+    }
+
+    fn handle_replicaof_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() != 3 {
+            return CommandError::WrongArity("REPLICAOF").to_resp();
+        }
+        let host = String::from_utf8_lossy(&argv[1]).into_owned();
+        let port = String::from_utf8_lossy(&argv[2]).into_owned();
+        if host.eq_ignore_ascii_case("NO") && port.eq_ignore_ascii_case("ONE") {
+            if matches!(
+                self.server.replication_runtime_state.role,
+                ReplicationRoleState::Master
+            ) {
+                return RespFrame::SimpleString("OK Already a master".to_string());
+            }
+            self.server.replication_runtime_state.role = ReplicationRoleState::Master;
+            self.server
+                .replication_runtime_state
+                .rotate_backlog_identity();
+            self.server.replication_runtime_state.replicas.clear();
+            self.server.refresh_replica_ack_snapshots();
+            return RespFrame::SimpleString("OK".to_string());
+        }
+        let Ok(port) = port.parse::<u16>() else {
+            return CommandError::InvalidInteger.to_resp();
+        };
+        self.server.replication_runtime_state.role = ReplicationRoleState::Replica {
+            host,
+            port,
+            state: "connected",
+        };
+        RespFrame::SimpleString("OK".to_string())
+    }
+
+    fn handle_replconf_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() < 2 {
+            return CommandError::WrongArity("REPLCONF").to_resp();
+        }
+        let sub = std::str::from_utf8(&argv[1]).unwrap_or("");
+        if sub.eq_ignore_ascii_case("ACK") {
+            if argv.len() != 3 {
+                return CommandError::WrongArity("REPLCONF").to_resp();
+            }
+            let offset = match parse_i64_arg(&argv[2]) {
+                Ok(value) if value >= 0 => value as u64,
+                _ => return CommandError::InvalidInteger.to_resp(),
+            };
+            if let Some(replica) = self
+                .server
+                .replication_runtime_state
+                .replicas
+                .get_mut(&self.session.client_id)
+            {
+                let offset = ReplOffset(offset);
+                if offset > replica.ack_offset {
+                    replica.ack_offset = offset;
+                }
+                if offset > replica.fsync_offset {
+                    replica.fsync_offset = offset;
+                }
+            }
+            self.server.refresh_replica_ack_snapshots();
+            RespFrame::SimpleString("OK".to_string())
+        } else if sub.eq_ignore_ascii_case("FACK") {
+            if argv.len() != 3 {
+                return CommandError::WrongArity("REPLCONF").to_resp();
+            }
+            let offset = match parse_i64_arg(&argv[2]) {
+                Ok(value) if value >= 0 => ReplOffset(value as u64),
+                _ => return CommandError::InvalidInteger.to_resp(),
+            };
+            if let Some(replica) = self
+                .server
+                .replication_runtime_state
+                .replicas
+                .get_mut(&self.session.client_id)
+            {
+                if offset > replica.ack_offset {
+                    replica.ack_offset = offset;
+                }
+                if offset > replica.fsync_offset {
+                    replica.fsync_offset = offset;
+                }
+            }
+            self.server.refresh_replica_ack_snapshots();
+            RespFrame::SimpleString("OK".to_string())
+        } else if sub.eq_ignore_ascii_case("GETACK") {
+            if argv.len() != 3 || !eq_ascii_token(&argv[2], b"*") {
+                return CommandError::WrongArity("REPLCONF").to_resp();
+            }
+            self.server.refresh_replica_ack_snapshots();
+            RespFrame::Array(Some(vec![
+                hello_bulk("REPLCONF"),
+                hello_bulk("ACK"),
+                hello_bulk(
+                    &self
+                        .server
+                        .replication_ack_state
+                        .primary_offset
+                        .0
+                        .to_string(),
+                ),
+            ]))
+        } else if sub.eq_ignore_ascii_case("listening-port") {
+            if argv.len() == 3
+                && let Ok(value) = parse_i64_arg(&argv[2])
+                && let Ok(port) = u16::try_from(value)
+            {
+                self.server
+                    .replication_runtime_state
+                    .ensure_replica(self.session.client_id)
+                    .listening_port = port;
+            }
+            RespFrame::SimpleString("OK".to_string())
+        } else if sub.eq_ignore_ascii_case("ip-address") {
+            if argv.len() == 3 {
+                self.server
+                    .replication_runtime_state
+                    .ensure_replica(self.session.client_id)
+                    .ip_address = Some(String::from_utf8_lossy(&argv[2]).into_owned());
+            }
+            RespFrame::SimpleString("OK".to_string())
+        } else {
+            RespFrame::SimpleString("OK".to_string())
+        }
+    }
+
+    fn handle_psync_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        let is_sync = argv.first().is_some_and(|cmd| eq_ascii_token(cmd, b"SYNC"));
+        if is_sync {
+            if argv.len() != 1 {
+                return CommandError::WrongArity("SYNC").to_resp();
+            }
+        } else if argv.len() != 3 {
+            return CommandError::WrongArity("PSYNC").to_resp();
+        }
+        let (requested_replid, requested_offset) = if is_sync {
+            ("?", -1)
+        } else {
+            let requested_offset = match parse_i64_arg(&argv[2]) {
+                Ok(value) => value,
+                Err(_) => return CommandError::InvalidInteger.to_resp(),
+            };
+            (
+                std::str::from_utf8(&argv[1]).unwrap_or(""),
+                requested_offset,
+            )
+        };
+
+        let primary_offset = self.server.replication_ack_state.primary_offset;
+        let backlog = self.server.replication_runtime_state.backlog.clone();
+        let response = if requested_replid == "?" || requested_offset < 0 {
+            RespFrame::SimpleString(format!(
+                "FULLRESYNC {} {}",
+                backlog.replid, primary_offset.0
+            ))
+        } else {
+            match decide_psync(
+                &backlog,
+                requested_replid,
+                ReplOffset(requested_offset as u64),
+            ) {
+                fr_repl::PsyncDecision::Continue { .. } => {
+                    RespFrame::SimpleString("CONTINUE".to_string())
+                }
+                fr_repl::PsyncDecision::FullResync { .. } => RespFrame::SimpleString(format!(
+                    "FULLRESYNC {} {}",
+                    backlog.replid, primary_offset.0
+                )),
+            }
+        };
+
+        let replica = self
+            .server
+            .replication_runtime_state
+            .ensure_replica(self.session.client_id);
+        if requested_offset >= 0 {
+            let offset = ReplOffset(requested_offset as u64);
+            if offset > replica.ack_offset {
+                replica.ack_offset = offset;
+            }
+            if offset > replica.fsync_offset {
+                replica.fsync_offset = offset;
+            }
+        }
+        self.server.refresh_replica_ack_snapshots();
+        response
+    }
+
     fn handle_multi_command(&mut self) -> RespFrame {
         if self.session.transaction_state.in_transaction {
             return RespFrame::Error("ERR MULTI calls can not be nested".to_string());
@@ -4003,7 +4824,7 @@ impl Runtime {
             }
 
             let _ = self.run_active_expire_cycle(now_ms, ActiveExpireCycleKind::Fast);
-            match dispatch_argv(argv, &mut self.server.store, now_ms) {
+            match self.execute_db_scoped_command(argv, now_ms) {
                 Ok(reply) => {
                     self.capture_aof_record(argv);
                     results.push(reply);
@@ -4040,11 +4861,12 @@ impl Runtime {
             return RespFrame::Error("ERR WATCH inside MULTI is not allowed".to_string());
         }
         for key in &argv[1..] {
-            let fp = self.server.store.key_fingerprint(key, now_ms);
+            let physical = encode_db_key(self.session.selected_db, key);
+            let fp = self.server.store.key_fingerprint(&physical, now_ms);
             self.session
                 .transaction_state
                 .watched_keys
-                .push((key.clone(), fp));
+                .push((physical, fp));
         }
         RespFrame::SimpleString("OK".to_string())
     }
@@ -4276,6 +5098,7 @@ fn store_to_rdb_entries(store: &mut Store, now_ms: u64) -> Vec<RdbEntry> {
         let Some((value, expires_at_ms)) = store.get_value_and_expiry(&key) else {
             continue;
         };
+        let (db, logical_key) = decode_db_key(&key).unwrap_or((0, key.as_slice()));
         let rdb_value = match value {
             Value::String(v) => RdbValue::String(v.clone()),
             Value::List(l) => RdbValue::List(l.iter().cloned().collect()),
@@ -4298,7 +5121,8 @@ fn store_to_rdb_entries(store: &mut Store, now_ms: u64) -> Vec<RdbEntry> {
             Value::Stream(_) => continue, // Streams not yet supported in RDB
         };
         entries.push(RdbEntry {
-            key,
+            db,
+            key: logical_key.to_vec(),
             value: rdb_value,
             expire_ms: expires_at_ms,
         });
@@ -4371,13 +5195,14 @@ mod tests {
         EventLoopMode, EventLoopPhase, FdRegistrationError, LoopBootstrap, PendingWriteError,
         ReadPathError, ReadinessCallback, TickBudget,
     };
-    use fr_persist::{AofRecord, PersistError, decode_aof_stream, write_aof_file};
+    use fr_persist::{AofRecord, PersistError, RdbValue, decode_aof_stream, write_aof_file};
     use fr_protocol::{RespFrame, parse_frame};
 
     use super::{
         ClientSession, ClusterClientMode, ClusterSubcommand, DEFAULT_AUTH_USER, Runtime,
         ServerState, classify_cluster_subcommand, classify_cluster_subcommand_linear,
         classify_runtime_special_command, classify_runtime_special_command_linear,
+        store_to_rdb_entries,
     };
 
     fn command(parts: &[&[u8]]) -> RespFrame {
@@ -5088,6 +5913,160 @@ mod tests {
     }
 
     #[test]
+    fn multi_db_select_scopes_keyspace_commands() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"shared", b"db0"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"2"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"shared", b"db2"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"other", b"x"]), 3),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"DBSIZE"]), 4),
+            RespFrame::Integer(2)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"KEYS", b"*"]), 5),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"other".to_vec())),
+                RespFrame::BulkString(Some(b"shared".to_vec())),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SCAN", b"0"]), 6),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"0".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"other".to_vec())),
+                    RespFrame::BulkString(Some(b"shared".to_vec())),
+                ])),
+            ]))
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"0"]), 7),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"shared"]), 8),
+            RespFrame::BulkString(Some(b"db0".to_vec()))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"DBSIZE"]), 9),
+            RespFrame::Integer(1)
+        );
+    }
+
+    #[test]
+    fn multi_db_move_and_swapdb_preserve_logical_keys() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"moveme", b"value"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"MOVE", b"moveme", b"3"]), 1),
+            RespFrame::Integer(1)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"moveme"]), 2),
+            RespFrame::BulkString(None)
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"3"]), 3),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"moveme"]), 4),
+            RespFrame::BulkString(Some(b"value".to_vec()))
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"swap", b"db3"]), 5),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"0"]), 6),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"swap", b"db0"]), 7),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SWAPDB", b"0", b"3"]), 8),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"swap"]), 9),
+            RespFrame::BulkString(Some(b"db3".to_vec()))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"3"]), 10),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"swap"]), 11),
+            RespFrame::BulkString(Some(b"db0".to_vec()))
+        );
+    }
+
+    #[test]
+    fn multi_db_persistence_tracks_selected_db_boundaries() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"zero", b"0"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"4"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"four", b"4"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        assert_eq!(
+            rt.aof_records(),
+            [
+                AofRecord {
+                    argv: vec![b"SET".to_vec(), b"zero".to_vec(), b"0".to_vec()],
+                },
+                AofRecord {
+                    argv: vec![b"SELECT".to_vec(), b"4".to_vec()],
+                },
+                AofRecord {
+                    argv: vec![b"SET".to_vec(), b"four".to_vec(), b"4".to_vec()],
+                },
+            ]
+            .as_slice()
+        );
+
+        let entries = store_to_rdb_entries(&mut rt.server.store, 3);
+        assert!(entries.iter().any(|entry| {
+            entry.db == 0 && entry.key == b"zero" && entry.value == RdbValue::String(b"0".to_vec())
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.db == 4 && entry.key == b"four" && entry.value == RdbValue::String(b"4".to_vec())
+        }));
+    }
+
+    #[test]
     fn fr_p2c_004_u010_user_auth_requires_authentication_before_dispatch() {
         let mut rt = Runtime::default_strict();
         rt.add_user(b"alice".to_vec(), b"secret2".to_vec());
@@ -5337,11 +6316,109 @@ mod tests {
     }
 
     #[test]
+    fn replication_role_transitions_change_role_shape() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"6380"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ROLE"]), 1),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"slave".to_vec())),
+                RespFrame::BulkString(Some(b"127.0.0.1".to_vec())),
+                RespFrame::Integer(6380),
+                RespFrame::BulkString(Some(b"connected".to_vec())),
+                RespFrame::Integer(0),
+            ]))
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLICAOF", b"NO", b"ONE"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ROLE"]), 3),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"master".to_vec())),
+                RespFrame::Integer(0),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn replication_psync_continue_uses_live_backlog_window() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"rep:key", b"value"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let replid = rt.server.replication_runtime_state.backlog.replid.clone();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"PSYNC", replid.as_bytes(), b"1"]), 1),
+            RespFrame::SimpleString("CONTINUE".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PSYNC", b"wrong-replid", b"1"]), 2),
+            RespFrame::SimpleString(format!("FULLRESYNC {} 1", replid))
+        );
+    }
+
+    #[test]
+    fn replication_sync_alias_triggers_fullresync() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SYNC"]), 0),
+            RespFrame::SimpleString(
+                "FULLRESYNC 0000000000000000000000000000000000000000 0".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn replication_replconf_ack_is_monotonic() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLCONF", b"listening-port", b"6380"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLCONF", b"ACK", b"10"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLCONF", b"ACK", b"5"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let replica = rt
+            .server
+            .replication_runtime_state
+            .replicas
+            .get(&rt.session.client_id)
+            .expect("replica state");
+        assert_eq!(replica.ack_offset, fr_repl::ReplOffset(10));
+        assert_eq!(replica.fsync_offset, fr_repl::ReplOffset(10));
+    }
+
+    #[test]
     fn fr_p2c_004_runtime_special_command_classifier_matches_linear_reference() {
         let samples: &[&[u8]] = &[
             b"AUTH",
             b"auth",
             b"HeLlO",
+            b"ROLE",
+            b"REPLCONF",
+            b"PSYNC",
+            b"SYNC",
+            b"REPLICAOF",
+            b"SLAVEOF",
             b"ASKING",
             b"CONFIG",
             b"readonly",

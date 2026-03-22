@@ -39,6 +39,14 @@ fn hello_bulk(s: &str) -> RespFrame {
 
 /// Return the list of key names referenced by the command.
 pub fn command_keys(argv: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    command_key_indexes(argv)
+        .into_iter()
+        .filter_map(|idx| argv.get(idx).cloned())
+        .collect()
+}
+
+/// Return the argv indexes that correspond to keys for the command.
+pub fn command_key_indexes(argv: &[Vec<u8>]) -> Vec<usize> {
     let Some(raw_cmd) = argv.first() else {
         return Vec::new();
     };
@@ -56,7 +64,7 @@ pub fn command_keys(argv: &[Vec<u8>]) -> Vec<Vec<u8>> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        return argv.iter().skip(3).take(num_keys).cloned().collect();
+        return (3..argv.len()).take(num_keys).collect();
     }
 
     if cmd_name.eq_ignore_ascii_case("XREAD") || cmd_name.eq_ignore_ascii_case("XREADGROUP") {
@@ -64,7 +72,7 @@ pub fn command_keys(argv: &[Vec<u8>]) -> Vec<Vec<u8>> {
         if let Some(idx) = streams_idx {
             let remaining = &argv[idx + 1..];
             let num_keys = remaining.len() / 2;
-            return remaining.iter().take(num_keys).cloned().collect();
+            return (idx + 1..argv.len()).take(num_keys).collect();
         }
         return Vec::new();
     }
@@ -86,8 +94,8 @@ pub fn command_keys(argv: &[Vec<u8>]) -> Vec<Vec<u8>> {
             let mut keys = Vec::new();
             let mut i = first_idx;
             while i < argv.len() && i <= last_idx {
-                if let Some(key) = argv.get(i) {
-                    keys.push(key.clone());
+                if argv.get(i).is_some() {
+                    keys.push(i);
                 }
                 i += step;
             }

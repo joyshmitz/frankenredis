@@ -166,6 +166,7 @@ const CRC64_REDIS_POLY: u64 = 0xAD93_D235_94C9_35A9;
 /// A key-value entry for RDB serialization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RdbEntry {
+    pub db: usize,
     pub key: Vec<u8>,
     pub value: RdbValue,
     pub expire_ms: Option<u64>,
@@ -245,19 +246,33 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
         rdb_encode_string(&mut buf, value.as_bytes());
     }
 
-    // Select DB 0
-    buf.push(RDB_OPCODE_SELECTDB);
-    rdb_encode_length(&mut buf, 0);
+    let mut sorted_entries = entries.to_vec();
+    sorted_entries.sort_by(|left, right| {
+        left.db
+            .cmp(&right.db)
+            .then_with(|| left.key.cmp(&right.key))
+    });
 
-    // Resize DB hint
-    let db_size = entries.len();
-    let expires_size = entries.iter().filter(|e| e.expire_ms.is_some()).count();
-    buf.push(RDB_OPCODE_RESIZEDB);
-    rdb_encode_length(&mut buf, db_size);
-    rdb_encode_length(&mut buf, expires_size);
+    let mut current_db: Option<usize> = None;
+    for (index, entry) in sorted_entries.iter().enumerate() {
+        let needs_db_header = current_db != Some(entry.db);
+        if needs_db_header {
+            current_db = Some(entry.db);
+            buf.push(RDB_OPCODE_SELECTDB);
+            rdb_encode_length(&mut buf, entry.db);
+            let db_entries = sorted_entries
+                .iter()
+                .filter(|candidate| candidate.db == entry.db)
+                .count();
+            let db_expires = sorted_entries
+                .iter()
+                .filter(|candidate| candidate.db == entry.db && candidate.expire_ms.is_some())
+                .count();
+            buf.push(RDB_OPCODE_RESIZEDB);
+            rdb_encode_length(&mut buf, db_entries);
+            rdb_encode_length(&mut buf, db_expires);
+        }
 
-    // Key-value pairs
-    for entry in entries {
         // Expiry
         if let Some(ms) = entry.expire_ms {
             buf.push(RDB_OPCODE_EXPIRETIME_MS);
@@ -307,6 +322,7 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
                 }
             }
         }
+        debug_assert!(index < sorted_entries.len());
     }
 
     // EOF
@@ -408,6 +424,7 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
     let mut entries = Vec::new();
     let mut aux = BTreeMap::new();
     let mut pending_expire_ms: Option<u64> = None;
+    let mut current_db = 0usize;
     let mut saw_eof = false;
 
     while cursor < data.len() {
@@ -462,9 +479,10 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                 }
             }
             RDB_OPCODE_SELECTDB => {
-                let (_, consumed) =
+                let (db, consumed) =
                     rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                 cursor += consumed;
+                current_db = db;
             }
             RDB_OPCODE_RESIZEDB => {
                 let (_, consumed) =
@@ -593,6 +611,7 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                 };
 
                 entries.push(RdbEntry {
+                    db: current_db,
                     key,
                     value,
                     expire_ms: pending_expire_ms.take(),
@@ -772,6 +791,7 @@ mod tests {
     #[test]
     fn rdb_round_trip_string() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"hello".to_vec(),
             value: RdbValue::String(b"world".to_vec()),
             expire_ms: None,
@@ -784,6 +804,7 @@ mod tests {
     #[test]
     fn rdb_round_trip_with_expiry() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"temp".to_vec(),
             value: RdbValue::String(b"val".to_vec()),
             expire_ms: Some(1_700_000_000_000),
@@ -796,6 +817,7 @@ mod tests {
     #[test]
     fn rdb_round_trip_list() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"mylist".to_vec(),
             value: RdbValue::List(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]),
             expire_ms: None,
@@ -808,6 +830,7 @@ mod tests {
     #[test]
     fn rdb_round_trip_set() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"myset".to_vec(),
             value: RdbValue::Set(vec![b"x".to_vec(), b"y".to_vec()]),
             expire_ms: None,
@@ -820,6 +843,7 @@ mod tests {
     #[test]
     fn rdb_round_trip_hash() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"myhash".to_vec(),
             value: RdbValue::Hash(vec![
                 (b"f1".to_vec(), b"v1".to_vec()),
@@ -835,6 +859,7 @@ mod tests {
     #[test]
     fn rdb_round_trip_sorted_set() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"myzset".to_vec(),
             value: RdbValue::SortedSet(vec![(b"alice".to_vec(), 1.5), (b"bob".to_vec(), 2.0)]),
             expire_ms: None,
@@ -847,6 +872,7 @@ mod tests {
     #[test]
     fn rdb_round_trip_aux_fields() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"k".to_vec(),
             value: RdbValue::String(b"v".to_vec()),
             expire_ms: None,
@@ -863,18 +889,21 @@ mod tests {
     fn rdb_round_trip_multiple_types() {
         let entries = vec![
             RdbEntry {
+                db: 0,
                 key: b"str".to_vec(),
                 value: RdbValue::String(b"hello".to_vec()),
                 expire_ms: Some(9_999_999),
             },
             RdbEntry {
-                key: b"lst".to_vec(),
-                value: RdbValue::List(vec![b"1".to_vec(), b"2".to_vec()]),
+                db: 2,
+                key: b"hsh".to_vec(),
+                value: RdbValue::Hash(vec![(b"a".to_vec(), b"b".to_vec())]),
                 expire_ms: None,
             },
             RdbEntry {
-                key: b"hsh".to_vec(),
-                value: RdbValue::Hash(vec![(b"a".to_vec(), b"b".to_vec())]),
+                db: 2,
+                key: b"lst".to_vec(),
+                value: RdbValue::List(vec![b"1".to_vec(), b"2".to_vec()]),
                 expire_ms: None,
             },
         ];
@@ -891,6 +920,7 @@ mod tests {
     #[test]
     fn rdb_rejects_checksum_mismatch() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"tamper".to_vec(),
             value: RdbValue::String(b"proof".to_vec()),
             expire_ms: None,
@@ -905,6 +935,7 @@ mod tests {
     #[test]
     fn rdb_rejects_missing_eof_trailer() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"missing".to_vec(),
             value: RdbValue::String(b"eof".to_vec()),
             expire_ms: None,
@@ -918,6 +949,7 @@ mod tests {
     #[test]
     fn rdb_rejects_unsupported_version() {
         let entries = vec![RdbEntry {
+            db: 0,
             key: b"version".to_vec(),
             value: RdbValue::String(b"mismatch".to_vec()),
             expire_ms: None,
@@ -956,11 +988,13 @@ mod tests {
 
         let entries = vec![
             RdbEntry {
+                db: 0,
                 key: b"key1".to_vec(),
                 value: RdbValue::String(b"val1".to_vec()),
                 expire_ms: None,
             },
             RdbEntry {
+                db: 3,
                 key: b"key2".to_vec(),
                 value: RdbValue::List(vec![b"a".to_vec(), b"b".to_vec()]),
                 expire_ms: Some(5_000_000),

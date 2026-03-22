@@ -1401,8 +1401,8 @@
         "1"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR index out of range"
+        "kind": "integer",
+        "value": 0
       }
     },
     {

@@ -648,7 +648,9 @@ fn process_buffered_frames(
                 } else {
                     conn.write_buf.extend_from_slice(&response.to_bytes());
                 }
-                if let Some(follow_up) = replication_follow_up_bytes(&parsed_frame, &response) {
+                if let Some(follow_up) =
+                    replication_follow_up_bytes(runtime, &parsed_frame, &response, ts)
+                {
                     conn.write_buf.extend_from_slice(&follow_up);
                 }
 
@@ -802,8 +804,10 @@ fn split_inline_args(line: &[u8]) -> Vec<Vec<u8>> {
 }
 
 pub(crate) fn replication_follow_up_bytes(
+    runtime: &mut Runtime,
     frame: &RespFrame,
     response: &RespFrame,
+    now_ms: u64,
 ) -> Option<Vec<u8>> {
     if !is_psync_frame(frame) {
         return None;
@@ -811,14 +815,14 @@ pub(crate) fn replication_follow_up_bytes(
     let RespFrame::SimpleString(line) = response else {
         return None;
     };
-    if !line.starts_with("FULLRESYNC ") {
-        return None;
+    if line.starts_with("FULLRESYNC ") {
+        return Some(RespFrame::BulkString(Some(runtime.encoded_rdb_snapshot(now_ms))).to_bytes());
     }
-
-    // Full resync on the wire is followed by an RDB bulk payload. Until the
-    // snapshot pipeline is integrated here, emit an empty snapshot so replica
-    // handshake clients can complete the TCP-level negotiation.
-    Some(RespFrame::BulkString(Some(Vec::new())).to_bytes())
+    if line == "CONTINUE" {
+        let offset = psync_requested_offset(frame)?;
+        return Some(runtime.encoded_aof_stream_from_offset(offset));
+    }
+    None
 }
 
 pub(crate) fn is_psync_frame(frame: &RespFrame) -> bool {
@@ -828,6 +832,20 @@ pub(crate) fn is_psync_frame(frame: &RespFrame) -> bool {
         return cmd.eq_ignore_ascii_case(b"PSYNC");
     }
     false
+}
+
+fn psync_requested_offset(frame: &RespFrame) -> Option<u64> {
+    let RespFrame::Array(Some(items)) = frame else {
+        return None;
+    };
+    let RespFrame::BulkString(Some(offset_bytes)) = items.get(2)? else {
+        return None;
+    };
+    let offset = std::str::from_utf8(offset_bytes)
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    Some(offset)
 }
 
 fn parse_blocking_deadline(timeout_bytes: &[u8], now_ms: u64) -> Option<u64> {
@@ -1465,7 +1483,19 @@ mod tests {
     }
 
     #[test]
-    fn psync_fullresync_emits_empty_rdb_follow_up() {
+    fn psync_fullresync_emits_rdb_follow_up() {
+        let mut runtime = Runtime::new(RuntimePolicy::hardened());
+        assert_eq!(
+            runtime.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"SET".to_vec())),
+                    RespFrame::BulkString(Some(b"seed".to_vec())),
+                    RespFrame::BulkString(Some(b"value".to_vec())),
+                ])),
+                1,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
         let frame = RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"PSYNC".to_vec())),
             RespFrame::BulkString(Some(b"?".to_vec())),
@@ -1475,24 +1505,36 @@ mod tests {
             "FULLRESYNC 0000000000000000000000000000000000000000 0".to_string(),
         );
 
-        let follow_up =
-            replication_follow_up_bytes(&frame, &response).expect("psync should emit snapshot");
-
-        assert_eq!(follow_up, b"$0\r\n\r\n");
+        let follow_up = replication_follow_up_bytes(&mut runtime, &frame, &response, 2)
+            .expect("psync should emit snapshot");
+        let parsed = fr_protocol::parse_frame(&follow_up).expect("parse bulk snapshot");
+        let RespFrame::BulkString(Some(snapshot)) = parsed.frame else {
+            panic!("expected bulk snapshot");
+        };
+        assert!(!snapshot.is_empty(), "snapshot should not be empty");
+        assert!(
+            snapshot.starts_with(b"REDIS"),
+            "snapshot should be an RDB payload"
+        );
     }
 
     #[test]
     fn non_psync_commands_emit_no_replication_follow_up() {
+        let mut runtime = Runtime::new(RuntimePolicy::hardened());
         let frame = RespFrame::Array(Some(vec![RespFrame::BulkString(Some(
             b"REPLCONF".to_vec(),
         ))]));
         let response = RespFrame::SimpleString("OK".to_string());
 
-        assert_eq!(replication_follow_up_bytes(&frame, &response), None);
+        assert_eq!(
+            replication_follow_up_bytes(&mut runtime, &frame, &response, 0),
+            None
+        );
     }
 
     #[test]
     fn psync_non_fullresync_response_emits_no_follow_up() {
+        let mut runtime = Runtime::new(RuntimePolicy::hardened());
         let frame = RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"PSYNC".to_vec())),
             RespFrame::BulkString(Some(b"?".to_vec())),
@@ -1500,7 +1542,72 @@ mod tests {
         ]));
         let response = RespFrame::Error("ERR fallback".to_string());
 
-        assert_eq!(replication_follow_up_bytes(&frame, &response), None);
+        assert_eq!(
+            replication_follow_up_bytes(&mut runtime, &frame, &response, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn psync_continue_emits_aof_backlog_tail() {
+        let mut runtime = Runtime::new(RuntimePolicy::hardened());
+        assert_eq!(
+            runtime.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"SET".to_vec())),
+                    RespFrame::BulkString(Some(b"alpha".to_vec())),
+                    RespFrame::BulkString(Some(b"1".to_vec())),
+                ])),
+                1,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            runtime.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"SET".to_vec())),
+                    RespFrame::BulkString(Some(b"beta".to_vec())),
+                    RespFrame::BulkString(Some(b"2".to_vec())),
+                ])),
+                2,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let frame = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"PSYNC".to_vec())),
+            RespFrame::BulkString(Some(b"0000000000000000000000000000000000000000".to_vec())),
+            RespFrame::BulkString(Some(b"1".to_vec())),
+        ]));
+        let response = RespFrame::SimpleString("CONTINUE".to_string());
+
+        let follow_up = replication_follow_up_bytes(&mut runtime, &frame, &response, 3)
+            .expect("psync continue should emit backlog");
+        let mut replica = fr_runtime::Runtime::default_strict();
+        let backlog = replica
+            .replay_aof_stream(&follow_up, 10)
+            .expect("decode backlog stream");
+        assert_eq!(backlog.len(), 1);
+        assert_eq!(backlog[0], RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(
+            replica.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"GET".to_vec())),
+                    RespFrame::BulkString(Some(b"alpha".to_vec())),
+                ])),
+                11,
+            ),
+            RespFrame::BulkString(None)
+        );
+        assert_eq!(
+            replica.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"GET".to_vec())),
+                    RespFrame::BulkString(Some(b"beta".to_vec())),
+                ])),
+                12,
+            ),
+            RespFrame::BulkString(Some(b"2".to_vec()))
+        );
     }
 
     #[test]
