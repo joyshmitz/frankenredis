@@ -2553,24 +2553,19 @@ impl<'a> LuaState<'a> {
             }
             "unpack" => {
                 let table = args.first().cloned().unwrap_or(LuaValue::Nil);
-                let start = args.get(1).and_then(|v| v.to_number()).unwrap_or(1.0) as usize;
-                if let LuaValue::Table(t) = &table {
-                    let end = args
-                        .get(2)
-                        .and_then(|v| v.to_number())
-                        .unwrap_or(t.array.len() as f64) as usize;
-                    let mut results = Vec::new();
-                    for i in start..=end {
-                        if i >= 1 && i <= t.array.len() {
-                            results.push(t.array[i - 1].clone());
-                        } else {
-                            results.push(LuaValue::Nil);
-                        }
+                let t = lua_table_arg("unpack", 1, &table)?;
+                let start = lua_optional_integer_arg("unpack", 2, args.get(1), 1)? as usize;
+                let end = lua_optional_integer_arg("unpack", 3, args.get(2), t.array.len() as i64)?
+                    as usize;
+                let mut results = Vec::new();
+                for i in start..=end {
+                    if i >= 1 && i <= t.array.len() {
+                        results.push(t.array[i - 1].clone());
+                    } else {
+                        results.push(LuaValue::Nil);
                     }
-                    Ok(results)
-                } else {
-                    Ok(vec![LuaValue::Nil])
                 }
+                Ok(results)
             }
             "select" => {
                 let idx = args.first().cloned().unwrap_or(LuaValue::Nil);
@@ -4498,6 +4493,30 @@ mod tests {
         );
 
         assert!(matches!(result, Err(ref err) if err.contains("bad argument #4 to 'concat'")));
+    }
+
+    #[test]
+    fn unpack_rejects_non_table_argument() {
+        let mut store = Store::new();
+        let result = eval_script(b"return unpack(42)", &[], &[], &mut store, 0);
+
+        assert!(matches!(result, Err(ref err) if err.contains("bad argument #1 to 'unpack'")));
+    }
+
+    #[test]
+    fn unpack_rejects_non_numeric_start() {
+        let mut store = Store::new();
+        let result = eval_script(b"return unpack({10, 20}, 'x')", &[], &[], &mut store, 0);
+
+        assert!(matches!(result, Err(ref err) if err.contains("bad argument #2 to 'unpack'")));
+    }
+
+    #[test]
+    fn unpack_rejects_non_numeric_end() {
+        let mut store = Store::new();
+        let result = eval_script(b"return unpack({10, 20}, 1, 'x')", &[], &[], &mut store, 0);
+
+        assert!(matches!(result, Err(ref err) if err.contains("bad argument #3 to 'unpack'")));
     }
 
     #[test]

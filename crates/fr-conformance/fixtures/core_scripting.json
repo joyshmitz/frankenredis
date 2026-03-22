@@ -2929,6 +2929,45 @@
       }
     },
     {
+      "name": "eval_unpack_rejects_non_table_argument",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return unpack(42)",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Error running script: bad argument #1 to 'unpack' (table expected, got number)"
+      }
+    },
+    {
+      "name": "eval_unpack_rejects_non_numeric_start",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return unpack({10, 20}, 'x')",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Error running script: bad argument #2 to 'unpack' (number expected, got string)"
+      }
+    },
+    {
+      "name": "eval_unpack_rejects_non_numeric_end",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return unpack({10, 20}, 1, 'x')",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Error running script: bad argument #3 to 'unpack' (number expected, got string)"
+      }
+    },
+    {
       "name": "eval_assert_success",
       "now_ms": 0,
       "argv": [

@@ -1508,6 +1508,13 @@ fn append(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     if argv.len() != 3 {
         return Err(CommandError::WrongArity("APPEND"));
     }
+    let current_len = store.strlen(&argv[1], now_ms)?;
+    let added_len = argv[2].len();
+    if current_len.saturating_add(added_len) > 536_870_912 {
+        return Ok(RespFrame::Error(
+            "ERR string exceeds maximum allowed size (512MB)".to_string(),
+        ));
+    }
     let new_len = store.append(&argv[1], &argv[2], now_ms)?;
     let new_len = i64::try_from(new_len).unwrap_or(i64::MAX);
     Ok(RespFrame::Integer(new_len))
@@ -5615,13 +5622,14 @@ fn setrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     if offset < 0 {
         return Err(CommandError::InvalidInteger);
     }
-    let max_len = offset as usize + argv[3].len();
-    if max_len > 536_870_912 {
+    let offset_usize = offset as usize;
+    let added_len = argv[3].len();
+    if offset_usize.saturating_add(added_len) > 536_870_912 {
         return Ok(RespFrame::Error(
             "ERR string exceeds maximum allowed size (512MB)".to_string(),
         ));
     }
-    let new_len = store.setrange(&argv[1], offset as usize, &argv[3], now_ms)?;
+    let new_len = store.setrange(&argv[1], offset_usize, &argv[3], now_ms)?;
     Ok(RespFrame::Integer(
         i64::try_from(new_len).unwrap_or(i64::MAX),
     ))
