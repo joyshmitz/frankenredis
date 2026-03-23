@@ -1479,6 +1479,8 @@ fn classify_command(cmd: &[u8]) -> Option<CommandId> {
                 Some(CommandId::Punsubscribe)
             } else if eq_ascii_command(cmd, b"SUNSUBSCRIBE") {
                 Some(CommandId::Sunsubscribe)
+            } else if eq_ascii_command(cmd, b"GEORADIUS_RO") {
+                Some(CommandId::Georadius) // _RO uses same handler
             } else {
                 None
             }
@@ -1520,6 +1522,13 @@ fn classify_command(cmd: &[u8]) -> Option<CommandId> {
         17 => {
             if eq_ascii_command(cmd, b"GEORADIUSBYMEMBER") {
                 Some(CommandId::Georadiusbymember)
+            } else {
+                None
+            }
+        }
+        20 => {
+            if eq_ascii_command(cmd, b"GEORADIUSBYMEMBER_RO") {
+                Some(CommandId::Georadiusbymember) // _RO uses same handler
             } else {
                 None
             }
@@ -7746,7 +7755,9 @@ const COMMAND_TABLE: &[(&str, i64, &str, i64, i64, i64)] = &[
     ("geodist", -4, "readonly", 1, 1, 1),
     ("geohash", -2, "readonly", 1, 1, 1),
     ("georadius", -6, "write", 1, 1, 1),
+    ("georadius_ro", -6, "readonly", 1, 1, 1),
     ("georadiusbymember", -5, "write", 1, 1, 1),
+    ("georadiusbymember_ro", -5, "readonly", 1, 1, 1),
     ("geosearch", -7, "readonly", 1, 1, 1),
     ("geosearchstore", -8, "write denyoom", 1, 2, 1),
     ("xadd", -5, "write denyoom fast", 1, 1, 1),
@@ -7813,6 +7824,7 @@ const COMMAND_TABLE: &[(&str, i64, &str, i64, i64, i64)] = &[
     ("readwrite", 1, "fast", 0, 0, 0),
     ("replconf", -1, "admin", 0, 0, 0),
     ("psync", 3, "admin", 0, 0, 0),
+    ("sync", 1, "admin", 0, 0, 0),
     ("replicaof", 3, "admin", 0, 0, 0),
     ("slaveof", 3, "admin", 0, 0, 0),
     ("function", -2, "scripting", 0, 0, 0),

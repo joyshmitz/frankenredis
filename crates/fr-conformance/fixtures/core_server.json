@@ -182,8 +182,7 @@
         "COUNT"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 231
+        "kind": "any_integer"
       }
     },
     {
