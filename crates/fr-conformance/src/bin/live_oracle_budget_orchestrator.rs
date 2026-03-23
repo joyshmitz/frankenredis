@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::env;
+use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +62,9 @@ fn run() -> Result<ExitCode, String> {
         .args(&cmd[1..])
         .status()
         .map_err(|err| format!("failed to execute command: {err}"))?;
-    Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
+    let raw_code = status.code().unwrap_or(1);
+    let code = u8::try_from(raw_code).unwrap_or(1);
+    Ok(ExitCode::from(code))
 }
 
 fn parse_args(raw_args: Vec<String>) -> Result<Option<CliArgs>, String> {
@@ -118,16 +121,21 @@ fn command_tokens(cli: &CliArgs) -> Vec<String> {
     ];
 
     if cli.runner == Runner::Rch {
-        let mut with_runner = vec![
-            "~/.local/bin/rch".to_string(),
-            "exec".to_string(),
-            "--".to_string(),
-        ];
+        let mut with_runner = vec![rch_executable(), "exec".to_string(), "--".to_string()];
         with_runner.extend(base);
         with_runner
     } else {
         base
     }
+}
+
+fn rch_executable() -> String {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".local/bin/rch"))
+        .filter(|path| path.is_file())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "rch".to_string())
 }
 
 fn shell_join(tokens: &[String]) -> String {
@@ -171,7 +179,9 @@ fn usage() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Runner, command_tokens, parse_args};
+    use super::{Runner, command_tokens, parse_args, rch_executable};
+    use std::env;
+    use std::path::PathBuf;
 
     #[test]
     fn parse_args_accepts_runner_and_single_positional() {
@@ -203,8 +213,19 @@ mod tests {
         .expect("args parse")
         .expect("help not requested");
         let cmd = command_tokens(&parsed);
-        assert_eq!(cmd[0], "~/.local/bin/rch");
+        assert_eq!(cmd[0], rch_executable());
         assert!(cmd.contains(&"live_oracle_budget_gate".to_string()));
         assert!(cmd.contains(&"cov.json".to_string()));
+    }
+
+    #[test]
+    fn rch_executable_uses_real_home_path_when_available() {
+        let expected = env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".local/bin/rch"))
+            .filter(|path| path.is_file())
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "rch".to_string());
+        assert_eq!(rch_executable(), expected);
     }
 }

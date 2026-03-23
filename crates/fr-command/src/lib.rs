@@ -8867,8 +8867,33 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         }
         Ok(RespFrame::Array(Some(entries)))
     } else if sub.eq_ignore_ascii_case("DOCS") {
-        // COMMAND DOCS: return empty map for now (stub)
-        Ok(RespFrame::Array(Some(Vec::new())))
+        let docs = if argv.len() == 2 {
+            COMMAND_TABLE
+                .iter()
+                .flat_map(|&(name, arity, flags, first_key, last_key, step)| {
+                    [
+                        RespFrame::BulkString(Some(name.as_bytes().to_vec())),
+                        command_docs_entry(name, arity, flags, first_key, last_key, step),
+                    ]
+                })
+                .collect()
+        } else {
+            argv[2..]
+                .iter()
+                .filter_map(|arg| {
+                    let cmd_name = std::str::from_utf8(arg).ok()?;
+                    let &(name, arity, flags, first_key, last_key, step) = COMMAND_TABLE
+                        .iter()
+                        .find(|&&(name, ..)| name.eq_ignore_ascii_case(cmd_name))?;
+                    Some([
+                        RespFrame::BulkString(Some(name.as_bytes().to_vec())),
+                        command_docs_entry(name, arity, flags, first_key, last_key, step),
+                    ])
+                })
+                .flatten()
+                .collect()
+        };
+        Ok(RespFrame::Array(Some(docs)))
     } else if sub.eq_ignore_ascii_case("GETKEYS") {
         // COMMAND GETKEYS <command> [args...]
         if argv.len() < 3 {
@@ -8935,6 +8960,210 @@ fn command_info_entry(
         RespFrame::Integer(last_key),
         RespFrame::Integer(step),
     ]))
+}
+
+fn command_docs_entry(
+    name: &str,
+    arity: i64,
+    flags: &str,
+    first_key: i64,
+    last_key: i64,
+    step: i64,
+) -> RespFrame {
+    let group = command_group_for_docs(name, flags);
+    let summary = format!("{} command `{name}`.", command_group_summary_prefix(group));
+    RespFrame::Array(Some(vec![
+        hello_bulk("summary"),
+        hello_bulk(&summary),
+        hello_bulk("group"),
+        hello_bulk(group),
+        hello_bulk("arguments"),
+        RespFrame::Array(Some(command_docs_arguments(
+            arity, first_key, last_key, step,
+        ))),
+    ]))
+}
+
+fn command_docs_arguments(arity: i64, first_key: i64, last_key: i64, step: i64) -> Vec<RespFrame> {
+    let fixed_arg_count = if arity > 0 { arity - 1 } else { (-arity) - 1 };
+    let mut docs = Vec::new();
+    for position in 1..=fixed_arg_count {
+        let name = if is_key_argument_position(position, fixed_arg_count, first_key, last_key, step)
+        {
+            if arity < 0 && position == fixed_arg_count && last_key < 0 {
+                "key [key ...]".to_string()
+            } else {
+                "key".to_string()
+            }
+        } else {
+            format!("arg{position}")
+        };
+        let arg_type = if name.starts_with("key") {
+            "key"
+        } else {
+            "string"
+        };
+        let mut entry = vec![
+            hello_bulk("name"),
+            hello_bulk(&name),
+            hello_bulk("type"),
+            hello_bulk(arg_type),
+        ];
+        if arity < 0 && position == fixed_arg_count {
+            entry.push(hello_bulk("optional"));
+            entry.push(RespFrame::Integer(1));
+        }
+        docs.push(RespFrame::Array(Some(entry)));
+    }
+    docs
+}
+
+fn is_key_argument_position(
+    position: i64,
+    argc_without_command: i64,
+    first_key: i64,
+    last_key: i64,
+    step: i64,
+) -> bool {
+    if first_key <= 0 || step <= 0 {
+        return false;
+    }
+    let actual_last = if last_key < 0 {
+        argc_without_command + last_key
+    } else {
+        last_key
+    };
+    position >= first_key && position <= actual_last && (position - first_key) % step == 0
+}
+
+fn command_group_for_docs(name: &str, flags: &str) -> &'static str {
+    let flag_list: Vec<&str> = flags.split_whitespace().collect();
+    if flag_list.contains(&"pubsub") {
+        "pubsub"
+    } else if flag_list.contains(&"scripting") {
+        "scripting"
+    } else if matches!(name, "multi" | "exec" | "discard" | "watch" | "unwatch") {
+        "transactions"
+    } else if matches!(
+        name,
+        "auth" | "hello" | "quit" | "reset" | "client" | "echo" | "ping"
+    ) {
+        "connection"
+    } else if matches!(name, "cluster" | "asking" | "readonly" | "readwrite") {
+        "cluster"
+    } else if matches!(
+        name,
+        "config"
+            | "acl"
+            | "save"
+            | "bgsave"
+            | "bgrewriteaof"
+            | "shutdown"
+            | "lastsave"
+            | "monitor"
+            | "slowlog"
+            | "debug"
+            | "latency"
+            | "role"
+            | "info"
+            | "command"
+            | "module"
+            | "sentinel"
+            | "failover"
+            | "replconf"
+            | "psync"
+            | "sync"
+            | "replicaof"
+            | "slaveof"
+            | "wait"
+            | "waitaof"
+    ) {
+        "server"
+    } else if matches!(
+        name,
+        "expire"
+            | "pexpire"
+            | "expireat"
+            | "pexpireat"
+            | "persist"
+            | "ttl"
+            | "pttl"
+            | "expiretime"
+            | "pexpiretime"
+            | "keys"
+            | "randomkey"
+            | "scan"
+            | "dbsize"
+            | "type"
+            | "rename"
+            | "renamenx"
+            | "move"
+            | "copy"
+            | "dump"
+            | "restore"
+            | "unlink"
+            | "touch"
+            | "sort"
+            | "sort_ro"
+            | "object"
+            | "memory"
+            | "flushdb"
+            | "flushall"
+            | "select"
+            | "swapdb"
+    ) {
+        "generic"
+    } else if name.starts_with('h') {
+        "hash"
+    } else if name.starts_with('l')
+        || matches!(name, "blpop" | "brpop" | "blmove" | "blmpop" | "brpoplpush")
+    {
+        "list"
+    } else if name.starts_with('s') {
+        "set"
+    } else if name.starts_with('z') || matches!(name, "bzpopmin" | "bzpopmax" | "bzmpop") {
+        "sorted_set"
+    } else if name.starts_with('x') {
+        "stream"
+    } else if name.starts_with("geo") {
+        "geo"
+    } else if name.starts_with("pf") {
+        "hyperloglog"
+    } else if name.starts_with("bit") || matches!(name, "setbit" | "getbit") {
+        "bitmap"
+    } else {
+        "string"
+    }
+}
+
+fn command_group_summary_prefix(group: &str) -> &'static str {
+    match group {
+        "connection" => "Connection-management",
+        "transactions" => "Transaction-control",
+        "sorted_set" => "Sorted-set",
+        _ => {
+            if group.is_empty() {
+                "General"
+            } else {
+                match group {
+                    "string" => "String",
+                    "generic" => "Generic",
+                    "server" => "Server",
+                    "hash" => "Hash",
+                    "list" => "List",
+                    "set" => "Set",
+                    "stream" => "Stream",
+                    "geo" => "Geo",
+                    "bitmap" => "Bitmap",
+                    "hyperloglog" => "HyperLogLog",
+                    "pubsub" => "Pub/sub",
+                    "scripting" => "Scripting",
+                    "cluster" => "Cluster",
+                    _ => "General",
+                }
+            }
+        }
+    }
 }
 
 fn config_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
@@ -9010,14 +9239,28 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         Ok(RespFrame::Integer(0))
     } else if sub.eq_ignore_ascii_case("PAUSE") {
         // CLIENT PAUSE timeout [WRITE|ALL]
-        if argv.len() < 3 {
+        if argv.len() < 3 || argv.len() > 4 {
             return Err(CommandError::WrongSubcommandArity {
                 command: "CLIENT",
                 subcommand: sub.to_string(),
             });
         }
+        parse_i64_arg(&argv[2])?;
+        if let Some(mode_arg) = argv.get(3) {
+            let mode =
+                std::str::from_utf8(mode_arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
+            if !mode.eq_ignore_ascii_case("WRITE") && !mode.eq_ignore_ascii_case("ALL") {
+                return Err(CommandError::SyntaxError);
+            }
+        }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("UNPAUSE") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: sub.to_string(),
+            });
+        }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("TRACKING") {
         // CLIENT TRACKING ON|OFF [REDIRECT id] [PREFIX prefix ...] [BCAST] [OPTIN] [OPTOUT] [NOLOOP]
@@ -22776,6 +23019,102 @@ mod tests {
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
         let out = dispatch_argv(&[b"CLIENT".to_vec(), b"UNPAUSE".to_vec()], &mut store, 0).unwrap();
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn client_pause_rejects_invalid_shape() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"PAUSE".to_vec(),
+                b"1000".to_vec(),
+                b"WRITE".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: "PAUSE".to_string(),
+            }
+        );
+
+        let err = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"PAUSE".to_vec(),
+                b"1000".to_vec(),
+                b"WAT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::SyntaxError);
+    }
+
+    #[test]
+    fn client_unpause_rejects_extra_arguments() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[b"CLIENT".to_vec(), b"UNPAUSE".to_vec(), b"NOW".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: "UNPAUSE".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn command_docs_returns_named_docs_entries() {
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"COMMAND".to_vec(), b"DOCS".to_vec()], &mut store, 0).unwrap();
+        let RespFrame::Array(Some(entries)) = out else {
+            panic!("expected docs array");
+        };
+        assert!(!entries.is_empty());
+        assert_eq!(entries[0], RespFrame::BulkString(Some(b"ping".to_vec())));
+        let RespFrame::Array(Some(doc_fields)) = &entries[1] else {
+            panic!("expected doc fields array");
+        };
+        assert!(doc_fields.len() >= 6);
+    }
+
+    #[test]
+    fn command_docs_filters_unknown_commands() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[
+                b"COMMAND".to_vec(),
+                b"DOCS".to_vec(),
+                b"GET".to_vec(),
+                b"NOPE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        let RespFrame::Array(Some(entries)) = out else {
+            panic!("expected docs array");
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], RespFrame::BulkString(Some(b"get".to_vec())));
+        let RespFrame::Array(Some(doc_fields)) = &entries[1] else {
+            panic!("expected doc fields array");
+        };
+        assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"group".to_vec()))));
+        assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"string".to_vec()))));
     }
 
     // ── REPLICAOF / SLAVEOF tests ───────────────────────────────────

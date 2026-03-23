@@ -3870,6 +3870,12 @@ impl Store {
         now_ms: u64,
     ) -> Result<(usize, usize), StoreError> {
         self.drop_if_expired(key, now_ms);
+
+        // ZADD XX on a missing key should not create an empty sorted set
+        if opts.xx && !self.entries.contains_key(key) {
+            return Ok((0, 0));
+        }
+
         let entry = self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
         let (added, changed) = {
             let Value::SortedSet(zs) = &mut entry.value else {
@@ -4605,6 +4611,7 @@ impl Store {
                     }
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
+                        self.dirty = self.dirty.saturating_add(removed_count as u64);
                         entry.touch(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
@@ -4642,6 +4649,7 @@ impl Store {
                     }
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
+                        self.dirty = self.dirty.saturating_add(removed_count as u64);
                         entry.touch(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
@@ -4679,6 +4687,7 @@ impl Store {
                     }
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
+                        self.dirty = self.dirty.saturating_add(removed_count as u64);
                         entry.touch(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
@@ -6042,6 +6051,7 @@ impl Store {
                             }
                         }
                         entry.expires_at_ms = exp;
+                        self.dirty = self.dirty.saturating_add(1);
                     }
                     Ok(Some(result))
                 }

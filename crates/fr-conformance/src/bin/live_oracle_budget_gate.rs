@@ -124,18 +124,17 @@ fn run() -> Result<ExitCode, (String, u8)> {
     let summary = load_summary(&cli.summary_path).map_err(|err| (err, 2))?;
     let evaluation = evaluate_budget(&summary, &cfg);
 
-    if !evaluation.quarantine_candidates.is_empty() {
-        write_quarantine_candidates(&cfg.quarantine_path, &evaluation.quarantine_candidates)
-            .map_err(|err| {
-                (
-                    format!(
-                        "failed to write quarantine candidates {}: {err}",
-                        cfg.quarantine_path.display()
-                    ),
-                    2,
-                )
-            })?;
-    }
+    write_quarantine_candidates(&cfg.quarantine_path, &evaluation.quarantine_candidates).map_err(
+        |err| {
+            (
+                format!(
+                    "failed to write quarantine candidates {}: {err}",
+                    cfg.quarantine_path.display()
+                ),
+                2,
+            )
+        },
+    )?;
 
     let status = if evaluation.violations.is_empty() {
         "pass".to_string()
@@ -458,7 +457,9 @@ fn write_quarantine_candidates(path: &Path, suites: &[String]) -> Result<(), std
         fs::create_dir_all(parent)?;
     }
     let mut payload = suites.join("\n");
-    payload.push('\n');
+    if !payload.is_empty() {
+        payload.push('\n');
+    }
     fs::write(path, payload)
 }
 
@@ -547,5 +548,28 @@ mod tests {
             err,
             "FR_PACKET_COVERAGE_FLOORS_JSON must decode to a JSON object"
         );
+    }
+
+    #[test]
+    fn write_quarantine_candidates_clears_stale_entries_on_clean_run() {
+        let unique = format!(
+            "fr_conformance_quarantine_{}_{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+
+        write_quarantine_candidates(&path, &["suite-a".to_string(), "suite-b".to_string()])
+            .expect("seed quarantine candidates");
+        assert_eq!(
+            fs::read_to_string(&path).expect("seed payload"),
+            "suite-a\nsuite-b\n"
+        );
+
+        write_quarantine_candidates(&path, &[]).expect("clear quarantine candidates");
+        assert_eq!(fs::read_to_string(&path).expect("cleared payload"), "");
     }
 }

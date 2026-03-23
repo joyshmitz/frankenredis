@@ -4101,13 +4101,32 @@ impl Runtime {
             } else {
                 -1
             };
+            let client_id = self.session.client_id;
+            let channel_subs = self
+                .server
+                .pubsub_client_channels
+                .get(&client_id)
+                .map_or(0, HashSet::len);
+            let pattern_subs = self
+                .server
+                .pubsub_client_patterns
+                .get(&client_id)
+                .map_or(0, HashSet::len);
+            let shard_subs = self
+                .server
+                .pubsub_client_shard_channels
+                .get(&client_id)
+                .map_or(0, HashSet::len);
             let lib_name = self.session.client_lib_name.as_deref().unwrap_or("");
             let lib_ver = self.session.client_lib_ver.as_deref().unwrap_or("");
             let info_line = format!(
-                "id={} addr=127.0.0.1:0 laddr=127.0.0.1:6379 fd=0 name={} db={} sub=0 psub=0 ssub=0 multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
-                self.session.client_id,
+                "id={} addr=127.0.0.1:0 laddr=127.0.0.1:6379 fd=0 name={} db={} sub={} psub={} ssub={} multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
+                client_id,
                 name_str,
                 self.session.selected_db,
+                channel_subs,
+                pattern_subs,
+                shard_subs,
                 multi_count,
                 self.session.transaction_state.watched_keys.len(),
                 sub.to_ascii_lowercase(),
@@ -4246,8 +4265,7 @@ impl Runtime {
             if !mode.eq_ignore_ascii_case("ON") && !mode.eq_ignore_ascii_case("OFF") {
                 return RespFrame::Error("ERR syntax error".to_string());
             }
-            // Accept TRACKING ON/OFF — Redis returns OK even if tracking is a no-op
-            RespFrame::SimpleString("OK".to_string())
+            RespFrame::Error("ERR CLIENT TRACKING is not supported by this server".to_string())
         } else if sub.eq_ignore_ascii_case("CACHING") {
             // CLIENT CACHING YES|NO
             if argv.len() != 3 {
@@ -4260,7 +4278,10 @@ impl Runtime {
             if !mode.eq_ignore_ascii_case("YES") && !mode.eq_ignore_ascii_case("NO") {
                 return RespFrame::Error("ERR syntax error".to_string());
             }
-            RespFrame::SimpleString("OK".to_string())
+            RespFrame::Error(
+                "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
+                    .to_string(),
+            )
         } else if sub.eq_ignore_ascii_case("GETREDIR") {
             // CLIENT GETREDIR — returns redirect ID for tracking (-1 = not tracking)
             if argv.len() != 2 {
@@ -7424,29 +7445,74 @@ mod tests {
     }
 
     #[test]
-    fn client_tracking_accepts_on_off() {
+    fn client_tracking_fails_closed_without_support() {
         let mut rt = Runtime::default_strict();
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"ON"]), 1),
-            RespFrame::SimpleString("OK".to_string())
+            RespFrame::Error("ERR CLIENT TRACKING is not supported by this server".to_string())
         );
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"OFF"]), 2),
-            RespFrame::SimpleString("OK".to_string())
+            RespFrame::Error("ERR CLIENT TRACKING is not supported by this server".to_string())
         );
     }
 
     #[test]
-    fn client_caching_accepts_yes_no() {
+    fn client_caching_fails_closed_without_tracking_support() {
         let mut rt = Runtime::default_strict();
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"YES"]), 1),
-            RespFrame::SimpleString("OK".to_string())
+            RespFrame::Error(
+                "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
+                    .to_string(),
+            )
         );
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"NO"]), 2),
-            RespFrame::SimpleString("OK".to_string())
+            RespFrame::Error(
+                "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
+                    .to_string(),
+            )
         );
+    }
+
+    #[test]
+    fn client_list_reports_live_pubsub_counts() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SUBSCRIBE", b"chan"]), 1),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                RespFrame::BulkString(Some(b"chan".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PSUBSCRIBE", b"pat:*"]), 2),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"psubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"pat:*".to_vec())),
+                RespFrame::Integer(2),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SSUBSCRIBE", b"shard"]), 3),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"ssubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"shard".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+
+        let client_info = rt.execute_frame(command(&[b"CLIENT", b"INFO"]), 4);
+        let info = match client_info {
+            RespFrame::BulkString(Some(info)) => String::from_utf8(info).expect("client info utf8"),
+            other => panic!("unexpected client info response: {other:?}"),
+        };
+        assert!(info.contains("sub=1"));
+        assert!(info.contains("psub=1"));
+        assert!(info.contains("ssub=1"));
     }
 
     #[test]
