@@ -7424,23 +7424,28 @@ mod tests {
     }
 
     #[test]
-    fn client_tracking_fails_closed_without_support() {
+    fn client_tracking_accepts_on_off() {
         let mut rt = Runtime::default_strict();
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"ON"]), 1),
-            RespFrame::Error("ERR CLIENT TRACKING is not supported by this server".to_string())
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"OFF"]), 2),
+            RespFrame::SimpleString("OK".to_string())
         );
     }
 
     #[test]
-    fn client_caching_fails_closed_without_support() {
+    fn client_caching_accepts_yes_no() {
         let mut rt = Runtime::default_strict();
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"YES"]), 1),
-            RespFrame::Error(
-                "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
-                    .to_string()
-            )
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"NO"]), 2),
+            RespFrame::SimpleString("OK".to_string())
         );
     }
 
