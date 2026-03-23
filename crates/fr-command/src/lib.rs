@@ -166,40 +166,43 @@ pub fn command_key_indexes(argv: &[Vec<u8>]) -> Vec<usize> {
         let mut keys = vec![1];
         let mut i = 2;
         while i < argv.len() {
-            if let Ok(s) = std::str::from_utf8(&argv[i]) {
-                if s.eq_ignore_ascii_case("STORE") && i + 1 < argv.len() {
-                    keys.push(i + 1);
-                    i += 2;
-                    continue;
-                }
+            if let Ok(s) = std::str::from_utf8(&argv[i])
+                && s.eq_ignore_ascii_case("STORE")
+                && i + 1 < argv.len()
+            {
+                keys.push(i + 1);
+                i += 2;
+                continue;
             }
             i += 1;
         }
         return keys;
     }
 
-    if cmd_name.eq_ignore_ascii_case("GEORADIUS") || cmd_name.eq_ignore_ascii_case("GEORADIUSBYMEMBER") {
+    if cmd_name.eq_ignore_ascii_case("GEORADIUS")
+        || cmd_name.eq_ignore_ascii_case("GEORADIUSBYMEMBER")
+    {
         if argv.len() < 2 {
             return Vec::new();
         }
         let mut keys = vec![1];
         let mut i = 2;
         while i < argv.len() {
-            if let Ok(s) = std::str::from_utf8(&argv[i]) {
-                if (s.eq_ignore_ascii_case("STORE") || s.eq_ignore_ascii_case("STOREDIST"))
-                    && i + 1 < argv.len()
-                {
-                    keys.push(i + 1);
-                    i += 2;
-                    continue;
-                }
+            if let Ok(s) = std::str::from_utf8(&argv[i])
+                && (s.eq_ignore_ascii_case("STORE") || s.eq_ignore_ascii_case("STOREDIST"))
+                && i + 1 < argv.len()
+            {
+                keys.push(i + 1);
+                i += 2;
+                continue;
             }
             i += 1;
         }
         return keys;
     }
 
-    if cmd_name.eq_ignore_ascii_case("GEOSEARCH") || cmd_name.eq_ignore_ascii_case("GEOSEARCHSTORE") {
+    if cmd_name.eq_ignore_ascii_case("GEOSEARCH") || cmd_name.eq_ignore_ascii_case("GEOSEARCHSTORE")
+    {
         if argv.len() < 3 {
             // Both take at least 'key' or 'destination source'
             if argv.len() == 2 {
@@ -243,10 +246,10 @@ pub fn command_key_indexes(argv: &[Vec<u8>]) -> Vec<usize> {
         if argv.len() < 3 {
             return Vec::new();
         }
-        if let Ok(sub) = std::str::from_utf8(&argv[1]) {
-            if sub.eq_ignore_ascii_case("USAGE") {
-                return vec![2];
-            }
+        if let Ok(sub) = std::str::from_utf8(&argv[1])
+            && sub.eq_ignore_ascii_case("USAGE")
+        {
+            return vec![2];
         }
         return Vec::new();
     }

@@ -1701,15 +1701,15 @@ fn propagate_writes_to_replicas(
 ) {
     let primary_offset = runtime.replication_primary_offset();
     for (&token, conn) in clients.iter_mut() {
-        if let Some(sent_offset) = conn.replication_sent_offset {
-            if sent_offset < primary_offset {
-                let bytes = runtime.encoded_aof_stream_from_offset(sent_offset.0);
-                if !bytes.is_empty() {
-                    conn.write_buf.extend_from_slice(&bytes);
-                    write_tokens.insert(token);
-                }
-                conn.replication_sent_offset = Some(primary_offset);
+        if let Some(sent_offset) = conn.replication_sent_offset
+            && sent_offset < primary_offset
+        {
+            let bytes = runtime.encoded_aof_stream_from_offset(sent_offset.0);
+            if !bytes.is_empty() {
+                conn.write_buf.extend_from_slice(&bytes);
+                write_tokens.insert(token);
             }
+            conn.replication_sent_offset = Some(primary_offset);
         }
     }
 }
@@ -2139,12 +2139,22 @@ mod tests {
             ),
             RespFrame::SimpleString("OK".to_string())
         );
+        let fullresync_offset = primary.replication_primary_offset().0;
+        let fullresync_offset_text = fullresync_offset.to_string();
         let snapshot = primary.encoded_rdb_snapshot(1);
+        let beta_bytes = fr_persist::encode_aof_stream(&[fr_persist::AofRecord {
+            argv: vec![b"SET".to_vec(), b"beta".to_vec(), b"2".to_vec()],
+        }]);
+        let continue_offset_text = fullresync_offset
+            .saturating_add(u64::try_from(beta_bytes.len()).unwrap_or(u64::MAX))
+            .to_string();
 
         let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind primary socket");
         let addr = listener.local_addr().expect("local addr");
         let server = thread::spawn({
             let replid = replid.clone();
+            let fullresync_offset_text = fullresync_offset_text.clone();
+            let continue_offset_text = continue_offset_text.clone();
             move || {
                 let parser = ParserConfig::default();
 
@@ -2169,7 +2179,10 @@ mod tests {
                 assert_eq!(psync1, replica_handshake_frame(&[b"PSYNC", b"?", b"-1"]));
                 stream1
                     .write_all(
-                        &RespFrame::SimpleString(format!("FULLRESYNC {replid} 1")).to_bytes(),
+                        &RespFrame::SimpleString(format!(
+                            "FULLRESYNC {replid} {fullresync_offset_text}"
+                        ))
+                        .to_bytes(),
                     )
                     .unwrap();
                 stream1
@@ -2201,7 +2214,11 @@ mod tests {
                     read_frame_from_stream(&mut stream2, &mut read_buf, &parser).expect("psync2");
                 assert_eq!(
                     psync2,
-                    replica_handshake_frame(&[b"PSYNC", replid.as_bytes(), b"2"])
+                    replica_handshake_frame(&[
+                        b"PSYNC",
+                        replid.as_bytes(),
+                        continue_offset_text.as_bytes(),
+                    ])
                 );
                 stream2
                     .write_all(&RespFrame::SimpleString("CONTINUE".to_string()).to_bytes())
@@ -2291,12 +2308,14 @@ mod tests {
             ),
             RespFrame::SimpleString("OK".to_string())
         );
+        let fullresync_offset_text = primary.replication_primary_offset().0.to_string();
         let snapshot = primary.encoded_rdb_snapshot(1);
 
         let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind primary socket");
         let addr = listener.local_addr().expect("local addr");
         let server = thread::spawn({
             let replid = replid.clone();
+            let fullresync_offset_text = fullresync_offset_text.clone();
             move || {
                 let parser = ParserConfig::default();
 
@@ -2324,7 +2343,10 @@ mod tests {
                 assert_eq!(psync, replica_handshake_frame(&[b"PSYNC", b"?", b"-1"]));
                 stream
                     .write_all(
-                        &RespFrame::SimpleString(format!("FULLRESYNC {replid} 1")).to_bytes(),
+                        &RespFrame::SimpleString(format!(
+                            "FULLRESYNC {replid} {fullresync_offset_text}"
+                        ))
+                        .to_bytes(),
                     )
                     .unwrap();
                 stream
@@ -2338,14 +2360,22 @@ mod tests {
                     .expect("getack reply");
                 assert_eq!(
                     immediate_ack,
-                    replica_handshake_frame(&[b"REPLCONF", b"ACK", b"1"])
+                    replica_handshake_frame(&[
+                        b"REPLCONF",
+                        b"ACK",
+                        fullresync_offset_text.as_bytes(),
+                    ])
                 );
 
                 let periodic_ack = read_frame_from_stream(&mut stream, &mut read_buf, &parser)
                     .expect("periodic ack");
                 assert_eq!(
                     periodic_ack,
-                    replica_handshake_frame(&[b"REPLCONF", b"ACK", b"1"])
+                    replica_handshake_frame(&[
+                        b"REPLCONF",
+                        b"ACK",
+                        fullresync_offset_text.as_bytes(),
+                    ])
                 );
             }
         });
@@ -2452,13 +2482,13 @@ mod tests {
 
     #[test]
     fn master_to_replica_streaming_propagate_writes() {
+        use crate::{ClientConnection, propagate_writes_to_replicas, replication_follow_up_bytes};
+        use fr_persist::{AofRecord, encode_aof_stream};
+        use fr_protocol::RespFrame;
+        use fr_runtime::Runtime;
+        use mio::Token;
         use std::collections::{HashMap, HashSet};
         use std::net::{TcpListener, TcpStream};
-        use mio::Token;
-        use fr_protocol::RespFrame;
-        use fr_persist::{AofRecord, encode_aof_stream};
-        use fr_runtime::Runtime;
-        use crate::{ClientConnection, propagate_writes_to_replicas, replication_follow_up_bytes};
 
         let mut runtime = Runtime::default_strict();
         let ts = 1000;
@@ -2471,7 +2501,8 @@ mod tests {
 
         let replica_session = runtime.new_session();
         let replica_id = replica_session.client_id;
-        let mut replica_conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), replica_session);
+        let mut replica_conn =
+            ClientConnection::new(mio::net::TcpStream::from_std(stream), replica_session);
 
         // 2. Perform PSYNC to mark as replica and set initial sent_offset.
         let psync_frame = RespFrame::Array(Some(vec![
@@ -2483,7 +2514,9 @@ mod tests {
         let prev = runtime.swap_session(std::mem::take(&mut replica_conn.session));
         let response = runtime.execute_frame(psync_frame.clone(), ts);
 
-        if let Some(follow_up) = replication_follow_up_bytes(&mut runtime, &psync_frame, &response, ts) {
+        if let Some(follow_up) =
+            replication_follow_up_bytes(&mut runtime, &psync_frame, &response, ts)
+        {
             replica_conn.write_buf.extend_from_slice(&follow_up);
             if runtime.is_replica(replica_id) {
                 replica_conn.replication_sent_offset = Some(runtime.replication_primary_offset());
