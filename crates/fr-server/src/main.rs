@@ -429,6 +429,15 @@ fn main() -> ExitCode {
             &mut write_tokens,
         );
 
+        // Deliver MONITOR output to monitor clients.
+        deliver_monitor_output(
+            &mut clients,
+            &client_id_to_token,
+            &mut runtime,
+            &mut poll,
+            &mut write_tokens,
+        );
+
         // Clean up clients marked for closing whose write buffers are drained.
         let to_remove: Vec<Token> = closing_tokens
             .iter()
@@ -1715,6 +1724,32 @@ fn propagate_writes_to_replicas(
 }
 
 /// Deliver pending Pub/Sub messages to all subscribed clients.
+/// Deliver MONITOR output to all monitor clients.
+fn deliver_monitor_output(
+    clients: &mut HashMap<Token, ClientConnection>,
+    client_id_to_token: &HashMap<u64, Token>,
+    runtime: &mut Runtime,
+    poll: &mut Poll,
+    write_tokens: &mut HashSet<Token>,
+) {
+    let output = runtime.drain_monitor_output();
+    for (client_id, line) in output {
+        let Some(&token) = client_id_to_token.get(&client_id) else {
+            continue;
+        };
+        let Some(conn) = clients.get_mut(&token) else {
+            continue;
+        };
+        conn.write_buf.extend_from_slice(&line);
+        write_tokens.insert(token);
+        let _ = poll.registry().reregister(
+            &mut conn.stream,
+            token,
+            Interest::READABLE | Interest::WRITABLE,
+        );
+    }
+}
+
 fn deliver_pubsub_messages(
     clients: &mut HashMap<Token, ClientConnection>,
     client_id_to_token: &HashMap<u64, Token>,

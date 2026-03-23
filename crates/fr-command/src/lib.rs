@@ -665,34 +665,13 @@ pub fn dispatch_argv(
         Some(CommandId::Readonly) => return readonly_cmd(argv),
         Some(CommandId::Readwrite) => return readwrite_cmd(argv),
         Some(CommandId::Zrangestore) => return zrangestore_cmd(argv, store, now_ms),
-        Some(CommandId::Monitor) => {
-            return Ok(RespFrame::SimpleString("OK".to_string()));
-        }
-        Some(CommandId::Migrate) => {
-            return Ok(RespFrame::SimpleString("NOKEY".to_string()));
-        }
-        Some(CommandId::Failover) => {
-            return Ok(RespFrame::SimpleString("OK".to_string()));
-        }
-        Some(CommandId::Module) => {
-            if argv.len() >= 2 && argv[1].eq_ignore_ascii_case(b"LIST") {
-                return Ok(RespFrame::Array(Some(Vec::new())));
-            }
-            return Ok(RespFrame::Error(
-                "ERR MODULE subcommand not supported".to_string(),
-            ));
-        }
-        Some(CommandId::Sentinel) => {
-            return Ok(RespFrame::Error(
-                "ERR SENTINEL commands are not supported in this mode".to_string(),
-            ));
-        }
-        Some(CommandId::Pfdebug) => {
-            return Ok(RespFrame::SimpleString("OK".to_string()));
-        }
-        Some(CommandId::Pfselftest) => {
-            return Ok(RespFrame::SimpleString("OK".to_string()));
-        }
+        Some(CommandId::Monitor) => return monitor_cmd(argv),
+        Some(CommandId::Migrate) => return migrate_cmd(argv),
+        Some(CommandId::Failover) => return failover_cmd(argv),
+        Some(CommandId::Module) => return module_cmd(argv),
+        Some(CommandId::Sentinel) => return sentinel_cmd(argv),
+        Some(CommandId::Pfdebug) => return pfdebug_cmd(argv, store, now_ms),
+        Some(CommandId::Pfselftest) => return pfselftest_cmd(argv, store),
         None => {}
     }
 
@@ -6600,6 +6579,399 @@ fn pfmerge(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame
     let sources: Vec<&[u8]> = argv[2..].iter().map(|k| k.as_slice()).collect();
     store.pfmerge(&argv[1], &sources, now_ms)?;
     Ok(RespFrame::SimpleString("OK".to_string()))
+}
+
+fn pfdebug_cmd(
+    argv: &[Vec<u8>],
+    store: &mut Store,
+    now_ms: u64,
+) -> Result<RespFrame, CommandError> {
+    if argv.len() != 3 {
+        return Err(CommandError::WrongArity("PFDEBUG"));
+    }
+
+    let missing = || CommandError::Custom("ERR The specified key does not exist".to_string());
+
+    if argv[1].eq_ignore_ascii_case(b"GETREG") {
+        let Some(registers) = store.hll_debug_getreg(&argv[2], now_ms)? else {
+            return Err(missing());
+        };
+        return Ok(RespFrame::Array(Some(
+            registers
+                .into_iter()
+                .map(|value| RespFrame::Integer(i64::from(value)))
+                .collect(),
+        )));
+    }
+
+    if argv[1].eq_ignore_ascii_case(b"DECODE") {
+        let Some(decoded) = store.hll_debug_decode(&argv[2], now_ms)? else {
+            return Err(missing());
+        };
+        return Ok(RespFrame::BulkString(Some(decoded.into_bytes())));
+    }
+
+    if argv[1].eq_ignore_ascii_case(b"ENCODING") {
+        let Some(encoding) = store.hll_debug_encoding(&argv[2], now_ms)? else {
+            return Err(missing());
+        };
+        return Ok(RespFrame::SimpleString(encoding.to_string()));
+    }
+
+    if argv[1].eq_ignore_ascii_case(b"TODENSE") {
+        let Some(converted) = store.hll_debug_todense(&argv[2], now_ms)? else {
+            return Err(missing());
+        };
+        return Ok(RespFrame::Integer(i64::from(converted)));
+    }
+
+    Err(CommandError::Custom(format!(
+        "ERR Unknown PFDEBUG subcommand '{}'",
+        bytes_to_lossy_string(&argv[1])
+    )))
+}
+
+fn pfselftest_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
+    if argv.len() != 1 {
+        return Err(CommandError::WrongArity("PFSELFTEST"));
+    }
+    store.hll_selftest()?;
+    Ok(RespFrame::SimpleString("OK".to_string()))
+}
+
+fn monitor_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+    if argv.len() != 1 {
+        return Err(CommandError::WrongArity("MONITOR"));
+    }
+    // MONITOR returns OK immediately. The runtime/server handles the actual
+    // streaming of commands to monitor clients. The client is flagged as a
+    // monitor in the server event loop after this response is sent.
+    Ok(RespFrame::SimpleString("OK".to_string()))
+}
+
+fn migrate_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+    // MIGRATE host port key|"" destination-db timeout [COPY] [REPLACE]
+    //   [AUTH password] [AUTH2 username password] [KEYS key [key ...]]
+    if argv.len() < 6 {
+        return Err(CommandError::WrongArity("MIGRATE"));
+    }
+
+    let host = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+    let port = std::str::from_utf8(&argv[2])
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .ok_or(CommandError::InvalidInteger)?;
+    let key_arg = &argv[3];
+    let _dest_db = parse_i64_arg(&argv[4])?;
+    let timeout_ms = parse_i64_arg(&argv[5])?;
+    if timeout_ms < 0 {
+        return Err(CommandError::InvalidInteger);
+    }
+    let timeout = std::time::Duration::from_millis(if timeout_ms == 0 {
+        1000
+    } else {
+        timeout_ms as u64
+    });
+
+    let mut _copy = false;
+    let mut _replace = false;
+    let mut auth_password: Option<Vec<u8>> = None;
+    let mut _auth_username: Option<Vec<u8>> = None;
+    let mut keys_mode = false;
+    let mut extra_keys: Vec<Vec<u8>> = Vec::new();
+
+    let mut i = 6;
+    while i < argv.len() {
+        let arg = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        if arg.eq_ignore_ascii_case("COPY") {
+            _copy = true;
+            i += 1;
+        } else if arg.eq_ignore_ascii_case("REPLACE") {
+            _replace = true;
+            i += 1;
+        } else if arg.eq_ignore_ascii_case("AUTH") {
+            if i + 1 >= argv.len() {
+                return Err(CommandError::SyntaxError);
+            }
+            auth_password = Some(argv[i + 1].clone());
+            i += 2;
+        } else if arg.eq_ignore_ascii_case("AUTH2") {
+            if i + 2 >= argv.len() {
+                return Err(CommandError::SyntaxError);
+            }
+            _auth_username = Some(argv[i + 1].clone());
+            auth_password = Some(argv[i + 2].clone());
+            i += 3;
+        } else if arg.eq_ignore_ascii_case("KEYS") {
+            keys_mode = true;
+            i += 1;
+            while i < argv.len() {
+                extra_keys.push(argv[i].clone());
+                i += 1;
+            }
+        } else {
+            return Err(CommandError::SyntaxError);
+        }
+    }
+
+    // Validate: KEYS option requires empty key arg
+    if keys_mode && !key_arg.is_empty() {
+        return Err(CommandError::Custom(
+            "ERR When using MIGRATE KEYS option, the key argument must be set to the empty string"
+                .to_string(),
+        ));
+    }
+
+    // Build key list
+    let mut keys_to_migrate: Vec<Vec<u8>> = Vec::new();
+    if keys_mode {
+        keys_to_migrate = extra_keys;
+    } else if !key_arg.is_empty() {
+        keys_to_migrate.push(key_arg.clone());
+    }
+
+    if keys_to_migrate.is_empty() {
+        return Ok(RespFrame::SimpleString("NOKEY".to_string()));
+    }
+
+    // Attempt real TCP connection to target instance
+    let addr = format!("{host}:{port}");
+    let stream = match std::net::TcpStream::connect_timeout(
+        &addr.parse().map_err(|_| {
+            CommandError::Custom(
+                "IOERR error or timeout connecting to the specified instance".to_string(),
+            )
+        })?,
+        timeout,
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            return Err(CommandError::Custom(
+                "IOERR error or timeout connecting to the specified instance".to_string(),
+            ));
+        }
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    let _ = auth_password; // Would send AUTH to target
+
+    // For a complete implementation, we would:
+    // 1. AUTH with the target if needed
+    // 2. SELECT the destination DB
+    // 3. For each key: DUMP locally, RESTORE on target
+    // 4. If not COPY: DEL locally
+    // Since we have an open socket, return IOERR for the actual transfer
+    // (keys exist but transfer protocol not yet wired to the store)
+    drop(stream);
+    Err(CommandError::Custom(
+        "IOERR error or timeout writing to target instance".to_string(),
+    ))
+}
+
+fn failover_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+    // Parse FAILOVER arguments: [TO host port [FORCE]] [ABORT] [TIMEOUT ms]
+    let mut abort = false;
+    let mut _to_host: Option<&[u8]> = None;
+    let mut _to_port: Option<u16> = None;
+    let mut _force = false;
+    let mut _timeout_ms: Option<u64> = None;
+
+    let mut i = 1;
+    while i < argv.len() {
+        let arg = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        if arg.eq_ignore_ascii_case("ABORT") {
+            abort = true;
+            i += 1;
+        } else if arg.eq_ignore_ascii_case("TO") {
+            if i + 2 >= argv.len() {
+                return Err(CommandError::SyntaxError);
+            }
+            _to_host = Some(&argv[i + 1]);
+            _to_port = std::str::from_utf8(&argv[i + 2])
+                .ok()
+                .and_then(|s| s.parse().ok());
+            i += 3;
+            // Check for FORCE
+            if i < argv.len() {
+                let next = std::str::from_utf8(&argv[i]).unwrap_or("");
+                if next.eq_ignore_ascii_case("FORCE") {
+                    _force = true;
+                    i += 1;
+                }
+            }
+        } else if arg.eq_ignore_ascii_case("TIMEOUT") {
+            if i + 1 >= argv.len() {
+                return Err(CommandError::SyntaxError);
+            }
+            let ms = parse_i64_arg(&argv[i + 1])?;
+            if ms <= 0 {
+                return Err(CommandError::Custom(
+                    "ERR FAILOVER timeout must be greater than 0".to_string(),
+                ));
+            }
+            _timeout_ms = Some(ms as u64);
+            i += 2;
+        } else {
+            return Err(CommandError::SyntaxError);
+        }
+    }
+
+    if abort {
+        // No failover in progress in standalone mode
+        return Err(CommandError::Custom(
+            "ERR No failover in progress.".to_string(),
+        ));
+    }
+
+    // In standalone mode without replicas, FAILOVER cannot proceed
+    Err(CommandError::Custom(
+        "ERR FAILOVER requires connected replicas.".to_string(),
+    ))
+}
+
+fn module_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+    if argv.len() < 2 {
+        return Err(CommandError::WrongArity("MODULE"));
+    }
+
+    if argv.len() == 2 && argv[1].eq_ignore_ascii_case(b"HELP") {
+        return Ok(RespFrame::Array(Some(vec![
+            hello_bulk("MODULE <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_bulk("LIST"),
+            hello_bulk("    Return a list of loaded modules."),
+            hello_bulk("LOAD <path> [<arg> ...]"),
+            hello_bulk(
+                "    Load a module library from <path>, passing to it any optional arguments.",
+            ),
+            hello_bulk("LOADEX <path> [[CONFIG NAME VALUE] [CONFIG NAME VALUE]] [ARGS ...]"),
+            hello_bulk(
+                "    Load a module library from <path>, while passing it module configurations and optional arguments.",
+            ),
+            hello_bulk("UNLOAD <name>"),
+            hello_bulk("    Unload a module."),
+            hello_bulk("HELP"),
+            hello_bulk("    Print this help."),
+        ])));
+    }
+
+    if argv[1].eq_ignore_ascii_case(b"LIST") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MODULE",
+                subcommand: bytes_to_lossy_string(&argv[1]),
+            });
+        }
+        return Ok(RespFrame::Array(Some(Vec::new())));
+    }
+
+    if argv[1].eq_ignore_ascii_case(b"UNLOAD") {
+        if argv.len() != 3 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MODULE",
+                subcommand: bytes_to_lossy_string(&argv[1]),
+            });
+        }
+        return Err(CommandError::Custom(
+            "ERR Error unloading module: no such module with that name".to_string(),
+        ));
+    }
+
+    if argv[1].eq_ignore_ascii_case(b"LOAD") || argv[1].eq_ignore_ascii_case(b"LOADEX") {
+        if argv.len() < 3 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MODULE",
+                subcommand: bytes_to_lossy_string(&argv[1]),
+            });
+        }
+        return Err(CommandError::Custom(
+            "ERR Error loading the extension. Please check the server logs.".to_string(),
+        ));
+    }
+
+    Err(CommandError::UnknownSubcommand {
+        command: "MODULE",
+        subcommand: bytes_to_lossy_string(&argv[1]),
+    })
+}
+
+fn sentinel_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+    if argv.len() < 2 {
+        return Err(CommandError::WrongArity("SENTINEL"));
+    }
+    let sub = std::str::from_utf8(&argv[1]).unwrap_or("");
+    if sub.eq_ignore_ascii_case("HELP") {
+        return Ok(RespFrame::Array(Some(vec![
+            hello_bulk("SENTINEL <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_bulk("CKQUORUM <master-name>"),
+            hello_bulk("CONFIG GET <option>"),
+            hello_bulk("CONFIG SET <option> <value>"),
+            hello_bulk("DEBUG <option> <value>"),
+            hello_bulk("FAILOVER <master-name>"),
+            hello_bulk("FLUSHCONFIG"),
+            hello_bulk("GET-MASTER-ADDR-BY-NAME <master-name>"),
+            hello_bulk("INFO-CACHE <master-name>"),
+            hello_bulk("IS-MASTER-DOWN-BY-ADDR ..."),
+            hello_bulk("MASTER <master-name>"),
+            hello_bulk("MASTERS"),
+            hello_bulk("MONITOR <name> <ip> <port> <quorum>"),
+            hello_bulk("MYID"),
+            hello_bulk("PENDING-SCRIPTS"),
+            hello_bulk("REMOVE <master-name>"),
+            hello_bulk("REPLICAS <master-name>"),
+            hello_bulk("RESET <pattern>"),
+            hello_bulk("SENTINELS <master-name>"),
+            hello_bulk("SET <master-name> <option> <value>"),
+            hello_bulk("SIMULATE-FAILURE (crash-after-election|crash-after-promotion|help)"),
+            hello_bulk("HELP"),
+        ])));
+    }
+    if sub.eq_ignore_ascii_case("MYID") {
+        // In non-sentinel mode, MYID returns an empty string
+        return Ok(RespFrame::BulkString(Some(Vec::new())));
+    }
+    if sub.eq_ignore_ascii_case("MASTERS") {
+        // No sentinel masters configured
+        return Ok(RespFrame::Array(Some(Vec::new())));
+    }
+    if sub.eq_ignore_ascii_case("MASTER")
+        || sub.eq_ignore_ascii_case("REPLICAS")
+        || sub.eq_ignore_ascii_case("SLAVES")
+        || sub.eq_ignore_ascii_case("SENTINELS")
+        || sub.eq_ignore_ascii_case("GET-MASTER-ADDR-BY-NAME")
+    {
+        if argv.len() < 3 {
+            return Err(CommandError::WrongArity("SENTINEL"));
+        }
+        return Err(CommandError::Custom(
+            "ERR No such master with that name".to_string(),
+        ));
+    }
+    if sub.eq_ignore_ascii_case("CKQUORUM")
+        || sub.eq_ignore_ascii_case("FAILOVER")
+        || sub.eq_ignore_ascii_case("RESET")
+        || sub.eq_ignore_ascii_case("REMOVE")
+    {
+        if argv.len() < 3 {
+            return Err(CommandError::WrongArity("SENTINEL"));
+        }
+        return Err(CommandError::Custom(
+            "ERR No such master with that name".to_string(),
+        ));
+    }
+    if sub.eq_ignore_ascii_case("FLUSHCONFIG") {
+        return Ok(RespFrame::SimpleString("OK".to_string()));
+    }
+    if sub.eq_ignore_ascii_case("PENDING-SCRIPTS") {
+        return Ok(RespFrame::Array(Some(Vec::new())));
+    }
+    Err(CommandError::UnknownSubcommand {
+        command: "SENTINEL",
+        subcommand: sub.to_string(),
+    })
+}
+
+fn bytes_to_lossy_string(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
@@ -18843,6 +19215,190 @@ mod tests {
             panic!("expected integer");
         };
         assert!((2..=4).contains(&count), "count={count}, expected ~3");
+    }
+
+    #[test]
+    fn pfdebug_encoding_getreg_and_todense_work_on_valid_hll() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"PFADD".to_vec(),
+                b"hll".to_vec(),
+                b"a".to_vec(),
+                b"b".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("pfadd");
+
+        let encoding = dispatch_argv(
+            &[b"PFDEBUG".to_vec(), b"ENCODING".to_vec(), b"hll".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("pfdebug encoding");
+        assert_eq!(encoding, RespFrame::SimpleString("dense".to_string()));
+
+        let getreg = dispatch_argv(
+            &[b"PFDEBUG".to_vec(), b"GETREG".to_vec(), b"hll".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("pfdebug getreg");
+        let RespFrame::Array(Some(registers)) = getreg else {
+            panic!("expected register array");
+        };
+        assert_eq!(registers.len(), 16_384);
+        assert!(
+            registers
+                .iter()
+                .any(|frame| frame != &RespFrame::Integer(0))
+        );
+
+        let todense = dispatch_argv(
+            &[b"PFDEBUG".to_vec(), b"TODENSE".to_vec(), b"hll".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("pfdebug todense");
+        assert_eq!(todense, RespFrame::Integer(0));
+    }
+
+    #[test]
+    fn pfdebug_decode_errors_for_dense_encoding() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"PFADD".to_vec(), b"hll".to_vec(), b"a".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("pfadd");
+
+        let out = dispatch_argv(
+            &[b"PFDEBUG".to_vec(), b"DECODE".to_vec(), b"hll".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("decode should fail on dense encoding");
+        assert_eq!(
+            out,
+            CommandError::Store(StoreError::GenericError(
+                "HLL encoding is not sparse".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn pfdebug_missing_key_and_unknown_subcommand_error() {
+        let mut store = Store::new();
+        let missing = dispatch_argv(
+            &[b"PFDEBUG".to_vec(), b"GETREG".to_vec(), b"hll".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("missing key should fail");
+        assert_eq!(
+            missing,
+            CommandError::Custom("ERR The specified key does not exist".to_string())
+        );
+
+        let unknown = dispatch_argv(
+            &[b"PFDEBUG".to_vec(), b"WAT".to_vec(), b"hll".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("unknown subcommand should fail");
+        assert_eq!(
+            unknown,
+            CommandError::Custom("ERR Unknown PFDEBUG subcommand 'WAT'".to_string())
+        );
+    }
+
+    #[test]
+    fn pfselftest_returns_ok() {
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"PFSELFTEST".to_vec()], &mut store, 0).expect("pfselftest");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn module_list_returns_empty_array() {
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"MODULE".to_vec(), b"LIST".to_vec()], &mut store, 0)
+            .expect("module list");
+        assert_eq!(out, RespFrame::Array(Some(Vec::new())));
+    }
+
+    #[test]
+    fn module_help_matches_redis_help_shape() {
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"MODULE".to_vec(), b"HELP".to_vec()], &mut store, 0)
+            .expect("module help");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected help array");
+        };
+        assert_eq!(
+            items.first(),
+            Some(&RespFrame::BulkString(Some(
+                b"MODULE <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_vec(),
+            )))
+        );
+        assert_eq!(
+            items.last(),
+            Some(&RespFrame::BulkString(Some(
+                b"    Print this help.".to_vec(),
+            )))
+        );
+    }
+
+    #[test]
+    fn module_load_and_unload_return_redis_style_errors() {
+        let mut store = Store::new();
+
+        let load = dispatch_argv(
+            &[
+                b"MODULE".to_vec(),
+                b"LOAD".to_vec(),
+                b"/tmp/mod.so".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("module load should fail");
+        assert_eq!(
+            load,
+            CommandError::Custom(
+                "ERR Error loading the extension. Please check the server logs.".to_string(),
+            )
+        );
+
+        let unload = dispatch_argv(
+            &[b"MODULE".to_vec(), b"UNLOAD".to_vec(), b"mymod".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("module unload should fail");
+        assert_eq!(
+            unload,
+            CommandError::Custom(
+                "ERR Error unloading module: no such module with that name".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn module_unknown_subcommand_uses_help_hint() {
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"MODULE".to_vec(), b"WAT".to_vec()], &mut store, 0)
+            .expect_err("module unknown subcommand should fail");
+        assert_eq!(
+            out,
+            CommandError::UnknownSubcommand {
+                command: "MODULE",
+                subcommand: "WAT".to_string(),
+            }
+        );
     }
 
     #[test]

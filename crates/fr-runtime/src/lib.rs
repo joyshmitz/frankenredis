@@ -923,6 +923,10 @@ pub struct ServerState {
     pubsub_client_shard_channels: HashMap<u64, HashSet<Vec<u8>>>,
     /// Keys that were modified in the current tick and may unblock clients.
     pub ready_keys: HashSet<Vec<u8>>,
+    /// Set of client IDs that are in MONITOR mode.
+    pub monitor_clients: HashSet<u64>,
+    /// Pending monitor output lines to deliver to monitor clients.
+    pub monitor_output: Vec<(u64, Vec<u8>)>,
 }
 
 impl Default for ServerState {
@@ -967,6 +971,8 @@ impl Default for ServerState {
             pubsub_client_patterns: HashMap::new(),
             pubsub_client_shard_channels: HashMap::new(),
             ready_keys: HashSet::new(),
+            monitor_clients: HashSet::new(),
+            monitor_output: Vec::new(),
         }
     }
 }
@@ -2393,6 +2399,17 @@ impl Runtime {
             });
         }
 
+        // Feed MONITOR clients before returning
+        self.feed_monitors(&argv, now_ms, self.session.selected_db);
+
+        // Check if this was a MONITOR command — flag the client
+        if argv
+            .first()
+            .is_some_and(|cmd| cmd.eq_ignore_ascii_case(b"MONITOR"))
+        {
+            self.enable_monitor();
+        }
+
         match result {
             Ok(reply) => {
                 if dirty_after > dirty_before {
@@ -2654,6 +2671,55 @@ impl Runtime {
     /// Return and clear the set of keys that were modified in the current tick.
     pub fn drain_ready_keys(&mut self) -> HashSet<Vec<u8>> {
         std::mem::take(&mut self.server.ready_keys)
+    }
+
+    // ── MONITOR support ─────────────────────────────────────────────
+
+    /// Register the current client as a MONITOR client.
+    pub fn enable_monitor(&mut self) {
+        self.server.monitor_clients.insert(self.session.client_id);
+    }
+
+    /// Remove a client from the monitor set.
+    pub fn disable_monitor(&mut self, client_id: u64) {
+        self.server.monitor_clients.remove(&client_id);
+    }
+
+    /// Feed a command to all monitor clients, formatted as Redis does.
+    pub fn feed_monitors(&mut self, argv: &[Vec<u8>], now_ms: u64, db: usize) {
+        if self.server.monitor_clients.is_empty() {
+            return;
+        }
+        let secs = now_ms / 1000;
+        let usecs = (now_ms % 1000) * 1000;
+        let mut line = format!("+{secs}.{usecs:06} [{} 127.0.0.1:0]", db);
+        for arg in argv {
+            line.push(' ');
+            line.push('"');
+            for &b in arg.iter() {
+                if b == b'"' || b == b'\\' {
+                    line.push('\\');
+                    line.push(b as char);
+                } else if !(32..=126).contains(&b) {
+                    line.push_str(&format!("\\x{b:02x}"));
+                } else {
+                    line.push(b as char);
+                }
+            }
+            line.push('"');
+        }
+        line.push_str("\r\n");
+        let line_bytes = line.into_bytes();
+        for &client_id in &self.server.monitor_clients {
+            self.server
+                .monitor_output
+                .push((client_id, line_bytes.clone()));
+        }
+    }
+
+    /// Drain pending monitor output for delivery.
+    pub fn drain_monitor_output(&mut self) -> Vec<(u64, Vec<u8>)> {
+        std::mem::take(&mut self.server.monitor_output)
     }
 
     pub fn execute_bytes(&mut self, input: &[u8], now_ms: u64) -> Vec<u8> {
@@ -7037,6 +7103,61 @@ mod tests {
         assert_eq!(
             invalid_timeout,
             RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+    }
+
+    #[test]
+    fn monitor_registers_client_and_streams_subsequent_commands() {
+        let mut rt = Runtime::default_strict();
+        rt.session.client_id = 42;
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"MONITOR"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert!(rt.server.monitor_clients.contains(&42));
+        assert!(rt.drain_monitor_output().is_empty());
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"alpha", b"1"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        assert_eq!(
+            rt.drain_monitor_output(),
+            vec![(
+                42,
+                b"+0.002000 [0 127.0.0.1:0] \"SET\" \"alpha\" \"1\"\r\n".to_vec(),
+            )]
+        );
+    }
+
+    #[test]
+    fn monitor_uses_selected_db_in_output() {
+        let mut rt = Runtime::default_strict();
+        rt.session.client_id = 7;
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"MONITOR"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"2"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        rt.drain_monitor_output();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"beta", b"2"]), 3),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        assert_eq!(
+            rt.drain_monitor_output(),
+            vec![(
+                7,
+                b"+0.003000 [2 127.0.0.1:0] \"SET\" \"beta\" \"2\"\r\n".to_vec(),
+            )]
         );
     }
 
