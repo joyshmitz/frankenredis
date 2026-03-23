@@ -4330,7 +4330,7 @@ impl Runtime {
         if replies.len() == 1 {
             replies.into_iter().next().expect("single reply")
         } else {
-            RespFrame::Array(Some(replies))
+            RespFrame::Sequence(replies)
         }
     }
 
@@ -4364,7 +4364,7 @@ impl Runtime {
             if replies.len() == 1 {
                 return replies.into_iter().next().expect("single reply");
             }
-            return RespFrame::Array(Some(replies));
+            return RespFrame::Sequence(replies);
         }
         let mut replies = Vec::new();
         for channel in &argv[1..] {
@@ -4378,7 +4378,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        RespFrame::Array(Some(replies))
+        RespFrame::Sequence(replies)
     }
 
     fn handle_psubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -4397,7 +4397,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        RespFrame::Array(Some(replies))
+        RespFrame::Sequence(replies)
     }
 
     fn handle_punsubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -4429,7 +4429,7 @@ impl Runtime {
             if replies.len() == 1 {
                 return replies.into_iter().next().expect("single reply");
             }
-            return RespFrame::Array(Some(replies));
+            return RespFrame::Sequence(replies);
         }
         let mut replies = Vec::new();
         for pattern in &argv[1..] {
@@ -4443,7 +4443,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        RespFrame::Array(Some(replies))
+        RespFrame::Sequence(replies)
     }
 
     fn handle_publish_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -4470,7 +4470,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        RespFrame::Array(Some(replies))
+        RespFrame::Sequence(replies)
     }
 
     fn handle_sunsubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -4502,7 +4502,7 @@ impl Runtime {
             if replies.len() == 1 {
                 return replies.into_iter().next().expect("single reply");
             }
-            return RespFrame::Array(Some(replies));
+            return RespFrame::Sequence(replies);
         }
         let mut replies = Vec::new();
         for channel in &argv[1..] {
@@ -4516,7 +4516,7 @@ impl Runtime {
         if replies.len() == 1 {
             return replies.into_iter().next().expect("single reply");
         }
-        RespFrame::Array(Some(replies))
+        RespFrame::Sequence(replies)
     }
 
     fn handle_spublish_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
@@ -6548,6 +6548,23 @@ mod tests {
 
         let _other_client = rt.swap_session(subscriber);
         let _ = rt.swap_session(previous);
+    }
+
+    #[test]
+    fn pubsub_multi_subscribe_encodes_as_resp_sequence() {
+        let mut rt = Runtime::default_strict();
+        let reply = rt.execute_frame(command(&[b"SUBSCRIBE", b"alpha", b"beta"]), 0);
+        match &reply {
+            RespFrame::Sequence(items) => {
+                assert_eq!(items.len(), 2);
+            }
+            other => panic!("expected RESP sequence, got {other:?}"),
+        }
+        assert_eq!(
+            reply.to_bytes(),
+            b"*3\r\n$9\r\nsubscribe\r\n$5\r\nalpha\r\n:1\r\n*3\r\n$9\r\nsubscribe\r\n$4\r\nbeta\r\n:2\r\n"
+                .to_vec()
+        );
     }
 
     #[test]

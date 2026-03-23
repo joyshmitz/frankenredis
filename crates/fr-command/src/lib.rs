@@ -19740,7 +19740,7 @@ mod tests {
         )
         .expect("subscribe multi");
         match out {
-            RespFrame::Sequence(arr) => {
+            RespFrame::Sequence(ref arr) => {
                 assert_eq!(arr.len(), 3);
                 for (i, item) in arr.iter().enumerate() {
                     match item {

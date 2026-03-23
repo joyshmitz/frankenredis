@@ -3741,7 +3741,7 @@ fn resp_to_lua(frame: &RespFrame) -> LuaValue {
         RespFrame::BulkString(None) => LuaValue::Bool(false),
         RespFrame::BulkString(Some(data)) => LuaValue::Str(data.clone()),
         RespFrame::Array(None) => LuaValue::Bool(false),
-        RespFrame::Array(Some(items)) => {
+        RespFrame::Array(Some(items)) | RespFrame::Sequence(items) => {
             let mut t = LuaTable::new();
             for (i, item) in items.iter().enumerate() {
                 t.set(LuaValue::Number((i + 1) as f64), resp_to_lua(item));
