@@ -8931,6 +8931,51 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 "ERR Invalid command specified, or key spec not found for '{cmd_name}'"
             ))),
         }
+    } else if sub.eq_ignore_ascii_case("GETKEYSANDFLAGS") {
+        // COMMAND GETKEYSANDFLAGS <command> [args...]
+        if argv.len() < 3 {
+            return Ok(RespFrame::Error(
+                "ERR Invalid arguments for 'COMMAND GETKEYSANDFLAGS'".to_string(),
+            ));
+        }
+        let cmd_name =
+            std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        let found = COMMAND_TABLE
+            .iter()
+            .find(|&&(name, ..)| name.eq_ignore_ascii_case(cmd_name));
+        match found {
+            Some(&(_name, _arity, flags, first_key, last_key, step)) => {
+                if first_key == 0 {
+                    return Ok(RespFrame::Array(Some(Vec::new())));
+                }
+                let cmd_argv = &argv[2..];
+                let mut keys = Vec::new();
+                let actual_last = if last_key < 0 {
+                    cmd_argv.len() as i64 + last_key
+                } else {
+                    last_key
+                };
+                let step_val = if step == 0 { 1 } else { step };
+                let derived_flags = command_getkeysandflags_flags(flags);
+                let mut i = first_key;
+                while i <= actual_last && (i as usize) < cmd_argv.len() {
+                    keys.push(RespFrame::Array(Some(vec![
+                        RespFrame::BulkString(Some(cmd_argv[i as usize].clone())),
+                        RespFrame::Array(Some(
+                            derived_flags
+                                .iter()
+                                .map(|flag| RespFrame::SimpleString((*flag).to_string()))
+                                .collect(),
+                        )),
+                    ])));
+                    i += step_val;
+                }
+                Ok(RespFrame::Array(Some(keys)))
+            }
+            None => Ok(RespFrame::Error(format!(
+                "ERR Invalid command specified, or key spec not found for '{cmd_name}'"
+            ))),
+        }
     } else {
         Err(CommandError::UnknownSubcommand {
             command: "COMMAND",
@@ -9163,6 +9208,17 @@ fn command_group_summary_prefix(group: &str) -> &'static str {
                 }
             }
         }
+    }
+}
+
+fn command_getkeysandflags_flags(flags: &str) -> &'static [&'static str] {
+    let flag_list: Vec<&str> = flags.split_whitespace().collect();
+    if flag_list.contains(&"readonly") {
+        &["RO", "access"]
+    } else if flag_list.contains(&"write") {
+        &["RW", "access", "update"]
+    } else {
+        &["access"]
     }
 }
 
@@ -23115,6 +23171,49 @@ mod tests {
         };
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"group".to_vec()))));
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"string".to_vec()))));
+    }
+
+    #[test]
+    fn command_getkeysandflags_reports_key_access_flags() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[
+                b"COMMAND".to_vec(),
+                b"GETKEYSANDFLAGS".to_vec(),
+                b"SET".to_vec(),
+                b"alpha".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"alpha".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::SimpleString("RW".to_string()),
+                    RespFrame::SimpleString("access".to_string()),
+                    RespFrame::SimpleString("update".to_string()),
+                ])),
+            ]))]))
+        );
+    }
+
+    #[test]
+    fn command_getkeysandflags_rejects_missing_arguments() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[b"COMMAND".to_vec(), b"GETKEYSANDFLAGS".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            RespFrame::Error("ERR Invalid arguments for 'COMMAND GETKEYSANDFLAGS'".to_string())
+        );
     }
 
     // ── REPLICAOF / SLAVEOF tests ───────────────────────────────────
