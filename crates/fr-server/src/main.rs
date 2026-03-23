@@ -1970,10 +1970,19 @@ mod tests {
             ),
             RespFrame::SimpleString("OK".to_string())
         );
+        // Calculate the byte offset after the first SET command.
+        // SET alpha 1 encodes as: *3\r\n$3\r\nSET\r\n$5\r\nalpha\r\n$1\r\n1\r\n = 31 bytes
+        let first_cmd_bytes = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"SET".to_vec())),
+            RespFrame::BulkString(Some(b"alpha".to_vec())),
+            RespFrame::BulkString(Some(b"1".to_vec())),
+        ]))
+        .to_bytes()
+        .len();
         let frame = RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"PSYNC".to_vec())),
             RespFrame::BulkString(Some(b"0000000000000000000000000000000000000000".to_vec())),
-            RespFrame::BulkString(Some(b"1".to_vec())),
+            RespFrame::BulkString(Some(first_cmd_bytes.to_string().into_bytes())),
         ]));
         let response = RespFrame::SimpleString("CONTINUE".to_string());
 
