@@ -985,6 +985,15 @@ fn frame_matches_expected(actual: &RespFrame, expected: &ExpectedFrame) -> bool 
                         .zip(value.iter())
                         .all(|(a, e)| frame_matches_expected(a, e))
             }
+            // Sequence is an alternate representation for multi-push responses
+            // (like multi-channel SUBSCRIBE); match it against Array expectations.
+            RespFrame::Sequence(items) => {
+                items.len() == value.len()
+                    && items
+                        .iter()
+                        .zip(value.iter())
+                        .all(|(a, e)| frame_matches_expected(a, e))
+            }
             _ => false,
         },
         _ => *actual == expected_to_frame(expected),
