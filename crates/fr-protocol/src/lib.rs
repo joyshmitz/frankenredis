@@ -10,6 +10,7 @@ pub enum RespFrame {
     Integer(i64),
     BulkString(Option<Vec<u8>>),
     Array(Option<Vec<RespFrame>>),
+    Sequence(Vec<RespFrame>),
 }
 
 impl RespFrame {
@@ -50,6 +51,11 @@ impl RespFrame {
                 out.extend_from_slice(b"*");
                 out.extend_from_slice(frames.len().to_string().as_bytes());
                 out.extend_from_slice(b"\r\n");
+                for frame in frames {
+                    frame.encode_into(out);
+                }
+            }
+            Self::Sequence(frames) => {
                 for frame in frames {
                     frame.encode_into(out);
                 }
@@ -742,5 +748,27 @@ mod tests {
             "protocol.depth_or_size_resource_clamp",
         );
         event.assert_schema_contract();
+    }
+
+    #[test]
+    fn sequence_frames_encode_as_back_to_back_resp_messages() {
+        let frame = RespFrame::Sequence(vec![
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                RespFrame::BulkString(Some(b"ch1".to_vec())),
+                RespFrame::Integer(1),
+            ])),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                RespFrame::BulkString(Some(b"ch2".to_vec())),
+                RespFrame::Integer(2),
+            ])),
+        ]);
+
+        assert_eq!(
+            frame.to_bytes(),
+            b"*3\r\n$9\r\nsubscribe\r\n$3\r\nch1\r\n:1\r\n*3\r\n$9\r\nsubscribe\r\n$3\r\nch2\r\n:2\r\n"
+                .to_vec()
+        );
     }
 }

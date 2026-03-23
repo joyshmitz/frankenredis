@@ -5772,7 +5772,7 @@ fn ssubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Comm
             RespFrame::Integer(count),
         ])));
     }
-    Ok(RespFrame::Array(Some(replies)))
+    Ok(RespFrame::Sequence(replies))
 }
 
 fn sunsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
@@ -5797,7 +5797,7 @@ fn sunsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Co
                 RespFrame::Integer(count),
             ])));
         }
-        return Ok(RespFrame::Array(Some(replies)));
+        return Ok(RespFrame::Sequence(replies));
     }
     if argv.len() == 2 {
         let count = store.sunsubscribe(&argv[1]) as i64;
@@ -5816,7 +5816,7 @@ fn sunsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Co
             RespFrame::Integer(count),
         ])));
     }
-    Ok(RespFrame::Array(Some(replies)))
+    Ok(RespFrame::Sequence(replies))
 }
 
 fn spublish_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
@@ -8843,8 +8843,6 @@ fn subscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Comma
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("SUBSCRIBE"));
     }
-    // In Redis, SUBSCRIBE with N channels produces N separate push messages.
-    // We pack them into a single Array-of-Arrays for the single-response dispatch model.
     if argv.len() == 2 {
         // Single channel — return the standard 3-element subscribe reply
         let count = store.subscribe(argv[1].clone()) as i64;
@@ -8854,7 +8852,6 @@ fn subscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Comma
             RespFrame::Integer(count),
         ])));
     }
-    // Multiple channels — produce one subscribe reply per channel
     let mut replies = Vec::with_capacity(argv.len() - 1);
     for channel in &argv[1..] {
         let count = store.subscribe(channel.clone()) as i64;
@@ -8864,7 +8861,7 @@ fn subscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Comma
             RespFrame::Integer(count),
         ])));
     }
-    Ok(RespFrame::Array(Some(replies)))
+    Ok(RespFrame::Sequence(replies))
 }
 
 fn unsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
@@ -8892,7 +8889,7 @@ fn unsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Com
         if replies.len() == 1 {
             return Ok(replies.into_iter().next().unwrap());
         }
-        return Ok(RespFrame::Array(Some(replies)));
+        return Ok(RespFrame::Sequence(replies));
     }
     if argv.len() == 2 {
         let count = store.unsubscribe(&argv[1]) as i64;
@@ -8911,7 +8908,7 @@ fn unsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Com
             RespFrame::Integer(count),
         ])));
     }
-    Ok(RespFrame::Array(Some(replies)))
+    Ok(RespFrame::Sequence(replies))
 }
 
 fn psubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
@@ -8935,7 +8932,7 @@ fn psubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Comm
             RespFrame::Integer(count),
         ])));
     }
-    Ok(RespFrame::Array(Some(replies)))
+    Ok(RespFrame::Sequence(replies))
 }
 
 fn punsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
@@ -8961,7 +8958,7 @@ fn punsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Co
         if replies.len() == 1 {
             return Ok(replies.into_iter().next().unwrap());
         }
-        return Ok(RespFrame::Array(Some(replies)));
+        return Ok(RespFrame::Sequence(replies));
     }
     if argv.len() == 2 {
         let count = store.punsubscribe(&argv[1]) as i64;
@@ -8980,7 +8977,7 @@ fn punsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Co
             RespFrame::Integer(count),
         ])));
     }
-    Ok(RespFrame::Array(Some(replies)))
+    Ok(RespFrame::Sequence(replies))
 }
 
 fn publish_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
@@ -19742,11 +19739,9 @@ mod tests {
             0,
         )
         .expect("subscribe multi");
-        // Multiple channels returns array-of-arrays
         match out {
-            RespFrame::Array(Some(arr)) => {
+            RespFrame::Sequence(arr) => {
                 assert_eq!(arr.len(), 3);
-                // Each sub-array is [subscribe, channel, count]
                 for (i, item) in arr.iter().enumerate() {
                     match item {
                         RespFrame::Array(Some(sub)) => {
@@ -19757,8 +19752,13 @@ mod tests {
                     }
                 }
             }
-            other => panic!("expected array of arrays, got {other:?}"),
+            other => panic!("expected RESP sequence, got {other:?}"),
         }
+        assert_eq!(
+            out.to_bytes(),
+            b"*3\r\n$9\r\nsubscribe\r\n$3\r\nch1\r\n:1\r\n*3\r\n$9\r\nsubscribe\r\n$3\r\nch2\r\n:2\r\n*3\r\n$9\r\nsubscribe\r\n$3\r\nch3\r\n:3\r\n"
+                .to_vec()
+        );
     }
 
     #[test]
@@ -19976,10 +19976,10 @@ mod tests {
         )
         .expect("psubscribe multi");
         match out {
-            RespFrame::Array(Some(arr)) => {
+            RespFrame::Sequence(arr) => {
                 assert_eq!(arr.len(), 2);
             }
-            other => panic!("expected array of arrays, got {other:?}"),
+            other => panic!("expected RESP sequence, got {other:?}"),
         }
     }
 
