@@ -9311,10 +9311,32 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         Ok(RespFrame::BulkString(Some(
             b"id=1 addr=127.0.0.1:0 fd=0 name= db=0\r\n".to_vec(),
         )))
-    } else if sub.eq_ignore_ascii_case("NO-EVICT")
-        || sub.eq_ignore_ascii_case("NO-TOUCH")
-        || sub.eq_ignore_ascii_case("REPLY")
-    {
+    } else if sub.eq_ignore_ascii_case("NO-EVICT") || sub.eq_ignore_ascii_case("NO-TOUCH") {
+        if argv.len() != 3 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: sub.to_string(),
+            });
+        }
+        let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        if !mode.eq_ignore_ascii_case("ON") && !mode.eq_ignore_ascii_case("OFF") {
+            return Err(CommandError::SyntaxError);
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("REPLY") {
+        if argv.len() != 3 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: sub.to_string(),
+            });
+        }
+        let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        if !mode.eq_ignore_ascii_case("ON")
+            && !mode.eq_ignore_ascii_case("OFF")
+            && !mode.eq_ignore_ascii_case("SKIP")
+        {
+            return Err(CommandError::SyntaxError);
+        }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("KILL") {
         // CLIENT KILL [ip:port | ID client-id | ...]
@@ -23155,6 +23177,68 @@ mod tests {
             CommandError::WrongSubcommandArity {
                 command: "CLIENT",
                 subcommand: "UNPAUSE".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn client_reply_rejects_invalid_mode_and_extra_arguments() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[b"CLIENT".to_vec(), b"REPLY".to_vec(), b"MAYBE".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::SyntaxError);
+
+        let err = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"REPLY".to_vec(),
+                b"ON".to_vec(),
+                b"NOW".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: "REPLY".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn client_no_evict_and_no_touch_validate_mode_and_arity() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[b"CLIENT".to_vec(), b"NO-EVICT".to_vec(), b"MAYBE".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::SyntaxError);
+
+        let err = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"NO-TOUCH".to_vec(),
+                b"ON".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::WrongSubcommandArity {
+                command: "CLIENT",
+                subcommand: "NO-TOUCH".to_string(),
             }
         );
     }
