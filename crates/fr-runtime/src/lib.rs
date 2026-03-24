@@ -4571,6 +4571,7 @@ impl Runtime {
         if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
             return reply;
         }
+        self.server.store.mark_saved_at(now_ms);
         self.server.last_save_time_sec = now_ms / 1000;
         RespFrame::SimpleString("OK".to_string())
     }
@@ -4592,6 +4593,7 @@ impl Runtime {
         if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
             return reply;
         }
+        self.server.store.mark_saved_at(now_ms);
         self.server.last_save_time_sec = now_ms / 1000;
         RespFrame::SimpleString("Background saving started".to_string())
     }
@@ -5260,23 +5262,24 @@ impl Runtime {
         argv: &[Vec<u8>],
         now_ms: u64,
     ) -> Result<RespFrame, CommandError> {
-        let section = if argv.len() >= 2 {
-            std::str::from_utf8(&argv[1]).ok()
-        } else {
-            None
+        let sections: Vec<&str> = argv[1..]
+            .iter()
+            .map(|arg| std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument))
+            .collect::<Result<_, _>>()?;
+        let is_all = sections.is_empty()
+            || sections.iter().any(|section| {
+                section.eq_ignore_ascii_case("all")
+                    || section.eq_ignore_ascii_case("everything")
+                    || section.eq_ignore_ascii_case("default")
+            });
+        let section_requested = |name: &str| {
+            is_all
+                || sections
+                    .iter()
+                    .any(|section| section.eq_ignore_ascii_case(name))
         };
-
-        let is_all = section.is_none() || section.is_some_and(|s| s.eq_ignore_ascii_case("all"));
-        let is_replication =
-            is_all || section.is_some_and(|s| s.eq_ignore_ascii_case("replication"));
-        let is_keyspace = is_all || section.is_some_and(|s| s.eq_ignore_ascii_case("keyspace"));
-
-        if section.is_some() && !is_replication && !is_keyspace {
-            let namespaced = self.namespace_argv_for_selected_db(argv);
-            let mut reply = dispatch_argv(&namespaced, &mut self.server.store, now_ms)?;
-            self.strip_db_prefixes_from_frame(&mut reply);
-            return Ok(reply);
-        }
+        let is_replication = section_requested("replication");
+        let is_keyspace = section_requested("keyspace");
 
         let mut info = Vec::new();
         if is_replication
@@ -5290,11 +5293,51 @@ impl Runtime {
             info.extend_from_slice(&bytes);
         }
 
-        if info.is_empty() {
-            let namespaced = self.namespace_argv_for_selected_db(argv);
+        const COMMAND_INFO_SECTIONS: &[&str] = &[
+            "server",
+            "clients",
+            "memory",
+            "persistence",
+            "stats",
+            "cpu",
+            "modules",
+            "errorstats",
+            "cluster",
+        ];
+
+        let mut delegated = vec![b"INFO".to_vec()];
+        if is_all {
+            delegated.extend(
+                COMMAND_INFO_SECTIONS
+                    .iter()
+                    .map(|section| section.as_bytes().to_vec()),
+            );
+        } else {
+            for section in &sections {
+                if COMMAND_INFO_SECTIONS
+                    .iter()
+                    .any(|known| section.eq_ignore_ascii_case(known))
+                    && !delegated
+                        .iter()
+                        .skip(1)
+                        .any(|arg| eq_ascii_token(arg, section.as_bytes()))
+                {
+                    delegated.push(section.as_bytes().to_vec());
+                }
+            }
+        }
+
+        if delegated.len() > 1 {
+            let namespaced = self.namespace_argv_for_selected_db(&delegated);
             let mut reply = dispatch_argv(&namespaced, &mut self.server.store, now_ms)?;
             self.strip_db_prefixes_from_frame(&mut reply);
-            return Ok(reply);
+            if let RespFrame::BulkString(Some(bytes)) = reply {
+                info.extend_from_slice(&bytes);
+            }
+        }
+
+        if info.is_empty() {
+            return Ok(RespFrame::BulkString(Some(Vec::new())));
         }
 
         Ok(RespFrame::BulkString(Some(info)))
@@ -8158,6 +8201,28 @@ mod tests {
     }
 
     #[test]
+    fn live_info_supports_multiple_requested_sections() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"key", b"value"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let info = rt.execute_frame(
+            command(&[b"INFO", b"replication", b"server", b"keyspace"]),
+            1,
+        );
+        let RespFrame::BulkString(Some(info_bytes)) = info else {
+            panic!("expected bulk INFO response");
+        };
+        let info = String::from_utf8(info_bytes).expect("utf8 info");
+        assert!(info.contains("# Replication\r\n"), "{info}");
+        assert!(info.contains("# Server\r\n"), "{info}");
+        assert!(info.contains("# Keyspace\r\n"), "{info}");
+    }
+
+    #[test]
     fn replication_replconf_ack_is_monotonic() {
         let mut rt = Runtime::default_strict();
 
@@ -9267,6 +9332,22 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&rdb_path);
+    }
+
+    #[test]
+    fn live_info_persistence_reports_last_save_time_after_save() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"SAVE"]), 1_700_000_005_000),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let info = rt.execute_frame(command(&[b"INFO", b"persistence"]), 1_700_000_099_000);
+        let RespFrame::BulkString(Some(info_bytes)) = info else {
+            panic!("expected bulk INFO response");
+        };
+        let info = String::from_utf8(info_bytes).expect("utf8 info");
+        assert!(info.contains("rdb_last_save_time:1700000005\r\n"), "{info}");
     }
 
     #[test]

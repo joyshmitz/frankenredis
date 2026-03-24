@@ -7999,19 +7999,27 @@ fn format_bytes_human(bytes: usize) -> String {
 
 fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     let keyspace_size = store.dbsize(now_ms);
-    let section = if argv.len() >= 2 {
-        std::str::from_utf8(&argv[1]).unwrap_or("all")
-    } else {
-        "all"
+    let sections: Vec<&str> = argv[1..]
+        .iter()
+        .map(|arg| std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument))
+        .collect::<Result<_, _>>()?;
+    let is_all = sections.is_empty()
+        || sections.iter().any(|section| {
+            section.eq_ignore_ascii_case("all")
+                || section.eq_ignore_ascii_case("everything")
+                || section.eq_ignore_ascii_case("default")
+        });
+    let section_requested = |name: &str| {
+        is_all
+            || sections
+                .iter()
+                .any(|section| section.eq_ignore_ascii_case(name))
     };
-    let is_all = section.eq_ignore_ascii_case("all")
-        || section.eq_ignore_ascii_case("everything")
-        || section.eq_ignore_ascii_case("default");
 
     let mut info = String::new();
 
     // Server section
-    if is_all || section.eq_ignore_ascii_case("server") {
+    if section_requested("server") {
         info.push_str("# Server\r\n");
         info.push_str("redis_version:7.2.0-frankenredis\r\n");
         info.push_str("redis_git_sha1:00000000\r\n");
@@ -8038,7 +8046,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
 
     // Clients section
-    if is_all || section.eq_ignore_ascii_case("clients") {
+    if section_requested("clients") {
         let connected = store.stat_connected_clients.max(1); // at least 1 (the current client)
         info.push_str("# Clients\r\n");
         info.push_str(&format!("connected_clients:{connected}\r\n"));
@@ -8058,7 +8066,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
 
     // Memory section
-    if is_all || section.eq_ignore_ascii_case("memory") {
+    if section_requested("memory") {
         let used_memory = store.estimate_memory_usage_bytes();
         let used_memory_human = format_bytes_human(used_memory);
         // RSS approximation: use used_memory since we don't have OS-level info
@@ -8097,7 +8105,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
 
     // Persistence section
-    if is_all || section.eq_ignore_ascii_case("persistence") {
+    if section_requested("persistence") {
         info.push_str("# Persistence\r\n");
         info.push_str("loading:0\r\n");
         info.push_str("async_loading:0\r\n");
@@ -8109,7 +8117,10 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("current_save_keys_total:0\r\n");
         info.push_str(&format!("rdb_changes_since_last_save:{}\r\n", store.dirty));
         info.push_str("rdb_bgsave_in_progress:0\r\n");
-        info.push_str("rdb_last_save_time:0\r\n");
+        info.push_str(&format!(
+            "rdb_last_save_time:{}\r\n",
+            store.last_save_time_sec
+        ));
         info.push_str("rdb_last_bgsave_status:ok\r\n");
         info.push_str("rdb_last_bgsave_time_sec:-1\r\n");
         info.push_str("rdb_current_bgsave_time_sec:-1\r\n");
@@ -8127,7 +8138,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
 
     // Stats section
-    if is_all || section.eq_ignore_ascii_case("stats") {
+    if section_requested("stats") {
         info.push_str("# Stats\r\n");
         info.push_str(&format!(
             "total_connections_received:{}\r\n",
@@ -8189,7 +8200,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
 
     // Replication section
-    if is_all || section.eq_ignore_ascii_case("replication") {
+    if section_requested("replication") {
         info.push_str("# Replication\r\n");
         info.push_str("role:master\r\n");
         info.push_str("connected_slaves:0\r\n");
@@ -8206,7 +8217,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
 
     // CPU section
-    if is_all || section.eq_ignore_ascii_case("cpu") {
+    if section_requested("cpu") {
         info.push_str("# CPU\r\n");
         info.push_str("used_cpu_sys:0.000000\r\n");
         info.push_str("used_cpu_user:0.000000\r\n");
@@ -8218,26 +8229,26 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
 
     // Modules section
-    if is_all || section.eq_ignore_ascii_case("modules") {
+    if section_requested("modules") {
         info.push_str("# Modules\r\n");
         info.push_str("\r\n");
     }
 
     // Errorstats section
-    if is_all || section.eq_ignore_ascii_case("errorstats") {
+    if section_requested("errorstats") {
         info.push_str("# Errorstats\r\n");
         info.push_str("\r\n");
     }
 
     // Cluster section
-    if is_all || section.eq_ignore_ascii_case("cluster") {
+    if section_requested("cluster") {
         info.push_str("# Cluster\r\n");
         info.push_str("cluster_enabled:0\r\n");
         info.push_str("\r\n");
     }
 
     // Keyspace section
-    if is_all || section.eq_ignore_ascii_case("keyspace") {
+    if section_requested("keyspace") {
         info.push_str("# Keyspace\r\n");
         if keyspace_size > 0 {
             let expires = store.count_expiring_keys();
@@ -9831,10 +9842,7 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
         ])))
     } else {
-        Err(CommandError::UnknownSubcommand {
-            command: "MEMORY",
-            subcommand: sub.to_string(),
-        })
+        Err(CommandError::SyntaxError)
     }
 }
 
@@ -20601,6 +20609,7 @@ mod tests {
             vec![b"MEMORY".to_vec(), b"PURGE".to_vec(), b"extra".to_vec()],
             vec![b"MEMORY".to_vec(), b"STATS".to_vec(), b"extra".to_vec()],
             vec![b"MEMORY".to_vec(), b"HELP".to_vec(), b"extra".to_vec()],
+            vec![b"MEMORY".to_vec(), b"BOGUS".to_vec()],
             vec![
                 b"MEMORY".to_vec(),
                 b"USAGE".to_vec(),
@@ -20625,6 +20634,24 @@ mod tests {
             let err = dispatch_argv(&argv, &mut store, 0).expect_err("memory syntax error");
             assert_eq!(err, CommandError::SyntaxError, "argv={argv:?}");
         }
+    }
+
+    #[test]
+    fn info_supports_multiple_requested_sections() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"server".to_vec(), b"clients".to_vec()],
+            &mut store,
+            5_000,
+        )
+        .expect("info");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string");
+        };
+        let info = String::from_utf8(bytes).expect("utf8 info");
+        assert!(info.contains("# Server\r\n"));
+        assert!(info.contains("# Clients\r\n"));
+        assert!(!info.contains("# Memory\r\n"));
     }
 
     #[test]
@@ -20710,6 +20737,20 @@ mod tests {
         let after_bgsave = dispatch_argv(&[b"LASTSAVE".to_vec()], &mut store, 1_700_000_199_000)
             .expect("lastsave after bgsave");
         assert_eq!(after_bgsave, RespFrame::Integer(1_700_000_007));
+    }
+
+    #[test]
+    fn info_persistence_reports_tracked_last_save_time() {
+        let mut store = Store::new();
+        dispatch_argv(&[b"SAVE".to_vec()], &mut store, 1_700_000_005_000).expect("save");
+
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"persistence".to_vec()], &mut store, 0)
+            .expect("info persistence");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string");
+        };
+        let info = String::from_utf8(bytes).expect("utf8 info");
+        assert!(info.contains("rdb_last_save_time:1700000005\r\n"), "{info}");
     }
 
     #[test]
