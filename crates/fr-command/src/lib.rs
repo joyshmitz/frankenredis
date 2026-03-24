@@ -25613,3 +25613,5 @@ mod tests {
         server.join().expect("join fake target");
     }
 }
+#[cfg(test)]
+mod zadd_xx_test;

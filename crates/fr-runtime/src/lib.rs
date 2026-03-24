@@ -907,6 +907,8 @@ pub struct ServerState {
     last_save_time_sec: u64,
     /// Path for AOF persistence file (used by SAVE/BGSAVE).
     aof_path: Option<std::path::PathBuf>,
+    /// Configured AOF target path, preserved even when appendonly is disabled.
+    aof_config_path: Option<std::path::PathBuf>,
     /// Path for RDB persistence file (used by SAVE/BGSAVE).
     rdb_path: Option<std::path::PathBuf>,
     /// Dynamically overridden CONFIG parameters (set via CONFIG SET, returned by CONFIG GET).
@@ -971,6 +973,7 @@ impl Default for ServerState {
             slowlog_max_len: 128,
             last_save_time_sec: 0,
             aof_path: None,
+            aof_config_path: None,
             rdb_path: None,
             config_overrides: HashMap::new(),
             pubsub_channel_subs: HashMap::new(),
@@ -991,6 +994,7 @@ impl Default for ServerState {
 
 impl ServerState {
     pub fn set_aof_path(&mut self, path: std::path::PathBuf) {
+        self.aof_config_path = Some(path.clone());
         self.aof_path = Some(path);
     }
 
@@ -3736,7 +3740,7 @@ impl Runtime {
             entries.push(RespFrame::BulkString(Some(b"appendfilename".to_vec())));
             let filename = self
                 .server
-                .aof_path
+                .aof_config_path
                 .as_ref()
                 .and_then(|path| path.file_name())
                 .map(|name| name.to_string_lossy().into_owned())
@@ -3747,12 +3751,35 @@ impl Runtime {
             entries.push(RespFrame::BulkString(Some(b"appenddirname".to_vec())));
             let dirname = self
                 .server
-                .aof_path
+                .aof_config_path
                 .as_ref()
                 .and_then(|path| path.parent())
                 .and_then(|path| path.file_name())
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "appendonlydir".to_string());
+            entries.push(RespFrame::BulkString(Some(dirname.into_bytes())));
+        }
+        if Self::config_pattern_matches(pattern, "dbfilename") {
+            entries.push(RespFrame::BulkString(Some(b"dbfilename".to_vec())));
+            let filename = self
+                .server
+                .rdb_path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "dump.rdb".to_string());
+            entries.push(RespFrame::BulkString(Some(filename.into_bytes())));
+        }
+        if Self::config_pattern_matches(pattern, "dir") {
+            entries.push(RespFrame::BulkString(Some(b"dir".to_vec())));
+            let dirname = self
+                .server
+                .rdb_path
+                .as_ref()
+                .and_then(|path| path.parent())
+                .map(|path| path.to_string_lossy().into_owned())
+                .filter(|path| !path.is_empty())
+                .unwrap_or_else(|| ".".to_string());
             entries.push(RespFrame::BulkString(Some(dirname.into_bytes())));
         }
         // Also emit ziplist aliases from Store (they alias the same live values).
@@ -3806,6 +3833,8 @@ impl Runtime {
                 || name == "appendonly"
                 || name == "appendfilename"
                 || name == "appenddirname"
+                || name == "dbfilename"
+                || name == "dir"
             {
                 continue;
             }
@@ -3838,6 +3867,13 @@ impl Runtime {
         let mut next_slowlog_slower_than: Option<i64> = None;
         let mut next_slowlog_max_len: Option<usize> = None;
         let mut next_hz: Option<u64> = None;
+        let mut next_appendonly: Option<bool> = None;
+        let mut next_rdb_path = self
+            .server
+            .rdb_path
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from(".").join("dump.rdb"));
+        let mut rdb_path_changed = false;
         let mut encoding_threshold_updates: Vec<(&str, usize)> = Vec::new();
         let mut static_override_updates: Vec<(String, String)> = Vec::new();
 
@@ -3930,6 +3966,62 @@ impl Runtime {
                     Err(err) => return err.to_resp(),
                 };
                 next_hz = Some(parsed);
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("appendonly") {
+                let value_str = match std::str::from_utf8(&pair[1]) {
+                    Ok(value) => value,
+                    Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                };
+                next_appendonly = Some(if value_str.eq_ignore_ascii_case("yes") {
+                    true
+                } else if value_str.eq_ignore_ascii_case("no") {
+                    false
+                } else {
+                    return RespFrame::Error(format!(
+                        "ERR Invalid argument '{value_str}' for CONFIG SET 'appendonly'"
+                    ));
+                });
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("appendfilename")
+                || parameter.eq_ignore_ascii_case("appenddirname")
+            {
+                return RespFrame::Error(format!(
+                    "ERR CONFIG SET failed (possibly related to argument '{parameter}') - can't set immutable config"
+                ));
+            }
+            if parameter.eq_ignore_ascii_case("dir") {
+                let value_str = match std::str::from_utf8(&pair[1]) {
+                    Ok(value) => value,
+                    Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                };
+                let filename = next_rdb_path
+                    .file_name()
+                    .map(|name| name.to_os_string())
+                    .unwrap_or_else(|| std::ffi::OsString::from("dump.rdb"));
+                next_rdb_path = std::path::PathBuf::from(value_str).join(filename);
+                rdb_path_changed = true;
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("dbfilename") {
+                let value_str = match std::str::from_utf8(&pair[1]) {
+                    Ok(value) => value,
+                    Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                };
+                let value_path = std::path::Path::new(value_str);
+                if value_path.components().count() != 1 || value_path.file_name().is_none() {
+                    return RespFrame::Error(
+                        "ERR CONFIG SET failed (possibly related to argument 'dbfilename') - dbfilename can't be a path, just a filename"
+                            .to_string(),
+                    );
+                }
+                let parent = next_rdb_path
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                next_rdb_path = parent.join(value_str);
+                rdb_path_changed = true;
                 continue;
             }
             // List encoding threshold — accepts negative values (-1 to -5 for byte limits).
@@ -4062,6 +4154,20 @@ impl Runtime {
         }
         if let Some(hz) = next_hz {
             self.server.hz = hz;
+        }
+        if rdb_path_changed {
+            self.server.rdb_path = Some(next_rdb_path);
+        }
+        if let Some(appendonly) = next_appendonly {
+            if appendonly {
+                let configured_path = self.server.aof_config_path.clone().unwrap_or_else(|| {
+                    std::path::PathBuf::from("appendonlydir").join("appendonly.aof")
+                });
+                self.server.aof_config_path = Some(configured_path.clone());
+                self.server.aof_path = Some(configured_path);
+            } else {
+                self.server.aof_path = None;
+            }
         }
         // Apply encoding threshold updates to Store and CONFIG GET state.
         for (param, value) in encoding_threshold_updates {
@@ -9325,6 +9431,212 @@ mod tests {
                 RespFrame::BulkString(Some(b"real-appendonly.aof".to_vec())),
                 RespFrame::BulkString(Some(b"appenddirname".to_vec())),
                 RespFrame::BulkString(Some(b"fr-test".to_vec())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn config_get_reports_live_rdb_path_state() {
+        let mut rt = Runtime::default_strict();
+        rt.set_rdb_path(std::path::PathBuf::from("/tmp/fr-rdb/real-dump.rdb"));
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"dbfilename", b"dir"]), 0),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"dbfilename".to_vec())),
+                RespFrame::BulkString(Some(b"real-dump.rdb".to_vec())),
+                RespFrame::BulkString(Some(b"dir".to_vec())),
+                RespFrame::BulkString(Some(b"/tmp/fr-rdb".to_vec())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn config_get_dir_uses_dot_for_filename_only_rdb_path() {
+        let mut rt = Runtime::default_strict();
+        rt.set_rdb_path(std::path::PathBuf::from("custom.rdb"));
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"dir", b"dbfilename"]), 0),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"dir".to_vec())),
+                RespFrame::BulkString(Some(b".".to_vec())),
+                RespFrame::BulkString(Some(b"dbfilename".to_vec())),
+                RespFrame::BulkString(Some(b"custom.rdb".to_vec())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn config_set_appendonly_updates_live_runtime_state() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"appendonly", b"yes"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"CONFIG",
+                    b"GET",
+                    b"appendonly",
+                    b"appendfilename",
+                    b"appenddirname",
+                ]),
+                0,
+            ),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"appendonly".to_vec())),
+                RespFrame::BulkString(Some(b"yes".to_vec())),
+                RespFrame::BulkString(Some(b"appendfilename".to_vec())),
+                RespFrame::BulkString(Some(b"appendonly.aof".to_vec())),
+                RespFrame::BulkString(Some(b"appenddirname".to_vec())),
+                RespFrame::BulkString(Some(b"appendonlydir".to_vec())),
+            ]))
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"appendonly", b"no"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"appendonly"]), 0),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"appendonly".to_vec())),
+                RespFrame::BulkString(Some(b"no".to_vec())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn config_set_rejects_immutable_append_paths() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"appendfilename", b"other.aof"]),
+                0
+            ),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'appendfilename') - can't set immutable config"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"appenddirname", b"otherdir"]),
+                0
+            ),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'appenddirname') - can't set immutable config"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn config_set_appendonly_preserves_existing_configured_aof_path() {
+        let mut rt = Runtime::default_strict();
+        rt.set_aof_path(std::path::PathBuf::from("/tmp/fr-preserve/custom.aof"));
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"appendonly", b"no"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"appendonly", b"yes"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"CONFIG",
+                    b"GET",
+                    b"appendonly",
+                    b"appendfilename",
+                    b"appenddirname",
+                ]),
+                0,
+            ),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"appendonly".to_vec())),
+                RespFrame::BulkString(Some(b"yes".to_vec())),
+                RespFrame::BulkString(Some(b"appendfilename".to_vec())),
+                RespFrame::BulkString(Some(b"custom.aof".to_vec())),
+                RespFrame::BulkString(Some(b"appenddirname".to_vec())),
+                RespFrame::BulkString(Some(b"fr-preserve".to_vec())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn config_set_dir_and_dbfilename_update_live_rdb_target() {
+        let base_dir = std::env::temp_dir().join("fr_runtime_config_rdb_target");
+        let new_dir = base_dir.join("snapshots");
+        let expected_path = new_dir.join("custom.rdb");
+
+        let _ = std::fs::create_dir_all(&new_dir);
+
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"CONFIG",
+                    b"SET",
+                    b"dir",
+                    new_dir.to_string_lossy().as_bytes(),
+                    b"dbfilename",
+                    b"custom.rdb",
+                ]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"dir", b"dbfilename"]), 0),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"dir".to_vec())),
+                RespFrame::BulkString(Some(new_dir.to_string_lossy().as_bytes().to_vec(),)),
+                RespFrame::BulkString(Some(b"dbfilename".to_vec())),
+                RespFrame::BulkString(Some(b"custom.rdb".to_vec())),
+            ]))
+        );
+
+        rt.execute_frame(command(&[b"SET", b"persisted", b"value"]), 1);
+        assert_eq!(
+            rt.execute_frame(command(&[b"SAVE"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert!(
+            expected_path.exists(),
+            "SAVE should write to the live CONFIG SET RDB target"
+        );
+
+        let _ = std::fs::remove_file(&expected_path);
+    }
+
+    #[test]
+    fn config_set_dbfilename_rejects_path_values() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"dbfilename", b"nested/custom.rdb"]),
+                0,
+            ),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'dbfilename') - dbfilename can't be a path, just a filename"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"dir", b"dbfilename"]), 0),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"dir".to_vec())),
+                RespFrame::BulkString(Some(b".".to_vec())),
+                RespFrame::BulkString(Some(b"dbfilename".to_vec())),
+                RespFrame::BulkString(Some(b"dump.rdb".to_vec())),
             ]))
         );
     }

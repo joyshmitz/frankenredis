@@ -3001,25 +3001,29 @@ impl Store {
                     let mut removed = 0_u64;
                     if count > 0 {
                         let limit = count as u64;
-                        let mut i = 0;
-                        while i < l.len() && removed < limit {
-                            if l[i].as_slice() == value {
-                                l.remove(i);
+                        l.retain(|v| {
+                            if removed < limit && v.as_slice() == value {
                                 removed += 1;
+                                false
                             } else {
-                                i += 1;
+                                true
                             }
-                        }
+                        });
                     } else if count < 0 {
                         let limit = (-count) as u64;
-                        let mut i = l.len();
-                        while i > 0 && removed < limit {
-                            i -= 1;
-                            if l[i].as_slice() == value {
-                                l.remove(i);
-                                removed += 1;
+                        let total = l.iter().filter(|v| v.as_slice() == value).count() as u64;
+                        let skip = total.saturating_sub(limit);
+                        let mut seen = 0_u64;
+                        l.retain(|v| {
+                            if v.as_slice() == value {
+                                seen += 1;
+                                if seen > skip {
+                                    removed += 1;
+                                    return false;
+                                }
                             }
-                        }
+                            true
+                        });
                     } else {
                         let old_len = l.len();
                         l.retain(|v| v.as_slice() != value);
@@ -4728,10 +4732,18 @@ impl Store {
         match self.entries.get_mut(key) {
             Some(entry) => match &mut entry.value {
                 Value::SortedSet(zs) => {
+                    let lower = match min {
+                        ScoreBound::Inclusive(s) => std::ops::Bound::Included(ScoreMember::min_for_score(s)),
+                        ScoreBound::Exclusive(s) => std::ops::Bound::Excluded(ScoreMember::max_for_score(s)),
+                    };
+                    let upper = match max {
+                        ScoreBound::Inclusive(s) => std::ops::Bound::Included(ScoreMember::max_for_score(s)),
+                        ScoreBound::Exclusive(s) => std::ops::Bound::Excluded(ScoreMember::min_for_score(s)),
+                    };
                     let to_remove: Vec<Vec<u8>> = zs
-                        .iter_asc()
-                        .filter(|&(_, &score)| score_in_range(score, min, max))
-                        .map(|(m, _)| m.clone())
+                        .ordered
+                        .range((lower, upper))
+                        .map(|(sm, _)| sm.member.unwrap_actual().clone())
                         .collect();
                     let removed_count = to_remove.len();
                     for m in &to_remove {
