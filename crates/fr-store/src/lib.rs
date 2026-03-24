@@ -676,6 +676,9 @@ pub struct Store {
     /// Total number of successful mutations since startup.
     pub dirty: u64,
 
+    /// Unix timestamp of the last successful SAVE/BGSAVE observed by this store.
+    pub last_save_time_sec: u64,
+
     /// Current recursion depth of Lua script execution.
     pub script_nesting_level: usize,
 
@@ -757,6 +760,7 @@ impl Default for Store {
             zset_max_listpack_value: 64,
             rng_seed: 0xDEADBEEF_C0FFEE11,
             dirty: 0,
+            last_save_time_sec: 0,
             script_nesting_level: 0,
             expires_count: 0,
             notify_keyspace_events: 0,
@@ -819,6 +823,10 @@ impl Store {
             .wrapping_mul(0x5851_f42d_4c95_7f2d)
             .wrapping_add(1);
         self.rng_seed
+    }
+
+    pub fn mark_saved_at(&mut self, now_ms: u64) {
+        self.last_save_time_sec = now_ms / 1000;
     }
 
     fn list_fits_legacy_listpack_size(&self, list: &VecDeque<Vec<u8>>) -> bool {

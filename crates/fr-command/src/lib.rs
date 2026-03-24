@@ -647,10 +647,10 @@ pub fn dispatch_argv(
         Some(CommandId::Lmpop) => return lmpop(argv, store, now_ms),
         Some(CommandId::Zmpop) => return zmpop(argv, store, now_ms),
         Some(CommandId::Slowlog) => return slowlog_cmd(argv),
-        Some(CommandId::Save) => return save_cmd(argv),
-        Some(CommandId::Bgsave) => return bgsave_cmd(argv),
+        Some(CommandId::Save) => return save_cmd(argv, store, now_ms),
+        Some(CommandId::Bgsave) => return bgsave_cmd(argv, store, now_ms),
         Some(CommandId::Bgrewriteaof) => return bgrewriteaof_cmd(argv),
-        Some(CommandId::Lastsave) => return lastsave_cmd(argv, now_ms),
+        Some(CommandId::Lastsave) => return lastsave_cmd(argv, store),
         Some(CommandId::Swapdb) => return swapdb_cmd(argv),
         Some(CommandId::Blpop) => return blpop(argv, store, now_ms),
         Some(CommandId::Brpop) => return brpop(argv, store, now_ms),
@@ -9828,14 +9828,15 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     }
 }
 
-fn save_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn save_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("SAVE"));
     }
+    store.mark_saved_at(now_ms);
     Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
-fn bgsave_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn bgsave_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     if argv.len() > 2 {
         return Err(CommandError::SyntaxError);
     }
@@ -9846,6 +9847,7 @@ fn bgsave_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             return Err(CommandError::SyntaxError);
         }
     }
+    store.mark_saved_at(now_ms);
     // Optional SCHEDULE argument — accepted but ignored
     Ok(RespFrame::SimpleString(
         "Background saving started".to_string(),
@@ -9861,12 +9863,11 @@ fn bgrewriteaof_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     ))
 }
 
-fn lastsave_cmd(argv: &[Vec<u8>], now_ms: u64) -> Result<RespFrame, CommandError> {
+fn lastsave_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("LASTSAVE"));
     }
-    // Return current time in seconds as a stub (no real save has occurred)
-    Ok(RespFrame::Integer((now_ms / 1000) as i64))
+    Ok(RespFrame::Integer(store.last_save_time_sec as i64))
 }
 
 /// Convert a `PubSubMessage` to the corresponding RESP push frame.
@@ -20570,29 +20571,36 @@ mod tests {
     #[test]
     fn save_returns_ok() {
         let mut store = Store::new();
-        let out = dispatch_argv(&[b"SAVE".to_vec()], &mut store, 0).expect("save");
+        let out = dispatch_argv(&[b"SAVE".to_vec()], &mut store, 42_000).expect("save");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(store.last_save_time_sec, 42);
     }
 
     #[test]
     fn bgsave_returns_ok() {
         let mut store = Store::new();
-        let out = dispatch_argv(&[b"BGSAVE".to_vec()], &mut store, 0).expect("bgsave");
+        let out = dispatch_argv(&[b"BGSAVE".to_vec()], &mut store, 84_000).expect("bgsave");
         assert_eq!(
             out,
             RespFrame::SimpleString("Background saving started".to_string())
         );
+        assert_eq!(store.last_save_time_sec, 84);
     }
 
     #[test]
     fn bgsave_schedule() {
         let mut store = Store::new();
-        let out = dispatch_argv(&[b"BGSAVE".to_vec(), b"SCHEDULE".to_vec()], &mut store, 0)
-            .expect("bgsave schedule");
+        let out = dispatch_argv(
+            &[b"BGSAVE".to_vec(), b"SCHEDULE".to_vec()],
+            &mut store,
+            91_000,
+        )
+        .expect("bgsave schedule");
         assert_eq!(
             out,
             RespFrame::SimpleString("Background saving started".to_string())
         );
+        assert_eq!(store.last_save_time_sec, 91);
     }
 
     #[test]
@@ -20630,9 +20638,19 @@ mod tests {
     #[test]
     fn lastsave_returns_timestamp() {
         let mut store = Store::new();
-        let out =
-            dispatch_argv(&[b"LASTSAVE".to_vec()], &mut store, 1700000000000).expect("lastsave");
-        assert_eq!(out, RespFrame::Integer(1700000000));
+        let initial = dispatch_argv(&[b"LASTSAVE".to_vec()], &mut store, 1_700_000_000_000)
+            .expect("initial lastsave");
+        assert_eq!(initial, RespFrame::Integer(0));
+
+        dispatch_argv(&[b"SAVE".to_vec()], &mut store, 1_700_000_005_000).expect("save");
+        let after_save = dispatch_argv(&[b"LASTSAVE".to_vec()], &mut store, 1_700_000_099_000)
+            .expect("lastsave after save");
+        assert_eq!(after_save, RespFrame::Integer(1_700_000_005));
+
+        dispatch_argv(&[b"BGSAVE".to_vec()], &mut store, 1_700_000_007_000).expect("bgsave");
+        let after_bgsave = dispatch_argv(&[b"LASTSAVE".to_vec()], &mut store, 1_700_000_199_000)
+            .expect("lastsave after bgsave");
+        assert_eq!(after_bgsave, RespFrame::Integer(1_700_000_007));
     }
 
     #[test]

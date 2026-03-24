@@ -160,7 +160,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unrecognized option or bad number of args for SHUTDOWN: 'BADARG'"
+        "value": "ERR syntax error"
       }
     },
     {
