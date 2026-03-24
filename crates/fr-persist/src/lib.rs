@@ -158,7 +158,7 @@ const RDB_OPCODE_EOF: u8 = 0xFF;
 const RDB_TYPE_STRING: u8 = 0;
 const RDB_TYPE_LIST: u8 = 1;
 const RDB_TYPE_SET: u8 = 2;
-const RDB_TYPE_ZSET: u8 = 5;
+const RDB_TYPE_ZSET_2: u8 = 5; // Binary LE double scores (our encoding)
 const RDB_TYPE_HASH: u8 = 4;
 const RDB_CHECKSUM_LEN: usize = 8;
 const CRC64_REDIS_POLY: u64 = 0xAD93_D235_94C9_35A9;
@@ -312,7 +312,7 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
                 }
             }
             RdbValue::SortedSet(members) => {
-                buf.push(RDB_TYPE_ZSET);
+                buf.push(RDB_TYPE_ZSET_2);
                 rdb_encode_string(&mut buf, &entry.key);
                 rdb_encode_length(&mut buf, members.len());
                 for (member, score) in members {
@@ -435,7 +435,7 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
         // This prevents 'leaking' an expiry to the next key if something unexpected happens.
         let is_type_byte = matches!(
             opcode,
-            RDB_TYPE_STRING | RDB_TYPE_LIST | RDB_TYPE_SET | RDB_TYPE_HASH | RDB_TYPE_ZSET
+            RDB_TYPE_STRING | RDB_TYPE_LIST | RDB_TYPE_SET | RDB_TYPE_HASH | RDB_TYPE_ZSET_2
         );
         let is_expiry_opcode = matches!(opcode, RDB_OPCODE_EXPIRETIME_MS | 0xFD);
         let is_eviction_opcode = matches!(opcode, 0xF8 | 0xF9);
@@ -531,7 +531,7 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                 cursor += 1;
             }
             type_byte @ (RDB_TYPE_STRING | RDB_TYPE_LIST | RDB_TYPE_SET | RDB_TYPE_HASH
-            | RDB_TYPE_ZSET) => {
+            | RDB_TYPE_ZSET_2) => {
                 let (key, consumed) =
                     rdb_decode_string(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                 cursor += consumed;
@@ -585,7 +585,7 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                         }
                         RdbValue::Hash(fields)
                     }
-                    RDB_TYPE_ZSET => {
+                    RDB_TYPE_ZSET_2 => {
                         let (count, c) =
                             rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                         cursor += c;

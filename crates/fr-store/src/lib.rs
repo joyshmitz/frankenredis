@@ -4742,12 +4742,20 @@ impl Store {
             Some(entry) => match &mut entry.value {
                 Value::SortedSet(zs) => {
                     let lower = match min {
-                        ScoreBound::Inclusive(s) => std::ops::Bound::Included(ScoreMember::min_for_score(s)),
-                        ScoreBound::Exclusive(s) => std::ops::Bound::Excluded(ScoreMember::max_for_score(s)),
+                        ScoreBound::Inclusive(s) => {
+                            std::ops::Bound::Included(ScoreMember::min_for_score(s))
+                        }
+                        ScoreBound::Exclusive(s) => {
+                            std::ops::Bound::Excluded(ScoreMember::max_for_score(s))
+                        }
                     };
                     let upper = match max {
-                        ScoreBound::Inclusive(s) => std::ops::Bound::Included(ScoreMember::max_for_score(s)),
-                        ScoreBound::Exclusive(s) => std::ops::Bound::Excluded(ScoreMember::min_for_score(s)),
+                        ScoreBound::Inclusive(s) => {
+                            std::ops::Bound::Included(ScoreMember::max_for_score(s))
+                        }
+                        ScoreBound::Exclusive(s) => {
+                            std::ops::Bound::Excluded(ScoreMember::min_for_score(s))
+                        }
                     };
                     let to_remove: Vec<Vec<u8>> = zs
                         .ordered
@@ -4954,6 +4962,11 @@ impl Store {
                 Value::Stream(entries) => {
                     entries.insert(id, fields.to_vec());
                     entry.touch(now_ms);
+                    // Track high watermark so IDs stay monotonic after XDEL
+                    let wm = self.stream_last_ids.entry(key.to_vec()).or_insert((0, 0));
+                    if id > *wm {
+                        *wm = id;
+                    }
                     self.dirty = self.dirty.saturating_add(1);
                     Ok(())
                 }
@@ -4963,7 +4976,8 @@ impl Store {
                 let mut entries = BTreeMap::new();
                 entries.insert(id, fields.to_vec());
                 self.stream_groups.remove(key);
-                self.stream_last_ids.remove(key);
+                // Set high watermark to the first entry's ID
+                self.stream_last_ids.insert(key.to_vec(), id);
                 self.internal_entries_insert(
                     key.to_vec(),
                     Entry::new(Value::Stream(entries), None, now_ms),
@@ -5275,14 +5289,9 @@ impl Store {
                     pending_entry.last_delivered_ms = now_ms;
                 }
             }
-        } else if let StreamGroupReadCursor::Id(_) = cursor {
-            for (id, _) in &records {
-                if let Some(pending_entry) = group_state.pending.get_mut(id) {
-                    pending_entry.deliveries = pending_entry.deliveries.saturating_add(1);
-                    pending_entry.last_delivered_ms = now_ms;
-                }
-            }
         }
+        // Note: when reading pending entries (cursor is Id), Redis does NOT
+        // increment delivery count - it's a non-destructive replay.
 
         Ok(Some(records))
     }
@@ -5442,7 +5451,7 @@ impl Store {
             };
             if !created_by_force {
                 let idle_ms = now_ms.saturating_sub(pending_entry.last_delivered_ms);
-                if idle_ms <= options.min_idle_time_ms {
+                if idle_ms < options.min_idle_time_ms {
                     continue;
                 }
             }
@@ -5533,7 +5542,7 @@ impl Store {
             }
 
             let idle_ms = now_ms.saturating_sub(pending_entry.last_delivered_ms);
-            if idle_ms <= options.min_idle_time_ms {
+            if idle_ms < options.min_idle_time_ms {
                 continue;
             }
 
@@ -6127,7 +6136,7 @@ impl Store {
             // Emit expired keyspace notification (use logical key, not physical)
             let (db, logical_key) = match decode_db_key(key) {
                 Some((db, lk)) => (db, lk),
-                None => (0, &key[..]),
+                None => (0, key),
             };
             self.notify_keyspace_event(NOTIFY_EXPIRED, "expired", logical_key, db);
         }
@@ -7874,14 +7883,19 @@ impl Store {
                         commands.push(argv);
                     }
 
-                    // Emit XSETID to preserve the last-generated-id.
-                    if let Some(&(ms, seq)) = self.stream_last_ids.get(&physical_key) {
-                        let id = format!("{ms}-{seq}");
-                        commands.push(vec![
-                            b"XSETID".to_vec(),
-                            logical_key.clone(),
-                            id.into_bytes(),
-                        ]);
+                    // Emit XSETID only if the high watermark exceeds the max entry
+                    // (e.g., entries were deleted, or XSETID was explicitly called).
+                    if let Some(&watermark) = self.stream_last_ids.get(&physical_key) {
+                        let max_entry_id = entries.keys().last().copied();
+                        if max_entry_id.map_or(true, |max| watermark > max) {
+                            let (ms, seq) = watermark;
+                            let id = format!("{ms}-{seq}");
+                            commands.push(vec![
+                                b"XSETID".to_vec(),
+                                logical_key.clone(),
+                                id.into_bytes(),
+                            ]);
+                        }
                     }
 
                     // Emit XGROUP CREATE for each consumer group.
@@ -10417,7 +10431,8 @@ mod tests {
         assert_eq!(
             all_entries,
             vec![
-                ((1000, 0), b"c1".to_vec(), 10, 2),
+                // Pending replay does not increment delivery count or update idle
+                ((1000, 0), b"c1".to_vec(), 25, 1),
                 ((1000, 1), b"c1".to_vec(), 5, 1),
             ]
         );

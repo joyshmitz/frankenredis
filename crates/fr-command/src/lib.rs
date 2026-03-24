@@ -17329,17 +17329,18 @@ mod tests {
         assert_eq!(
             detail,
             RespFrame::Array(Some(vec![
+                // Pending replay does NOT increment delivery count or update idle time
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"1000-0".to_vec())),
                     RespFrame::BulkString(Some(b"c1".to_vec())),
-                    RespFrame::Integer(20),
-                    RespFrame::Integer(2),
+                    RespFrame::Integer(30), // idle since initial delivery at t=10
+                    RespFrame::Integer(1),  // delivery count stays at 1
                 ])),
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"1000-1".to_vec())),
                     RespFrame::BulkString(Some(b"c1".to_vec())),
-                    RespFrame::Integer(20),
-                    RespFrame::Integer(2),
+                    RespFrame::Integer(30),
+                    RespFrame::Integer(1),
                 ])),
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"1000-2".to_vec())),
@@ -17370,14 +17371,14 @@ mod tests {
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"1000-0".to_vec())),
                     RespFrame::BulkString(Some(b"c1".to_vec())),
-                    RespFrame::Integer(20),
-                    RespFrame::Integer(2),
+                    RespFrame::Integer(30),
+                    RespFrame::Integer(1),
                 ])),
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"1000-1".to_vec())),
                     RespFrame::BulkString(Some(b"c1".to_vec())),
-                    RespFrame::Integer(20),
-                    RespFrame::Integer(2),
+                    RespFrame::Integer(30),
+                    RespFrame::Integer(1),
                 ])),
             ]))
         );
