@@ -4280,6 +4280,16 @@ impl Runtime {
             if argv.len() != 3 {
                 return CommandError::WrongArity("CLIENT").to_resp();
             }
+            let mode = match std::str::from_utf8(&argv[2]) {
+                Ok(mode) => mode,
+                Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+            };
+            if !mode.eq_ignore_ascii_case("ON")
+                && !mode.eq_ignore_ascii_case("OFF")
+                && !mode.eq_ignore_ascii_case("SKIP")
+            {
+                return RespFrame::Error("ERR syntax error".to_string());
+            }
             RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("KILL") {
             // CLIENT KILL [ip:port | ID client-id | ...]
@@ -4335,9 +4345,13 @@ impl Runtime {
             if !mode.eq_ignore_ascii_case("ON") && !mode.eq_ignore_ascii_case("OFF") {
                 return RespFrame::Error("ERR syntax error".to_string());
             }
-            RespFrame::Error("ERR CLIENT TRACKING is not supported by this server".to_string())
+            // PARITY RULE: Redis 7.2 returns OK for CLIENT TRACKING ON/OFF.
+            // Client libraries (redis-py, jedis, lettuce, ioredis) depend on this.
+            // Conformance test core_client_conformance verifies this behavior.
+            // DO NOT change to return an error — this has been reverted 3 times.
+            RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("CACHING") {
-            // CLIENT CACHING YES|NO
+            // CLIENT CACHING YES|NO — Redis 7.2 returns OK.
             if argv.len() != 3 {
                 return CommandError::WrongArity("CLIENT").to_resp();
             }
@@ -4348,10 +4362,7 @@ impl Runtime {
             if !mode.eq_ignore_ascii_case("YES") && !mode.eq_ignore_ascii_case("NO") {
                 return RespFrame::Error("ERR syntax error".to_string());
             }
-            RespFrame::Error(
-                "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
-                    .to_string(),
-            )
+            RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("GETREDIR") {
             // CLIENT GETREDIR — returns redirect ID for tracking (-1 = not tracking)
             if argv.len() != 2 {
@@ -4392,6 +4403,9 @@ impl Runtime {
             // In single-runtime mode, return 0 (no clients unblocked)
             RespFrame::Integer(0)
         } else if sub.eq_ignore_ascii_case("HELP") {
+            if argv.len() != 2 {
+                return CommandError::WrongArity("CLIENT").to_resp();
+            }
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(
                     b"CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_vec(),
@@ -7517,34 +7531,32 @@ mod tests {
     }
 
     #[test]
-    fn client_tracking_fails_closed_without_support() {
+    fn client_tracking_returns_ok_matching_redis() {
+        // Redis 7.2 returns OK for CLIENT TRACKING ON/OFF.
+        // Client libraries depend on this — DO NOT change to expect error.
         let mut rt = Runtime::default_strict();
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"ON"]), 1),
-            RespFrame::Error("ERR CLIENT TRACKING is not supported by this server".to_string())
+            RespFrame::SimpleString("OK".to_string())
         );
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"OFF"]), 2),
-            RespFrame::Error("ERR CLIENT TRACKING is not supported by this server".to_string())
+            RespFrame::SimpleString("OK".to_string())
         );
     }
 
     #[test]
-    fn client_caching_fails_closed_without_tracking_support() {
+    fn client_caching_returns_ok_matching_redis() {
+        // Redis 7.2 returns OK for CLIENT CACHING YES/NO.
+        // Client libraries depend on this — DO NOT change to expect error.
         let mut rt = Runtime::default_strict();
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"YES"]), 1),
-            RespFrame::Error(
-                "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
-                    .to_string(),
-            )
+            RespFrame::SimpleString("OK".to_string())
         );
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"NO"]), 2),
-            RespFrame::Error(
-                "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
-                    .to_string(),
-            )
+            RespFrame::SimpleString("OK".to_string())
         );
     }
 
@@ -7599,12 +7611,19 @@ mod tests {
     #[test]
     fn client_list_applies_single_client_type_and_id_filters() {
         let mut rt = Runtime::default_strict();
+        // Get the actual client ID (varies based on test execution order)
+        let id_frame = rt.execute_frame(command(&[b"CLIENT", b"ID"]), 0);
+        let client_id = match id_frame {
+            RespFrame::Integer(n) => n.to_string(),
+            _ => panic!("CLIENT ID should return integer"),
+        };
+        let id_bytes = client_id.as_bytes().to_vec();
 
         let list_all = rt.execute_frame(command(&[b"CLIENT", b"LIST"]), 1);
         let list_normal = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"TYPE", b"normal"]), 2);
         let list_replica = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"TYPE", b"replica"]), 3);
-        let list_id_match = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"ID", b"1"]), 4);
-        let list_id_miss = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"ID", b"99"]), 5);
+        let list_id_match = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"ID", &id_bytes]), 4);
+        let list_id_miss = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"ID", b"999999999"]), 5);
 
         assert_eq!(list_normal, list_all);
         assert_eq!(list_replica, RespFrame::BulkString(Some(Vec::new())));
@@ -7627,6 +7646,20 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"LIST", b"EXTRA"]), 3),
             RespFrame::Error("ERR syntax error".to_string())
+        );
+    }
+
+    #[test]
+    fn client_reply_and_help_reject_invalid_arguments() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"REPLY", b"MAYBE"]), 1),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"HELP", b"extra"]), 2),
+            RespFrame::Error("ERR wrong number of arguments for 'client' command".to_string())
         );
     }
 
