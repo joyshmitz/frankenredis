@@ -2001,7 +2001,7 @@ fn ttl(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
     let value = match store.pttl(&argv[1], now_ms) {
         PttlValue::KeyMissing => -2,
         PttlValue::NoExpiry => -1,
-        PttlValue::Remaining(ms) => ms.saturating_add(500) / 1000,
+        PttlValue::Remaining(ms) => ms / 1000,
     };
     Ok(RespFrame::Integer(value))
 }
@@ -2626,10 +2626,11 @@ fn geo_hash_string_from_score(score: f64) -> Option<Vec<u8>> {
 
     let mut buf = [0_u8; 11];
     for (i, slot) in buf.iter_mut().enumerate() {
-        let idx = if i == 10 {
-            0
+        let shift = 52_i32 - ((i as i32 + 1) * 5);
+        let idx = if shift >= 0 {
+            ((bits >> shift as u32) & 0x1f) as usize
         } else {
-            ((bits >> (52 - ((i + 1) * 5))) & 0x1f) as usize
+            ((bits << (-shift) as u32) & 0x1f) as usize
         };
         *slot = GEO_BASE32_ALPHABET[idx];
     }
@@ -2786,7 +2787,7 @@ fn zrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
                 return Err(CommandError::SyntaxError);
             }
             limit_offset = Some(parse_u64_arg(&argv[i + 1])? as usize);
-            limit_count = Some(parse_u64_arg(&argv[i + 2])? as usize);
+            limit_count = parse_limit_count_arg(&argv[i + 2])?;
             i += 3;
         } else {
             return Err(CommandError::SyntaxError);
@@ -2810,8 +2811,12 @@ fn zrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         if rev {
             pairs.reverse();
         }
-        if let (Some(offset), Some(count)) = (limit_offset, limit_count) {
-            pairs = pairs.into_iter().skip(offset).take(count).collect();
+        if let Some(offset) = limit_offset {
+            if let Some(count) = limit_count {
+                pairs = pairs.into_iter().skip(offset).take(count).collect();
+            } else {
+                pairs = pairs.into_iter().skip(offset).collect();
+            }
         }
         zrange_emit(pairs, withscores)
     } else if bylex {
@@ -2826,8 +2831,12 @@ fn zrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         if rev {
             members.reverse();
         }
-        if let (Some(offset), Some(count)) = (limit_offset, limit_count) {
-            members = members.into_iter().skip(offset).take(count).collect();
+        if let Some(offset) = limit_offset {
+            if let Some(count) = limit_count {
+                members = members.into_iter().skip(offset).take(count).collect();
+            } else {
+                members = members.into_iter().skip(offset).collect();
+            }
         }
         if withscores {
             // For lex ranges, get scores individually
@@ -2935,7 +2944,7 @@ fn parse_zrangebyscore_opts(
                 return Err(CommandError::SyntaxError);
             }
             limit_offset = Some(parse_u64_arg(&argv[i + 1])? as usize);
-            limit_count = Some(parse_u64_arg(&argv[i + 2])? as usize);
+            limit_count = parse_limit_count_arg(&argv[i + 2])?;
             i += 3;
         } else {
             return Err(CommandError::SyntaxError);
@@ -2957,8 +2966,12 @@ fn zrangebyscore(
     let max = parse_score_bound(&argv[3])?;
     let (withscores, limit_offset, limit_count) = parse_zrangebyscore_opts(argv, 4)?;
     let mut pairs = store.zrangebyscore_withscores(&argv[1], min, max, now_ms)?;
-    if let (Some(offset), Some(count)) = (limit_offset, limit_count) {
-        pairs = pairs.into_iter().skip(offset).take(count).collect();
+    if let Some(offset) = limit_offset {
+        if let Some(count) = limit_count {
+            pairs = pairs.into_iter().skip(offset).take(count).collect();
+        } else {
+            pairs = pairs.into_iter().skip(offset).collect();
+        }
     }
     zrange_emit(pairs, withscores)
 }
@@ -5506,7 +5519,7 @@ fn zrangestore_cmd(
                 return Err(CommandError::SyntaxError);
             }
             limit_offset = Some(parse_u64_arg(&argv[i + 1])? as usize);
-            limit_count = Some(parse_u64_arg(&argv[i + 2])? as usize);
+            limit_count = parse_limit_count_arg(&argv[i + 2])?;
             i += 3;
         } else {
             return Err(CommandError::SyntaxError);
@@ -5557,8 +5570,12 @@ fn zrangestore_cmd(
     };
 
     // Apply LIMIT
-    let pairs = if let (Some(offset), Some(count)) = (limit_offset, limit_count) {
-        pairs.into_iter().skip(offset).take(count).collect()
+    let pairs = if let Some(offset) = limit_offset {
+        if let Some(count) = limit_count {
+            pairs.into_iter().skip(offset).take(count).collect()
+        } else {
+            pairs.into_iter().skip(offset).collect()
+        }
     } else {
         pairs
     };
@@ -6572,8 +6589,12 @@ fn zrevrangebyscore(
     let (withscores, limit_offset, limit_count) = parse_zrangebyscore_opts(argv, 4)?;
     let mut pairs = store.zrangebyscore_withscores(&argv[1], min, max, now_ms)?;
     pairs.reverse();
-    if let (Some(offset), Some(count)) = (limit_offset, limit_count) {
-        pairs = pairs.into_iter().skip(offset).take(count).collect();
+    if let Some(offset) = limit_offset {
+        if let Some(count) = limit_count {
+            pairs = pairs.into_iter().skip(offset).take(count).collect();
+        } else {
+            pairs = pairs.into_iter().skip(offset).collect();
+        }
     }
     zrange_emit(pairs, withscores)
 }
@@ -6589,8 +6610,12 @@ fn zrangebylex(
     }
     let (_, limit_offset, limit_count) = parse_zrangebyscore_opts(argv, 4)?;
     let mut members = store.zrangebylex(&argv[1], &argv[2], &argv[3], now_ms)?;
-    if let (Some(offset), Some(count)) = (limit_offset, limit_count) {
-        members = members.into_iter().skip(offset).take(count).collect();
+    if let Some(offset) = limit_offset {
+        if let Some(count) = limit_count {
+            members = members.into_iter().skip(offset).take(count).collect();
+        } else {
+            members = members.into_iter().skip(offset).collect();
+        }
     }
     let frames = members
         .into_iter()
@@ -6610,8 +6635,12 @@ fn zrevrangebylex(
     }
     let (_, limit_offset, limit_count) = parse_zrangebyscore_opts(argv, 4)?;
     let mut members = store.zrevrangebylex(&argv[1], &argv[2], &argv[3], now_ms)?;
-    if let (Some(offset), Some(count)) = (limit_offset, limit_count) {
-        members = members.into_iter().skip(offset).take(count).collect();
+    if let Some(offset) = limit_offset {
+        if let Some(count) = limit_count {
+            members = members.into_iter().skip(offset).take(count).collect();
+        } else {
+            members = members.into_iter().skip(offset).collect();
+        }
     }
     let frames = members
         .into_iter()
@@ -7251,6 +7280,18 @@ fn parse_u64_arg(arg: &[u8]) -> Result<u64, CommandError> {
     let text = std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
     text.parse::<u64>()
         .map_err(|_| CommandError::InvalidInteger)
+}
+
+/// Parse a LIMIT count that can be negative (Redis uses -1 to mean "unlimited").
+/// Returns None for negative values, Some(n) for non-negative.
+fn parse_limit_count_arg(arg: &[u8]) -> Result<Option<usize>, CommandError> {
+    let text = std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
+    let val: i64 = text.parse().map_err(|_| CommandError::InvalidInteger)?;
+    if val < 0 {
+        Ok(None)
+    } else {
+        Ok(Some(val as usize))
+    }
 }
 
 fn parse_expire_options(extra_args: &[Vec<u8>]) -> Result<ExpireOptions, CommandError> {
@@ -10994,7 +11035,7 @@ fn bitfield_sign_extend(value: i64, bits: u8) -> i64 {
     }
     let mask = 1i64 << (bits - 1);
     if value & mask != 0 {
-        value | (i64::MAX << bits << 1) // sign extend
+        value | !((1i64 << bits) - 1) // sign extend: set all bits above width
     } else {
         value & ((1i64 << bits) - 1) // mask to width
     }
@@ -15286,7 +15327,7 @@ mod tests {
         assert_eq!(
             hashes,
             RespFrame::Array(Some(vec![
-                RespFrame::BulkString(Some(b"sqc8b49rny0".to_vec())),
+                RespFrame::BulkString(Some(b"sqc8b49rnys".to_vec())),
                 RespFrame::BulkString(Some(b"sqdtr74hyu0".to_vec())),
                 RespFrame::BulkString(None),
             ]))

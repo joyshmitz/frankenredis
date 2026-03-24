@@ -1756,6 +1756,9 @@ fn deliver_monitor_output(
         let Some(conn) = clients.get_mut(&token) else {
             continue;
         };
+        if conn.closing {
+            continue; // don't buffer output for dying connections
+        }
         conn.write_buf.extend_from_slice(&line);
         write_tokens.insert(token);
         let _ = poll.registry().reregister(
@@ -1791,6 +1794,10 @@ fn deliver_pubsub_messages(
         let Some(conn) = clients.get_mut(&token) else {
             continue;
         };
+
+        if conn.closing {
+            continue; // don't buffer messages for dying connections
+        }
 
         for msg in msgs {
             let frame = pubsub_message_to_frame(msg);

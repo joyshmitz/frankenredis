@@ -1793,7 +1793,7 @@
       ],
       "expect": {
         "kind": "integer",
-        "value": 6
+        "value": 5
       }
     },
     {

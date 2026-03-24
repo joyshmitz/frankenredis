@@ -896,7 +896,7 @@ pub struct ServerState {
     /// Server hz (timer interrupt frequency).
     hz: u64,
     /// Slow log: ring buffer of slow queries.
-    slowlog: Vec<SlowlogEntry>,
+    slowlog: std::collections::VecDeque<SlowlogEntry>,
     /// Slow log entry ID counter.
     slowlog_next_id: u64,
     /// Slow log threshold in microseconds (slowlog-log-slower-than config).
@@ -967,7 +967,7 @@ impl Default for ServerState {
             active_expire_budget: ActiveExpireCycleBudget::default(),
             last_active_expire_cycle: None,
             hz: 10,
-            slowlog: Vec::new(),
+            slowlog: std::collections::VecDeque::new(),
             slowlog_next_id: 0,
             slowlog_log_slower_than_us: 10_000,
             slowlog_max_len: 128,
@@ -1138,9 +1138,9 @@ impl ServerState {
             argv: argv.to_vec(),
         };
         self.slowlog_next_id += 1;
-        self.slowlog.push(entry);
+        self.slowlog.push_back(entry);
         while self.slowlog.len() > self.slowlog_max_len {
-            self.slowlog.remove(0);
+            self.slowlog.pop_front();
         }
     }
 
@@ -4149,7 +4149,7 @@ impl Runtime {
             self.server.slowlog_max_len = max_len;
             // Trim existing entries if the new max is smaller.
             while self.server.slowlog.len() > self.server.slowlog_max_len {
-                self.server.slowlog.remove(0);
+                self.server.slowlog.pop_front();
             }
         }
         if let Some(hz) = next_hz {
@@ -5034,7 +5034,13 @@ impl Runtime {
             if argv.len() != 2 {
                 return CommandError::SyntaxError.to_resp();
             }
-            return RespFrame::Integer(self.server.pubsub_pattern_subs.len() as i64);
+            return RespFrame::Integer(
+                self.server
+                    .pubsub_pattern_subs
+                    .values()
+                    .map(|clients| clients.len())
+                    .sum::<usize>() as i64,
+            );
         }
 
         if sub.eq_ignore_ascii_case("SHARDCHANNELS") {
