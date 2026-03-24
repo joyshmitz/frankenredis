@@ -9762,40 +9762,50 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             let opt =
                 std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if !opt.eq_ignore_ascii_case("SAMPLES") {
-                return Ok(RespFrame::Error(format!("ERR unknown option '{opt}'")));
+                return Err(CommandError::SyntaxError);
             }
             if argv.len() != 5 {
-                return Ok(RespFrame::Error(
-                    "ERR value is not an integer or out of range".to_string(),
-                ));
+                return Err(CommandError::SyntaxError);
             }
             // Parse the samples count to validate it, but we ignore it
-            let _samples: i64 = parse_i64_arg(&argv[4])?;
+            let samples = parse_i64_arg(&argv[4])?;
+            if samples < 0 {
+                return Err(CommandError::SyntaxError);
+            }
         }
         match store.memory_usage_for_key(&argv[2], now_ms) {
             Some(bytes) => Ok(RespFrame::Integer(bytes as i64)),
             None => Ok(RespFrame::BulkString(None)),
         }
     } else if sub.eq_ignore_ascii_case("DOCTOR") {
+        if argv.len() != 2 {
+            return Err(CommandError::SyntaxError);
+        }
         Ok(RespFrame::BulkString(Some(
             b"Sam, I have no memory problems".to_vec(),
         )))
     } else if sub.eq_ignore_ascii_case("MALLOC-STATS") {
+        if argv.len() != 2 {
+            return Err(CommandError::SyntaxError);
+        }
         Ok(RespFrame::BulkString(Some(
             b"Memory allocator stats not available".to_vec(),
         )))
     } else if sub.eq_ignore_ascii_case("PURGE") {
+        if argv.len() != 2 {
+            return Err(CommandError::SyntaxError);
+        }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("STATS") {
+        if argv.len() != 2 {
+            return Err(CommandError::SyntaxError);
+        }
         Ok(RespFrame::BulkString(Some(
             b"peak.allocated:0\r\ntotal.allocated:0\r\nstartup.allocated:0\r\nreplication.backlog:0\r\nclients.slaves:0\r\nclients.normal:0\r\naof.buffer:0\r\n".to_vec(),
         )))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "MEMORY",
-                subcommand: "HELP".to_string(),
-            });
+            return Err(CommandError::SyntaxError);
         }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
@@ -10064,6 +10074,9 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     }
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("CHANNELS") {
+        if argv.len() != 2 && argv.len() != 3 {
+            return Err(CommandError::SyntaxError);
+        }
         let channels = store.pubsub_channels();
         // Optionally filter by glob pattern
         let filtered: Vec<RespFrame> = if argv.len() >= 3 {
@@ -10088,8 +10101,14 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         }
         Ok(RespFrame::Array(Some(result)))
     } else if sub.eq_ignore_ascii_case("NUMPAT") {
+        if argv.len() != 2 {
+            return Err(CommandError::SyntaxError);
+        }
         Ok(RespFrame::Integer(store.pubsub_numpat() as i64))
     } else if sub.eq_ignore_ascii_case("SHARDCHANNELS") {
+        if argv.len() != 2 && argv.len() != 3 {
+            return Err(CommandError::SyntaxError);
+        }
         let mut channels: Vec<Vec<u8>> = store.subscribed_shard_channels.iter().cloned().collect();
         if argv.len() > 2 {
             let pattern = &argv[2];
@@ -10111,32 +10130,31 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::Array(Some(result)))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "PUBSUB",
-                subcommand: "HELP".to_string(),
-            });
+            return Err(CommandError::SyntaxError);
         }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
                 b"PUBSUB <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
             )),
             RespFrame::BulkString(Some(
-                b"CHANNELS [<pattern>] - Return channels with active subscribers matching pattern."
+                b"CHANNELS [<pattern>] - Return the currently active channels matching a <pattern> (default: '*')."
                     .to_vec(),
             )),
             RespFrame::BulkString(Some(
-                b"NUMSUB [<channel> ...] - Return subscriber counts for channels.".to_vec(),
+                b"NUMPAT - Return number of subscriptions to patterns.".to_vec(),
             )),
             RespFrame::BulkString(Some(
-                b"NUMPAT - Return number of pattern subscriptions.".to_vec(),
+                b"NUMSUB [<channel> ...] - Return the number of subscribers for the specified channels, excluding pattern subscriptions(default: no channels).".to_vec(),
             )),
-            RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
+            RespFrame::BulkString(Some(
+                b"SHARDCHANNELS [<pattern>] - Return the currently active shard level channels matching a <pattern> (default: '*').".to_vec(),
+            )),
+            RespFrame::BulkString(Some(
+                b"SHARDNUMSUB [<shardchannel> ...] - Return the number of subscribers for the specified shard level channel(s)".to_vec(),
+            )),
         ])))
     } else {
-        Err(CommandError::UnknownSubcommand {
-            command: "PUBSUB",
-            subcommand: sub.to_string(),
-        })
+        Err(CommandError::SyntaxError)
     }
 }
 
@@ -20569,6 +20587,47 @@ mod tests {
     }
 
     #[test]
+    fn memory_subcommands_reject_invalid_syntax() {
+        let mut store = Store::new();
+        store.set(b"k".to_vec(), b"v".to_vec(), None, 0);
+
+        for argv in [
+            vec![b"MEMORY".to_vec(), b"DOCTOR".to_vec(), b"extra".to_vec()],
+            vec![
+                b"MEMORY".to_vec(),
+                b"MALLOC-STATS".to_vec(),
+                b"extra".to_vec(),
+            ],
+            vec![b"MEMORY".to_vec(), b"PURGE".to_vec(), b"extra".to_vec()],
+            vec![b"MEMORY".to_vec(), b"STATS".to_vec(), b"extra".to_vec()],
+            vec![b"MEMORY".to_vec(), b"HELP".to_vec(), b"extra".to_vec()],
+            vec![
+                b"MEMORY".to_vec(),
+                b"USAGE".to_vec(),
+                b"k".to_vec(),
+                b"SAMPLES".to_vec(),
+                b"-1".to_vec(),
+            ],
+            vec![
+                b"MEMORY".to_vec(),
+                b"USAGE".to_vec(),
+                b"k".to_vec(),
+                b"BADOPT".to_vec(),
+                b"1".to_vec(),
+            ],
+            vec![
+                b"MEMORY".to_vec(),
+                b"USAGE".to_vec(),
+                b"k".to_vec(),
+                b"SAMPLES".to_vec(),
+            ],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("memory syntax error");
+            assert_eq!(err, CommandError::SyntaxError, "argv={argv:?}");
+        }
+    }
+
+    #[test]
     fn save_returns_ok() {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"SAVE".to_vec()], &mut store, 42_000).expect("save");
@@ -21368,6 +21427,55 @@ mod tests {
                 RespFrame::BulkString(Some(b"ch2".to_vec())),
                 RespFrame::Integer(0),
             ]))
+        );
+    }
+
+    #[test]
+    fn pubsub_help_and_arity_match_redis_syntax() {
+        let mut store = Store::new();
+        let help = dispatch_argv(&[b"PUBSUB".to_vec(), b"HELP".to_vec()], &mut store, 0)
+            .expect("pubsub help");
+        let RespFrame::Array(Some(lines)) = help else {
+            panic!("expected pubsub help array");
+        };
+        assert!(lines.len() >= 6);
+
+        let err = dispatch_argv(
+            &[b"PUBSUB".to_vec(), b"HELP".to_vec(), b"extra".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("pubsub help extra should fail");
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+
+        let err = dispatch_argv(
+            &[
+                b"PUBSUB".to_vec(),
+                b"CHANNELS".to_vec(),
+                b"a*".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("pubsub channels extra should fail");
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+
+        let err = dispatch_argv(
+            &[b"PUBSUB".to_vec(), b"NUMPAT".to_vec(), b"extra".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("pubsub numpat extra should fail");
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error("ERR syntax error".to_string())
         );
     }
 

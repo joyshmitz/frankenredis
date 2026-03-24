@@ -387,6 +387,7 @@ enum RuntimeSpecialCommand {
     Lastsave,
     Bgrewriteaof,
     Shutdown,
+    Pubsub,
     Subscribe,
     Unsubscribe,
     Psubscribe,
@@ -459,6 +460,8 @@ fn classify_runtime_special_command(cmd: &[u8]) -> Option<RuntimeSpecialCommand>
                 Some(RuntimeSpecialCommand::Config)
             } else if eq_ascii_token(cmd, b"CLIENT") {
                 Some(RuntimeSpecialCommand::Client)
+            } else if eq_ascii_token(cmd, b"PUBSUB") {
+                Some(RuntimeSpecialCommand::Pubsub)
             } else if eq_ascii_token(cmd, b"BGSAVE") {
                 Some(RuntimeSpecialCommand::Bgsave)
             } else if eq_ascii_token(cmd, b"SELECT") {
@@ -2318,6 +2321,9 @@ impl Runtime {
             }
             Some(RuntimeSpecialCommand::Shutdown) => {
                 return self.handle_shutdown_command(&argv);
+            }
+            Some(RuntimeSpecialCommand::Pubsub) => {
+                return self.handle_pubsub_command(&argv);
             }
             Some(RuntimeSpecialCommand::Subscribe) => {
                 return self.handle_subscribe_command(&argv);
@@ -4810,6 +4816,115 @@ impl Runtime {
         RespFrame::Integer(receivers as i64)
     }
 
+    fn handle_pubsub_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() < 2 {
+            return CommandError::WrongArity("PUBSUB").to_resp();
+        }
+        let sub = match std::str::from_utf8(&argv[1]) {
+            Ok(sub) => sub,
+            Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+        };
+
+        if sub.eq_ignore_ascii_case("HELP") {
+            if argv.len() != 2 {
+                return CommandError::SyntaxError.to_resp();
+            }
+            return RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(
+                    b"PUBSUB <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
+                )),
+                RespFrame::BulkString(Some(
+                    b"CHANNELS [<pattern>] - Return the currently active channels matching a <pattern> (default: '*').".to_vec(),
+                )),
+                RespFrame::BulkString(Some(
+                    b"NUMPAT - Return number of subscriptions to patterns.".to_vec(),
+                )),
+                RespFrame::BulkString(Some(
+                    b"NUMSUB [<channel> ...] - Return the number of subscribers for the specified channels, excluding pattern subscriptions(default: no channels).".to_vec(),
+                )),
+                RespFrame::BulkString(Some(
+                    b"SHARDCHANNELS [<pattern>] - Return the currently active shard level channels matching a <pattern> (default: '*').".to_vec(),
+                )),
+                RespFrame::BulkString(Some(
+                    b"SHARDNUMSUB [<shardchannel> ...] - Return the number of subscribers for the specified shard level channel(s)".to_vec(),
+                )),
+            ]));
+        }
+
+        if sub.eq_ignore_ascii_case("CHANNELS") {
+            if argv.len() != 2 && argv.len() != 3 {
+                return CommandError::SyntaxError.to_resp();
+            }
+            let mut channels: Vec<Vec<u8>> =
+                self.server.pubsub_channel_subs.keys().cloned().collect();
+            if let Some(pattern) = argv.get(2) {
+                channels.retain(|channel| fr_store::glob_match(pattern, channel));
+            }
+            channels.sort();
+            return RespFrame::Array(Some(
+                channels
+                    .into_iter()
+                    .map(|channel| RespFrame::BulkString(Some(channel)))
+                    .collect(),
+            ));
+        }
+
+        if sub.eq_ignore_ascii_case("NUMSUB") {
+            let mut result = Vec::with_capacity(argv.len().saturating_sub(2) * 2);
+            for channel in &argv[2..] {
+                result.push(RespFrame::BulkString(Some(channel.clone())));
+                result.push(RespFrame::Integer(
+                    self.server
+                        .pubsub_channel_subs
+                        .get(channel)
+                        .map_or(0, HashSet::len) as i64,
+                ));
+            }
+            return RespFrame::Array(Some(result));
+        }
+
+        if sub.eq_ignore_ascii_case("NUMPAT") {
+            if argv.len() != 2 {
+                return CommandError::SyntaxError.to_resp();
+            }
+            return RespFrame::Integer(self.server.pubsub_pattern_subs.len() as i64);
+        }
+
+        if sub.eq_ignore_ascii_case("SHARDCHANNELS") {
+            if argv.len() != 2 && argv.len() != 3 {
+                return CommandError::SyntaxError.to_resp();
+            }
+            let mut channels: Vec<Vec<u8>> =
+                self.server.pubsub_shard_subs.keys().cloned().collect();
+            if let Some(pattern) = argv.get(2) {
+                channels.retain(|channel| fr_store::glob_match(pattern, channel));
+            }
+            channels.sort();
+            return RespFrame::Array(Some(
+                channels
+                    .into_iter()
+                    .map(|channel| RespFrame::BulkString(Some(channel)))
+                    .collect(),
+            ));
+        }
+
+        if sub.eq_ignore_ascii_case("SHARDNUMSUB") {
+            let mut result = Vec::with_capacity(argv.len().saturating_sub(2) * 2);
+            for channel in &argv[2..] {
+                result.push(RespFrame::BulkString(Some(channel.clone())));
+                result.push(RespFrame::Integer(
+                    self.server
+                        .pubsub_shard_subs
+                        .get(channel)
+                        .map_or(0, HashSet::len) as i64,
+                ));
+            }
+            return RespFrame::Array(Some(result));
+        }
+
+        CommandError::SyntaxError.to_resp()
+    }
+
     fn handle_ssubscribe_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() < 2 {
             return CommandError::WrongArity("SSUBSCRIBE").to_resp();
@@ -6920,6 +7035,128 @@ mod tests {
             reply.to_bytes(),
             b"*3\r\n$9\r\nsubscribe\r\n$5\r\nalpha\r\n:1\r\n*3\r\n$9\r\nsubscribe\r\n$4\r\nbeta\r\n:2\r\n"
                 .to_vec()
+        );
+    }
+
+    #[test]
+    fn live_pubsub_introspection_uses_runtime_subscription_state() {
+        let mut rt = Runtime::default_strict();
+        let first_client = rt.new_session();
+        let second_client = rt.new_session();
+
+        let previous = rt.swap_session(first_client);
+        assert_eq!(
+            rt.execute_frame(command(&[b"SUBSCRIBE", b"alpha", b"beta"]), 0),
+            RespFrame::Sequence(vec![
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                    RespFrame::BulkString(Some(b"alpha".to_vec())),
+                    RespFrame::Integer(1),
+                ])),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                    RespFrame::BulkString(Some(b"beta".to_vec())),
+                    RespFrame::Integer(2),
+                ])),
+            ])
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PSUBSCRIBE", b"a*"]), 1),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"psubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"a*".to_vec())),
+                RespFrame::Integer(3),
+            ]))
+        );
+
+        let first_client = rt.swap_session(second_client);
+        assert_eq!(
+            rt.execute_frame(command(&[b"SUBSCRIBE", b"alpha"]), 2),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                RespFrame::BulkString(Some(b"alpha".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SSUBSCRIBE", b"shard-1"]), 3),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"ssubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"shard-1".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+
+        let second_client = rt.swap_session(first_client);
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"CHANNELS"]), 4),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"alpha".to_vec())),
+                RespFrame::BulkString(Some(b"beta".to_vec())),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"CHANNELS", b"a*"]), 5),
+            RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"alpha".to_vec()))]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"NUMSUB", b"alpha", b"beta"]), 6),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"alpha".to_vec())),
+                RespFrame::Integer(2),
+                RespFrame::BulkString(Some(b"beta".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"NUMPAT"]), 7),
+            RespFrame::Integer(1)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"SHARDCHANNELS"]), 8),
+            RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"shard-1".to_vec()))]))
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"PUBSUB", b"SHARDNUMSUB", b"shard-1", b"shard-2"]),
+                9
+            ),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"shard-1".to_vec())),
+                RespFrame::Integer(1),
+                RespFrame::BulkString(Some(b"shard-2".to_vec())),
+                RespFrame::Integer(0),
+            ]))
+        );
+
+        let _ = rt.swap_session(second_client);
+        let _ = rt.swap_session(previous);
+    }
+
+    #[test]
+    fn live_pubsub_help_and_arity_follow_redis_syntax() {
+        let mut rt = Runtime::default_strict();
+        let help = rt.execute_frame(command(&[b"PUBSUB", b"HELP"]), 0);
+        let RespFrame::Array(Some(lines)) = help else {
+            panic!("expected pubsub help array");
+        };
+        assert!(lines.len() >= 6);
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"HELP", b"extra"]), 1),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"CHANNELS", b"a*", b"extra"]), 2),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"NUMPAT", b"extra"]), 3),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBSUB", b"BOGUS"]), 4),
+            RespFrame::Error("ERR syntax error".to_string())
         );
     }
 
