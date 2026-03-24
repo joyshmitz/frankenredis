@@ -3782,8 +3782,14 @@ impl Runtime {
                 .aof_config_path
                 .as_ref()
                 .and_then(|path| path.parent())
-                .map(|path| path.to_string_lossy().into_owned())
-                .filter(|path| !path.is_empty())
+                .and_then(|path| {
+                    if path.as_os_str().is_empty() {
+                        None
+                    } else {
+                        path.file_name()
+                    }
+                })
+                .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "appendonlydir".to_string());
             entries.push(RespFrame::BulkString(Some(dirname.into_bytes())));
         }
@@ -3897,7 +3903,6 @@ impl Runtime {
         let mut next_hz: Option<u64> = None;
         let mut next_appendonly: Option<bool> = None;
         let mut next_keyspace_events: Option<u32> = None;
-        let mut next_list_max_listpack_size: Option<i64> = None;
         let mut next_rdb_path = self
             .server
             .rdb_path
@@ -4087,7 +4092,7 @@ impl Runtime {
                         ));
                     }
                 };
-                next_list_max_listpack_size = Some(parsed);
+                self.server.store.list_max_listpack_size = parsed;
                 continue;
             }
             // Encoding threshold parameters — update Store fields for live effect.
@@ -4188,9 +4193,6 @@ impl Runtime {
         }
         if let Some(flags) = next_keyspace_events {
             self.server.store.notify_keyspace_events = flags;
-        }
-        if let Some(size) = next_list_max_listpack_size {
-            self.server.store.list_max_listpack_size = size;
         }
         if rdb_path_changed {
             self.server.rdb_path = Some(next_rdb_path);
@@ -9492,7 +9494,7 @@ mod tests {
                 RespFrame::BulkString(Some(b"appendfilename".to_vec())),
                 RespFrame::BulkString(Some(b"custom.aof".to_vec())),
                 RespFrame::BulkString(Some(b"appenddirname".to_vec())),
-                RespFrame::BulkString(Some(b".".to_vec())),
+                RespFrame::BulkString(Some(b"appendonlydir".to_vec())),
             ]))
         );
     }
