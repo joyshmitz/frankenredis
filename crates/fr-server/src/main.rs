@@ -507,7 +507,7 @@ fn main() -> ExitCode {
                 );
             }
             eprintln!("info: shutdown requested, exiting gracefully");
-            break;
+            return ExitCode::SUCCESS;
         }
     }
 }

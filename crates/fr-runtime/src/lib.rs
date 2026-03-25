@@ -1295,7 +1295,7 @@ impl ClientSession {
 #[derive(Debug)]
 pub struct Runtime {
     policy: RuntimePolicy,
-    server: ServerState,
+    pub server: ServerState,
     session: ClientSession,
 }
 
@@ -4004,9 +4004,15 @@ impl Runtime {
         let mut next_slowlog_max_len: Option<usize> = None;
         let mut next_hz: Option<u64> = None;
         let mut next_maxclients: Option<usize> = None;
+        let mut next_repl_backlog_size: Option<u64> = None;
+        let mut next_repl_timeout: Option<u64> = None;
+        let mut next_query_buffer_limit: Option<usize> = None;
+        let mut next_proto_max_bulk_len: Option<usize> = None;
+        let mut next_maxmemory_samples: Option<usize> = None;
         let mut next_command_time_budget: Option<u64> = None;
         let mut next_appendonly: Option<bool> = None;
         let mut next_keyspace_events: Option<u32> = None;
+        let mut next_list_max_listpack_size: Option<i64> = None;
         let mut next_rdb_path = self
             .server
             .rdb_path
@@ -4130,8 +4136,7 @@ impl Runtime {
                     }
                     Err(err) => return err.to_resp(),
                 };
-                self.server.repl_backlog_size = parsed;
-                self.server.store.server_repl_backlog_size = parsed;
+                next_repl_backlog_size = Some(parsed);
                 static_override_updates.push(("repl-backlog-size".to_string(), parsed.to_string()));
                 continue;
             }
@@ -4145,7 +4150,7 @@ impl Runtime {
                     }
                     Err(err) => return err.to_resp(),
                 };
-                self.server.repl_timeout_sec = parsed;
+                next_repl_timeout = Some(parsed);
                 static_override_updates.push(("repl-timeout".to_string(), parsed.to_string()));
                 continue;
             }
@@ -4160,7 +4165,7 @@ impl Runtime {
                     }
                     Err(err) => return err.to_resp(),
                 };
-                self.server.query_buffer_limit = parsed;
+                next_query_buffer_limit = Some(parsed);
                 static_override_updates
                     .push(("client-query-buffer-limit".to_string(), parsed.to_string()));
                 continue;
@@ -4175,7 +4180,7 @@ impl Runtime {
                     }
                     Err(err) => return err.to_resp(),
                 };
-                self.server.proto_max_bulk_len = parsed;
+                next_proto_max_bulk_len = Some(parsed);
                 static_override_updates
                     .push(("proto-max-bulk-len".to_string(), parsed.to_string()));
                 continue;
@@ -4190,7 +4195,7 @@ impl Runtime {
                     }
                     Err(err) => return err.to_resp(),
                 };
-                self.server.maxmemory_eviction_sample_limit = parsed;
+                next_maxmemory_samples = Some(parsed);
                 static_override_updates.push(("maxmemory-samples".to_string(), parsed.to_string()));
                 continue;
             }
@@ -4320,7 +4325,7 @@ impl Runtime {
                         ));
                     }
                 };
-                self.server.store.list_max_listpack_size = parsed;
+                next_list_max_listpack_size = Some(parsed);
                 continue;
             }
             // Encoding threshold parameters — update Store fields for live effect.
@@ -4424,6 +4429,22 @@ impl Runtime {
             self.server.max_clients = mc;
             self.server.store.server_maxclients = mc as u64;
         }
+        if let Some(backlog_size) = next_repl_backlog_size {
+            self.server.repl_backlog_size = backlog_size;
+            self.server.store.server_repl_backlog_size = backlog_size;
+        }
+        if let Some(repl_timeout) = next_repl_timeout {
+            self.server.repl_timeout_sec = repl_timeout;
+        }
+        if let Some(query_buffer_limit) = next_query_buffer_limit {
+            self.server.query_buffer_limit = query_buffer_limit;
+        }
+        if let Some(proto_max_bulk_len) = next_proto_max_bulk_len {
+            self.server.proto_max_bulk_len = proto_max_bulk_len;
+        }
+        if let Some(maxmemory_samples) = next_maxmemory_samples {
+            self.server.maxmemory_eviction_sample_limit = maxmemory_samples;
+        }
         if let Some(budget) = next_command_time_budget {
             self.server.command_time_budget_ms = budget;
         }
@@ -4443,6 +4464,9 @@ impl Runtime {
             } else {
                 self.server.aof_path = None;
             }
+        }
+        if let Some(list_max_listpack_size) = next_list_max_listpack_size {
+            self.server.store.list_max_listpack_size = list_max_listpack_size;
         }
         // Apply encoding threshold updates to Store and CONFIG GET state.
         for (param, value) in encoding_threshold_updates {
@@ -10065,6 +10089,8 @@ mod tests {
             command(&[
                 b"CONFIG",
                 b"SET",
+                b"list-max-listpack-size",
+                b"-5",
                 b"timeout",
                 b"300",
                 b"hz",
@@ -10106,6 +10132,16 @@ mod tests {
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"maxmemory-policy".to_vec())),
                 RespFrame::BulkString(Some(b"noeviction".to_vec())),
+            ]))
+        );
+
+        let list_max_listpack_size =
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"list-max-listpack-size"]), 1);
+        assert_eq!(
+            list_max_listpack_size,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"list-max-listpack-size".to_vec())),
+                RespFrame::BulkString(Some(b"-2".to_vec())),
             ]))
         );
     }

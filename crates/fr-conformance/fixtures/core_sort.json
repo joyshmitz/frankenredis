@@ -1273,7 +1273,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'sort' command"
+        "value": "ERR wrong number of arguments for 'sort_ro' command"
       }
     },
     {
@@ -1920,7 +1920,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'sort' command"
+        "value": "ERR wrong number of arguments for 'sort_ro' command"
       }
     }
   ]

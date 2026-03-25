@@ -25693,6 +25693,36 @@ mod tests {
 
         server.join().expect("join fake target");
     }
+
+    #[test]
+    fn eval_closure_captures_upvalues() {
+        let mut store = Store::new();
+        // Test: closure accesses local variable from enclosing scope
+        let result = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"local x = 42; local f = function() return x end; return f()".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval closure");
+        assert_eq!(result, RespFrame::Integer(42));
+
+        // Test: nested closure
+        let result2 = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"local a = 10; local f = function() local g = function() return a end; return g() end; return f()".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval nested closure");
+        assert_eq!(result2, RespFrame::Integer(10));
+    }
 }
 #[cfg(test)]
 mod zadd_xx_test;

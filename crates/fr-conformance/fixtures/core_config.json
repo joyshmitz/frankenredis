@@ -299,19 +299,19 @@
           },
           {
             "kind": "bulk",
-            "value": "maxmemory-policy"
-          },
-          {
-            "kind": "bulk",
-            "value": "noeviction"
-          },
-          {
-            "kind": "bulk",
             "value": "maxmemory-samples"
           },
           {
             "kind": "bulk",
             "value": "5"
+          },
+          {
+            "kind": "bulk",
+            "value": "maxmemory-policy"
+          },
+          {
+            "kind": "bulk",
+            "value": "noeviction"
           },
           {
             "kind": "bulk",
@@ -1463,19 +1463,19 @@
           },
           {
             "kind": "bulk",
-            "value": "maxmemory-policy"
-          },
-          {
-            "kind": "bulk",
-            "value": "noeviction"
-          },
-          {
-            "kind": "bulk",
             "value": "maxmemory-samples"
           },
           {
             "kind": "bulk",
             "value": "5"
+          },
+          {
+            "kind": "bulk",
+            "value": "maxmemory-policy"
+          },
+          {
+            "kind": "bulk",
+            "value": "noeviction"
           },
           {
             "kind": "bulk",

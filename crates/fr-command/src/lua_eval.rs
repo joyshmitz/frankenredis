@@ -2697,10 +2697,9 @@ impl<'a> LuaState<'a> {
                         t.set(key, val);
                     }
                 }
-                // Return the mutated table (args[0]), not a stale clone
-                let mut result = LuaValue::Nil;
-                std::mem::swap(&mut args[0], &mut result);
-                Ok(vec![result])
+                // Return the mutated table — clone from args[0] which has the mutation.
+                // (args[0] must remain intact for the write-back at the call site.)
+                Ok(vec![args[0].clone()])
             }
             "setmetatable" => {
                 // Return first argument (table) — metatables not supported
