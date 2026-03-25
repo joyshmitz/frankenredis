@@ -511,7 +511,7 @@ fn accept_connections(
 ) {
     loop {
         // Check maxclients gate via fr-eventloop before accepting.
-        if let Err(e) = validate_accept_path(clients.len(), MAX_CLIENTS, true) {
+        if let Err(e) = validate_accept_path(clients.len(), runtime.server.max_clients, true) {
             // Drain ALL pending connections from the backlog.
             while let Ok((stream, _)) = listener.accept() {
                 eprintln!(

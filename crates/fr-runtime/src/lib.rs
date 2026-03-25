@@ -895,6 +895,10 @@ pub struct ServerState {
     last_active_expire_cycle: Option<ActiveExpireCycleStats>,
     /// Server hz (timer interrupt frequency).
     hz: u64,
+    /// Maximum number of connected clients (CONFIG SET maxclients).
+    pub max_clients: usize,
+    /// Command time budget in ms (CONFIG SET busy-reply-threshold / lua-time-limit).
+    command_time_budget_ms: u64,
     /// Slow log: ring buffer of slow queries.
     slowlog: std::collections::VecDeque<SlowlogEntry>,
     /// Slow log entry ID counter.
@@ -967,6 +971,8 @@ impl Default for ServerState {
             active_expire_budget: ActiveExpireCycleBudget::default(),
             last_active_expire_cycle: None,
             hz: 10,
+            max_clients: 10_000,
+            command_time_budget_ms: 5000,
             slowlog: std::collections::VecDeque::new(),
             slowlog_next_id: 0,
             slowlog_log_slower_than_us: 10_000,
@@ -2436,7 +2442,7 @@ impl Runtime {
         let dirty_after = self.server.store.dirty;
         self.record_slowlog(&argv, elapsed_us, now_ms);
 
-        if elapsed_us > (COMMAND_TIME_BUDGET_MS as u64 * 1000) {
+        if elapsed_us > (self.server.command_time_budget_ms * 1000) {
             self.record_threat_event(ThreatEventInput {
                 now_ms,
                 packet_id,
@@ -2447,7 +2453,7 @@ impl Runtime {
                 reason_code: "command_time_budget_exceeded",
                 reason: format!(
                     "command '{}' took {}us, exceeding budget {}ms",
-                    command_name, elapsed_us, COMMAND_TIME_BUDGET_MS
+                    command_name, elapsed_us, self.server.command_time_budget_ms
                 ),
                 input_digest,
                 state_before: &state_before,
@@ -3692,6 +3698,26 @@ impl Runtime {
                 self.server.slowlog_max_len.to_string().into_bytes(),
             )));
         }
+        if Self::config_pattern_matches(pattern, "maxclients") {
+            entries.push(RespFrame::BulkString(Some(b"maxclients".to_vec())));
+            entries.push(RespFrame::BulkString(Some(
+                self.server.max_clients.to_string().into_bytes(),
+            )));
+        }
+        if Self::config_pattern_matches(pattern, "busy-reply-threshold") {
+            entries.push(RespFrame::BulkString(Some(
+                b"busy-reply-threshold".to_vec(),
+            )));
+            entries.push(RespFrame::BulkString(Some(
+                self.server.command_time_budget_ms.to_string().into_bytes(),
+            )));
+        }
+        if Self::config_pattern_matches(pattern, "lua-time-limit") {
+            entries.push(RespFrame::BulkString(Some(b"lua-time-limit".to_vec())));
+            entries.push(RespFrame::BulkString(Some(
+                self.server.command_time_budget_ms.to_string().into_bytes(),
+            )));
+        }
         // Dynamic hz — override the static default
         if Self::config_pattern_matches(pattern, "hz") {
             entries.push(RespFrame::BulkString(Some(b"hz".to_vec())));
@@ -3886,6 +3912,9 @@ impl Runtime {
                 || name == "appenddirname"
                 || name == "dbfilename"
                 || name == "dir"
+                || name == "maxclients"
+                || name == "busy-reply-threshold"
+                || name == "lua-time-limit"
             {
                 continue;
             }
@@ -3918,6 +3947,8 @@ impl Runtime {
         let mut next_slowlog_slower_than: Option<i64> = None;
         let mut next_slowlog_max_len: Option<usize> = None;
         let mut next_hz: Option<u64> = None;
+        let mut next_maxclients: Option<usize> = None;
+        let mut next_command_time_budget: Option<u64> = None;
         let mut next_appendonly: Option<bool> = None;
         let mut next_keyspace_events: Option<u32> = None;
         let mut next_rdb_path = self
@@ -4018,6 +4049,35 @@ impl Runtime {
                     Err(err) => return err.to_resp(),
                 };
                 next_hz = Some(parsed);
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("maxclients") {
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(value) if value >= 1 => value as usize,
+                    Ok(_) => {
+                        return RespFrame::Error(
+                            "ERR Invalid argument for CONFIG SET 'maxclients'".to_string(),
+                        );
+                    }
+                    Err(err) => return err.to_resp(),
+                };
+                next_maxclients = Some(parsed);
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("busy-reply-threshold")
+                || parameter.eq_ignore_ascii_case("lua-time-limit")
+            {
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(value) if value >= 0 => value as u64,
+                    Ok(_) => {
+                        return RespFrame::Error(
+                            "ERR Invalid argument for CONFIG SET 'busy-reply-threshold'"
+                                .to_string(),
+                        );
+                    }
+                    Err(err) => return err.to_resp(),
+                };
+                next_command_time_budget = Some(parsed);
                 continue;
             }
             if parameter.eq_ignore_ascii_case("appendonly") {
@@ -4229,6 +4289,13 @@ impl Runtime {
         if let Some(hz) = next_hz {
             self.server.hz = hz;
             self.server.store.server_hz = hz;
+        }
+        if let Some(mc) = next_maxclients {
+            self.server.max_clients = mc;
+            self.server.store.server_maxclients = mc as u64;
+        }
+        if let Some(budget) = next_command_time_budget {
+            self.server.command_time_budget_ms = budget;
         }
         if let Some(flags) = next_keyspace_events {
             self.server.store.notify_keyspace_events = flags;
