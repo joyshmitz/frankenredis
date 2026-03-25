@@ -1557,12 +1557,11 @@ impl Store {
         self.drop_if_expired(key, now_ms);
         self.entries.get(key).map(|entry| match &entry.value {
             Value::String(v) => {
-                // Redis returns "int" for strings that can be parsed as i64
-                // and "embstr" for strings <= 44 bytes, "raw" otherwise
-                if std::str::from_utf8(v)
-                    .ok()
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .is_some()
+                // Redis returns "int" for strings that are the canonical
+                // representation of an i64 (round-trip: parse then format must match)
+                if let Ok(s) = std::str::from_utf8(v)
+                    && let Ok(n) = s.parse::<i64>()
+                    && n.to_string() == s
                 {
                     "int"
                 } else if v.len() <= 44 {
