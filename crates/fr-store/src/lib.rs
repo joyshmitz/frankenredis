@@ -4,6 +4,9 @@ use fr_expire::evaluate_expiry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ops::Bound::{Excluded, Included, Unbounded};
 
+/// Redis-compatible version string. Single source of truth for all version reporting.
+pub const REDIS_COMPAT_VERSION: &str = "7.2.0";
+
 // ── Keyspace notification flags (matching Redis server.h) ───────────
 pub const NOTIFY_KEYSPACE: u32 = 1 << 0; // K
 pub const NOTIFY_KEYEVENT: u32 = 1 << 1; // E

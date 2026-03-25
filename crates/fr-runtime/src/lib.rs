@@ -1526,7 +1526,7 @@ impl Runtime {
         let entries = store_to_rdb_entries(&mut self.server.store, now_ms);
         encode_rdb(
             &entries,
-            &[("redis-ver", "7.2.0"), ("frankenredis", "true")],
+            &[("redis-ver", fr_store::REDIS_COMPAT_VERSION), ("frankenredis", "true")],
         )
     }
 
@@ -4832,7 +4832,7 @@ impl Runtime {
 
         if let Some(path) = &self.server.rdb_path {
             let entries = store_to_rdb_entries(&mut self.server.store, now_ms);
-            let aux = [("redis-ver", "7.2.0"), ("frankenredis", "true")];
+            let aux = [("redis-ver", fr_store::REDIS_COMPAT_VERSION), ("frankenredis", "true")];
             if write_rdb_file(path, &entries, &aux).is_err() {
                 return Err(RespFrame::Error(
                     "ERR error saving RDB snapshot to disk".to_string(),
@@ -6411,7 +6411,7 @@ fn build_hello_response(protocol_version: i64, client_id: u64) -> RespFrame {
         hello_bulk("server"),
         hello_bulk("redis"),
         hello_bulk("version"),
-        hello_bulk("7.2.0"),
+        hello_bulk(fr_store::REDIS_COMPAT_VERSION),
         hello_bulk("proto"),
         RespFrame::Integer(protocol_version),
         hello_bulk("id"),

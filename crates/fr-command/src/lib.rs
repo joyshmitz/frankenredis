@@ -3996,14 +3996,9 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         idx += 2;
     }
 
-    // NOMKSTREAM: if key doesn't exist, return nil
-    if nomkstream && store.xlen(&argv[1], now_ms).unwrap_or(0) == 0 {
-        // Check if key exists as a stream at all
-        match store.xlast_id(&argv[1], now_ms) {
-            Ok(None) => return Ok(RespFrame::BulkString(None)),
-            Err(StoreError::WrongType) => return Err(CommandError::Store(StoreError::WrongType)),
-            _ => {} // Key exists as empty stream, proceed
-        }
+    // NOMKSTREAM: if key doesn't exist, return nil (but proceed if key exists, even empty)
+    if nomkstream && !store.exists(&argv[1], now_ms) {
+        return Ok(RespFrame::BulkString(None));
     }
 
     let last_id = store.xlast_id(&argv[1], now_ms)?;
@@ -8079,7 +8074,10 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     // Server section
     if section_requested("server") {
         info.push_str("# Server\r\n");
-        info.push_str("redis_version:7.2.0-frankenredis\r\n");
+        info.push_str(&format!(
+            "redis_version:{}-frankenredis\r\n",
+            fr_store::REDIS_COMPAT_VERSION
+        ));
         info.push_str("redis_git_sha1:00000000\r\n");
         info.push_str("redis_git_dirty:0\r\n");
         info.push_str("redis_build_id:0\r\n");

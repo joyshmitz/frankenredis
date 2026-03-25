@@ -255,19 +255,18 @@ fn read_line(input: &[u8], start: usize) -> Result<(&[u8], usize), RespParseErro
     if start >= input.len() {
         return Err(RespParseError::Incomplete);
     }
-    let max_search = (start + MAX_LINE_LENGTH).min(input.len());
+    let max_line_end = start + MAX_LINE_LENGTH;
     let mut i = start;
-    while i + 1 < max_search {
+    while i + 1 < input.len() {
         if input[i] == b'\r' && input[i + 1] == b'\n' {
             return Ok((&input[start..i], i + 2));
         }
         i += 1;
+        if i >= max_line_end {
+            return Err(RespParseError::LineTooLong);
+        }
     }
-    if i + 1 < input.len() {
-        Err(RespParseError::LineTooLong)
-    } else {
-        Err(RespParseError::Incomplete)
-    }
+    Err(RespParseError::Incomplete)
 }
 
 #[cfg(test)]
