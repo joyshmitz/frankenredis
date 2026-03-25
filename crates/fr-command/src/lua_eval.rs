@@ -3024,9 +3024,10 @@ impl<'a> LuaState<'a> {
                         // Append captures if any
                         for cap in &m.captures {
                             match cap {
-                                LuaCapture::Substring(cs, ce) => {
+                                LuaCapture::Substring(cs, Some(ce)) => {
                                     result.push(LuaValue::Str(s[*cs..*ce].to_vec()));
                                 }
+                                LuaCapture::Substring(_, None) => {}
                                 LuaCapture::Position(pos) => {
                                     result.push(LuaValue::Number(*pos as f64 + 1.0));
                                 }
@@ -3371,8 +3372,8 @@ struct LuaPatMatch {
 }
 
 enum LuaCapture {
-    Substring(usize, usize), // start, end (0-indexed, exclusive end)
-    Position(usize),         // position capture from ()
+    Substring(usize, Option<usize>), // start, end (0-indexed, exclusive end; None = open/unclosed)
+    Position(usize),                 // position capture from ()
 }
 
 /// Check if byte matches a Lua character class letter (the char after %).
@@ -3521,7 +3522,7 @@ fn lua_pat_match(
         }
         // Start substring capture
         let cap_idx = captures.len();
-        captures.push(LuaCapture::Substring(si, 0)); // placeholder
+        captures.push(LuaCapture::Substring(si, None)); // open capture
         if let Some(end) = lua_pat_match(s, si, pat, pi + 1, captures, depth + 1) {
             return Some(end);
         }
@@ -3533,12 +3534,12 @@ fn lua_pat_match(
     if pat[pi] == b')' {
         // Find the last open capture and close it
         for i in (0..captures.len()).rev() {
-            if let LuaCapture::Substring(start, 0) = captures[i] {
-                captures[i] = LuaCapture::Substring(start, si);
+            if let LuaCapture::Substring(start, None) = captures[i] {
+                captures[i] = LuaCapture::Substring(start, Some(si));
                 if let Some(end) = lua_pat_match(s, si, pat, pi + 1, captures, depth + 1) {
                     return Some(end);
                 }
-                captures[i] = LuaCapture::Substring(start, 0); // restore
+                captures[i] = LuaCapture::Substring(start, None); // restore
                 return None;
             }
         }
@@ -3686,7 +3687,8 @@ fn lua_match_captures(s: &[u8], m: &LuaPatMatch) -> Vec<LuaValue> {
     m.captures
         .iter()
         .map(|cap| match cap {
-            LuaCapture::Substring(start, end) => LuaValue::Str(s[*start..*end].to_vec()),
+            LuaCapture::Substring(start, Some(end)) => LuaValue::Str(s[*start..*end].to_vec()),
+            LuaCapture::Substring(_, None) => LuaValue::Nil,
             LuaCapture::Position(pos) => LuaValue::Number(*pos as f64 + 1.0), // 1-indexed
         })
         .collect()
@@ -3706,9 +3708,10 @@ fn lua_gsub_replace(s: &[u8], m: &LuaPatMatch, repl: &[u8]) -> Vec<u8> {
                     result.extend_from_slice(&s[m.start..m.end]);
                 } else if idx <= m.captures.len() {
                     match &m.captures[idx - 1] {
-                        LuaCapture::Substring(cs, ce) => {
+                        LuaCapture::Substring(cs, Some(ce)) => {
                             result.extend_from_slice(&s[*cs..*ce]);
                         }
+                        LuaCapture::Substring(_, None) => {}
                         LuaCapture::Position(pos) => {
                             result.extend_from_slice(format!("{}", pos + 1).as_bytes());
                         }
@@ -3856,7 +3859,15 @@ fn lua_string_format(fmt: &str, args: &[LuaValue]) -> Result<String, String> {
                 }
                 // Conversion
                 if let Some(conv) = chars.next() {
-                    let arg = args.get(arg_idx).cloned().unwrap_or(LuaValue::Nil);
+                    let arg = match args.get(arg_idx) {
+                        Some(v) => v.clone(),
+                        None => {
+                            return Err(format!(
+                                "bad argument #{} to 'format' (no value)",
+                                arg_idx + 1
+                            ));
+                        }
+                    };
                     arg_idx += 1;
                     let formatted = match conv {
                         'd' | 'i' | 'u' => {
