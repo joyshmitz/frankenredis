@@ -430,7 +430,7 @@ fn main() -> ExitCode {
         // When the pause expires, we must re-trigger processing since mio won't
         // generate a readable event for data already in the read buffer.
         if !paused_tokens.is_empty() && !runtime.is_client_paused(ts) {
-            let tokens: Vec<Token> = paused_tokens.drain().collect();
+            let tokens = std::mem::take(&mut paused_tokens);
             for token in tokens {
                 if let Some(conn) = clients.get_mut(&token)
                     && !conn.read_buf.is_empty()
