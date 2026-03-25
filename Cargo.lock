@@ -127,6 +127,7 @@ name = "fr-store"
 version = "0.1.0"
 dependencies = [
  "fr-expire",
+ "fr-persist",
 ]
 
 [[package]]
