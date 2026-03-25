@@ -4962,6 +4962,25 @@ impl Store {
         }
     }
 
+    pub fn stream_watermark(&self, key: &[u8]) -> Result<Option<StreamId>, StoreError> {
+        match self.entries.get(key) {
+            Some(entry) => match &entry.value {
+                Value::Stream(entries) => {
+                    let btree_last = entries.last_key_value().map(|(id, _)| *id);
+                    let xsetid_last = self.stream_last_ids.get(key).copied();
+                    Ok(match (btree_last, xsetid_last) {
+                        (Some(a), Some(b)) => Some(a.max(b)),
+                        (Some(a), None) => Some(a),
+                        (None, Some(b)) => Some(b),
+                        (None, None) => None,
+                    })
+                }
+                _ => Err(StoreError::WrongType),
+            },
+            None => Ok(None),
+        }
+    }
+
     pub fn xadd(
         &mut self,
         key: &[u8],
@@ -5346,6 +5365,7 @@ impl Store {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn xpending_entries(
         &mut self,
         key: &[u8],
@@ -10930,7 +10950,13 @@ mod tests {
             .xinfo_consumers(b"s", b"g1", 0)
             .unwrap()
             .expect("consumers");
-        assert_eq!(consumers, vec![b"c1".to_vec(), b"c2".to_vec()]);
+        assert_eq!(
+            consumers
+                .into_iter()
+                .map(|(name, _pending, _idle)| name)
+                .collect::<Vec<_>>(),
+            vec![b"c1".to_vec(), b"c2".to_vec()]
+        );
 
         assert_eq!(store.xinfo_consumers(b"s", b"missing", 0).unwrap(), None);
         assert_eq!(

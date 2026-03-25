@@ -29,9 +29,6 @@ const DEFAULT_PORT: u16 = 6379;
 /// Token for the TCP listener socket.
 const LISTENER: Token = Token(0);
 
-/// Maximum connected clients. Matches Redis default.
-const MAX_CLIENTS: usize = 10_000;
-
 const REPLICA_ACK_INTERVAL_MS: u64 = 1_000;
 const REPLICA_RECONNECT_BACKOFF_MS: u64 = 250;
 

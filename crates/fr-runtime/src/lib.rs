@@ -1321,7 +1321,6 @@ struct ThreatEventInput<'a> {
 }
 
 const MAX_COMMAND_ARITY: usize = 1024 * 1024;
-const COMMAND_TIME_BUDGET_MS: u128 = 5000;
 
 impl Runtime {
     #[must_use]
@@ -1556,7 +1555,10 @@ impl Runtime {
         let entries = store_to_rdb_entries(&mut self.server.store, now_ms);
         encode_rdb(
             &entries,
-            &[("redis-ver", fr_store::REDIS_COMPAT_VERSION), ("frankenredis", "true")],
+            &[
+                ("redis-ver", fr_store::REDIS_COMPAT_VERSION),
+                ("frankenredis", "true"),
+            ],
         )
     }
 
@@ -3729,9 +3731,7 @@ impl Runtime {
             )));
         }
         if Self::config_pattern_matches(pattern, "repl-backlog-size") {
-            entries.push(RespFrame::BulkString(Some(
-                b"repl-backlog-size".to_vec(),
-            )));
+            entries.push(RespFrame::BulkString(Some(b"repl-backlog-size".to_vec())));
             entries.push(RespFrame::BulkString(Some(
                 self.server.repl_backlog_size.to_string().into_bytes(),
             )));
@@ -3743,9 +3743,7 @@ impl Runtime {
             )));
         }
         if Self::config_pattern_matches(pattern, "maxmemory-samples") {
-            entries.push(RespFrame::BulkString(Some(
-                b"maxmemory-samples".to_vec(),
-            )));
+            entries.push(RespFrame::BulkString(Some(b"maxmemory-samples".to_vec())));
             entries.push(RespFrame::BulkString(Some(
                 self.server
                     .maxmemory_eviction_sample_limit
@@ -3880,9 +3878,15 @@ impl Runtime {
                 .aof_config_path
                 .as_ref()
                 .and_then(|path| path.parent())
-                .map(|path| path.to_string_lossy().into_owned())
-                .filter(|path| !path.is_empty())
-                .unwrap_or_else(|| ".".to_string());
+                .and_then(|path| {
+                    if path.as_os_str().is_empty() {
+                        None
+                    } else {
+                        path.file_name()
+                    }
+                })
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "appendonlydir".to_string());
             entries.push(RespFrame::BulkString(Some(dirname.into_bytes())));
         }
         if Self::config_pattern_matches(pattern, "dbfilename") {
@@ -4128,8 +4132,7 @@ impl Runtime {
                 };
                 self.server.repl_backlog_size = parsed;
                 self.server.store.server_repl_backlog_size = parsed;
-                static_override_updates
-                    .push(("repl-backlog-size".to_string(), parsed.to_string()));
+                static_override_updates.push(("repl-backlog-size".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("repl-timeout") {
@@ -4143,8 +4146,7 @@ impl Runtime {
                     Err(err) => return err.to_resp(),
                 };
                 self.server.repl_timeout_sec = parsed;
-                static_override_updates
-                    .push(("repl-timeout".to_string(), parsed.to_string()));
+                static_override_updates.push(("repl-timeout".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("client-query-buffer-limit") {
@@ -4159,10 +4161,8 @@ impl Runtime {
                     Err(err) => return err.to_resp(),
                 };
                 self.server.query_buffer_limit = parsed;
-                static_override_updates.push((
-                    "client-query-buffer-limit".to_string(),
-                    parsed.to_string(),
-                ));
+                static_override_updates
+                    .push(("client-query-buffer-limit".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("proto-max-bulk-len") {
@@ -4191,8 +4191,7 @@ impl Runtime {
                     Err(err) => return err.to_resp(),
                 };
                 self.server.maxmemory_eviction_sample_limit = parsed;
-                static_override_updates
-                    .push(("maxmemory-samples".to_string(), parsed.to_string()));
+                static_override_updates.push(("maxmemory-samples".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("busy-reply-threshold")
@@ -5036,7 +5035,10 @@ impl Runtime {
 
         if let Some(path) = &self.server.rdb_path {
             let entries = store_to_rdb_entries(&mut self.server.store, now_ms);
-            let aux = [("redis-ver", fr_store::REDIS_COMPAT_VERSION), ("frankenredis", "true")];
+            let aux = [
+                ("redis-ver", fr_store::REDIS_COMPAT_VERSION),
+                ("frankenredis", "true"),
+            ];
             if write_rdb_file(path, &entries, &aux).is_err() {
                 return Err(RespFrame::Error(
                     "ERR error saving RDB snapshot to disk".to_string(),
@@ -6680,10 +6682,7 @@ fn store_to_rdb_entries(store: &mut Store, now_ms: u64) -> Vec<RdbEntry> {
                         (*ms, *seq, field_pairs)
                     })
                     .collect();
-                let watermark = store
-                    .stream_last_ids
-                    .get(&key)
-                    .copied();
+                let watermark = store.stream_watermark(&key).unwrap_or(None);
                 RdbValue::Stream(stream_entries, watermark)
             }
         };
@@ -9758,6 +9757,24 @@ mod tests {
                 RespFrame::BulkString(Some(b"real-appendonly.aof".to_vec())),
                 RespFrame::BulkString(Some(b"appenddirname".to_vec())),
                 RespFrame::BulkString(Some(b"/tmp/fr-test".to_vec())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn config_get_reports_default_appenddirname_when_aof_is_disabled() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"GET", b"appendfilename", b"appenddirname"]),
+                0,
+            ),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"appendfilename".to_vec())),
+                RespFrame::BulkString(Some(b"appendonly.aof".to_vec())),
+                RespFrame::BulkString(Some(b"appenddirname".to_vec())),
+                RespFrame::BulkString(Some(b"appendonlydir".to_vec())),
             ]))
         );
     }
