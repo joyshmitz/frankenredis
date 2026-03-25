@@ -3614,8 +3614,10 @@ impl Runtime {
                 }
                 .to_resp();
             }
-            // Reset tracked statistics: clear slowlog, reset next ID, reset config overrides
+            // Reset tracked statistics: slowlog, command counters, connection counters
             self.server.reset_slowlog();
+            self.server.store.stat_total_commands_processed = 0;
+            self.server.store.stat_total_connections_received = 0;
             return RespFrame::SimpleString("OK".to_string());
         }
         if sub.eq_ignore_ascii_case("REWRITE") {
@@ -4086,7 +4088,10 @@ impl Runtime {
                     Ok(value) if value >= 0 => value as usize,
                     Ok(_) => {
                         return RespFrame::Error(
-                            "ERR Invalid argument '?' for CONFIG SET 'maxmemory'".to_string(),
+                            format!(
+                                "ERR Invalid argument '{}' for CONFIG SET 'maxmemory'",
+                                String::from_utf8_lossy(&pair[1])
+                            ),
                         );
                     }
                     Err(err) => return err.to_resp(),
@@ -4124,7 +4129,10 @@ impl Runtime {
                     Ok(value) if value >= 0 => value as usize,
                     Ok(_) => {
                         return RespFrame::Error(
-                            "ERR Invalid argument '?' for CONFIG SET 'slowlog-max-len'".to_string(),
+                            format!(
+                                "ERR Invalid argument '{}' for CONFIG SET 'slowlog-max-len'",
+                                String::from_utf8_lossy(&pair[1])
+                            ),
                         );
                     }
                     Err(err) => return err.to_resp(),
@@ -4137,7 +4145,10 @@ impl Runtime {
                     Ok(value) if (1..=500).contains(&value) => value as u64,
                     Ok(_) => {
                         return RespFrame::Error(
-                            "ERR Invalid argument '?' for CONFIG SET 'hz'".to_string(),
+                            format!(
+                                "ERR Invalid argument '{}' for CONFIG SET 'hz'",
+                                String::from_utf8_lossy(&pair[1])
+                            ),
                         );
                     }
                     Err(err) => return err.to_resp(),
@@ -4281,6 +4292,8 @@ impl Runtime {
             }
             if parameter.eq_ignore_ascii_case("appendfilename")
                 || parameter.eq_ignore_ascii_case("appenddirname")
+                || parameter.eq_ignore_ascii_case("bind")
+                || parameter.eq_ignore_ascii_case("port")
             {
                 return RespFrame::Error(format!(
                     "ERR CONFIG SET failed (possibly related to argument '{parameter}') - can't set immutable config"
@@ -10196,7 +10209,7 @@ mod tests {
         );
         assert_eq!(
             set,
-            RespFrame::Error("ERR Invalid argument '?' for CONFIG SET 'maxmemory'".to_string())
+            RespFrame::Error("ERR Invalid argument '-1' for CONFIG SET 'maxmemory'".to_string())
         );
 
         let timeout = rt.execute_frame(command(&[b"CONFIG", b"GET", b"timeout"]), 1);

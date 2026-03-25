@@ -679,7 +679,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Invalid argument '?' for CONFIG SET 'maxmemory'"
+        "value": "ERR Invalid argument '-1' for CONFIG SET 'maxmemory'"
       }
     },
     {
@@ -1265,7 +1265,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Invalid argument '?' for CONFIG SET 'slowlog-max-len'"
+        "value": "ERR Invalid argument '-1' for CONFIG SET 'slowlog-max-len'"
       }
     },
     {
@@ -1784,7 +1784,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Invalid argument '?' for CONFIG SET 'hz'"
+        "value": "ERR Invalid argument '0' for CONFIG SET 'hz'"
       }
     },
     {
@@ -1798,7 +1798,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Invalid argument '?' for CONFIG SET 'hz'"
+        "value": "ERR Invalid argument '-1' for CONFIG SET 'hz'"
       }
     },
     {
@@ -1812,7 +1812,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Invalid argument '?' for CONFIG SET 'hz'"
+        "value": "ERR Invalid argument '501' for CONFIG SET 'hz'"
       }
     },
     {
@@ -1949,18 +1949,18 @@
     {
       "name": "config_set_multi_params",
       "now_ms": 0,
-      "argv": ["CONFIG", "SET", "bind", "0.0.0.0", "protected-mode", "no"],
+      "argv": ["CONFIG", "SET", "timeout", "30", "protected-mode", "no"],
       "expect": { "kind": "simple", "value": "OK" }
     },
     {
-      "name": "config_get_bind_after_multi_set",
+      "name": "config_get_timeout_after_multi_set",
       "now_ms": 0,
-      "argv": ["CONFIG", "GET", "bind"],
+      "argv": ["CONFIG", "GET", "timeout"],
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "bind" },
-          { "kind": "bulk", "value": "0.0.0.0" }
+          { "kind": "bulk", "value": "timeout" },
+          { "kind": "bulk", "value": "30" }
         ]
       }
     },
