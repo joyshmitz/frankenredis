@@ -35,7 +35,7 @@ use fr_repl::{
 };
 use fr_store::{
     EvictionLoopFailure, EvictionLoopResult, EvictionLoopStatus, EvictionSafetyGateState,
-    MaxmemoryPolicy, NUM_DATABASES, Store, decode_db_key, encode_db_key, glob_match,
+    MaxmemoryPolicy, Store, decode_db_key, encode_db_key, glob_match,
 };
 
 static PACKET_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -692,14 +692,18 @@ fn increment_run_id_hex(current: &str) -> String {
 }
 
 #[inline]
-fn parse_db_index_arg(arg: &[u8], out_of_range_message: &'static str) -> Result<usize, RespFrame> {
+fn parse_db_index_arg(
+    arg: &[u8],
+    out_of_range_message: &'static str,
+    database_count: usize,
+) -> Result<usize, RespFrame> {
     let parsed = std::str::from_utf8(arg)
         .ok()
         .and_then(|s| s.parse::<i64>().ok())
         .ok_or_else(|| {
             RespFrame::Error("ERR value is not an integer or out of range".to_string())
         })?;
-    if (0..NUM_DATABASES as i64).contains(&parsed) {
+    if (0..database_count as i64).contains(&parsed) {
         Ok(parsed as usize)
     } else {
         Err(RespFrame::Error(out_of_range_message.to_string()))
@@ -5471,7 +5475,11 @@ impl Runtime {
         if argv.len() != 2 {
             return CommandError::WrongArity("SELECT").to_resp();
         }
-        let db = match parse_db_index_arg(&argv[1], "ERR DB index is out of range") {
+        let db = match parse_db_index_arg(
+            &argv[1],
+            "ERR DB index is out of range",
+            self.server.store.database_count,
+        ) {
             Ok(db) => db,
             Err(reply) => return reply,
         };
@@ -5483,11 +5491,12 @@ impl Runtime {
         if argv.len() != 3 {
             return CommandError::WrongArity("SWAPDB").to_resp();
         }
-        let db1 = match parse_db_index_arg(&argv[1], "ERR invalid DB index") {
+        let dbc = self.server.store.database_count;
+        let db1 = match parse_db_index_arg(&argv[1], "ERR invalid DB index", dbc) {
             Ok(n) => n,
             Err(e) => return e,
         };
-        let db2 = match parse_db_index_arg(&argv[2], "ERR invalid DB index") {
+        let db2 = match parse_db_index_arg(&argv[2], "ERR invalid DB index", dbc) {
             Ok(n) => n,
             Err(e) => return e,
         };
@@ -5657,8 +5666,12 @@ impl Runtime {
         if argv.len() != 3 {
             return Err(CommandError::WrongArity("MOVE"));
         }
-        let target_db =
-            parse_db_index_arg(&argv[2], "ERR DB index is out of range").map_err(|reply| {
+        let target_db = parse_db_index_arg(
+            &argv[2],
+            "ERR DB index is out of range",
+            self.server.store.database_count,
+        )
+        .map_err(|reply| {
                 match reply {
                     RespFrame::Error(message) => CommandError::Custom(message),
                     _ => CommandError::InvalidInteger,
@@ -5705,7 +5718,11 @@ impl Runtime {
                 if i + 1 >= argv.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                destination_db = parse_db_index_arg(&argv[i + 1], "ERR DB index is out of range")
+                destination_db = parse_db_index_arg(
+                    &argv[i + 1],
+                    "ERR DB index is out of range",
+                    self.server.store.database_count,
+                )
                     .map_err(|reply| match reply {
                     RespFrame::Error(message) => CommandError::Custom(message),
                     _ => CommandError::InvalidInteger,
@@ -5817,7 +5834,7 @@ impl Runtime {
 
     fn handle_info_keyspace_section(&mut self, _now_ms: u64) -> RespFrame {
         let mut info = String::from("# Keyspace\r\n");
-        for db in 0..NUM_DATABASES {
+        for db in 0..self.server.store.database_count {
             let keys = self.server.store.dbsize_in_db(db);
             if keys > 0 {
                 let expires = self.server.store.expires_in_db(db);

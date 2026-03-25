@@ -637,13 +637,16 @@ impl ValueType {
     }
 }
 
-pub const NUM_DATABASES: usize = 16;
+/// Default number of databases (matches Redis default).
+pub const DEFAULT_NUM_DATABASES: usize = 16;
 
 #[derive(Debug)]
 pub struct Store {
     entries: BTreeMap<Vec<u8>, Entry>,
-    db_key_counts: [usize; NUM_DATABASES],
-    db_expires_counts: [usize; NUM_DATABASES],
+    db_key_counts: Vec<usize>,
+    db_expires_counts: Vec<usize>,
+    /// Number of databases (configurable at startup, default 16).
+    pub database_count: usize,
     stream_groups: HashMap<Vec<u8>, StreamGroupState>,
     /// Per-stream last-generated-id set by XSETID (may be higher than max entry).
     stream_last_ids: HashMap<Vec<u8>, StreamId>,
@@ -748,8 +751,9 @@ impl Default for Store {
     fn default() -> Self {
         Self {
             entries: BTreeMap::new(),
-            db_key_counts: [0; NUM_DATABASES],
-            db_expires_counts: [0; NUM_DATABASES],
+            db_key_counts: vec![0; DEFAULT_NUM_DATABASES],
+            db_expires_counts: vec![0; DEFAULT_NUM_DATABASES],
+            database_count: DEFAULT_NUM_DATABASES,
             stream_groups: HashMap::new(),
             stream_last_ids: HashMap::new(),
             script_cache: HashMap::new(),
@@ -979,7 +983,7 @@ impl Store {
             if entry.expires_at_ms.is_none() {
                 self.expires_count = self.expires_count.saturating_add(1);
                 let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
-                if db < NUM_DATABASES {
+                if db < self.database_count {
                     self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
                 }
             }
@@ -1008,7 +1012,7 @@ impl Store {
             if entry.expires_at_ms.is_none() {
                 self.expires_count = self.expires_count.saturating_add(1);
                 let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
-                if db < NUM_DATABASES {
+                if db < self.database_count {
                     self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
                 }
             }
@@ -1520,7 +1524,7 @@ impl Store {
             entry.expires_at_ms = None;
             self.expires_count = self.expires_count.saturating_sub(1);
             let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
-            if db < NUM_DATABASES {
+            if db < self.database_count {
                 self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
             }
             self.dirty = self.dirty.saturating_add(1);
@@ -1798,7 +1802,7 @@ impl Store {
 
     #[must_use]
     pub fn dbsize_in_db(&self, db: usize) -> usize {
-        if db < NUM_DATABASES {
+        if db < self.database_count {
             self.db_key_counts[db]
         } else {
             0
@@ -1807,7 +1811,7 @@ impl Store {
 
     #[must_use]
     pub fn expires_in_db(&self, db: usize) -> usize {
-        if db < NUM_DATABASES {
+        if db < self.database_count {
             self.db_expires_counts[db]
         } else {
             0
@@ -1824,7 +1828,7 @@ impl Store {
         match self.entries.entry(key) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => {
-                if db < NUM_DATABASES {
+                if db < self.database_count {
                     self.db_key_counts[db] = self.db_key_counts[db].saturating_add(1);
                 }
                 entry.insert(Entry::new(default_value, None, now_ms))
@@ -1836,20 +1840,20 @@ impl Store {
         let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
         if entry.expires_at_ms.is_some() {
             self.expires_count = self.expires_count.saturating_add(1);
-            if db < NUM_DATABASES {
+            if db < self.database_count {
                 self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
             }
         }
         if let Some(old) = self.entries.insert(key, entry) {
             if old.expires_at_ms.is_some() {
                 self.expires_count = self.expires_count.saturating_sub(1);
-                if db < NUM_DATABASES {
+                if db < self.database_count {
                     self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
                 }
             }
             Some(old)
         } else {
-            if db < NUM_DATABASES {
+            if db < self.database_count {
                 self.db_key_counts[db] = self.db_key_counts[db].saturating_add(1);
             }
             None
@@ -1859,12 +1863,12 @@ impl Store {
     fn internal_entries_remove(&mut self, key: &[u8]) -> Option<Entry> {
         if let Some(entry) = self.entries.remove(key) {
             let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
-            if db < NUM_DATABASES {
+            if db < self.database_count {
                 self.db_key_counts[db] = self.db_key_counts[db].saturating_sub(1);
             }
             if entry.expires_at_ms.is_some() {
                 self.expires_count = self.expires_count.saturating_sub(1);
-                if db < NUM_DATABASES {
+                if db < self.database_count {
                     self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
                 }
             }
@@ -2087,8 +2091,8 @@ impl Store {
         self.stream_groups.clear();
         self.stream_last_ids.clear();
         self.expires_count = 0;
-        self.db_key_counts = [0; NUM_DATABASES];
-        self.db_expires_counts = [0; NUM_DATABASES];
+        self.db_key_counts.fill(0);
+        self.db_expires_counts.fill(0);
         self.dirty += 1;
     }
 
@@ -6225,13 +6229,13 @@ impl Store {
                             let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
                             if is_exp {
                                 self.expires_count = self.expires_count.saturating_add(1);
-                                if db < NUM_DATABASES {
+                                if db < self.database_count {
                                     self.db_expires_counts[db] =
                                         self.db_expires_counts[db].saturating_add(1);
                                 }
                             } else {
                                 self.expires_count = self.expires_count.saturating_sub(1);
-                                if db < NUM_DATABASES {
+                                if db < self.database_count {
                                     self.db_expires_counts[db] =
                                         self.db_expires_counts[db].saturating_sub(1);
                                 }
