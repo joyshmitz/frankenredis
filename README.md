@@ -31,6 +31,7 @@ This project uses four pervasive disciplines:
   - RESP parser/encoder
   - broad command surface across strings, hashes, lists, sets, sorted sets, streams, geo, pub/sub, and server control paths
   - in-memory store + TTL semantics
+  - replication sync baseline: `PSYNC`/`SYNC` negotiation, full-resync snapshot apply, partial backlog replay, replica reconnect flow, and live replication offset reporting
   - strict/hardened compatibility gate + evidence ledger scaffold
   - fixture-driven conformance harness (`core_*` families + phase2c packet suites)
 - baseline and proof artifacts added:
@@ -83,7 +84,7 @@ Maintain deterministic command semantics, expiration behavior, and AOF/RDB recov
 ## Next Steps
 
 1. Expand conformance fixtures until all command families and compatibility-critical behaviors are covered.
-2. Land persistence and replication invariants at full behavior parity.
+2. Expand persistence and replication invariants from the implemented sync baseline to broader legacy-oracle parity coverage.
 3. Add Asupersync-backed runtime adapter and FrankenTUI operator dashboard adapter.
 4. Implement RaptorQ sidecar pipeline for all durability-critical artifacts.
 5. Run optimization loop with one lever per commit and isomorphism proofs while preserving strict parity.
