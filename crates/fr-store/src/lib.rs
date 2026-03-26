@@ -5524,6 +5524,7 @@ impl Store {
 
         if !claimed_ids.is_empty() {
             group_state.consumers.insert(consumer_vec);
+            self.dirty = self.dirty.saturating_add(claimed_ids.len() as u64);
         }
 
         if options.justid {
@@ -5620,6 +5621,7 @@ impl Store {
         }
         if !claimed_ids.is_empty() {
             group_state.consumers.insert(consumer_vec);
+            self.dirty = self.dirty.saturating_add(claimed_ids.len() as u64);
         }
 
         let next_start = scanned_last
@@ -5716,6 +5718,7 @@ impl Store {
                 pending: BTreeMap::new(),
             },
         );
+        self.dirty = self.dirty.saturating_add(1);
         Ok(true)
     }
 
@@ -5738,6 +5741,9 @@ impl Store {
                     if remove_groups_key {
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
+                    }
+                    if removed {
+                        self.dirty = self.dirty.saturating_add(1);
                     }
                     Ok(removed)
                 }
@@ -5762,6 +5768,7 @@ impl Store {
                         && let Some(current_group) = groups.get_mut(group)
                     {
                         current_group.last_delivered_id = last_delivered_id;
+                        self.dirty = self.dirty.saturating_add(1);
                         return Ok(true);
                     }
                     Ok(false)
@@ -5823,7 +5830,11 @@ impl Store {
                     let Some(group_state) = groups.get_mut(group) else {
                         return Ok(None);
                     };
-                    Ok(Some(group_state.consumers.insert(consumer.to_vec())))
+                    let created = group_state.consumers.insert(consumer.to_vec());
+                    if created {
+                        self.dirty = self.dirty.saturating_add(1);
+                    }
+                    Ok(Some(created))
                 }
                 _ => Err(StoreError::WrongType),
             },
