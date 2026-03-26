@@ -3812,9 +3812,12 @@ pub fn lua_to_resp(val: &LuaValue) -> RespFrame {
             if let LuaValue::Str(err) = t.get(&LuaValue::Str(b"err".to_vec())) {
                 return RespFrame::Error(String::from_utf8_lossy(&err).to_string());
             }
-            // Convert array part to RESP array
+            // Convert array part to RESP array (stop at first nil, matching Redis)
             let mut items = Vec::new();
             for item in &t.array {
+                if matches!(item, LuaValue::Nil) {
+                    break;
+                }
                 items.push(lua_to_resp(item));
             }
             RespFrame::Array(Some(items))
