@@ -4090,12 +4090,10 @@ impl Runtime {
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) if value >= 0 => value as usize,
                     Ok(_) => {
-                        return RespFrame::Error(
-                            format!(
-                                "ERR Invalid argument '{}' for CONFIG SET 'maxmemory'",
-                                String::from_utf8_lossy(&pair[1])
-                            ),
-                        );
+                        return RespFrame::Error(format!(
+                            "ERR Invalid argument '{}' for CONFIG SET 'maxmemory'",
+                            String::from_utf8_lossy(&pair[1])
+                        ));
                     }
                     Err(err) => return err.to_resp(),
                 };
@@ -4131,12 +4129,10 @@ impl Runtime {
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) if value >= 0 => value as usize,
                     Ok(_) => {
-                        return RespFrame::Error(
-                            format!(
-                                "ERR Invalid argument '{}' for CONFIG SET 'slowlog-max-len'",
-                                String::from_utf8_lossy(&pair[1])
-                            ),
-                        );
+                        return RespFrame::Error(format!(
+                            "ERR Invalid argument '{}' for CONFIG SET 'slowlog-max-len'",
+                            String::from_utf8_lossy(&pair[1])
+                        ));
                     }
                     Err(err) => return err.to_resp(),
                 };
@@ -4147,12 +4143,10 @@ impl Runtime {
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) if (1..=500).contains(&value) => value as u64,
                     Ok(_) => {
-                        return RespFrame::Error(
-                            format!(
-                                "ERR Invalid argument '{}' for CONFIG SET 'hz'",
-                                String::from_utf8_lossy(&pair[1])
-                            ),
-                        );
+                        return RespFrame::Error(format!(
+                            "ERR Invalid argument '{}' for CONFIG SET 'hz'",
+                            String::from_utf8_lossy(&pair[1])
+                        ));
                     }
                     Err(err) => return err.to_resp(),
                 };
@@ -6341,33 +6335,33 @@ impl Runtime {
 
         let primary_offset = self.server.replication_ack_state.primary_offset;
         let backlog = self.server.replication_runtime_state.backlog.clone();
-        let response = if requested_replid == "?" || requested_offset < 0 {
-            RespFrame::SimpleString(format!(
-                "FULLRESYNC {} {}",
-                backlog.replid, primary_offset.0
-            ))
+        let continued_offset = if requested_replid == "?" || requested_offset < 0 {
+            None
         } else {
             match decide_psync(
                 &backlog,
                 requested_replid,
                 ReplOffset(requested_offset as u64),
             ) {
-                fr_repl::PsyncDecision::Continue { .. } => {
-                    RespFrame::SimpleString("CONTINUE".to_string())
-                }
-                fr_repl::PsyncDecision::FullResync { .. } => RespFrame::SimpleString(format!(
-                    "FULLRESYNC {} {}",
-                    backlog.replid, primary_offset.0
-                )),
+                fr_repl::PsyncDecision::Continue { requested_offset } => Some(requested_offset),
+                fr_repl::PsyncDecision::FullResync { .. } => None,
             }
+        };
+
+        let response = if continued_offset.is_some() {
+            RespFrame::SimpleString("CONTINUE".to_string())
+        } else {
+            RespFrame::SimpleString(format!(
+                "FULLRESYNC {} {}",
+                backlog.replid, primary_offset.0
+            ))
         };
 
         let replica = self
             .server
             .replication_runtime_state
             .ensure_replica(self.session.client_id);
-        if requested_offset >= 0 {
-            let offset = ReplOffset(requested_offset as u64);
+        if let Some(offset) = continued_offset {
             if offset > replica.ack_offset {
                 replica.ack_offset = offset;
             }
@@ -8836,6 +8830,42 @@ mod tests {
             ),
             RespFrame::SimpleString(format!("FULLRESYNC {} {}", replid, live_offset))
         );
+    }
+
+    #[test]
+    fn replication_fullresync_psync_does_not_credit_replica_with_requested_offset() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"rep:key", b"value"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLCONF", b"listening-port", b"6380"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let live_offset = rt.replication_primary_offset().0.to_string();
+        let bogus_requested_offset = b"999999";
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"PSYNC", b"wrong-replid", bogus_requested_offset]),
+                2
+            ),
+            RespFrame::SimpleString(format!(
+                "FULLRESYNC {} {}",
+                rt.server.replication_runtime_state.backlog.replid, live_offset
+            ))
+        );
+
+        let replica = rt
+            .server
+            .replication_runtime_state
+            .replicas
+            .get(&rt.session.client_id)
+            .expect("replica state");
+        assert_eq!(replica.ack_offset, fr_repl::ReplOffset(0));
+        assert_eq!(replica.fsync_offset, fr_repl::ReplOffset(0));
     }
 
     #[test]
