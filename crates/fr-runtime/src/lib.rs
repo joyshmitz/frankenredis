@@ -6151,7 +6151,9 @@ impl Runtime {
                     .collect();
                 RespFrame::Array(Some(vec![
                     hello_bulk("master"),
-                    RespFrame::Integer(0),
+                    RespFrame::Integer(
+                        self.server.replication_ack_state.primary_offset.0 as i64,
+                    ),
                     RespFrame::Array(Some(replicas)),
                 ]))
             }

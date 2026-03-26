@@ -884,8 +884,7 @@
             "value": "master"
           },
           {
-            "kind": "integer",
-            "value": 0
+            "kind": "any_integer"
           },
           {
             "kind": "array",
