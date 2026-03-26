@@ -5324,6 +5324,8 @@ impl Store {
                     pending_entry.last_delivered_ms = now_ms;
                 }
             }
+            // Consumer group state was mutated — mark dirty for AOF persistence
+            self.dirty = self.dirty.saturating_add(1);
         }
         // Note: when reading pending entries (cursor is Id), Redis does NOT
         // increment delivery count - it's a non-destructive replay.

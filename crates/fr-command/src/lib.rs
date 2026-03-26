@@ -834,6 +834,12 @@ pub fn is_write_command(cmd: &[u8]) -> bool {
             | CommandId::Zrangestore
             | CommandId::Bitfield
             | CommandId::Blmove
+            | CommandId::Blpop
+            | CommandId::Brpop
+            | CommandId::Blmpop
+            | CommandId::Lmpop
+            | CommandId::Zmpop
+            | CommandId::Xreadgroup
             | CommandId::Geosearchstore
     )
 }
