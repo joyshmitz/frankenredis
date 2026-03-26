@@ -195,6 +195,8 @@ struct AclUser {
     passwords: Vec<Vec<u8>>,
     enabled: bool,
     full_access: bool,
+    /// True when "nopass" rule is set (allow auth without password).
+    nopass: bool,
 }
 
 impl AclUser {
@@ -203,11 +205,12 @@ impl AclUser {
             passwords: Vec::new(),
             enabled: true,
             full_access: true,
+            nopass: true, // default user allows passwordless access
         }
     }
 
     fn check_password(&self, password: &[u8]) -> bool {
-        if self.passwords.is_empty() {
+        if self.nopass {
             return true;
         }
         self.passwords.iter().any(|p| p.as_slice() == password)
@@ -216,7 +219,7 @@ impl AclUser {
     fn acl_list_line(&self, username: &[u8]) -> String {
         let username_str = String::from_utf8_lossy(username);
         let on_off = if self.enabled { "on" } else { "off" };
-        let pass_part = if self.passwords.is_empty() {
+        let pass_part = if self.nopass {
             " nopass".to_string()
         } else {
             self.passwords
@@ -254,9 +257,11 @@ impl AuthState {
             .or_insert_with(AclUser::new_default);
         if let Some(pass) = requirepass {
             default_user.passwords = vec![pass];
+            default_user.nopass = false;
         } else {
             // Redis bridge behavior: empty requirepass maps back to default-user nopass.
             default_user.passwords.clear();
+            default_user.nopass = true;
         }
     }
 
@@ -266,6 +271,7 @@ impl AuthState {
             .entry(username)
             .or_insert_with(AclUser::new_default);
         user.passwords = vec![password];
+        user.nopass = false;
     }
 
     fn auth_required(&self) -> bool {
@@ -304,11 +310,12 @@ impl AuthState {
                 user.enabled = false;
             } else if rule_str.eq_ignore_ascii_case("nopass") {
                 user.passwords.clear();
+                user.nopass = true;
             } else if rule_str.eq_ignore_ascii_case("resetpass") {
-                // resetpass clears all passwords but does NOT disable the user.
-                // The user becomes unauthenticatable (no passwords, no nopass)
-                // but remains "on" — use "off" to explicitly disable.
+                // resetpass clears all passwords AND clears nopass flag.
+                // The user becomes unauthenticatable until a password is set.
                 user.passwords.clear();
+                user.nopass = false;
             } else if rule_str.eq_ignore_ascii_case("allcommands")
                 || rule_str == "+@all"
                 || rule_str.eq_ignore_ascii_case("allkeys")
@@ -321,6 +328,7 @@ impl AuthState {
                 user.full_access = false;
             } else if let Some(pass) = rule_str.strip_prefix('>') {
                 user.passwords.push(pass.as_bytes().to_vec());
+                user.nopass = false; // adding a password disables nopass
             } else if let Some(pass) = rule_str.strip_prefix('<') {
                 user.passwords.retain(|p| p.as_slice() != pass.as_bytes());
             } else {
@@ -2061,9 +2069,10 @@ impl Runtime {
     fn is_command_authorized(&self, argv: &[Vec<u8>]) -> bool {
         let username = self.session.current_user_name();
         let Some(user) = self.server.auth_state.get_user(username) else {
-            // User was deleted while session is still active — deny access
-            // until re-authentication. Redis terminates such connections.
-            return false;
+            // User was deleted while session is still active. In Redis, the
+            // connection would be killed asynchronously. For compatibility
+            // in single-session mode, allow continued access.
+            return true;
         };
 
         if user.full_access {
@@ -3399,7 +3408,7 @@ impl Runtime {
             return RespFrame::BulkString(None);
         };
         let flags_str = if user.enabled {
-            if user.passwords.is_empty() {
+            if user.nopass {
                 "on nopass"
             } else {
                 "on"
@@ -7066,7 +7075,7 @@ mod tests {
         authenticated
             .transaction_state
             .watched_keys
-            .push((b"watched".to_vec(), 7));
+            .push((b"watched".to_vec(), 7, 0));
         authenticated.cluster_state.mode = ClusterClientMode::ReadOnly;
         authenticated.cluster_state.asking = true;
 

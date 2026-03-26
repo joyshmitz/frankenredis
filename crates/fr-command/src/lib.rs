@@ -3404,6 +3404,11 @@ fn georadius(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
+    if radius < 0.0 {
+        return Ok(RespFrame::Error(
+            "ERR radius cannot be negative".to_string(),
+        ));
+    }
     let unit_mult = match geo_unit_to_meters(&argv[5]) {
         Some(m) => m,
         None => {
@@ -3450,6 +3455,11 @@ fn georadiusbymember(
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
+    if radius < 0.0 {
+        return Ok(RespFrame::Error(
+            "ERR radius cannot be negative".to_string(),
+        ));
+    }
     let unit_mult = match geo_unit_to_meters(&argv[4]) {
         Some(m) => m,
         None => {
@@ -3548,6 +3558,11 @@ fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
+            if r < 0.0 {
+                return Ok(RespFrame::Error(
+                    "ERR radius cannot be negative".to_string(),
+                ));
+            }
             let um = match geo_unit_to_meters(&argv[i + 2]) {
                 Some(m) => m,
                 None => {
@@ -3577,6 +3592,11 @@ fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
+            if w < 0.0 || h < 0.0 {
+                return Ok(RespFrame::Error(
+                    "ERR width or height cannot be negative".to_string(),
+                ));
+            }
             let um = match geo_unit_to_meters(&argv[i + 3]) {
                 Some(m) => m,
                 None => {
@@ -3739,6 +3759,11 @@ fn geosearchstore(
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
+            if r < 0.0 {
+                return Ok(RespFrame::Error(
+                    "ERR radius cannot be negative".to_string(),
+                ));
+            }
             let um = match geo_unit_to_meters(&synth[i + 2]) {
                 Some(m) => m,
                 None => {
@@ -3768,6 +3793,11 @@ fn geosearchstore(
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
+            if w < 0.0 || h < 0.0 {
+                return Ok(RespFrame::Error(
+                    "ERR width or height cannot be negative".to_string(),
+                ));
+            }
             let um = match geo_unit_to_meters(&synth[i + 3]) {
                 Some(m) => m,
                 None => {
