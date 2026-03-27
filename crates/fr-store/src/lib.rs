@@ -5057,7 +5057,7 @@ impl Store {
             Some(entry) => match &mut entry.value {
                 Value::Stream(entries) => {
                     entries.insert(id, fields.to_vec());
-                    entry.touch(now_ms);
+                    entry.touch_write(now_ms);
                     // Track high watermark so IDs stay monotonic after XDEL
                     let wm = self.stream_last_ids.entry(key.to_vec()).or_insert((0, 0));
                     if id > *wm {
@@ -5184,7 +5184,7 @@ impl Store {
                         }
                     }
                     if removed > 0 {
-                        entry.touch(now_ms);
+                        entry.touch_write(now_ms);
                         self.dirty = self.dirty.saturating_add(removed as u64);
                     }
                     Ok(removed)
@@ -6040,7 +6040,7 @@ impl Store {
             Some(entry) => match &entry.value {
                 Value::Stream(_) => {
                     self.stream_last_ids.insert(key.to_vec(), last_id);
-                    entry.touch(now_ms);
+                    entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(1);
                     Ok(true)
                 }

@@ -1915,6 +1915,61 @@
         "kind": "integer",
         "value": 3
       }
+    },
+    {
+      "name": "georadius_ro_basic",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUS_RO",
+        "mygeo",
+        "13.361389",
+        "38.115556",
+        "200",
+        "km",
+        "ASC"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Palermo" },
+          { "kind": "bulk", "value": "Catania" }
+        ]
+      }
+    },
+    {
+      "name": "georadiusbymember_ro_basic",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUSBYMEMBER_RO",
+        "mygeo",
+        "Palermo",
+        "200",
+        "km",
+        "ASC"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "Palermo" },
+          { "kind": "bulk", "value": "Catania" }
+        ]
+      }
+    },
+    {
+      "name": "georadius_ro_negative_radius_error",
+      "now_ms": 100,
+      "argv": [
+        "GEORADIUS_RO",
+        "mygeo",
+        "13.361389",
+        "38.115556",
+        "-1",
+        "km"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR radius cannot be negative"
+      }
     }
   ]
 }
