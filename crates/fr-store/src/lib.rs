@@ -468,6 +468,8 @@ struct Entry {
     expires_at_ms: Option<u64>,
     /// Last access timestamp in milliseconds (for OBJECT IDLETIME / LRU).
     last_access_ms: u64,
+    /// Monotonic modification counter (bumped on every write, used by WATCH).
+    modification_count: u64,
 }
 
 impl Entry {
@@ -476,11 +478,21 @@ impl Entry {
             value,
             expires_at_ms,
             last_access_ms: now_ms,
+            modification_count: 0,
         }
     }
 
     fn touch(&mut self, now_ms: u64) {
         self.last_access_ms = now_ms;
+    }
+
+    fn bump_mod_count(&mut self) {
+        self.modification_count = self.modification_count.wrapping_add(1);
+    }
+
+    fn touch_write(&mut self, now_ms: u64) {
+        self.touch(now_ms);
+        self.bump_mod_count();
     }
 }
 
@@ -1049,7 +1061,7 @@ impl Store {
                 Value::String(v) => {
                     v.extend_from_slice(value);
                     let len = v.len();
-                    entry.touch(now_ms);
+                    entry.touch_write(now_ms);
                     self.dirty += 1;
                     Ok(len)
                 }
@@ -1255,7 +1267,7 @@ impl Store {
                     }
                     _ => return Err(StoreError::WrongType),
                 };
-                entry.touch(now_ms);
+                entry.touch_write(now_ms);
                 self.dirty += 1;
                 Ok(len)
             }
@@ -1301,7 +1313,7 @@ impl Store {
                     if old_len != v.len() || old_bit != value {
                         self.dirty = self.dirty.saturating_add(1);
                     }
-                    entry.touch(now_ms);
+                    entry.touch_write(now_ms);
                     Ok(old_bit)
                 }
                 _ => Err(StoreError::WrongType),
@@ -1841,8 +1853,13 @@ impl Store {
         }
     }
 
-    fn internal_entries_insert(&mut self, key: Vec<u8>, entry: Entry) -> Option<Entry> {
+    fn internal_entries_insert(&mut self, key: Vec<u8>, mut entry: Entry) -> Option<Entry> {
         let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
+
+        if let Some(old_entry) = self.entries.get(&key) {
+            entry.modification_count = old_entry.modification_count.wrapping_add(1);
+        }
+
         if entry.expires_at_ms.is_some() {
             self.expires_count = self.expires_count.saturating_add(1);
             if db < self.database_count {
@@ -2315,7 +2332,7 @@ impl Store {
         };
         let is_new = !m.contains_key(&field);
         m.insert(field, value);
-        entry.touch(now_ms);
+        entry.touch_write(now_ms);
         self.dirty = self.dirty.saturating_add(1);
         Ok(is_new)
     }
@@ -2355,7 +2372,7 @@ impl Store {
                 }
                 let is_empty = m.is_empty();
                 if removed > 0 {
-                    entry.touch(now_ms);
+                    entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(removed);
                 }
                 if is_empty {
@@ -2491,7 +2508,7 @@ impl Store {
             .checked_add(delta)
             .ok_or(StoreError::IntegerOverflow)?;
         m.insert(field.to_vec(), next.to_string().into_bytes());
-        entry.touch(now_ms);
+        entry.touch_write(now_ms);
         self.dirty = self.dirty.saturating_add(1);
         Ok(next)
     }
@@ -2510,7 +2527,7 @@ impl Store {
         };
         if let std::collections::btree_map::Entry::Vacant(slot) = m.entry(field) {
             slot.insert(value);
-            entry.touch(now_ms);
+            entry.touch_write(now_ms);
             self.dirty = self.dirty.saturating_add(1);
             Ok(true)
         } else {
@@ -2556,7 +2573,7 @@ impl Store {
             return Err(StoreError::IncrFloatNaN);
         }
         m.insert(field.to_vec(), next.to_string().into_bytes());
-        entry.touch(now_ms);
+        entry.touch_write(now_ms);
         self.dirty = self.dirty.saturating_add(1);
         Ok(next)
     }
@@ -2671,7 +2688,7 @@ impl Store {
                         l.push_front(v.clone());
                     }
                     let len = l.len();
-                    entry.touch(now_ms);
+                    entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(values.len() as u64);
                     Ok(len)
                 }
@@ -2707,7 +2724,7 @@ impl Store {
                         l.push_back(v.clone());
                     }
                     let len = l.len();
-                    entry.touch(now_ms);
+                    entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(values.len() as u64);
                     Ok(len)
                 }
@@ -2863,7 +2880,7 @@ impl Store {
                     }
                     let idx = normalize_index(index, len) as usize;
                     l[idx] = value;
-                    entry.touch(now_ms);
+                    entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(1);
                     Ok(())
                 }
@@ -2978,7 +2995,7 @@ impl Store {
                     if let Some(pos) = l.iter().position(|v| v.as_slice() == pivot) {
                         l.insert(pos, value);
                         let len = l.len();
-                        entry.touch(now_ms);
+                        entry.touch_write(now_ms);
                         self.dirty = self.dirty.saturating_add(1);
                         Ok(len as i64)
                     } else {
@@ -3005,7 +3022,7 @@ impl Store {
                     if let Some(pos) = l.iter().position(|v| v.as_slice() == pivot) {
                         l.insert(pos + 1, value);
                         let len = l.len();
-                        entry.touch(now_ms);
+                        entry.touch_write(now_ms);
                         self.dirty = self.dirty.saturating_add(1);
                         Ok(len as i64)
                     } else {
@@ -3874,7 +3891,7 @@ impl Store {
                 _ => return Err(StoreError::WrongType),
             };
             if r {
-                entry.touch(now_ms);
+                entry.touch_write(now_ms);
                 self.dirty = self.dirty.saturating_add(1);
             }
             r
@@ -4039,7 +4056,7 @@ impl Store {
             (added, changed)
         };
         if added > 0 || changed > 0 {
-            entry.touch(now_ms);
+            entry.touch_write(now_ms);
             self.dirty = self.dirty.saturating_add((added + changed) as u64);
         }
         if opts.ch {
@@ -4068,7 +4085,7 @@ impl Store {
         };
 
         if removed > 0 {
-            entry.touch(now_ms);
+            entry.touch_write(now_ms);
             self.dirty = self.dirty.saturating_add(removed);
         }
         if is_empty {
@@ -4412,7 +4429,7 @@ impl Store {
         }
 
         zs.insert(member, new_score);
-        entry.touch(now_ms);
+        entry.touch_write(now_ms);
         self.dirty = self.dirty.saturating_add(1);
         Ok(Some(new_score))
     }
@@ -4775,7 +4792,7 @@ impl Store {
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
                         self.dirty = self.dirty.saturating_add(removed_count as u64);
-                        entry.touch(now_ms);
+                        entry.touch_write(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
@@ -4829,7 +4846,7 @@ impl Store {
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
                         self.dirty = self.dirty.saturating_add(removed_count as u64);
-                        entry.touch(now_ms);
+                        entry.touch_write(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
@@ -4867,7 +4884,7 @@ impl Store {
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
                         self.dirty = self.dirty.saturating_add(removed_count as u64);
-                        entry.touch(now_ms);
+                        entry.touch_write(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
@@ -6386,6 +6403,7 @@ impl Store {
             dest.to_vec(),
             Entry::new(Value::String(result), None, now_ms),
         );
+        self.dirty = self.dirty.saturating_add(1);
         Ok(len)
     }
 
@@ -6951,6 +6969,7 @@ impl Store {
             self.stream_last_ids.insert(destination.to_vec(), last_id);
         }
         self.internal_entries_insert(destination.to_vec(), entry);
+        self.dirty = self.dirty.saturating_add(1);
         Ok(true)
     }
 
@@ -6985,6 +7004,7 @@ impl Store {
             key,
             Entry::new(Value::List(elements.into_iter().collect()), None, 0),
         );
+        self.dirty = self.dirty.saturating_add(1);
     }
 
     /// Compute a fingerprint for a single key's current state.
@@ -7051,6 +7071,21 @@ impl Store {
         let expiry_bytes = entry.expires_at_ms.unwrap_or(0).to_le_bytes();
         hash = fnv1a_update(hash, &expiry_bytes);
         hash
+    }
+
+    /// Return the modification counter for a key (0 if key doesn't exist or is expired).
+    pub fn key_modification_count(&self, key: &[u8], now_ms: u64) -> u64 {
+        match self.entries.get(key) {
+            Some(entry) => {
+                if let Some(exp) = entry.expires_at_ms
+                    && now_ms >= exp
+                {
+                    return 0;
+                }
+                entry.modification_count
+            }
+            None => 0,
+        }
     }
 
     #[must_use]
@@ -7205,6 +7240,7 @@ impl Store {
     pub fn script_load(&mut self, script: &[u8]) -> String {
         let sha1_hex = sha1_hex(script);
         self.script_cache.insert(sha1_hex.clone(), script.to_vec());
+        self.dirty = self.dirty.saturating_add(1);
         sha1_hex
     }
 
@@ -7222,6 +7258,7 @@ impl Store {
     /// Flush the script cache.
     pub fn script_flush(&mut self) {
         self.script_cache.clear();
+        self.dirty = self.dirty.saturating_add(1);
     }
 
     /// Look up a script body by SHA1 hex.
@@ -7295,6 +7332,7 @@ impl Store {
         };
 
         self.function_libraries.insert(lib_name.clone(), library);
+        self.dirty = self.dirty.saturating_add(1);
         Ok(lib_name)
     }
 
@@ -7305,6 +7343,7 @@ impl Store {
                 "ERR Library not found".to_string(),
             ));
         }
+        self.dirty = self.dirty.saturating_add(1);
         Ok(())
     }
 
@@ -7328,6 +7367,7 @@ impl Store {
     /// Flush all function libraries.
     pub fn function_flush(&mut self) {
         self.function_libraries.clear();
+        self.dirty = self.dirty.saturating_add(1);
     }
 
     /// Dump all function libraries as a serialized blob.
@@ -7460,6 +7500,7 @@ impl Store {
                 },
             );
         }
+        self.dirty = self.dirty.saturating_add(1);
         Ok(())
     }
 
@@ -7883,6 +7924,7 @@ impl Store {
             None
         };
         self.internal_entries_insert(key.to_vec(), Entry::new(value, expires_at_ms, now_ms));
+        self.dirty = self.dirty.saturating_add(1);
         Ok(())
     }
 
