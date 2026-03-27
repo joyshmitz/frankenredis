@@ -4202,7 +4202,7 @@ impl Store {
                     let len = zs.len() as i64;
                     let s = normalize_index(start, len);
                     let e = normalize_index(stop, len);
-                    if s > e || s >= len {
+                    if s > e || s >= len || e < 0 {
                         return Ok(Vec::new());
                     }
                     let s_idx = s.max(0) as usize;
@@ -4238,7 +4238,7 @@ impl Store {
                     let len = zs.len() as i64;
                     let s = normalize_index(start, len);
                     let e = normalize_index(stop, len);
-                    if s > e || s >= len {
+                    if s > e || s >= len || e < 0 {
                         return Ok(Vec::new());
                     }
                     let s_idx = s.max(0) as usize;
@@ -4571,7 +4571,7 @@ impl Store {
                     let len = zs.len() as i64;
                     let s = normalize_index(start, len);
                     let e = normalize_index(stop, len);
-                    if s > e || s >= len {
+                    if s > e || s >= len || e < 0 {
                         return Ok(Vec::new());
                     }
                     let s_idx = s.max(0) as usize;
@@ -4606,7 +4606,7 @@ impl Store {
                     let len = zs.len() as i64;
                     let s = normalize_index(start, len);
                     let e = normalize_index(stop, len);
-                    if s > e || s >= len {
+                    if s > e || s >= len || e < 0 {
                         return Ok(Vec::new());
                     }
                     let s_idx = s.max(0) as usize;
@@ -4773,7 +4773,7 @@ impl Store {
                     let len = zs.len();
                     let s = normalize_index(start, len as i64);
                     let e = normalize_index(stop, len as i64);
-                    if s > e || s >= len as i64 {
+                    if s > e || s >= len as i64 || e < 0 {
                         return Ok(0);
                     }
                     let s_idx = s.max(0) as usize;
