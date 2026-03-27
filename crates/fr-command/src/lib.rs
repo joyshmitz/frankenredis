@@ -12510,6 +12510,23 @@ mod tests {
     }
 
     #[test]
+    fn is_write_command_covers_all_command_table_write_flags() {
+        // Exhaustive: every command in COMMAND_TABLE with "write" in flags
+        // must return true from is_write_command. This prevents AOF data loss
+        // regressions when new commands are added.
+        let mut missing = Vec::new();
+        for &(name, _arity, flags, _first, _last, _step) in COMMAND_TABLE {
+            if flags.contains("write") && !is_write_command(name.as_bytes()) {
+                missing.push(name);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "Commands with 'write' flag NOT in is_write_command (AOF data loss!): {missing:?}"
+        );
+    }
+
+    #[test]
     fn classify_command_matches_linear_reference() {
         let samples: &[&[u8]] = &[
             b"PING",
