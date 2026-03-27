@@ -11832,4 +11832,89 @@ mod tests {
         assert!(commands.contains(&b"RPUSH".as_slice()));
         assert!(commands.contains(&b"SADD".as_slice()));
     }
+
+    #[test]
+    fn xreadgroup_increments_dirty_on_new_entries() {
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1000, 0), &[(b"f".to_vec(), b"v".to_vec())], 0)
+            .unwrap();
+        assert!(store.xgroup_create(b"s", b"g", (0, 0), false, 0).unwrap());
+        let before = store.dirty;
+        store
+            .xreadgroup(
+                b"s",
+                b"g",
+                b"c",
+                group_read_options(StreamGroupReadCursor::NewEntries, false, None),
+                10,
+            )
+            .unwrap();
+        assert!(
+            store.dirty > before,
+            "XREADGROUP with new entries must increment dirty for AOF"
+        );
+    }
+
+    #[test]
+    fn xclaim_increments_dirty() {
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1, 0), &[(b"f".to_vec(), b"v".to_vec())], 0)
+            .unwrap();
+        assert!(store.xgroup_create(b"s", b"g", (0, 0), false, 0).unwrap());
+        store
+            .xreadgroup(
+                b"s",
+                b"g",
+                b"old_consumer",
+                group_read_options(StreamGroupReadCursor::NewEntries, false, None),
+                100,
+            )
+            .unwrap();
+        let before = store.dirty;
+        let opts = StreamClaimOptions {
+            min_idle_time_ms: 0,
+            idle_ms: None,
+            time_ms: None,
+            retrycount: None,
+            force: true,
+            justid: false,
+            lastid: None,
+        };
+        let _ = store.xclaim(b"s", b"g", b"new_consumer", &[(1, 0)], &opts, 200);
+        assert!(
+            store.dirty > before,
+            "XCLAIM must increment dirty for AOF"
+        );
+    }
+
+    #[test]
+    fn xgroup_create_increments_dirty() {
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1, 0), &[(b"f".to_vec(), b"v".to_vec())], 0)
+            .unwrap();
+        let before = store.dirty;
+        assert!(store.xgroup_create(b"s", b"g", (0, 0), false, 0).unwrap());
+        assert!(
+            store.dirty > before,
+            "XGROUP CREATE must increment dirty for AOF"
+        );
+    }
+
+    #[test]
+    fn xgroup_destroy_increments_dirty() {
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1, 0), &[(b"f".to_vec(), b"v".to_vec())], 0)
+            .unwrap();
+        store.xgroup_create(b"s", b"g", (0, 0), false, 0).unwrap();
+        let before = store.dirty;
+        assert!(store.xgroup_destroy(b"s", b"g", 0).unwrap());
+        assert!(
+            store.dirty > before,
+            "XGROUP DESTROY must increment dirty for AOF"
+        );
+    }
 }

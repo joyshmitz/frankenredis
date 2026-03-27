@@ -22,7 +22,7 @@ Non-negotiable policy:
 | Replication baseline | in_progress | implemented/tested baseline includes backlog-window tracking, PSYNC decisioning, SYNC/FULLRESYNC replies, replica ACK/fsync accounting, WAIT/WAITAOF thresholds, full snapshot apply on replicas, CONTINUE backlog replay, and server-level replica reconnect/partial resync flow; remaining work is widening oracle coverage and hardening edge semantics, not initial protocol sync bring-up |
 | ACL/config mode split | in_progress | implemented/tested baseline includes AUTH plus ACL lifecycle commands (`SETUSER`/`GETUSER`/`DELUSER`/`LIST`/`WHOAMI`/`CAT`/`GENPASS`/`LOG`) and broad live CONFIG GET/SET coverage in `fr-runtime`, including multi-pattern glob matching, memory/latency/replication/query-buffer knobs, appendonly/dir/dbfilename, and keyspace-notification configuration; `core_acl` and `core_config` conformance are online and passing. Remaining work is long-tail parameter and policy-surface expansion rather than initial ACL/CONFIG wiring |
 | Differential conformance harness | in_progress | implemented/tested baseline includes general fixture execution plus dedicated protocol-negative and replay runners, FR-P2C packet-family suites (`FR-P2C-001` through `FR-P2C-009`), structured-log verification, and broad smoke coverage across core command families, packet journeys, protocol abuse, and persistence replay. Live Redis diff entry points also exist for side-by-side oracle checks when a local Redis instance is available. Remaining work is broader oracle depth and fixture expansion, not basic harness bring-up |
-| Benchmark + optimization artifacts | in_progress | round1 + round2 baseline JSON, syscall profile, and expanded golden checksum artifacts added |
+| Benchmark + optimization artifacts | in_progress | checked-in evidence currently lives under `artifacts/optimization/phase2c-gate` (baseline/after hyperfine summaries, stdout/sha256 captures, syscall profiles, and gate harness) plus `artifacts/optimization/ISOMORPHISM_PROOF_ROUND{1,2}.md` and `artifacts/phase2c/schema/topology_lock_v1.json`; remaining work is broader benchmark refresh/repopulation and packet-directory evidence expansion, not initial optimization-proof scaffolding |
 | Full command/API surface closure | parity_green | All 241 Redis base commands have real implementations (zero stubs). Per-database key isolation implemented (encode_db_key namespace prefix, DB-scoped KEYS/DBSIZE/FLUSHDB/RANDOMKEY/SCAN/MOVE/COPY, SWAPDB). COMMAND DOCS, COMMAND GETKEYSANDFLAGS, PFDEBUG, PFSELFTEST, MONITOR (streaming), MIGRATE (DUMP/RESTORE over TCP), FAILOVER (standalone validation), MODULE (proper error handling), SENTINEL (non-sentinel mode), CONFIG HELP. CLIENT PAUSE with actual blocking and starvation fix. SHUTDOWN graceful exit with optional SAVE. Lua closures with upvalue capture. DUMP/RESTORE upgraded to CRC64 with consistent bounds checks. XPENDING IDLE option (Redis 6.2+). XINFO CONSUMERS with real pending/idle metrics. CONFIG SET/GET fully wired for maxclients, hz, busy-reply-threshold, lua-time-limit, maxmemory-samples, repl-backlog-size, repl-timeout, client-query-buffer-limit, proto-max-bulk-len, client-output-buffer-limit, appendonly, dir, dbfilename. NUM_DATABASES runtime-configurable via Vec. Per-client peer address tracking for CLIENT LIST. Stream RDB persistence. OBJECT ENCODING canonical int check. 435+ unit tests, 3700+ conformance cases, 39 smoke tests all pass. |
 
 ## Required Evidence Per Feature Family
@@ -61,8 +61,10 @@ Non-negotiable policy:
 - `crates/fr-conformance/fixtures/core_function.json`
 - `crates/fr-conformance/fixtures/core_wait.json`
 - `crates/fr-conformance/fixtures/persist_replay.json`
-- `baselines/round1_conformance_baseline.json`
-- `baselines/round1_conformance_strace.txt`
-- `baselines/round2_protocol_negative_baseline.json`
-- `baselines/round2_protocol_negative_strace.txt`
-- `golden_checksums.txt`
+- `artifacts/optimization/phase2c-gate/baseline_hyperfine.json`
+- `artifacts/optimization/phase2c-gate/baseline_strace.txt`
+- `artifacts/optimization/phase2c-gate/after_hyperfine_multi.json`
+- `artifacts/optimization/phase2c-gate/after_multi_strace.txt`
+- `artifacts/optimization/ISOMORPHISM_PROOF_ROUND1.md`
+- `artifacts/optimization/ISOMORPHISM_PROOF_ROUND2.md`
+- `artifacts/phase2c/schema/topology_lock_v1.json`

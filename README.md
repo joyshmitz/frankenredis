@@ -34,12 +34,14 @@ This project uses four pervasive disciplines:
   - replication sync baseline: `PSYNC`/`SYNC` negotiation, full-resync snapshot apply, partial backlog replay, replica reconnect flow, and live replication offset reporting
   - strict/hardened compatibility gate + evidence ledger scaffold
   - fixture-driven conformance harness (`core_*` families + phase2c packet suites)
-- baseline and proof artifacts added:
-  - `baselines/round1_conformance_baseline.json`
-  - `baselines/round1_conformance_strace.txt`
-  - `baselines/round2_protocol_negative_baseline.json`
-  - `baselines/round2_protocol_negative_strace.txt`
-  - `golden_checksums.txt`
+- checked-in optimization and proof artifacts currently include:
+  - `artifacts/optimization/phase2c-gate/baseline_hyperfine.json`
+  - `artifacts/optimization/phase2c-gate/baseline_strace.txt`
+  - `artifacts/optimization/phase2c-gate/after_hyperfine_multi.json`
+  - `artifacts/optimization/phase2c-gate/after_multi_strace.txt`
+  - `artifacts/optimization/ISOMORPHISM_PROOF_ROUND1.md`
+  - `artifacts/optimization/ISOMORPHISM_PROOF_ROUND2.md`
+  - `artifacts/phase2c/schema/topology_lock_v1.json`
 
 ## Full Drop-In Parity Contract
 
