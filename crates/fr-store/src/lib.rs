@@ -1645,9 +1645,15 @@ impl Store {
 
     pub fn rename(&mut self, key: &[u8], newkey: &[u8], now_ms: u64) -> Result<(), StoreError> {
         self.drop_if_expired(key, now_ms);
+        if !self.entries.contains_key(key) {
+            return Err(StoreError::KeyNotFound);
+        }
+        if key == newkey {
+            return Ok(());
+        }
         let entry = self
             .internal_entries_remove(key)
-            .ok_or(StoreError::KeyNotFound)?;
+            .unwrap();
         let moved_groups = self.stream_groups.remove(key);
         let moved_last_id = self.stream_last_ids.remove(key);
         self.internal_entries_remove(newkey);
@@ -4356,21 +4362,59 @@ impl Store {
         delta: f64,
         now_ms: u64,
     ) -> Result<f64, StoreError> {
+        self.zincrby_with_options(key, member, delta, ZaddOptions::default(), now_ms)
+            .map(|opt| opt.unwrap_or(0.0)) // ZINCRBY without options always succeeds
+    }
+
+    /// Increment score of member by delta, respecting ZADD options (NX, XX, GT, LT).
+    /// Returns None if the operation was aborted due to options.
+    pub fn zincrby_with_options(
+        &mut self,
+        key: &[u8],
+        member: Vec<u8>,
+        delta: f64,
+        opts: ZaddOptions,
+        now_ms: u64,
+    ) -> Result<Option<f64>, StoreError> {
         self.drop_if_expired(key, now_ms);
+
+        if opts.xx && !self.entries.contains_key(key) {
+            return Ok(None);
+        }
+
         let entry = self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
         let Value::SortedSet(zs) = &mut entry.value else {
             return Err(StoreError::WrongType);
         };
-        let new_score = zs.get_score(&member).unwrap_or(0.0) + delta;
-        // Redis allows infinity results from ZINCRBY.
-        // Only NaN is rejected (e.g., inf + (-inf) = NaN).
+
+        let old_score = zs.get_score(&member);
+
+        if opts.nx && old_score.is_some() {
+            return Ok(None);
+        }
+        if opts.xx && old_score.is_none() {
+            return Ok(None);
+        }
+
+        let new_score = old_score.unwrap_or(0.0) + delta;
+
         if new_score.is_nan() {
             return Err(StoreError::IncrFloatNaN);
         }
+
+        if let Some(old) = old_score {
+            if opts.gt && new_score <= old {
+                return Ok(None);
+            }
+            if opts.lt && new_score >= old {
+                return Ok(None);
+            }
+        }
+
         zs.insert(member, new_score);
         entry.touch(now_ms);
         self.dirty = self.dirty.saturating_add(1);
-        Ok(new_score)
+        Ok(Some(new_score))
     }
 
     /// Remove and return the member with the lowest score.

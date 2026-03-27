@@ -2645,7 +2645,7 @@ fn geo_hash_string_from_score(score: f64) -> Option<Vec<u8>> {
 }
 
 fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
-    // ZADD key [NX|XX] [GT|LT] [CH] score member [score member ...]
+    // ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]
     if argv.len() < 4 {
         return Err(CommandError::WrongArity("ZADD"));
     }
@@ -2655,6 +2655,7 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     let mut gt = false;
     let mut lt = false;
     let mut ch = false;
+    let mut incr = false;
     let mut i = 2;
 
     // Parse option flags
@@ -2670,6 +2671,8 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             lt = true;
         } else if opt.eq_ignore_ascii_case("CH") {
             ch = true;
+        } else if opt.eq_ignore_ascii_case("INCR") {
+            incr = true;
         } else {
             break; // Start of score-member pairs
         }
@@ -2700,16 +2703,32 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         return Err(CommandError::WrongArity("ZADD"));
     }
 
-    let mut pairs = Vec::with_capacity(remaining / 2);
-    while i + 1 < argv.len() {
-        let score = parse_f64_arg(&argv[i])?;
-        pairs.push((score, argv[i + 1].clone()));
-        i += 2;
+    if incr && remaining != 2 {
+        return Ok(RespFrame::Error(
+            "ERR INCR option supports a single increment-element pair".to_string(),
+        ));
     }
 
     let opts = fr_store::ZaddOptions { nx, xx, gt, lt, ch };
-    let (count, _changed) = store.zadd_with_options(&argv[1], &pairs, opts, now_ms)?;
-    Ok(RespFrame::Integer(i64::try_from(count).unwrap_or(i64::MAX)))
+
+    if incr {
+        let score_delta = parse_f64_arg(&argv[i])?;
+        let member = argv[i + 1].clone();
+        match store.zincrby_with_options(&argv[1], member, score_delta, opts, now_ms)? {
+            Some(new_score) => Ok(RespFrame::BulkString(Some(new_score.to_string().into_bytes()))),
+            None => Ok(RespFrame::BulkString(None)),
+        }
+    } else {
+        let mut pairs = Vec::with_capacity(remaining / 2);
+        while i + 1 < argv.len() {
+            let score = parse_f64_arg(&argv[i])?;
+            pairs.push((score, argv[i + 1].clone()));
+            i += 2;
+        }
+
+        let (count, _changed) = store.zadd_with_options(&argv[1], &pairs, opts, now_ms)?;
+        Ok(RespFrame::Integer(i64::try_from(count).unwrap_or(i64::MAX)))
+    }
 }
 
 fn zrem(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
