@@ -1187,7 +1187,10 @@ fn flush_replica_primary_writes(connection: &mut ReplicaPrimaryConnection) -> io
     let mut total_written = 0;
     let mut result = Ok(());
     while total_written < connection.write_buf.len() {
-        match connection.stream.write(&connection.write_buf[total_written..]) {
+        match connection
+            .stream
+            .write(&connection.write_buf[total_written..])
+        {
             Ok(0) => {
                 result = Err(io::Error::new(
                     ErrorKind::WriteZero,

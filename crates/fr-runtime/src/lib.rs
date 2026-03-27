@@ -38,6 +38,59 @@ use fr_store::{
     MaxmemoryPolicy, Store, decode_db_key, encode_db_key, glob_match,
 };
 
+/// Return the ACL categories a command belongs to, using the COMMAND_TABLE metadata.
+fn command_categories(cmd_name: &str) -> Vec<String> {
+    let Some(flags) = fr_command::get_command_flags(cmd_name.as_bytes()) else {
+        return Vec::new();
+    };
+    // The ACL category names used by Redis map to flag words and data-type names.
+    // We check against the known category set.
+    const ACL_CATEGORIES: &[&str] = &[
+        "keyspace",
+        "read",
+        "write",
+        "set",
+        "sortedset",
+        "list",
+        "hash",
+        "string",
+        "bitmap",
+        "hyperloglog",
+        "geo",
+        "stream",
+        "pubsub",
+        "admin",
+        "fast",
+        "slow",
+        "blocking",
+        "dangerous",
+        "connection",
+        "transaction",
+        "scripting",
+        "server",
+        "generic",
+    ];
+    let flag_list: Vec<&str> = flags.split_whitespace().collect();
+    let mut cats = Vec::new();
+    for &cat in ACL_CATEGORIES {
+        // Check if the command's flags contain the category name.
+        if flag_list.iter().any(|f| f.eq_ignore_ascii_case(cat)) {
+            cats.push(cat.to_string());
+        }
+    }
+    // Also check if the command appears in category listing (handles edge cases where
+    // flag names differ from category names, e.g., "generic" vs "keyspace").
+    for &cat in ACL_CATEGORIES {
+        if !cats.iter().any(|c| c == cat) {
+            let cat_cmds = commands_in_acl_category(cat);
+            if cat_cmds.iter().any(|c| c.eq_ignore_ascii_case(cmd_name)) {
+                cats.push(cat.to_string());
+            }
+        }
+    }
+    cats
+}
+
 static PACKET_COUNTER: AtomicU64 = AtomicU64::new(1);
 static CLIENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 const DEFAULT_AUTH_USER: &[u8] = b"default";
@@ -194,9 +247,24 @@ const CONFIG_STATIC_PARAMS: &[(&str, &str)] = &[
 struct AclUser {
     passwords: Vec<Vec<u8>>,
     enabled: bool,
-    full_access: bool,
     /// True when "nopass" rule is set (allow auth without password).
     nopass: bool,
+    /// Per-command and per-category permission model.
+    /// When `all_commands` is true, all commands are allowed unless individually denied.
+    /// When `all_commands` is false, only individually allowed commands/categories are permitted.
+    all_commands: bool,
+    /// Explicitly allowed individual commands (lowercase).
+    allowed_commands: HashSet<String>,
+    /// Explicitly denied individual commands (lowercase).
+    denied_commands: HashSet<String>,
+    /// Explicitly allowed categories (lowercase).
+    allowed_categories: HashSet<String>,
+    /// Explicitly denied categories (lowercase).
+    denied_categories: HashSet<String>,
+    /// Key patterns. Empty means no keys allowed unless all_keys is true.
+    all_keys: bool,
+    /// Channel patterns. Empty means no channels allowed unless all_channels is true.
+    all_channels: bool,
 }
 
 impl AclUser {
@@ -204,8 +272,14 @@ impl AclUser {
         Self {
             passwords: Vec::new(),
             enabled: true,
-            full_access: true,
             nopass: true, // default user allows passwordless access
+            all_commands: true,
+            allowed_commands: HashSet::new(),
+            denied_commands: HashSet::new(),
+            allowed_categories: HashSet::new(),
+            denied_categories: HashSet::new(),
+            all_keys: true,
+            all_channels: true,
         }
     }
 
@@ -214,6 +288,93 @@ impl AclUser {
             return true;
         }
         self.passwords.iter().any(|p| p.as_slice() == password)
+    }
+
+    /// Check if a specific command is allowed for this user.
+    fn is_command_allowed(&self, cmd_name: &str) -> bool {
+        let cmd_lower = cmd_name.to_ascii_lowercase();
+
+        // Explicit per-command deny always wins.
+        if self.denied_commands.contains(&cmd_lower) {
+            return false;
+        }
+
+        // Explicit per-command allow always wins (after deny check).
+        if self.allowed_commands.contains(&cmd_lower) {
+            return true;
+        }
+
+        // Check category-level permissions.
+        // Get the categories this command belongs to.
+        let cmd_categories = command_categories(&cmd_lower);
+
+        // If any denied category contains this command, deny it.
+        for denied_cat in &self.denied_categories {
+            if cmd_categories.iter().any(|c| c == denied_cat) {
+                return false;
+            }
+        }
+
+        // If we have allowed categories, check if any match.
+        if !self.allowed_categories.is_empty() {
+            for allowed_cat in &self.allowed_categories {
+                if cmd_categories.iter().any(|c| c == allowed_cat) {
+                    return true;
+                }
+            }
+        }
+
+        // Fall back to base permission.
+        self.all_commands
+    }
+
+    fn commands_string(&self) -> String {
+        if self.all_commands && self.denied_commands.is_empty() && self.denied_categories.is_empty()
+        {
+            return "+@all".to_string();
+        }
+
+        let mut parts: Vec<String> = Vec::new();
+
+        if self.all_commands {
+            parts.push("+@all".to_string());
+        } else if self.allowed_categories.is_empty() && self.allowed_commands.is_empty() {
+            parts.push("-@all".to_string());
+        }
+
+        // Add allowed categories.
+        let mut sorted_cats: Vec<&String> = self.allowed_categories.iter().collect();
+        sorted_cats.sort();
+        for cat in sorted_cats {
+            parts.push(format!("+@{cat}"));
+        }
+
+        // Add denied categories.
+        let mut sorted_denied_cats: Vec<&String> = self.denied_categories.iter().collect();
+        sorted_denied_cats.sort();
+        for cat in sorted_denied_cats {
+            parts.push(format!("-@{cat}"));
+        }
+
+        // Add allowed commands.
+        let mut sorted_cmds: Vec<&String> = self.allowed_commands.iter().collect();
+        sorted_cmds.sort();
+        for cmd in sorted_cmds {
+            parts.push(format!("+{cmd}"));
+        }
+
+        // Add denied commands.
+        let mut sorted_denied: Vec<&String> = self.denied_commands.iter().collect();
+        sorted_denied.sort();
+        for cmd in sorted_denied {
+            parts.push(format!("-{cmd}"));
+        }
+
+        if parts.is_empty() {
+            "-@all".to_string()
+        } else {
+            parts.join(" ")
+        }
     }
 
     fn acl_list_line(&self, username: &[u8]) -> String {
@@ -227,7 +388,10 @@ impl AclUser {
                 .map(|_| " #<hidden>".to_string())
                 .collect::<String>()
         };
-        format!("user {username_str} {on_off}{pass_part} ~* &* +@all")
+        let keys_part = if self.all_keys { " ~*" } else { "" };
+        let channels_part = if self.all_channels { " &*" } else { "" };
+        let commands_part = self.commands_string();
+        format!("user {username_str} {on_off}{pass_part}{keys_part}{channels_part} {commands_part}")
     }
 }
 
@@ -316,21 +480,69 @@ impl AuthState {
                 // The user becomes unauthenticatable until a password is set.
                 user.passwords.clear();
                 user.nopass = false;
-            } else if rule_str.eq_ignore_ascii_case("allcommands")
-                || rule_str == "+@all"
-                || rule_str.eq_ignore_ascii_case("allkeys")
-                || rule_str == "~*"
-                || rule_str.eq_ignore_ascii_case("allchannels")
-                || rule_str == "&*"
-            {
-                user.full_access = true;
+            } else if rule_str.eq_ignore_ascii_case("allcommands") || rule_str == "+@all" {
+                user.all_commands = true;
+                user.allowed_commands.clear();
+                user.denied_commands.clear();
+                user.allowed_categories.clear();
+                user.denied_categories.clear();
+            } else if rule_str.eq_ignore_ascii_case("allkeys") || rule_str == "~*" {
+                user.all_keys = true;
+            } else if rule_str.eq_ignore_ascii_case("allchannels") || rule_str == "&*" {
+                user.all_channels = true;
             } else if rule_str == "-@all" || rule_str.eq_ignore_ascii_case("nocommands") {
-                user.full_access = false;
+                user.all_commands = false;
+                user.allowed_commands.clear();
+                user.denied_commands.clear();
+                user.allowed_categories.clear();
+                user.denied_categories.clear();
+            } else if let Some(cat) = rule_str.strip_prefix("+@") {
+                // +@category — allow all commands in this category.
+                let cat_lower = cat.to_ascii_lowercase();
+                user.allowed_categories.insert(cat_lower.clone());
+                user.denied_categories.remove(&cat_lower);
+            } else if let Some(cat) = rule_str.strip_prefix("-@") {
+                // -@category — deny all commands in this category.
+                let cat_lower = cat.to_ascii_lowercase();
+                user.denied_categories.insert(cat_lower.clone());
+                user.allowed_categories.remove(&cat_lower);
+            } else if let Some(cmd) = rule_str.strip_prefix('+') {
+                // +command — allow this specific command.
+                let cmd_lower = cmd.to_ascii_lowercase();
+                user.allowed_commands.insert(cmd_lower.clone());
+                user.denied_commands.remove(&cmd_lower);
+            } else if let Some(cmd) = rule_str.strip_prefix('-') {
+                // -command — deny this specific command.
+                let cmd_lower = cmd.to_ascii_lowercase();
+                user.denied_commands.insert(cmd_lower.clone());
+                user.allowed_commands.remove(&cmd_lower);
             } else if let Some(pass) = rule_str.strip_prefix('>') {
                 user.passwords.push(pass.as_bytes().to_vec());
                 user.nopass = false; // adding a password disables nopass
             } else if let Some(pass) = rule_str.strip_prefix('<') {
                 user.passwords.retain(|p| p.as_slice() != pass.as_bytes());
+            } else if rule_str.starts_with('~') {
+                // Key pattern (e.g., ~user:*) — for now, accept but only ~* grants full access.
+                if rule_str == "~*" {
+                    user.all_keys = true;
+                }
+                // Non-wildcard key patterns accepted silently (future: store and enforce).
+            } else if rule_str.starts_with('&') {
+                // Channel pattern (e.g., &channel:*).
+                if rule_str == "&*" {
+                    user.all_channels = true;
+                }
+            } else if rule_str.eq_ignore_ascii_case("reset") {
+                // Reset user to default state (no passwords, disabled, no commands).
+                user.passwords.clear();
+                user.nopass = false;
+                user.all_commands = false;
+                user.allowed_commands.clear();
+                user.denied_commands.clear();
+                user.allowed_categories.clear();
+                user.denied_categories.clear();
+                user.all_keys = false;
+                user.all_channels = false;
             } else {
                 return Err(format!(
                     "ERR Error in ACL SETUSER modifier '{}': Syntax error",
@@ -2075,35 +2287,12 @@ impl Runtime {
             return true;
         };
 
-        if user.full_access {
-            return true;
-        }
-
-        // Special check for other runtime-only commands.
-        if let Some(cmd) = argv.first()
-            && let Some(
-                RuntimeSpecialCommand::Config
-                | RuntimeSpecialCommand::Client
-                | RuntimeSpecialCommand::Save
-                | RuntimeSpecialCommand::Bgsave
-                | RuntimeSpecialCommand::Bgrewriteaof
-                | RuntimeSpecialCommand::Shutdown,
-            ) = classify_runtime_special_command(cmd)
-        {
+        let Some(cmd) = argv.first() else {
             return false;
-        }
+        };
 
-        // If user doesn't have full access, they can only run non-dangerous commands.
-        if let Some(cmd) = argv.first()
-            && let Some(flags) = fr_command::get_command_flags(cmd)
-        {
-            let flag_list: Vec<&str> = flags.split_whitespace().collect();
-            if flag_list.contains(&"admin") || flag_list.contains(&"dangerous") {
-                return false;
-            }
-        }
-
-        true
+        let cmd_name = String::from_utf8_lossy(cmd);
+        user.is_command_allowed(&cmd_name)
     }
 
     #[must_use]
@@ -3289,10 +3478,10 @@ impl Runtime {
             let user = self.server.auth_state.get_user(username);
             match user {
                 Some(u) => {
-                    if u.full_access {
+                    let cmd_name = String::from_utf8_lossy(&argv[3]);
+                    if u.is_command_allowed(&cmd_name) {
                         RespFrame::SimpleString("OK".to_string())
                     } else {
-                        let cmd_name = String::from_utf8_lossy(&argv[3]);
                         RespFrame::Error(format!(
                             "ERR User '{}' has no permissions to run the '{}' command",
                             String::from_utf8_lossy(username),
@@ -3408,14 +3597,13 @@ impl Runtime {
             return RespFrame::BulkString(None);
         };
         let flags_str = if user.enabled {
-            if user.nopass {
-                "on nopass"
-            } else {
-                "on"
-            }
+            if user.nopass { "on nopass" } else { "on" }
         } else {
             "off"
         };
+        let commands_str = user.commands_string();
+        let keys_str = if user.all_keys { "~*" } else { "" };
+        let channels_str = if user.all_channels { "&*" } else { "" };
         RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"flags".to_vec())),
             RespFrame::Array(Some(
@@ -3427,11 +3615,11 @@ impl Runtime {
             RespFrame::BulkString(Some(b"passwords".to_vec())),
             RespFrame::Array(Some(Vec::new())),
             RespFrame::BulkString(Some(b"commands".to_vec())),
-            RespFrame::BulkString(Some(b"+@all".to_vec())),
+            RespFrame::BulkString(Some(commands_str.into_bytes())),
             RespFrame::BulkString(Some(b"keys".to_vec())),
-            RespFrame::BulkString(Some(b"~*".to_vec())),
+            RespFrame::BulkString(Some(keys_str.as_bytes().to_vec())),
             RespFrame::BulkString(Some(b"channels".to_vec())),
-            RespFrame::BulkString(Some(b"&*".to_vec())),
+            RespFrame::BulkString(Some(channels_str.as_bytes().to_vec())),
         ]))
     }
 
@@ -6169,9 +6357,7 @@ impl Runtime {
                     .collect();
                 RespFrame::Array(Some(vec![
                     hello_bulk("master"),
-                    RespFrame::Integer(
-                        self.server.replication_ack_state.primary_offset.0 as i64,
-                    ),
+                    RespFrame::Integer(self.server.replication_ack_state.primary_offset.0 as i64),
                     RespFrame::Array(Some(replicas)),
                 ]))
             }
@@ -10655,6 +10841,427 @@ mod tests {
             RespFrame::Error(
                 "ERR User 'alice' has no permissions to run the 'SET' command".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn acl_per_command_allow_specific_commands() {
+        let mut rt = Runtime::default_strict();
+        // Create user with -@all then selectively allow +get +set
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"bob", b"on", b">pass", b"-@all", b"+get", b"+set"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Auth as bob
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"bob", b"pass"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // SET and GET should work
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"k", b"v"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"k"]), 3),
+            RespFrame::BulkString(Some(b"v".to_vec()))
+        );
+
+        // DEL should be denied
+        let del_reply = rt.execute_frame(command(&[b"DEL", b"k"]), 4);
+        assert!(
+            matches!(&del_reply, RespFrame::Error(e) if e.contains("NOPERM")),
+            "DEL should be denied, got: {del_reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_per_command_deny_specific_commands() {
+        let mut rt = Runtime::default_strict();
+        // Create user with +@all then selectively deny -del -flushdb
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"carol",
+                    b"on",
+                    b">pass",
+                    b"+@all",
+                    b"-del",
+                    b"-flushdb"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Auth as carol
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"carol", b"pass"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // SET and GET should work
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"k", b"v"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"k"]), 3),
+            RespFrame::BulkString(Some(b"v".to_vec()))
+        );
+
+        // DEL should be denied
+        let del_reply = rt.execute_frame(command(&[b"DEL", b"k"]), 4);
+        assert!(
+            matches!(&del_reply, RespFrame::Error(e) if e.contains("NOPERM")),
+            "DEL should be denied, got: {del_reply:?}"
+        );
+
+        // FLUSHDB should be denied
+        let flush_reply = rt.execute_frame(command(&[b"FLUSHDB"]), 5);
+        assert!(
+            matches!(&flush_reply, RespFrame::Error(e) if e.contains("NOPERM")),
+            "FLUSHDB should be denied, got: {flush_reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_category_based_permissions() {
+        let mut rt = Runtime::default_strict();
+        // Create user with only read permission
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"reader",
+                    b"on",
+                    b">pass",
+                    b"-@all",
+                    b"+@read",
+                    b"+@connection"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Set a key as default user first
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"k", b"v"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Auth as reader
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"reader", b"pass"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // GET should work (it's a read command)
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"k"]), 3),
+            RespFrame::BulkString(Some(b"v".to_vec()))
+        );
+
+        // SET should be denied (it's a write command)
+        let set_reply = rt.execute_frame(command(&[b"SET", b"k", b"new"]), 4);
+        assert!(
+            matches!(&set_reply, RespFrame::Error(e) if e.contains("NOPERM")),
+            "SET should be denied for read-only user, got: {set_reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_deny_category_overrides_allow_all() {
+        let mut rt = Runtime::default_strict();
+        // +@all -@dangerous: allow everything except dangerous commands
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"safe",
+                    b"on",
+                    b">pass",
+                    b"+@all",
+                    b"-@dangerous"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Dryrun: GET should be allowed
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"safe", b"GET", b"k"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Dryrun: FLUSHALL is in dangerous category
+        let reply = rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"safe", b"FLUSHALL"]), 2);
+        assert!(
+            matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
+            "FLUSHALL should be denied for -@dangerous user, got: {reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_per_command_override_category_deny() {
+        let mut rt = Runtime::default_strict();
+        // -@all +@read +set: deny all, allow reads, plus specifically allow SET
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"mixed", b"on", b">pass", b"-@all", b"+@read", b"+set"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Dryrun: GET should be allowed (via +@read)
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"mixed", b"GET", b"k"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Dryrun: SET should be allowed (via +set)
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"DRYRUN", b"mixed", b"SET", b"k", b"v"]),
+                2
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Dryrun: DEL should be denied (not in +@read, not explicitly allowed)
+        let reply = rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"mixed", b"DEL", b"k"]), 3);
+        assert!(
+            matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
+            "DEL should be denied, got: {reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_getuser_reflects_per_command_permissions() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"dave", b"on", b">pass", b"-@all", b"+get", b"+set"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let reply = rt.execute_frame(command(&[b"ACL", b"GETUSER", b"dave"]), 1);
+        // The commands field should reflect the per-command permissions
+        if let RespFrame::Array(Some(fields)) = &reply {
+            // Find the "commands" field value
+            let mut found_commands = false;
+            for (i, field) in fields.iter().enumerate() {
+                if let RespFrame::BulkString(Some(name)) = field
+                    && name == b"commands"
+                    && i + 1 < fields.len()
+                    && let RespFrame::BulkString(Some(val)) = &fields[i + 1]
+                {
+                    let val_str = std::str::from_utf8(val).unwrap();
+                    assert!(
+                        val_str.contains("+get"),
+                        "commands string should contain +get, got: {val_str}"
+                    );
+                    assert!(
+                        val_str.contains("+set"),
+                        "commands string should contain +set, got: {val_str}"
+                    );
+                    found_commands = true;
+                }
+            }
+            assert!(
+                found_commands,
+                "Should have found commands field in GETUSER reply"
+            );
+        } else {
+            panic!("Expected array reply from GETUSER, got: {reply:?}");
+        }
+    }
+
+    #[test]
+    fn acl_list_reflects_per_command_permissions() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"eve", b"on", b">pass", b"+@all", b"-del"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let reply = rt.execute_frame(command(&[b"ACL", b"LIST"]), 1);
+        if let RespFrame::Array(Some(entries)) = &reply {
+            let eve_entry = entries.iter().find(|e| {
+                if let RespFrame::BulkString(Some(s)) = e {
+                    String::from_utf8_lossy(s).contains("eve")
+                } else {
+                    false
+                }
+            });
+            assert!(eve_entry.is_some(), "Should find eve in ACL LIST");
+            if let Some(RespFrame::BulkString(Some(s))) = eve_entry {
+                let entry_str = String::from_utf8_lossy(s);
+                assert!(
+                    entry_str.contains("-del"),
+                    "ACL LIST for eve should contain -del, got: {entry_str}"
+                );
+            }
+        } else {
+            panic!("Expected array reply from ACL LIST, got: {reply:?}");
+        }
+    }
+
+    #[test]
+    fn acl_case_insensitive_command_matching() {
+        let mut rt = Runtime::default_strict();
+        // Create user allowing only +GET (uppercase)
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"ci", b"on", b">pass", b"-@all", b"+GET"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Dryrun with lowercase "get" should still be allowed
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"ci", b"get", b"k"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Dryrun with mixed case "Get" should also be allowed
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"ci", b"Get", b"k"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+    }
+
+    #[test]
+    fn acl_allcommands_resets_granular_permissions() {
+        let mut rt = Runtime::default_strict();
+        // Start with -@all +get, then apply allcommands
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"reset_test",
+                    b"on",
+                    b">pass",
+                    b"-@all",
+                    b"+get"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // DEL denied before allcommands
+        let reply = rt.execute_frame(
+            command(&[b"ACL", b"DRYRUN", b"reset_test", b"DEL", b"k"]),
+            1,
+        );
+        assert!(matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")));
+
+        // Apply allcommands
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"SETUSER", b"reset_test", b"allcommands"]),
+                2
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // DEL now allowed
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"DRYRUN", b"reset_test", b"DEL", b"k"]),
+                3
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+    }
+
+    #[test]
+    fn acl_deny_command_wins_over_allow_all() {
+        let mut rt = Runtime::default_strict();
+        // +@all -del: explicit deny should override the +@all base
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"deny_test",
+                    b"on",
+                    b">pass",
+                    b"+@all",
+                    b"-del"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // GET allowed
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"deny_test", b"GET", b"k"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // DEL denied
+        let reply = rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"deny_test", b"DEL", b"k"]), 2);
+        assert!(
+            matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
+            "DEL should be denied despite +@all, got: {reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_reset_rule_clears_all_permissions() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"SETUSER", b"reset_user", b"on", b">pass", b"+@all"]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        // Apply reset
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"SETUSER", b"reset_user", b"reset"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        // User should have no access after reset
+        let reply = rt.execute_frame(
+            command(&[b"ACL", b"DRYRUN", b"reset_user", b"GET", b"k"]),
+            2,
+        );
+        assert!(
+            matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
+            "GET should be denied after reset, got: {reply:?}"
         );
     }
 }

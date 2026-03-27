@@ -675,9 +675,10 @@ pub fn run_replay_fixture(
     let mut total = 0_usize;
     for case in fixture.cases {
         let mut runtime = runtime_for_harness_config(config);
-    if fixture_name == "core_wait.json" || fixture_name == "fr_p2c_006_replication_journey.json" {
-        runtime.set_aof_path(std::path::PathBuf::from("/dev/null"));
-    }
+        if fixture_name == "core_wait.json" || fixture_name == "fr_p2c_006_replication_journey.json"
+        {
+            runtime.set_aof_path(std::path::PathBuf::from("/dev/null"));
+        }
         let source_records = case
             .records
             .into_iter()

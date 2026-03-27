@@ -2987,10 +2987,7 @@ impl<'a> LuaState<'a> {
                 for (i, a) in args.iter().enumerate() {
                     let n = a.to_number().ok_or("bad argument to 'string.char'")? as i64;
                     if !(0..=255).contains(&n) {
-                        return Err(format!(
-                            "bad argument #{} to 'char' (invalid value)",
-                            i + 1
-                        ));
+                        return Err(format!("bad argument #{} to 'char' (invalid value)", i + 1));
                     }
                     result.push(n as u8);
                 }

@@ -652,8 +652,8 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                         } else {
                             Some((wm_ms, wm_seq))
                         };
-                        let (count, consumed) = rdb_decode_length(&data[cursor..])
-                            .ok_or(PersistError::InvalidFrame)?;
+                        let (count, consumed) =
+                            rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                         cursor += consumed;
                         let mut stream_entries = Vec::with_capacity(count);
                         for _ in 0..count {

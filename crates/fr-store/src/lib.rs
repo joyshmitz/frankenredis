@@ -1663,9 +1663,7 @@ impl Store {
         if key == newkey {
             return Ok(());
         }
-        let entry = self
-            .internal_entries_remove(key)
-            .unwrap();
+        let entry = self.internal_entries_remove(key).unwrap();
         let moved_groups = self.stream_groups.remove(key);
         let moved_last_id = self.stream_last_ids.remove(key);
         self.internal_entries_remove(newkey);
@@ -11883,10 +11881,7 @@ mod tests {
             last_id: None,
         };
         let _ = store.xclaim(b"s", b"g", b"new_consumer", &[(1, 0)], opts, 200);
-        assert!(
-            store.dirty > before,
-            "XCLAIM must increment dirty for AOF"
-        );
+        assert!(store.dirty > before, "XCLAIM must increment dirty for AOF");
     }
 
     #[test]

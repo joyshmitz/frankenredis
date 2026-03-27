@@ -2720,7 +2720,9 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         let score_delta = parse_f64_arg(&argv[i])?;
         let member = argv[i + 1].clone();
         match store.zincrby_with_options(&argv[1], member, score_delta, opts, now_ms)? {
-            Some(new_score) => Ok(RespFrame::BulkString(Some(new_score.to_string().into_bytes()))),
+            Some(new_score) => Ok(RespFrame::BulkString(Some(
+                new_score.to_string().into_bytes(),
+            ))),
             None => Ok(RespFrame::BulkString(None)),
         }
     } else {
@@ -4686,20 +4688,19 @@ fn xpending(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     // Extended form: XPENDING key group [[IDLE min-idle-time] start end count [consumer]]
     // Without IDLE: 6 or 7 args. With IDLE: 8 or 9 args.
     let mut min_idle_ms: u64 = 0;
-    let (start_idx, consumer_idx) =
-        if argv.len() >= 4 && eq_ascii_command(&argv[3], b"IDLE") {
-            // IDLE form: argv[3]=IDLE, argv[4]=min-idle-time, argv[5]=start, argv[6]=end, argv[7]=count, [argv[8]=consumer]
-            if argv.len() != 8 && argv.len() != 9 {
-                return Err(CommandError::WrongArity("XPENDING"));
-            }
-            min_idle_ms = parse_i64_arg(&argv[4]).map(|v| v.max(0) as u64)?;
-            (5, if argv.len() == 9 { Some(8) } else { None })
-        } else {
-            if argv.len() != 6 && argv.len() != 7 {
-                return Err(CommandError::WrongArity("XPENDING"));
-            }
-            (3, if argv.len() == 7 { Some(6) } else { None })
-        };
+    let (start_idx, consumer_idx) = if argv.len() >= 4 && eq_ascii_command(&argv[3], b"IDLE") {
+        // IDLE form: argv[3]=IDLE, argv[4]=min-idle-time, argv[5]=start, argv[6]=end, argv[7]=count, [argv[8]=consumer]
+        if argv.len() != 8 && argv.len() != 9 {
+            return Err(CommandError::WrongArity("XPENDING"));
+        }
+        min_idle_ms = parse_i64_arg(&argv[4]).map(|v| v.max(0) as u64)?;
+        (5, if argv.len() == 9 { Some(8) } else { None })
+    } else {
+        if argv.len() != 6 && argv.len() != 7 {
+            return Err(CommandError::WrongArity("XPENDING"));
+        }
+        (3, if argv.len() == 7 { Some(6) } else { None })
+    };
 
     let start = match parse_stream_range_bound(&argv[start_idx], true) {
         Ok(id) => id,
@@ -4717,8 +4718,15 @@ fn xpending(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     let count = usize::try_from(count_raw).unwrap_or(usize::MAX);
     let consumer = consumer_idx.map(|idx| argv[idx].as_slice());
 
-    let Some(entries) =
-        store.xpending_entries(&argv[1], &argv[2], (start, end), count, consumer, now_ms, min_idle_ms)?
+    let Some(entries) = store.xpending_entries(
+        &argv[1],
+        &argv[2],
+        (start, end),
+        count,
+        consumer,
+        now_ms,
+        min_idle_ms,
+    )?
     else {
         return Ok(xpending_nogroup_error(&argv[1], &argv[2]));
     };
@@ -8683,7 +8691,35 @@ fn command_matches_acl_category(name: &str, flags: &str, category: &str) -> bool
         "admin" => flag_list.contains(&"admin"),
         "pubsub" => flag_list.contains(&"pubsub"),
         "scripting" => flag_list.contains(&"scripting"),
-        "dangerous" => flag_list.contains(&"admin") || flag_list.contains(&"dangerous"),
+        "dangerous" => {
+            flag_list.contains(&"admin")
+                || flag_list.contains(&"dangerous")
+                || matches!(
+                    name,
+                    "flushdb"
+                        | "flushall"
+                        | "keys"
+                        | "shutdown"
+                        | "debug"
+                        | "sort"
+                        | "migrate"
+                        | "restore"
+                        | "replicaof"
+                        | "slaveof"
+                        | "cluster"
+                        | "acl"
+                        | "slowlog"
+                        | "latency"
+                        | "object"
+                        | "module"
+                        | "swapdb"
+                        | "failover"
+                        | "pfdebug"
+                        | "pfselftest"
+                        | "psync"
+                        | "replconf"
+                )
+        }
         "blocking" => matches!(
             name,
             "blpop"
@@ -8711,6 +8747,7 @@ fn command_matches_acl_category(name: &str, flags: &str, category: &str) -> bool
                 | "time"
                 | "dbsize"
                 | "flushdb"
+                | "flushall"
                 | "save"
                 | "bgsave"
                 | "bgrewriteaof"
@@ -20843,12 +20880,8 @@ mod tests {
         }
 
         // MEMORY with unknown subcommand returns an error frame (not CommandError)
-        let bogus = dispatch_argv(
-            &[b"MEMORY".to_vec(), b"BOGUS".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect("memory bogus");
+        let bogus = dispatch_argv(&[b"MEMORY".to_vec(), b"BOGUS".to_vec()], &mut store, 0)
+            .expect("memory bogus");
         assert!(matches!(bogus, RespFrame::Error(_)));
     }
 
@@ -25846,8 +25879,15 @@ mod tests {
     fn adversarial_set_ex_zero() {
         let mut store = Store::new();
         let r = dispatch_argv(
-            &[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec(), b"EX".to_vec(), b"0".to_vec()],
-            &mut store, 1000,
+            &[
+                b"SET".to_vec(),
+                b"k".to_vec(),
+                b"v".to_vec(),
+                b"EX".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            1000,
         );
         assert!(r.is_err(), "SET EX 0 should error");
     }
@@ -25855,8 +25895,18 @@ mod tests {
     #[test]
     fn adversarial_expire_zero_deletes() {
         let mut store = Store::new();
-        dispatch_argv(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()], &mut store, 1000).unwrap();
-        let r = dispatch_argv(&[b"EXPIRE".to_vec(), b"k".to_vec(), b"0".to_vec()], &mut store, 1000).unwrap();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()],
+            &mut store,
+            1000,
+        )
+        .unwrap();
+        let r = dispatch_argv(
+            &[b"EXPIRE".to_vec(), b"k".to_vec(), b"0".to_vec()],
+            &mut store,
+            1000,
+        )
+        .unwrap();
         assert_eq!(r, RespFrame::Integer(1));
         let g = dispatch_argv(&[b"GET".to_vec(), b"k".to_vec()], &mut store, 1000).unwrap();
         assert_eq!(g, RespFrame::BulkString(None));
@@ -25865,30 +25915,64 @@ mod tests {
     #[test]
     fn adversarial_lpop_zero_count() {
         let mut store = Store::new();
-        dispatch_argv(&[b"RPUSH".to_vec(), b"l".to_vec(), b"a".to_vec()], &mut store, 0).unwrap();
-        let r = dispatch_argv(&[b"LPOP".to_vec(), b"l".to_vec(), b"0".to_vec()], &mut store, 0).unwrap();
+        dispatch_argv(
+            &[b"RPUSH".to_vec(), b"l".to_vec(), b"a".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        let r = dispatch_argv(
+            &[b"LPOP".to_vec(), b"l".to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
         assert_eq!(r, RespFrame::Array(Some(vec![])));
     }
 
     #[test]
     fn adversarial_getrange_negative() {
         let mut store = Store::new();
-        dispatch_argv(&[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()], &mut store, 0).unwrap();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
         let r = dispatch_argv(
-            &[b"GETRANGE".to_vec(), b"k".to_vec(), b"-1".to_vec(), b"-1".to_vec()],
-            &mut store, 0,
-        ).unwrap();
+            &[
+                b"GETRANGE".to_vec(),
+                b"k".to_vec(),
+                b"-1".to_vec(),
+                b"-1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
         assert_eq!(r, RespFrame::BulkString(Some(b"o".to_vec())));
     }
 
     #[test]
     fn adversarial_setrange_empty() {
         let mut store = Store::new();
-        dispatch_argv(&[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()], &mut store, 0).unwrap();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
         let r = dispatch_argv(
-            &[b"SETRANGE".to_vec(), b"k".to_vec(), b"0".to_vec(), b"".to_vec()],
-            &mut store, 0,
-        ).unwrap();
+            &[
+                b"SETRANGE".to_vec(),
+                b"k".to_vec(),
+                b"0".to_vec(),
+                b"".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
         assert_eq!(r, RespFrame::Integer(5));
     }
 
@@ -25897,8 +25981,10 @@ mod tests {
         let mut store = Store::new();
         let r = dispatch_argv(
             &[b"OBJECT".to_vec(), b"ENCODING".to_vec(), b"nope".to_vec()],
-            &mut store, 0,
-        ).unwrap();
+            &mut store,
+            0,
+        )
+        .unwrap();
         assert!(matches!(r, RespFrame::Error(_)));
     }
 }
