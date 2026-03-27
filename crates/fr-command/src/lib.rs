@@ -25819,6 +25819,66 @@ mod tests {
         .expect("eval nested closure");
         assert_eq!(result2, RespFrame::Integer(10));
     }
+
+    #[test]
+    fn adversarial_set_ex_zero() {
+        let mut store = Store::new();
+        let r = dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec(), b"EX".to_vec(), b"0".to_vec()],
+            &mut store, 1000,
+        );
+        assert!(r.is_err(), "SET EX 0 should error");
+    }
+
+    #[test]
+    fn adversarial_expire_zero_deletes() {
+        let mut store = Store::new();
+        dispatch_argv(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()], &mut store, 1000).unwrap();
+        let r = dispatch_argv(&[b"EXPIRE".to_vec(), b"k".to_vec(), b"0".to_vec()], &mut store, 1000).unwrap();
+        assert_eq!(r, RespFrame::Integer(1));
+        let g = dispatch_argv(&[b"GET".to_vec(), b"k".to_vec()], &mut store, 1000).unwrap();
+        assert_eq!(g, RespFrame::BulkString(None));
+    }
+
+    #[test]
+    fn adversarial_lpop_zero_count() {
+        let mut store = Store::new();
+        dispatch_argv(&[b"RPUSH".to_vec(), b"l".to_vec(), b"a".to_vec()], &mut store, 0).unwrap();
+        let r = dispatch_argv(&[b"LPOP".to_vec(), b"l".to_vec(), b"0".to_vec()], &mut store, 0).unwrap();
+        assert_eq!(r, RespFrame::Array(Some(vec![])));
+    }
+
+    #[test]
+    fn adversarial_getrange_negative() {
+        let mut store = Store::new();
+        dispatch_argv(&[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()], &mut store, 0).unwrap();
+        let r = dispatch_argv(
+            &[b"GETRANGE".to_vec(), b"k".to_vec(), b"-1".to_vec(), b"-1".to_vec()],
+            &mut store, 0,
+        ).unwrap();
+        assert_eq!(r, RespFrame::BulkString(Some(b"o".to_vec())));
+    }
+
+    #[test]
+    fn adversarial_setrange_empty() {
+        let mut store = Store::new();
+        dispatch_argv(&[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()], &mut store, 0).unwrap();
+        let r = dispatch_argv(
+            &[b"SETRANGE".to_vec(), b"k".to_vec(), b"0".to_vec(), b"".to_vec()],
+            &mut store, 0,
+        ).unwrap();
+        assert_eq!(r, RespFrame::Integer(5));
+    }
+
+    #[test]
+    fn adversarial_object_encoding_nonexistent() {
+        let mut store = Store::new();
+        let r = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"ENCODING".to_vec(), b"nope".to_vec()],
+            &mut store, 0,
+        ).unwrap();
+        assert!(matches!(r, RespFrame::Error(_)));
+    }
 }
 #[cfg(test)]
 mod zadd_xx_test;
