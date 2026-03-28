@@ -2903,8 +2903,7 @@ mod tests {
 
     #[test]
     fn inline_unbalanced_quotes_via_try_parse() {
-        let result =
-            crate::try_parse_inline(b"SET key \"unclosed\r\n").expect("should parse ok");
+        let result = crate::try_parse_inline(b"SET key \"unclosed\r\n").expect("should parse ok");
         match result {
             InlineParseResult::ProtocolError(frame, consumed) => {
                 assert_eq!(consumed, 19);
