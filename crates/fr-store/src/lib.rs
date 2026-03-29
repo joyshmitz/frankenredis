@@ -1663,7 +1663,9 @@ impl Store {
         if key == newkey {
             return Ok(());
         }
-        let entry = self.internal_entries_remove(key).unwrap();
+        let Some(entry) = self.internal_entries_remove(key) else {
+            return Err(StoreError::KeyNotFound);
+        };
         let moved_groups = self.stream_groups.remove(key);
         let moved_last_id = self.stream_last_ids.remove(key);
         self.internal_entries_remove(newkey);
@@ -7803,7 +7805,7 @@ impl Store {
                 // List
                 let (count, consumed) = decode_length(payload, cursor)?;
                 cursor += consumed;
-                let mut list = VecDeque::with_capacity(count);
+                let mut list = VecDeque::with_capacity(count.min(1024));
                 for _ in 0..count {
                     let (len, consumed) = decode_length(payload, cursor)?;
                     cursor += consumed;

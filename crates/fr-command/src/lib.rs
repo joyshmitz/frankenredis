@@ -10182,7 +10182,9 @@ fn unsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Com
             ])));
         }
         if replies.len() == 1 {
-            return Ok(replies.into_iter().next().unwrap());
+            if let Some(frame) = replies.pop() {
+                return Ok(frame);
+            }
         }
         return Ok(RespFrame::Sequence(replies));
     }
@@ -10251,7 +10253,9 @@ fn punsubscribe_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Co
             ])));
         }
         if replies.len() == 1 {
-            return Ok(replies.into_iter().next().unwrap());
+            if let Some(frame) = replies.pop() {
+                return Ok(frame);
+            }
         }
         return Ok(RespFrame::Sequence(replies));
     }
@@ -11762,7 +11766,7 @@ fn sort_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
             for (idx, sk) in sort_keys.iter().enumerate() {
                 let val = sk.as_deref().unwrap_or(b"0");
                 let s = std::str::from_utf8(val).unwrap_or("0");
-                let Ok(score) = s.parse::<f64>() else {
+                let Ok(score) = s.trim().parse::<f64>() else {
                     return Ok(RespFrame::Error(
                         "ERR One or more scores can't be converted into double".to_string(),
                     ));
