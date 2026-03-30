@@ -981,7 +981,12 @@ impl Store {
         if !self.entries.contains_key(key) {
             return false;
         }
+        let (db, logical_key) = match decode_db_key(key) {
+            Some((db, lk)) => (db, lk.to_vec()),
+            None => (0, key.to_vec()),
+        };
         if milliseconds <= 0 {
+            self.notify_keyspace_event(NOTIFY_GENERIC, "del", &logical_key, db);
             self.internal_entries_remove(key);
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
@@ -1001,6 +1006,7 @@ impl Store {
             }
             entry.expires_at_ms = Some(expires_at_ms);
             self.dirty += 1;
+            self.notify_keyspace_event(NOTIFY_GENERIC, "expire", &logical_key, db);
         }
         true
     }
