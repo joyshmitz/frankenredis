@@ -2578,89 +2578,108 @@ impl Runtime {
 
         // Dispatch runtime-special commands that execute outside of MULTI,
         // or the subset that must execute immediately inside MULTI.
-        match special_command {
-            Some(RuntimeSpecialCommand::Acl) => return self.handle_acl_command(&argv),
-            Some(RuntimeSpecialCommand::Config) => return self.handle_config_command(&argv),
-            Some(RuntimeSpecialCommand::Client) => {
-                return self.handle_client_command(&argv, now_ms);
+        // Like Redis's call(), we record slowlog for all dispatched commands.
+        {
+            let special_start = Instant::now();
+            let special_reply = match special_command {
+                Some(RuntimeSpecialCommand::Acl) => Some(self.handle_acl_command(&argv)),
+                Some(RuntimeSpecialCommand::Config) => Some(self.handle_config_command(&argv)),
+                Some(RuntimeSpecialCommand::Client) => {
+                    Some(self.handle_client_command(&argv, now_ms))
+                }
+                Some(RuntimeSpecialCommand::Role) => Some(self.handle_role_command(&argv)),
+                Some(RuntimeSpecialCommand::Replconf) => {
+                    Some(self.handle_replconf_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Psync) | Some(RuntimeSpecialCommand::Sync) => {
+                    Some(self.handle_psync_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Replicaof)
+                | Some(RuntimeSpecialCommand::Slaveof) => {
+                    Some(self.handle_replicaof_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Asking) => Some(self.handle_asking_command(&argv)),
+                Some(RuntimeSpecialCommand::Readonly) => {
+                    Some(self.handle_readonly_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Readwrite) => {
+                    Some(self.handle_readwrite_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Cluster) => {
+                    Some(self.handle_cluster_command(&argv, now_ms))
+                }
+                Some(RuntimeSpecialCommand::Wait) => Some(self.handle_wait_command(&argv)),
+                Some(RuntimeSpecialCommand::Waitaof) => Some(self.handle_waitaof_command(&argv)),
+                Some(RuntimeSpecialCommand::Multi) => Some(self.handle_multi_command()),
+                Some(RuntimeSpecialCommand::Exec) => Some(self.handle_exec_command(
+                    now_ms,
+                    packet_id,
+                    &input_digest,
+                    &state_before,
+                )),
+                Some(RuntimeSpecialCommand::Discard) => Some(self.handle_discard_command()),
+                Some(RuntimeSpecialCommand::Watch) => {
+                    Some(self.handle_watch_command(&argv, now_ms))
+                }
+                Some(RuntimeSpecialCommand::Unwatch) => Some(self.handle_unwatch_command(&argv)),
+                Some(RuntimeSpecialCommand::Quit) => {
+                    Some(RespFrame::SimpleString("OK".to_string()))
+                }
+                Some(RuntimeSpecialCommand::Reset) => Some(self.handle_reset_command(&argv)),
+                Some(RuntimeSpecialCommand::Slowlog) => {
+                    Some(self.handle_slowlog_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Save) => {
+                    Some(self.handle_save_command(&argv, now_ms))
+                }
+                Some(RuntimeSpecialCommand::Bgsave) => {
+                    Some(self.handle_bgsave_command(&argv, now_ms))
+                }
+                Some(RuntimeSpecialCommand::Lastsave) => {
+                    Some(self.handle_lastsave_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Bgrewriteaof) => {
+                    Some(self.handle_bgrewriteaof_command(&argv, now_ms))
+                }
+                Some(RuntimeSpecialCommand::Shutdown) => {
+                    Some(self.handle_shutdown_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Pubsub) => Some(self.handle_pubsub_command(&argv)),
+                Some(RuntimeSpecialCommand::Subscribe) => {
+                    Some(self.handle_subscribe_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Unsubscribe) => {
+                    Some(self.handle_unsubscribe_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Psubscribe) => {
+                    Some(self.handle_psubscribe_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Punsubscribe) => {
+                    Some(self.handle_punsubscribe_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Publish) => {
+                    Some(self.handle_publish_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Ssubscribe) => {
+                    Some(self.handle_ssubscribe_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Sunsubscribe) => {
+                    Some(self.handle_sunsubscribe_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Spublish) => {
+                    Some(self.handle_spublish_command(&argv))
+                }
+                Some(RuntimeSpecialCommand::Select) => Some(self.handle_select_command(&argv)),
+                Some(RuntimeSpecialCommand::Swapdb) => {
+                    Some(self.handle_swapdb_command(&argv))
+                }
+                _ => None,
+            };
+            if let Some(reply) = special_reply {
+                let elapsed_us = special_start.elapsed().as_micros() as u64;
+                self.record_slowlog(&argv, elapsed_us, now_ms);
+                return reply;
             }
-            Some(RuntimeSpecialCommand::Role) => return self.handle_role_command(&argv),
-            Some(RuntimeSpecialCommand::Replconf) => return self.handle_replconf_command(&argv),
-            Some(RuntimeSpecialCommand::Psync) | Some(RuntimeSpecialCommand::Sync) => {
-                return self.handle_psync_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Replicaof) | Some(RuntimeSpecialCommand::Slaveof) => {
-                return self.handle_replicaof_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Asking) => return self.handle_asking_command(&argv),
-            Some(RuntimeSpecialCommand::Readonly) => return self.handle_readonly_command(&argv),
-            Some(RuntimeSpecialCommand::Readwrite) => return self.handle_readwrite_command(&argv),
-            Some(RuntimeSpecialCommand::Cluster) => {
-                return self.handle_cluster_command(&argv, now_ms);
-            }
-            Some(RuntimeSpecialCommand::Wait) => return self.handle_wait_command(&argv),
-            Some(RuntimeSpecialCommand::Waitaof) => return self.handle_waitaof_command(&argv),
-            Some(RuntimeSpecialCommand::Multi) => return self.handle_multi_command(),
-            Some(RuntimeSpecialCommand::Exec) => {
-                return self.handle_exec_command(now_ms, packet_id, &input_digest, &state_before);
-            }
-            Some(RuntimeSpecialCommand::Discard) => return self.handle_discard_command(),
-            Some(RuntimeSpecialCommand::Watch) => return self.handle_watch_command(&argv, now_ms),
-            Some(RuntimeSpecialCommand::Unwatch) => return self.handle_unwatch_command(&argv),
-            Some(RuntimeSpecialCommand::Quit) => return RespFrame::SimpleString("OK".to_string()),
-            Some(RuntimeSpecialCommand::Reset) => return self.handle_reset_command(&argv),
-            Some(RuntimeSpecialCommand::Slowlog) => {
-                return self.handle_slowlog_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Save) => {
-                return self.handle_save_command(&argv, now_ms);
-            }
-            Some(RuntimeSpecialCommand::Bgsave) => {
-                return self.handle_bgsave_command(&argv, now_ms);
-            }
-            Some(RuntimeSpecialCommand::Lastsave) => {
-                return self.handle_lastsave_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Bgrewriteaof) => {
-                return self.handle_bgrewriteaof_command(&argv, now_ms);
-            }
-            Some(RuntimeSpecialCommand::Shutdown) => {
-                return self.handle_shutdown_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Pubsub) => {
-                return self.handle_pubsub_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Subscribe) => {
-                return self.handle_subscribe_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Unsubscribe) => {
-                return self.handle_unsubscribe_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Psubscribe) => {
-                return self.handle_psubscribe_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Punsubscribe) => {
-                return self.handle_punsubscribe_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Publish) => {
-                return self.handle_publish_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Ssubscribe) => {
-                return self.handle_ssubscribe_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Sunsubscribe) => {
-                return self.handle_sunsubscribe_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Spublish) => {
-                return self.handle_spublish_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Select) => {
-                return self.handle_select_command(&argv);
-            }
-            Some(RuntimeSpecialCommand::Swapdb) => {
-                return self.handle_swapdb_command(&argv);
-            }
-            _ => {}
         }
 
         if let Some(reply) = self.enforce_maxmemory_before_dispatch(
@@ -8904,11 +8923,12 @@ mod tests {
         };
         assert_eq!(default_entries.len(), 10);
 
+        // The first SLOWLOG GET above was also recorded (threshold=0), so 12+1=13
         let all = rt.execute_frame(command(&[b"SLOWLOG", b"GET", b"-1"]), 100);
         let RespFrame::Array(Some(all_entries)) = all else {
             panic!("expected all slowlog array");
         };
-        assert_eq!(all_entries.len(), 12);
+        assert_eq!(all_entries.len(), 13);
     }
 
     #[test]
