@@ -3775,6 +3775,8 @@ impl Runtime {
             hello_bulk("    when no category is specified."),
             hello_bulk("DELUSER <username> [<username> ...]"),
             hello_bulk("    Delete a list of users."),
+            hello_bulk("DRYRUN <username> <command> [<arg> ...]"),
+            hello_bulk("    Test if a command would be allowed for the given user."),
             hello_bulk("GENPASS [<bits>]"),
             hello_bulk("    Generate a secure password."),
             hello_bulk("GETUSER <username>"),
@@ -6245,11 +6247,13 @@ impl Runtime {
                 return RespFrame::Error(CLUSTER_UNKNOWN_SUBCOMMAND_ERROR.to_string());
             }
             return RespFrame::Array(Some(vec![
-                hello_bulk("CLUSTER HELP"),
-                hello_bulk("CLUSTER subcommand dispatch scaffold (FR-P2C-007 D1)."),
-                hello_bulk(
-                    "Supported subcommands in this stage: HELP, INFO, MYID, SLOTS, SHARDS, NODES, KEYSLOT, GETKEYSINSLOT, COUNTKEYSINSLOT, RESET.",
-                ),
+                hello_bulk("CLUSTER INFO"),
+                hello_bulk("CLUSTER MYID"),
+                hello_bulk("CLUSTER KEYSLOT <key>"),
+                hello_bulk("CLUSTER SLOTS"),
+                hello_bulk("CLUSTER SHARDS"),
+                hello_bulk("CLUSTER NODES"),
+                hello_bulk("CLUSTER RESET"),
             ]));
         }
 
@@ -9578,13 +9582,13 @@ mod tests {
         assert_eq!(
             help,
             RespFrame::Array(Some(vec![
-                RespFrame::BulkString(Some(b"CLUSTER HELP".to_vec())),
-                RespFrame::BulkString(Some(
-                    b"CLUSTER subcommand dispatch scaffold (FR-P2C-007 D1).".to_vec(),
-                )),
-                RespFrame::BulkString(Some(
-                    b"Supported subcommands in this stage: HELP, INFO, MYID, SLOTS, SHARDS, NODES, KEYSLOT, GETKEYSINSLOT, COUNTKEYSINSLOT, RESET.".to_vec(),
-                )),
+                RespFrame::BulkString(Some(b"CLUSTER INFO".to_vec())),
+                RespFrame::BulkString(Some(b"CLUSTER MYID".to_vec())),
+                RespFrame::BulkString(Some(b"CLUSTER KEYSLOT <key>".to_vec())),
+                RespFrame::BulkString(Some(b"CLUSTER SLOTS".to_vec())),
+                RespFrame::BulkString(Some(b"CLUSTER SHARDS".to_vec())),
+                RespFrame::BulkString(Some(b"CLUSTER NODES".to_vec())),
+                RespFrame::BulkString(Some(b"CLUSTER RESET".to_vec())),
             ]))
         );
 
@@ -11465,4 +11469,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn acl_help_lists_dryrun_subcommand() {
+        let mut rt = Runtime::default_strict();
+        let reply = rt.execute_frame(command(&[b"ACL", b"HELP"]), 0);
+        let RespFrame::Array(Some(items)) = reply else {
+            panic!("expected ACL HELP to return an array");
+        };
+        assert!(
+            items.contains(&RespFrame::BulkString(Some(
+                b"DRYRUN <username> <command> [<arg> ...]".to_vec()
+            ))),
+            "ACL HELP should list DRYRUN"
+        );
+    }
 }
