@@ -4446,10 +4446,10 @@ mod tests {
         let result = eval_script(b"return select(-1, 'a', 'b', 'c')", &[], &[], &mut store, 0);
 
         assert!(matches!(result, Ok(RespFrame::BulkString(Some(ref bytes))) if bytes == b"c"));
-        }
+    }
 
-        #[test]
-        fn empty_while_loop_hits_iteration_limit() {
+    #[test]
+    fn empty_while_loop_hits_iteration_limit() {
         let mut store = Store::new();
         let result = eval_script(b"while true do end", &[], &[], &mut store, 0);
         match result {
@@ -4457,8 +4457,8 @@ mod tests {
             Err(e) => assert!(e.contains("iteration count"), "Unexpected string error: {}", e),
             other => panic!("Expected iteration limit error, got {:?}", other),
         }
-        }
-        }
+    }
+
     #[test]
     fn select_zero_index_errors() {
         let mut store = Store::new();

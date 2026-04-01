@@ -73,6 +73,22 @@
       }
     },
     {
+      "name": "config_set_rdb_target_before_save",
+      "now_ms": 4999990,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "dir",
+        "/tmp",
+        "dbfilename",
+        "fr_core_server.rdb"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
       "name": "save_returns_ok",
       "now_ms": 5000000,
       "argv": [
@@ -137,6 +153,31 @@
       "expect": {
         "kind": "error",
         "value": "ERR appendonly is disabled, cannot rewrite append only file"
+      }
+    },
+    {
+      "name": "config_set_appendonly_yes_before_bgrewriteaof",
+      "now_ms": 8001,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "appendonly",
+        "yes"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "bgrewriteaof_errors_when_appendonlydir_is_missing",
+      "now_ms": 8002,
+      "argv": [
+        "BGREWRITEAOF"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR error rewriting AOF file"
       }
     },
     {
@@ -1971,6 +2012,36 @@
       }
     },
     {
+      "name": "config_set_appendonly_no_before_save_duplicate_block",
+      "now_ms": 98,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "appendonly",
+        "no"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "config_set_rdb_target_before_save_duplicate_block",
+      "now_ms": 99,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "dir",
+        "/tmp",
+        "dbfilename",
+        "fr_core_server_dup.rdb"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
       "name": "save_returns_ok",
       "now_ms": 100,
       "argv": [
@@ -1990,6 +2061,20 @@
       "expect": {
         "kind": "simple",
         "value": "Background saving started"
+      }
+    },
+    {
+      "name": "config_set_appendonly_no_before_bgrewriteaof_duplicate_block",
+      "now_ms": 100,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "appendonly",
+        "no"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
       }
     },
     {
