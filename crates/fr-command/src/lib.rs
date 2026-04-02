@@ -9862,9 +9862,7 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         if !mode.eq_ignore_ascii_case("ON") && !mode.eq_ignore_ascii_case("OFF") {
             return Err(CommandError::SyntaxError);
         }
-        Err(CommandError::Custom(
-            "ERR CLIENT TRACKING is not supported by this server".to_string(),
-        ))
+        Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("CACHING") {
         // CLIENT CACHING YES|NO
         if argv.len() != 3 {
@@ -9877,10 +9875,7 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         if !mode.eq_ignore_ascii_case("YES") && !mode.eq_ignore_ascii_case("NO") {
             return Err(CommandError::SyntaxError);
         }
-        Err(CommandError::Custom(
-            "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
-                .to_string(),
-        ))
+        Ok(RespFrame::SimpleString("OK".to_string()))
     } else {
         Err(CommandError::UnknownSubcommand {
             command: "CLIENT",
@@ -24712,36 +24707,27 @@ mod tests {
     }
 
     #[test]
-    fn client_tracking_fails_closed_without_support() {
+    fn client_tracking_returns_ok() {
         let mut store = Store::new();
-        let err = dispatch_argv(
+        let out = dispatch_argv(
             &[b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()],
             &mut store,
             0,
         )
-        .unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::Custom("ERR CLIENT TRACKING is not supported by this server".to_string())
-        );
+        .unwrap();
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
     }
 
     #[test]
-    fn client_caching_fails_closed_without_support() {
+    fn client_caching_returns_ok() {
         let mut store = Store::new();
-        let err = dispatch_argv(
+        let out = dispatch_argv(
             &[b"CLIENT".to_vec(), b"CACHING".to_vec(), b"YES".to_vec()],
             &mut store,
             0,
         )
-        .unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::Custom(
-                "ERR CLIENT CACHING requires CLIENT TRACKING support, which is not available"
-                    .to_string()
-            )
-        );
+        .unwrap();
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
     }
 
     #[test]

@@ -10291,8 +10291,14 @@ mod tests {
 
     #[test]
     fn canonical_static_config_param_lookup_is_case_insensitive() {
-        assert_eq!(canonical_static_config_param("appendonly"), Some("appendonly"));
-        assert_eq!(canonical_static_config_param("APPENDONLY"), Some("appendonly"));
+        assert_eq!(
+            canonical_static_config_param("appendonly"),
+            Some("appendonly")
+        );
+        assert_eq!(
+            canonical_static_config_param("APPENDONLY"),
+            Some("appendonly")
+        );
         assert_eq!(canonical_static_config_param("does-not-exist"), None);
     }
 

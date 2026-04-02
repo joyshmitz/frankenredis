@@ -7154,17 +7154,20 @@ impl Store {
         self.internal_entries_remove(dest);
         self.stream_groups.remove(dest);
         self.stream_last_ids.remove(dest);
-        
+
         if members.is_empty() {
             self.dirty = self.dirty.saturating_add(1);
             return;
         }
-        
+
         let mut zs = SortedSet::new();
         for (m, s) in members {
             zs.insert(m, s);
         }
-        self.internal_entries_insert(dest.to_vec(), Entry::new(Value::SortedSet(zs), None, now_ms));
+        self.internal_entries_insert(
+            dest.to_vec(),
+            Entry::new(Value::SortedSet(zs), None, now_ms),
+        );
         self.dirty = self.dirty.saturating_add(1);
     }
 
@@ -9259,9 +9262,7 @@ mod tests {
         store
             .xadd(b"s", (1, 0), &[(b"f".to_vec(), b"v".to_vec())], 0)
             .unwrap();
-        store
-            .xgroup_create(b"s", b"g1", (0, 0), false, 0)
-            .unwrap();
+        store.xgroup_create(b"s", b"g1", (0, 0), false, 0).unwrap();
         assert!(store.stream_groups.contains_key(b"s".as_slice()));
 
         // Overwrite the stream key with a string via RENAME.
@@ -11533,18 +11534,26 @@ mod tests {
     fn dump_restore_stream_leak() {
         let mut store = Store::new();
         // Create a stream and a group
-        store.xadd(b"s", (1, 0), &[(b"f".to_vec(), b"v".to_vec())], 0).unwrap();
+        store
+            .xadd(b"s", (1, 0), &[(b"f".to_vec(), b"v".to_vec())], 0)
+            .unwrap();
         store.xgroup_create(b"s", b"g1", (0, 0), false, 0).unwrap();
-        
+
         // Create a string and dump it
         store.set(b"k".to_vec(), b"string".to_vec(), None, 0);
         let payload = store.dump_key(b"k", 0).unwrap();
-        
+
         // Restore string over the stream
         store.restore_key(b"s", 0, &payload, true, 0).unwrap();
-        
-        assert!(!store.stream_groups.contains_key(b"s".as_slice()), "Leaked groups!");
-        assert!(!store.stream_last_ids.contains_key(b"s".as_slice()), "Leaked last_ids!");
+
+        assert!(
+            !store.stream_groups.contains_key(b"s".as_slice()),
+            "Leaked groups!"
+        );
+        assert!(
+            !store.stream_last_ids.contains_key(b"s".as_slice()),
+            "Leaked last_ids!"
+        );
     }
 
     #[test]

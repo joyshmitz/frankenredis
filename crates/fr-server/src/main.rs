@@ -951,14 +951,22 @@ fn split_inline_args(line: &[u8]) -> Result<Vec<Vec<u8>>, &'static str> {
                 if line[i] == b'\\' && i + 1 < line.len() {
                     // Handle escape sequences.
                     i += 1;
+                    if line[i] == b'x' && i + 2 < line.len() {
+                        if let Some(byte) = parse_hex_escape(line[i + 1], line[i + 2]) {
+                            arg.push(byte);
+                            i += 3;
+                            continue;
+                        }
+                    }
                     match line[i] {
                         b'n' => arg.push(b'\n'),
                         b'r' => arg.push(b'\r'),
                         b't' => arg.push(b'\t'),
+                        b'b' => arg.push(b'\x08'),
+                        b'a' => arg.push(b'\x07'),
                         b'"' => arg.push(b'"'),
                         b'\\' => arg.push(b'\\'),
                         other => {
-                            arg.push(b'\\');
                             arg.push(other);
                         }
                     }
@@ -994,6 +1002,20 @@ fn split_inline_args(line: &[u8]) -> Result<Vec<Vec<u8>>, &'static str> {
         }
     }
     Ok(args)
+}
+
+fn parse_hex_escape(h1: u8, h2: u8) -> Option<u8> {
+    let parse_hex = |b: u8| -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    };
+    let b1 = parse_hex(h1)?;
+    let b2 = parse_hex(h2)?;
+    Some((b1 << 4) | b2)
 }
 
 fn replica_handshake_frame(args: &[&[u8]]) -> RespFrame {
