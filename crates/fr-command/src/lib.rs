@@ -5,9 +5,9 @@ pub use lua_eval::eval_script;
 
 use fr_protocol::RespFrame;
 use fr_store::{
-    PttlValue, PubSubMessage, ScoreBound, Store, StoreError, StreamAutoClaimOptions,
-    StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply, StreamGroupReadCursor,
-    StreamGroupReadOptions, StreamId, ValueType, crc16_slot, glob_match,
+    MaxmemoryPolicy, PttlValue, PubSubMessage, ScoreBound, Store, StoreError,
+    StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply,
+    StreamGroupReadCursor, StreamGroupReadOptions, StreamId, ValueType, crc16_slot, glob_match,
 };
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -692,7 +692,7 @@ pub fn dispatch_argv(
         Some(CommandId::Select) => return select(argv),
         Some(CommandId::Info) => return info(argv, store, now_ms),
         Some(CommandId::Command) => return command_cmd(argv),
-        Some(CommandId::Config) => return config_cmd(argv),
+        Some(CommandId::Config) => return config_cmd(argv, store, now_ms),
         Some(CommandId::Client) => return client_cmd(argv),
         Some(CommandId::Time) => return time_cmd(argv, now_ms),
         Some(CommandId::Randomkey) => return randomkey(argv, store, now_ms),
@@ -9469,7 +9469,11 @@ fn command_getkeysandflags_flags(flags: &str) -> &'static [&'static str] {
     }
 }
 
-fn config_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn config_cmd(
+    argv: &[Vec<u8>],
+    store: &mut Store,
+    _now_ms: u64,
+) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("CONFIG"));
     }
@@ -9481,12 +9485,24 @@ fn config_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 subcommand: sub.to_string(),
             });
         }
-        // Return empty array for all CONFIG GET queries (stub)
-        Ok(RespFrame::Array(Some(Vec::new())))
-    } else if sub.eq_ignore_ascii_case("SET")
-        || sub.eq_ignore_ascii_case("RESETSTAT")
-        || sub.eq_ignore_ascii_case("REWRITE")
-    {
+        let mut entries = Vec::new();
+        for arg in &argv[2..] {
+            let raw_pattern =
+                std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
+            let pattern = raw_pattern.to_ascii_lowercase();
+            config_collect_store_entries(&pattern, store, &mut entries);
+        }
+        Ok(RespFrame::Array(Some(entries)))
+    } else if sub.eq_ignore_ascii_case("SET") {
+        if argv.len() < 4 || !argv.len().is_multiple_of(2) {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: sub.to_string(),
+            });
+        }
+        config_apply_store_sets(&argv[2..], store)?;
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("RESETSTAT") || sub.eq_ignore_ascii_case("REWRITE") {
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
@@ -9514,6 +9530,240 @@ fn config_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             subcommand: sub.to_string(),
         })
     }
+}
+
+/// Static CONFIG parameter defaults, mirroring Redis defaults.
+///
+/// These provide baseline responses for CONFIG GET when called via `dispatch_argv`
+/// (e.g., from Lua scripts). Dynamic store-level params are handled separately by
+/// `config_collect_store_entries` and override these defaults.
+const CONFIG_STATIC_DEFAULTS: &[(&str, &str)] = &[
+    ("bind", "127.0.0.1"),
+    ("bind-source-addr", ""),
+    ("port", "6379"),
+    ("tcp-backlog", "511"),
+    ("unixsocket", ""),
+    ("unixsocketperm", "0"),
+    ("timeout", "0"),
+    ("tcp-keepalive", "300"),
+    ("protected-mode", "yes"),
+    ("daemonize", "no"),
+    ("pidfile", ""),
+    ("loglevel", "notice"),
+    ("logfile", ""),
+    ("databases", "16"),
+    ("always-show-logo", "yes"),
+    ("maxmemory", "0"),
+    ("maxmemory-samples", "5"),
+    ("maxmemory-eviction-tenacity", "10"),
+    ("maxclients", "10000"),
+    ("save", ""),
+    ("stop-writes-on-bgsave-error", "yes"),
+    ("rdbcompression", "yes"),
+    ("rdbchecksum", "yes"),
+    ("dbfilename", "dump.rdb"),
+    ("dir", "."),
+    ("appendonly", "no"),
+    ("appendfilename", "appendonly.aof"),
+    ("appenddirname", "appendonlydir"),
+    ("appendfsync", "everysec"),
+    ("no-appendfsync-on-rewrite", "no"),
+    ("auto-aof-rewrite-percentage", "100"),
+    ("auto-aof-rewrite-min-size", "67108864"),
+    ("aof-load-truncated", "yes"),
+    ("aof-use-rdb-preamble", "yes"),
+    ("replicaof", ""),
+    ("masterauth", ""),
+    ("replica-serve-stale-data", "yes"),
+    ("replica-read-only", "yes"),
+    ("repl-diskless-sync", "yes"),
+    ("repl-diskless-sync-delay", "5"),
+    ("repl-ping-replica-period", "10"),
+    ("repl-timeout", "60"),
+    ("repl-backlog-size", "1048576"),
+    ("repl-backlog-ttl", "3600"),
+    ("min-replicas-to-write", "0"),
+    ("min-replicas-max-lag", "10"),
+    ("lua-time-limit", "5000"),
+    ("busy-reply-threshold", "5000"),
+    ("cluster-enabled", "no"),
+    ("cluster-node-timeout", "15000"),
+    ("slowlog-log-slower-than", "10000"),
+    ("slowlog-max-len", "128"),
+    ("latency-tracking", "yes"),
+    ("latency-monitor-threshold", "0"),
+    ("notify-keyspace-events", ""),
+    ("hz", "10"),
+    ("dynamic-hz", "yes"),
+    ("active-expire-enabled", "yes"),
+    ("lfu-log-factor", "10"),
+    ("lfu-decay-time", "1"),
+    ("lazyfree-lazy-eviction", "no"),
+    ("lazyfree-lazy-expire", "no"),
+    ("lazyfree-lazy-server-del", "no"),
+    ("lazyfree-lazy-user-del", "no"),
+    ("list-compress-depth", "0"),
+    ("stream-node-max-bytes", "4096"),
+    ("stream-node-max-entries", "100"),
+    ("proto-max-bulk-len", "512000000"),
+    ("io-threads", "1"),
+    ("io-threads-do-reads", "no"),
+    ("requirepass", ""),
+    ("acllog-max-len", "128"),
+    ("client-query-buffer-limit", "1073741824"),
+    ("client-output-buffer-limit", "0"),
+];
+
+/// Names of dynamically-managed params that `config_collect_store_entries` handles.
+/// We skip these when iterating static defaults to avoid duplicate entries.
+const CONFIG_DYNAMIC_PARAM_NAMES: &[&str] = &[
+    "hash-max-listpack-entries",
+    "hash-max-listpack-value",
+    "hash-max-ziplist-entries",
+    "hash-max-ziplist-value",
+    "list-max-listpack-entries",
+    "list-max-listpack-value",
+    "list-max-listpack-size",
+    "list-max-ziplist-size",
+    "set-max-intset-entries",
+    "set-max-listpack-entries",
+    "zset-max-listpack-entries",
+    "zset-max-listpack-value",
+    "zset-max-ziplist-entries",
+    "zset-max-ziplist-value",
+    "maxmemory-policy",
+];
+
+/// Collect store-accessible CONFIG parameters matching a glob pattern.
+///
+/// This provides real CONFIG GET values for parameters stored on `Store` when
+/// called via `dispatch_argv` (e.g., from Lua `redis.call("CONFIG", "GET", ...)`).
+/// Runtime-level parameters (maxmemory, hz, slowlog, etc.) are only available
+/// through the runtime's CONFIG handler.
+fn config_collect_store_entries(pattern: &str, store: &Store, entries: &mut Vec<RespFrame>) {
+    fn matches(pattern: &str, name: &str) -> bool {
+        glob_match(pattern.as_bytes(), name.as_bytes())
+    }
+    fn push_pair(entries: &mut Vec<RespFrame>, name: &str, value: &str) {
+        entries.push(RespFrame::BulkString(Some(name.as_bytes().to_vec())));
+        entries.push(RespFrame::BulkString(Some(value.as_bytes().to_vec())));
+    }
+
+    let usize_params: &[(&str, usize)] = &[
+        ("hash-max-listpack-entries", store.hash_max_listpack_entries),
+        ("hash-max-listpack-value", store.hash_max_listpack_value),
+        ("list-max-listpack-entries", store.list_max_listpack_entries),
+        ("list-max-listpack-value", store.list_max_listpack_value),
+        ("set-max-intset-entries", store.set_max_intset_entries),
+        ("set-max-listpack-entries", store.set_max_listpack_entries),
+        ("zset-max-listpack-entries", store.zset_max_listpack_entries),
+        ("zset-max-listpack-value", store.zset_max_listpack_value),
+        // Ziplist aliases (same live values)
+        ("hash-max-ziplist-entries", store.hash_max_listpack_entries),
+        ("hash-max-ziplist-value", store.hash_max_listpack_value),
+        ("zset-max-ziplist-entries", store.zset_max_listpack_entries),
+        ("zset-max-ziplist-value", store.zset_max_listpack_value),
+    ];
+    for &(name, value) in usize_params {
+        if matches(pattern, name) {
+            push_pair(entries, name, &value.to_string());
+        }
+    }
+    if matches(pattern, "list-max-listpack-size") {
+        push_pair(
+            entries,
+            "list-max-listpack-size",
+            &store.list_max_listpack_size.to_string(),
+        );
+    }
+    if matches(pattern, "list-max-ziplist-size") {
+        push_pair(
+            entries,
+            "list-max-ziplist-size",
+            &store.list_max_listpack_size.to_string(),
+        );
+    }
+    if matches(pattern, "maxmemory-policy") {
+        push_pair(
+            entries,
+            "maxmemory-policy",
+            store.maxmemory_policy.as_config_str(),
+        );
+    }
+
+    // Emit static defaults for params not dynamically managed.
+    for &(name, default_value) in CONFIG_STATIC_DEFAULTS {
+        if CONFIG_DYNAMIC_PARAM_NAMES.contains(&name) {
+            continue;
+        }
+        if matches(pattern, name) {
+            push_pair(entries, name, default_value);
+        }
+    }
+}
+
+/// Apply CONFIG SET for store-accessible parameters.
+///
+/// Unknown parameters are silently accepted (the runtime handles them).
+fn config_apply_store_sets(pairs: &[Vec<u8>], store: &mut Store) -> Result<(), CommandError> {
+    let mut i = 0;
+    while i + 1 < pairs.len() {
+        let name = std::str::from_utf8(&pairs[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        let val =
+            std::str::from_utf8(&pairs[i + 1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        let lower = name.to_ascii_lowercase();
+
+        match lower.as_str() {
+            "hash-max-listpack-entries" | "hash-max-ziplist-entries" => {
+                store.hash_max_listpack_entries = parse_config_usize(val)?;
+            }
+            "hash-max-listpack-value" | "hash-max-ziplist-value" => {
+                store.hash_max_listpack_value = parse_config_usize(val)?;
+            }
+            "list-max-listpack-entries" => {
+                store.list_max_listpack_entries = parse_config_usize(val)?;
+            }
+            "list-max-listpack-value" => {
+                store.list_max_listpack_value = parse_config_usize(val)?;
+            }
+            "list-max-listpack-size" | "list-max-ziplist-size" => {
+                store.list_max_listpack_size = val
+                    .parse::<i64>()
+                    .map_err(|_| CommandError::InvalidInteger)?;
+            }
+            "set-max-intset-entries" => {
+                store.set_max_intset_entries = parse_config_usize(val)?;
+            }
+            "set-max-listpack-entries" => {
+                store.set_max_listpack_entries = parse_config_usize(val)?;
+            }
+            "zset-max-listpack-entries" | "zset-max-ziplist-entries" => {
+                store.zset_max_listpack_entries = parse_config_usize(val)?;
+            }
+            "zset-max-listpack-value" | "zset-max-ziplist-value" => {
+                store.zset_max_listpack_value = parse_config_usize(val)?;
+            }
+            "maxmemory-policy" => {
+                store.maxmemory_policy =
+                    MaxmemoryPolicy::from_config_str(val).ok_or_else(|| {
+                        CommandError::Custom(format!(
+                            "ERR Invalid argument '{val}' for CONFIG SET 'maxmemory-policy'"
+                        ))
+                    })?;
+            }
+            _ => {
+                // Unknown params are silently accepted — the runtime layer
+                // handles server-level params like maxmemory, hz, slowlog, etc.
+            }
+        }
+        i += 2;
+    }
+    Ok(())
+}
+
+fn parse_config_usize(val: &str) -> Result<usize, CommandError> {
+    val.parse::<usize>()
+        .map_err(|_| CommandError::InvalidInteger)
 }
 
 fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {

@@ -1138,14 +1138,14 @@ impl Store {
         now_ms: u64,
     ) -> Result<Option<Vec<u8>>, StoreError> {
         self.drop_if_expired(&key, now_ms);
-        let (old, expires_at_ms) = match self.entries.get(&key) {
+        let old = match self.entries.get(&key) {
             Some(entry) => match &entry.value {
-                Value::String(v) => (Some(v.clone()), entry.expires_at_ms),
+                Value::String(v) => Some(v.clone()),
                 _ => return Err(StoreError::WrongType),
             },
-            None => (None, None),
+            None => None,
         };
-        self.internal_entries_insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
+        self.internal_entries_insert(key, Entry::new(Value::String(value), None, now_ms));
         self.dirty += 1;
         Ok(old)
     }
@@ -9162,7 +9162,7 @@ mod tests {
     }
 
     #[test]
-    fn getset_preserves_existing_ttl() {
+    fn getset_clears_existing_ttl() {
         let mut store = Store::new();
         store.set(b"k".to_vec(), b"v1".to_vec(), Some(5_000), 1_000);
         assert_eq!(store.pttl(b"k", 1_000), PttlValue::Remaining(5_000));
@@ -9172,8 +9172,8 @@ mod tests {
             Some(b"v1".to_vec())
         );
         assert_eq!(store.get(b"k", 2_000).unwrap(), Some(b"v2".to_vec()));
-        assert_eq!(store.pttl(b"k", 2_000), PttlValue::Remaining(4_000));
-        assert_eq!(store.get(b"k", 6_001).unwrap(), None);
+        assert_eq!(store.pttl(b"k", 2_000), PttlValue::NoExpiry);
+        assert_eq!(store.get(b"k", 6_001).unwrap(), Some(b"v2".to_vec()));
     }
 
     #[test]

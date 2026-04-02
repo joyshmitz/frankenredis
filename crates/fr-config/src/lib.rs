@@ -544,12 +544,6 @@ pub fn plan_tls_runtime_apply(
     let requires_connection_type_configure =
         target_listener_enabled && (requires_context_swap || !current.connection_type_configured);
 
-    if target_listener_enabled && !requires_connection_type_configure {
-        return Err(TlsCfgError::ConnectionTypeConfigureViolation(
-            "TLS listener would update without connection-type configure hook".to_string(),
-        ));
-    }
-
     Ok(TlsApplyPlan {
         candidate_config: candidate,
         listener_transition,
@@ -819,6 +813,32 @@ mod tests {
         assert_eq!(plan.listener_transition, TlsListenerTransition::Enable);
         assert!(plan.requires_context_swap);
         assert!(plan.requires_connection_type_configure);
+    }
+
+    #[test]
+    fn fr_p2c_009_u014_runtime_apply_plan_allows_noop_reapply_for_enabled_tls() {
+        let candidate = TlsConfig {
+            tls_port: Some(6380),
+            cert_file: Some("cert.pem".to_string()),
+            key_file: Some("key.pem".to_string()),
+            ca_file: Some("ca.pem".to_string()),
+            protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ciphers: Some("HIGH:!aNULL".to_string()),
+            auth_clients: TlsAuthClients::Required,
+            cluster_announce_tls_port: None,
+            max_new_tls_connections_per_cycle: 64,
+        };
+        let current = TlsRuntimeState {
+            active_config: Some(candidate.clone()),
+            tls_listener_enabled: true,
+            tcp_listener_enabled: true,
+            connection_type_configured: true,
+        };
+
+        let plan = plan_tls_runtime_apply(&current, candidate).expect("no-op reapply should plan");
+        assert_eq!(plan.listener_transition, TlsListenerTransition::Keep);
+        assert!(!plan.requires_context_swap);
+        assert!(!plan.requires_connection_type_configure);
     }
 
     #[test]
