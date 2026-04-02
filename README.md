@@ -28,6 +28,7 @@ This project uses four pervasive disciplines:
 - project charter and porting docs established
 - legacy oracle cloned at `/data/projects/frankenredis/legacy_redis_code/redis`
 - first executable vertical slice landed:
+  - standalone `fr-server` binary (`frankenredis`) using `mio` for single-threaded TCP serving on top of `fr-runtime`
   - RESP parser/encoder
   - broad command surface across strings, hashes, lists, sets, sorted sets, streams, geo, pub/sub, and server control paths
   - in-memory store + TTL semantics
@@ -52,17 +53,18 @@ This project uses four pervasive disciplines:
 
 ## Architecture Direction
 
-RESP parser -> command router -> data engine -> persistence -> replication
+tcp client -> fr-server -> fr-runtime -> RESP parser -> command router -> data engine -> persistence -> replication
 
 ## Concrete Execution Path (Current Code)
 
-1. RESP parsing/encoding lives in `crates/fr-protocol/src/lib.rs` via `parse_frame` and `RespFrame::to_bytes`.
-2. Runtime ingress starts at `Runtime::execute_bytes` (`crates/fr-runtime/src/lib.rs`), which parses wire bytes and emits fail-closed evidence on protocol errors.
+1. Network ingress starts in the standalone `frankenredis` binary at `crates/fr-server/src/main.rs`, which runs a single-threaded `mio` event loop, owns TCP connection state, and delegates per-command execution to `fr-runtime`.
+2. Runtime ingress inside that server path reaches `Runtime::execute_bytes` (`crates/fr-runtime/src/lib.rs`), which parses wire bytes and emits fail-closed evidence on protocol errors.
 3. `Runtime::execute_frame` performs preflight policy checks, handles special runtime commands (auth, acl, config, cluster, transaction, persistence controls), enforces auth/maxmemory gates, and runs active-expire before general dispatch.
 4. General command dispatch flows through `fr_command::dispatch_argv` (`crates/fr-command/src/lib.rs`) into command handlers that mutate/read `Store` with deterministic `now_ms` semantics.
 5. Expiration semantics are centralized in store + `fr-expire` (`evaluate_expiry`), preserving Redis-visible `TTL/PTTL` return contracts (`-2`, `-1`, positive remaining lifetime).
 6. Successful write dispatch captures persistence/replication signals in runtime (`capture_aof_record`), appending `fr-persist::AofRecord` entries and advancing replication offsets.
-7. Conformance execution is driven by `fr-conformance::run_fixture`, which instantiates strict or hardened runtime modes and validates both reply parity and threat/evidence expectations.
+7. Replication state-machine logic lives in `fr-repl`, while the live server path in `fr-server` handles replica sockets, backlog delivery, and reconnect flow on top of runtime state.
+8. Conformance execution is driven by `fr-conformance::run_fixture`, which instantiates strict or hardened runtime modes and validates both reply parity and threat/evidence expectations.
 
 ## Compatibility and Security Stance
 

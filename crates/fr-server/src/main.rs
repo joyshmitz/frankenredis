@@ -436,6 +436,7 @@ fn main() -> ExitCode {
             client_id_to_token: &client_id_to_token,
             blocked_tokens: &mut blocked_tokens,
             closing_tokens: &mut closing_tokens,
+            paused_tokens: &mut paused_tokens,
             runtime: &mut runtime,
             poll: &mut poll,
             write_tokens: &mut write_tokens,
@@ -444,15 +445,16 @@ fn main() -> ExitCode {
 
         // Check blocked clients (BLPOP/BRPOP/BLMOVE) for available data
         // or timeout expiry.
-        check_blocked_clients(
-            &mut clients,
-            &mut blocked_tokens,
-            &mut closing_tokens,
-            &mut runtime,
-            &mut poll,
-            &mut write_tokens,
+        check_blocked_clients(CheckBlockedClientsContext {
+            clients: &mut clients,
+            blocked_tokens: &mut blocked_tokens,
+            closing_tokens: &mut closing_tokens,
+            paused_tokens: &mut paused_tokens,
+            runtime: &mut runtime,
+            poll: &mut poll,
+            write_tokens: &mut write_tokens,
             ts,
-        );
+        });
 
         // Re-process clients whose commands were deferred by CLIENT PAUSE.
         // When the pause expires, we must re-trigger processing since mio won't
@@ -1665,17 +1667,30 @@ fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedStat
     }
 }
 
+struct CheckBlockedClientsContext<'a> {
+    clients: &'a mut HashMap<Token, ClientConnection>,
+    blocked_tokens: &'a mut HashSet<Token>,
+    closing_tokens: &'a mut HashSet<Token>,
+    paused_tokens: &'a mut HashSet<Token>,
+    runtime: &'a mut Runtime,
+    poll: &'a mut Poll,
+    write_tokens: &'a mut HashSet<Token>,
+    ts: u64,
+}
+
 /// Check all blocked clients. Unblock them if their keys have data or
 /// their timeout has expired.
-fn check_blocked_clients(
-    clients: &mut HashMap<Token, ClientConnection>,
-    blocked_tokens: &mut HashSet<Token>,
-    closing_tokens: &mut HashSet<Token>,
-    runtime: &mut Runtime,
-    poll: &mut Poll,
-    write_tokens: &mut HashSet<Token>,
-    ts: u64,
-) {
+fn check_blocked_clients(ctx: CheckBlockedClientsContext<'_>) {
+    let CheckBlockedClientsContext {
+        clients,
+        blocked_tokens,
+        closing_tokens,
+        paused_tokens,
+        runtime,
+        poll,
+        write_tokens,
+        ts,
+    } = ctx;
     if blocked_tokens.is_empty() {
         runtime.clear_ready_keys();
         return;
@@ -1724,7 +1739,6 @@ fn check_blocked_clients(
             if !conn.read_buf.is_empty() {
                 let session = std::mem::take(&mut conn.session);
                 let prev = runtime.swap_session(session);
-                let mut dummy_paused = HashSet::new();
                 process_buffered_frames(
                     token,
                     conn,
@@ -1732,7 +1746,7 @@ fn check_blocked_clients(
                     blocked_tokens,
                     closing_tokens,
                     write_tokens,
-                    &mut dummy_paused,
+                    paused_tokens,
                     ts,
                 );
                 let updated_session = runtime.swap_session(prev);
@@ -1758,7 +1772,6 @@ fn check_blocked_clients(
             // Process any commands the client pipelined while blocked.
             if !conn.read_buf.is_empty() {
                 // The session is already swapped in here.
-                let mut dummy_paused = HashSet::new();
                 process_buffered_frames(
                     token,
                     conn,
@@ -1766,7 +1779,7 @@ fn check_blocked_clients(
                     blocked_tokens,
                     closing_tokens,
                     write_tokens,
-                    &mut dummy_paused,
+                    paused_tokens,
                     ts,
                 );
             }
@@ -1790,6 +1803,7 @@ struct PendingClientUnblocksContext<'a> {
     client_id_to_token: &'a HashMap<u64, Token>,
     blocked_tokens: &'a mut HashSet<Token>,
     closing_tokens: &'a mut HashSet<Token>,
+    paused_tokens: &'a mut HashSet<Token>,
     runtime: &'a mut Runtime,
     poll: &'a mut Poll,
     write_tokens: &'a mut HashSet<Token>,
@@ -1802,6 +1816,7 @@ fn apply_pending_client_unblocks(ctx: PendingClientUnblocksContext<'_>) {
         client_id_to_token,
         blocked_tokens,
         closing_tokens,
+        paused_tokens,
         runtime,
         poll,
         write_tokens,
@@ -1842,7 +1857,6 @@ fn apply_pending_client_unblocks(ctx: PendingClientUnblocksContext<'_>) {
         if !conn.read_buf.is_empty() {
             let session = std::mem::take(&mut conn.session);
             let prev = runtime.swap_session(session);
-            let mut dummy_paused = HashSet::new();
             process_buffered_frames(
                 token,
                 conn,
@@ -1850,7 +1864,7 @@ fn apply_pending_client_unblocks(ctx: PendingClientUnblocksContext<'_>) {
                 blocked_tokens,
                 closing_tokens,
                 write_tokens,
-                &mut dummy_paused,
+                paused_tokens,
                 ts,
             );
             let updated_session = runtime.swap_session(prev);
@@ -2197,12 +2211,12 @@ fn handle_writable(
 #[cfg(test)]
 mod tests {
     use crate::{
-        InlineParseResult, PendingClientUnblocksContext, REPLICA_ACK_INTERVAL_MS,
-        REPLICA_RECONNECT_BACKOFF_MS, ReplicaPrimaryConnection, ReplicaSyncState,
-        apply_pending_client_unblocks, drain_replica_stream, drive_replica_sync,
-        parse_blocking_deadline, read_frame_from_stream, replica_handshake_frame,
-        replica_handshake_read_timeout, replication_follow_up_bytes, server_help_text,
-        should_try_inline_parsing, try_build_blocked_state,
+        CheckBlockedClientsContext, InlineParseResult, PendingClientUnblocksContext,
+        REPLICA_ACK_INTERVAL_MS, REPLICA_RECONNECT_BACKOFF_MS, ReplicaPrimaryConnection,
+        ReplicaSyncState, apply_pending_client_unblocks, check_blocked_clients,
+        drain_replica_stream, drive_replica_sync, parse_blocking_deadline, read_frame_from_stream,
+        replica_handshake_frame, replica_handshake_read_timeout, replication_follow_up_bytes,
+        server_help_text, should_try_inline_parsing, try_build_blocked_state,
     };
     use fr_config::RuntimePolicy;
     use fr_protocol::{ParserConfig, RespFrame};
@@ -3340,6 +3354,7 @@ mod tests {
             client_id_to_token: &client_id_to_token,
             blocked_tokens: &mut blocked_tokens,
             closing_tokens: &mut closing_tokens,
+            paused_tokens: &mut paused_tokens,
             runtime: &mut runtime,
             poll: &mut poll,
             write_tokens: &mut write_tokens,
@@ -3369,5 +3384,200 @@ mod tests {
             RespFrame::Error("UNBLOCKED client unblocked via CLIENT UNBLOCK".to_string())
                 .to_bytes()
         );
+    }
+
+    #[test]
+    fn client_unblock_tracks_paused_tokens_for_pipelined_commands() {
+        use crate::{BlockedState, BlockingOp, ClientConnection};
+        use mio::{Poll, Token};
+        use std::collections::{HashMap, HashSet};
+        use std::net::{TcpListener, TcpStream};
+
+        let mut runtime = Runtime::default_strict();
+
+        let blocked_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let blocked_addr = blocked_listener.local_addr().unwrap();
+        let blocked_stream = TcpStream::connect(blocked_addr).unwrap();
+        let (mut blocked_peer, _) = blocked_listener.accept().unwrap();
+        blocked_peer
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+
+        let blocked_token = Token(1);
+        let blocked_session = runtime.new_session();
+        let blocked_client_id = blocked_session.client_id;
+        let mut blocked_conn = ClientConnection::new(
+            mio::net::TcpStream::from_std(blocked_stream),
+            blocked_session,
+        );
+        blocked_conn.blocked = Some(BlockedState {
+            op: BlockingOp::BLpop {
+                keys: vec![b"queue".to_vec()],
+            },
+            deadline_ms: u64::MAX,
+        });
+        blocked_conn.read_buf.extend_from_slice(
+            &RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"GET".to_vec())),
+                RespFrame::BulkString(Some(b"after".to_vec())),
+            ]))
+            .to_bytes(),
+        );
+
+        runtime.mark_client_blocked(blocked_client_id);
+        assert_eq!(
+            runtime.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"CLIENT".to_vec())),
+                    RespFrame::BulkString(Some(b"PAUSE".to_vec())),
+                    RespFrame::BulkString(Some(b"1000".to_vec())),
+                    RespFrame::BulkString(Some(b"ALL".to_vec())),
+                ])),
+                10,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert!(runtime.is_client_paused(11));
+
+        let requester = runtime.new_session();
+        let previous = runtime.swap_session(requester);
+        assert_eq!(
+            runtime.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"CLIENT".to_vec())),
+                    RespFrame::BulkString(Some(b"UNBLOCK".to_vec())),
+                    RespFrame::BulkString(Some(blocked_client_id.to_string().into_bytes())),
+                    RespFrame::BulkString(Some(b"ERROR".to_vec())),
+                ])),
+                11,
+            ),
+            RespFrame::Integer(1)
+        );
+        let _ = runtime.swap_session(previous);
+
+        let mut clients = HashMap::from([(blocked_token, blocked_conn)]);
+        let client_id_to_token = HashMap::from([(blocked_client_id, blocked_token)]);
+        let mut blocked_tokens = HashSet::from([blocked_token]);
+        let mut closing_tokens = HashSet::new();
+        let mut paused_tokens = HashSet::new();
+        let mut write_tokens = HashSet::new();
+        let mut poll = Poll::new().unwrap();
+
+        apply_pending_client_unblocks(PendingClientUnblocksContext {
+            clients: &mut clients,
+            client_id_to_token: &client_id_to_token,
+            blocked_tokens: &mut blocked_tokens,
+            closing_tokens: &mut closing_tokens,
+            paused_tokens: &mut paused_tokens,
+            runtime: &mut runtime,
+            poll: &mut poll,
+            write_tokens: &mut write_tokens,
+            ts: 11,
+        });
+
+        let blocked_conn = clients.get(&blocked_token).unwrap();
+        assert!(blocked_conn.blocked.is_none());
+        assert!(!blocked_tokens.contains(&blocked_token));
+        assert!(paused_tokens.contains(&blocked_token));
+        assert!(!blocked_conn.read_buf.is_empty());
+
+        let mut blocked_reply =
+            vec![
+                0_u8;
+                RespFrame::Error("UNBLOCKED client unblocked via CLIENT UNBLOCK".to_string())
+                    .to_bytes()
+                    .len()
+            ];
+        std::io::Read::read_exact(&mut blocked_peer, &mut blocked_reply).unwrap();
+        assert_eq!(
+            blocked_reply,
+            RespFrame::Error("UNBLOCKED client unblocked via CLIENT UNBLOCK".to_string())
+                .to_bytes()
+        );
+    }
+
+    #[test]
+    fn blocked_client_timeout_tracks_paused_tokens_for_pipelined_commands() {
+        use crate::{BlockedState, BlockingOp, ClientConnection};
+        use mio::{Poll, Token};
+        use std::collections::{HashMap, HashSet};
+        use std::net::{TcpListener, TcpStream};
+
+        let mut runtime = Runtime::default_strict();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+
+        let blocked_token = Token(1);
+        let blocked_session = runtime.new_session();
+        let blocked_client_id = blocked_session.client_id;
+        let mut blocked_conn =
+            ClientConnection::new(mio::net::TcpStream::from_std(stream), blocked_session);
+        blocked_conn.blocked = Some(BlockedState {
+            op: BlockingOp::BLpop {
+                keys: vec![b"queue".to_vec()],
+            },
+            deadline_ms: 20,
+        });
+        blocked_conn.read_buf.extend_from_slice(
+            &RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"GET".to_vec())),
+                RespFrame::BulkString(Some(b"after".to_vec())),
+            ]))
+            .to_bytes(),
+        );
+
+        runtime.mark_client_blocked(blocked_client_id);
+        assert_eq!(
+            runtime.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"CLIENT".to_vec())),
+                    RespFrame::BulkString(Some(b"PAUSE".to_vec())),
+                    RespFrame::BulkString(Some(b"1000".to_vec())),
+                    RespFrame::BulkString(Some(b"ALL".to_vec())),
+                ])),
+                10,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert!(runtime.is_client_paused(21));
+
+        let mut clients = HashMap::from([(blocked_token, blocked_conn)]);
+        let mut blocked_tokens = HashSet::from([blocked_token]);
+        let mut closing_tokens = HashSet::new();
+        let mut paused_tokens = HashSet::new();
+        let mut write_tokens = HashSet::new();
+        let mut poll = Poll::new().unwrap();
+
+        check_blocked_clients(CheckBlockedClientsContext {
+            clients: &mut clients,
+            blocked_tokens: &mut blocked_tokens,
+            closing_tokens: &mut closing_tokens,
+            paused_tokens: &mut paused_tokens,
+            runtime: &mut runtime,
+            poll: &mut poll,
+            write_tokens: &mut write_tokens,
+            ts: 21,
+        });
+
+        let blocked_conn = clients.get(&blocked_token).unwrap();
+        assert!(blocked_conn.blocked.is_none());
+        assert!(!blocked_tokens.contains(&blocked_token));
+        assert!(paused_tokens.contains(&blocked_token));
+        assert!(!blocked_conn.read_buf.is_empty());
+        assert!(
+            !runtime
+                .server
+                .blocked_client_ids
+                .contains(&blocked_client_id)
+        );
+
+        let mut blocked_reply = vec![0_u8; RespFrame::Array(None).to_bytes().len()];
+        std::io::Read::read_exact(&mut peer, &mut blocked_reply).unwrap();
+        assert_eq!(blocked_reply, RespFrame::Array(None).to_bytes());
     }
 }

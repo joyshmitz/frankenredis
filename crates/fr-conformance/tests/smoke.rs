@@ -361,3 +361,27 @@ fn core_object_conformance() {
     assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
     assert!(diff.failed.is_empty());
 }
+
+#[test]
+fn core_pfdebug_conformance() {
+    let cfg = HarnessConfig::default_paths();
+    let diff = run_fixture(&cfg, "core_pfdebug.json").expect("pfdebug fixture");
+    assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
+    assert!(diff.failed.is_empty());
+}
+
+#[test]
+fn core_migrate_conformance() {
+    let cfg = HarnessConfig::default_paths();
+    let diff = run_fixture(&cfg, "core_migrate.json").expect("migrate fixture");
+    assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
+    assert!(diff.failed.is_empty());
+}
+
+#[test]
+fn core_module_sentinel_conformance() {
+    let cfg = HarnessConfig::default_paths();
+    let diff = run_fixture(&cfg, "core_module_sentinel.json").expect("module/sentinel fixture");
+    assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
+    assert!(diff.failed.is_empty());
+}

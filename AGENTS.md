@@ -66,7 +66,8 @@ We only use **Cargo** in this project, NEVER any other package manager.
 | `fr-repl` | Replication protocol and state machine |
 | `fr-eventloop` | Single-threaded event loop and I/O multiplexing |
 | `fr-config` | Server configuration and runtime tuning |
-| `fr-runtime` | Top-level server assembly (depends on `fr-command`, `fr-config`, `fr-protocol`, `fr-store`) |
+| `fr-runtime` | Core runtime orchestration and per-client/session semantics (depends on `fr-command`, `fr-config`, `fr-protocol`, `fr-store`) |
+| `fr-server` | Standalone `frankenredis` TCP server binary using `mio` on top of `fr-runtime` |
 | `fr-conformance` | Conformance test harness against legacy Redis (depends on `fr-config`, `fr-persist`, `fr-protocol`, `fr-runtime`, `serde`, `serde_json`) |
 | `serde` + `serde_json` | Serialization (used in conformance) |
 
@@ -216,9 +217,9 @@ If you aren't 100% sure how to use a third-party library, **SEARCH ONLINE** to f
 ### Architecture
 
 ```
-Client → RESP Parser → Command Router → Data Engine → Persistence → Replication
-         (fr-protocol)  (fr-command)     (fr-store)    (fr-persist)   (fr-repl)
-                                          (fr-expire)
+TCP Client → fr-server → fr-runtime → RESP Parser → Command Router → Data Engine → Persistence → Replication
+             (mio loop)  (session/core)   (fr-protocol)  (fr-command)     (fr-store)    (fr-persist)   (fr-repl)
+                                                                                 (fr-expire)
 ```
 
 ### Workspace Structure
@@ -235,8 +236,9 @@ frankenredis/
 │   ├── fr-repl/                       # Replication protocol and state machine
 │   ├── fr-eventloop/                  # Single-threaded event loop
 │   ├── fr-config/                     # Server configuration
-│   ├── fr-runtime/                    # Top-level server assembly
-│   └── fr-conformance/               # Conformance tests against legacy Redis
+│   ├── fr-runtime/                    # Core runtime orchestration and session semantics
+│   ├── fr-server/                     # Standalone mio-based TCP server binary
+│   └── fr-conformance/                # Conformance tests against legacy Redis
 ├── legacy_redis_code/redis/           # Upstream C Redis source (behavioral oracle)
 ├── baselines/                         # Performance baseline artifacts
 ├── golden_outputs/                    # Golden output fixtures for conformance
