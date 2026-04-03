@@ -416,6 +416,33 @@ impl AclUser {
         let commands_part = self.commands_string();
         format!("user {username_str} {on_off}{pass_part}{keys_part}{channels_part} {commands_part}")
     }
+
+    fn acl_save_line(&self, username: &[u8]) -> String {
+        let username_str = String::from_utf8_lossy(username);
+        let mut parts = vec!["user".to_string(), username_str.into_owned(), "reset".to_string()];
+        parts.push(if self.enabled {
+            "on".to_string()
+        } else {
+            "off".to_string()
+        });
+        if self.nopass {
+            parts.push("nopass".to_string());
+        } else if self.passwords.is_empty() {
+            parts.push("resetpass".to_string());
+        } else {
+            for password in &self.passwords {
+                parts.push(format!(">{}", String::from_utf8_lossy(password)));
+            }
+        }
+        if self.all_keys {
+            parts.push("~*".to_string());
+        }
+        if self.all_channels {
+            parts.push("&*".to_string());
+        }
+        parts.extend(self.commands_string().split_whitespace().map(str::to_string));
+        parts.join(" ")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -478,6 +505,33 @@ impl AuthState {
             .iter()
             .map(|(name, user)| user.acl_list_line(name))
             .collect()
+    }
+
+    fn serialize_acl_rules(&self) -> String {
+        self.acl_users
+            .iter()
+            .map(|(name, user)| user.acl_save_line(name))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn load_acl_rules(&mut self, content: &str) -> Result<(), String> {
+        let mut loaded = Self::default();
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 2 || !parts[0].eq_ignore_ascii_case("user") {
+                return Err("ERR /ACL file contains invalid format".to_string());
+            }
+            let username = parts[1].as_bytes().to_vec();
+            let rules: Vec<&[u8]> = parts[2..].iter().map(|part| part.as_bytes()).collect();
+            loaded.set_user(username, &rules)?;
+        }
+        *self = loaded;
+        Ok(())
     }
 
     fn get_user(&self, username: &[u8]) -> Option<&AclUser> {
@@ -1179,6 +1233,8 @@ pub struct ServerState {
     aof_config_path: Option<std::path::PathBuf>,
     /// Path for RDB persistence file (used by SAVE/BGSAVE).
     rdb_path: Option<std::path::PathBuf>,
+    /// Path for ACL SAVE/LOAD persistence file.
+    acl_file_path: Option<std::path::PathBuf>,
     /// Dynamically overridden CONFIG parameters (set via CONFIG SET, returned by CONFIG GET).
     config_overrides: HashMap<String, String>,
 
@@ -1215,7 +1271,8 @@ pub struct ServerState {
 
 impl Default for ServerState {
     fn default() -> Self {
-        let store = Store::new();
+        let mut store = Store::new();
+        store.maxmemory_bytes_live = 0;
         Self {
             replication_runtime_state: ReplicationRuntimeState::new(
                 "0000000000000000000000000000000000000000".to_string(),
@@ -1256,6 +1313,7 @@ impl Default for ServerState {
             aof_path: None,
             aof_config_path: None,
             rdb_path: None,
+            acl_file_path: None,
             config_overrides: HashMap::new(),
             pubsub_channel_subs: HashMap::new(),
             pubsub_pattern_subs: HashMap::new(),
@@ -1285,6 +1343,10 @@ impl ServerState {
         self.rdb_path = Some(path);
     }
 
+    pub fn set_acl_file_path(&mut self, path: std::path::PathBuf) {
+        self.acl_file_path = Some(path);
+    }
+
     pub fn load_aof(&mut self, now_ms: u64) -> Result<usize, PersistError> {
         let path = match &self.aof_path {
             Some(path) => path.clone(),
@@ -1309,6 +1371,7 @@ impl ServerState {
         now_ms: u64,
         cycle_kind: ActiveExpireCycleKind,
     ) -> ActiveExpireCycleStats {
+        let start = Instant::now();
         let plan = plan_active_expire_cycle(
             cycle_kind,
             self.store.count_expiring_keys(),
@@ -1323,6 +1386,16 @@ impl ServerState {
         );
         self.active_expire_db_cursor = plan.next_db_index;
         self.active_expire_key_cursor = cycle_result.next_cursor;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        self.store.stat_expire_cycle_cpu_milliseconds = self
+            .store
+            .stat_expire_cycle_cpu_milliseconds
+            .saturating_add(elapsed_ms);
+        self.store.stat_expired_stale_perc = if cycle_result.sampled_keys == 0 {
+            0
+        } else {
+            ((cycle_result.evicted_keys as u64) * 100) / (cycle_result.sampled_keys as u64)
+        };
 
         let stats = ActiveExpireCycleStats {
             plan,
@@ -1351,6 +1424,7 @@ impl ServerState {
         max_cycles: usize,
     ) {
         self.maxmemory_bytes = maxmemory_bytes;
+        self.store.maxmemory_bytes_live = maxmemory_bytes;
         self.maxmemory_not_counted_bytes = not_counted_bytes;
         self.maxmemory_eviction_sample_limit = sample_limit.max(1);
         self.maxmemory_eviction_max_cycles = max_cycles;
@@ -1628,6 +1702,10 @@ impl Runtime {
     /// an RDB snapshot to this path.
     pub fn set_rdb_path(&mut self, path: std::path::PathBuf) {
         self.server.set_rdb_path(path);
+    }
+
+    pub fn set_acl_file_path(&mut self, path: std::path::PathBuf) {
+        self.server.set_acl_file_path(path);
     }
 
     /// Set the server listen port (for INFO server section).
@@ -2322,6 +2400,11 @@ impl Runtime {
         self.apply_requirepass_update(requirepass, false);
     }
 
+    fn refresh_store_runtime_info_context(&mut self) {
+        self.server.store.stat_tracking_clients = 0;
+        self.server.store.maxmemory_bytes_live = self.server.maxmemory_bytes;
+    }
+
     pub fn add_user(&mut self, username: Vec<u8>, password: Vec<u8>) {
         self.server.auth_state.add_user(username, password);
         self.session
@@ -2449,6 +2532,7 @@ impl Runtime {
 
     pub fn execute_frame(&mut self, frame: RespFrame, now_ms: u64) -> RespFrame {
         self.server.store.stat_total_commands_processed += 1;
+        self.refresh_store_runtime_info_context();
         let packet_id = next_packet_id();
         let input_digest = digest_bytes(&frame.to_bytes());
         let state_before = self.server.store.state_digest();
@@ -3088,10 +3172,16 @@ impl Runtime {
 
     pub fn mark_client_blocked(&mut self, client_id: u64) {
         self.server.blocked_client_ids.insert(client_id);
+        self.server.store.stat_blocked_clients = self.server.blocked_client_ids.len() as u64;
+    }
+
+    pub fn set_blocked_clients_count_for_info(&mut self, blocked_clients: usize) {
+        self.server.store.stat_blocked_clients = blocked_clients as u64;
     }
 
     pub fn mark_client_unblocked(&mut self, client_id: u64) {
         self.server.blocked_client_ids.remove(&client_id);
+        self.server.store.stat_blocked_clients = self.server.blocked_client_ids.len() as u64;
     }
 
     pub fn drain_pending_client_unblocks(&mut self) -> Vec<(u64, ClientUnblockMode)> {
@@ -3539,15 +3629,10 @@ impl Runtime {
             self.handle_acl_genpass(argv)
         } else if sub.eq_ignore_ascii_case("LOG") {
             self.handle_acl_log(argv)
-        } else if sub.eq_ignore_ascii_case("SAVE") || sub.eq_ignore_ascii_case("LOAD") {
-            if argv.len() != 2 {
-                return CommandError::WrongSubcommandArity {
-                    command: "ACL",
-                    subcommand: sub.to_string(),
-                }
-                .to_resp();
-            }
-            RespFrame::SimpleString("OK".to_string())
+        } else if sub.eq_ignore_ascii_case("SAVE") {
+            self.handle_acl_save(argv)
+        } else if sub.eq_ignore_ascii_case("LOAD") {
+            self.handle_acl_load(argv)
         } else if sub.eq_ignore_ascii_case("HELP") {
             if argv.len() != 2 {
                 return CommandError::WrongSubcommandArity {
@@ -3848,6 +3933,68 @@ impl Runtime {
         }
     }
 
+    fn handle_acl_save(&self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() != 2 {
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "SAVE".to_string(),
+            }
+            .to_resp();
+        }
+        let Some(path) = &self.server.acl_file_path else {
+            return RespFrame::Error("ERR There is no configured ACL file".to_string());
+        };
+        let content = self.server.auth_state.serialize_acl_rules();
+        let tmp_path = path.with_extension("tmp");
+        match (|| -> std::io::Result<()> {
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut file = std::fs::File::create(&tmp_path)?;
+            std::io::Write::write_all(&mut file, content.as_bytes())?;
+            std::io::Write::write_all(&mut file, b"\n")?;
+            std::io::Write::flush(&mut file)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&tmp_path, path)?;
+            Ok(())
+        })() {
+            Ok(()) => RespFrame::SimpleString("OK".to_string()),
+            Err(err) => RespFrame::Error(format!("ERR {err}")),
+        }
+    }
+
+    fn handle_acl_load(&mut self, argv: &[Vec<u8>]) -> RespFrame {
+        if argv.len() != 2 {
+            return CommandError::WrongSubcommandArity {
+                command: "ACL",
+                subcommand: "LOAD".to_string(),
+            }
+            .to_resp();
+        }
+        let Some(path) = &self.server.acl_file_path else {
+            return RespFrame::Error("ERR There is no configured ACL file".to_string());
+        };
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) => return RespFrame::Error(format!("ERR {err}")),
+        };
+        let previous = self.server.auth_state.clone();
+        match self.server.auth_state.load_acl_rules(&content) {
+            Ok(()) => {
+                self.session
+                    .refresh_authentication_for_server(&self.server.auth_state, true);
+                RespFrame::SimpleString("OK".to_string())
+            }
+            Err(err) => {
+                self.server.auth_state = previous;
+                RespFrame::Error(err)
+            }
+        }
+    }
+
     fn handle_acl_help(&self) -> RespFrame {
         RespFrame::Array(Some(vec![
             hello_bulk("ACL <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
@@ -3912,6 +4059,10 @@ impl Runtime {
             self.server.reset_slowlog();
             self.server.store.stat_total_commands_processed = 0;
             self.server.store.stat_total_connections_received = 0;
+            self.server.store.stat_expired_keys = 0;
+            self.server.store.stat_evicted_keys = 0;
+            self.server.store.stat_expired_stale_perc = 0;
+            self.server.store.stat_expire_cycle_cpu_milliseconds = 0;
             return RespFrame::SimpleString("OK".to_string());
         }
         if sub.eq_ignore_ascii_case("REWRITE") {
@@ -4236,6 +4387,16 @@ impl Runtime {
                 .unwrap_or_else(|| ".".to_string());
             entries.push(RespFrame::BulkString(Some(dirname.into_bytes())));
         }
+        if Self::config_pattern_matches(pattern, "aclfile") {
+            entries.push(RespFrame::BulkString(Some(b"aclfile".to_vec())));
+            let path = self
+                .server
+                .acl_file_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            entries.push(RespFrame::BulkString(Some(path.into_bytes())));
+        }
         // Also emit ziplist aliases from Store (they alias the same live values).
         let ziplist_aliases: &[(&str, usize)] = &[
             (
@@ -4289,6 +4450,7 @@ impl Runtime {
                 || name == "appenddirname"
                 || name == "dbfilename"
                 || name == "dir"
+                || name == "aclfile"
                 || name == "maxclients"
                 || name == "busy-reply-threshold"
                 || name == "lua-time-limit"
@@ -4763,6 +4925,7 @@ impl Runtime {
         self.server.acllog_max_len = next_acllog_max_len;
         if let Some(maxmemory) = next_maxmemory {
             self.server.maxmemory_bytes = maxmemory;
+            self.server.store.maxmemory_bytes_live = maxmemory;
         }
         if let Some(maxmemory_policy) = next_maxmemory_policy {
             self.server.store.maxmemory_policy = maxmemory_policy;
@@ -7726,6 +7889,9 @@ mod tests {
         assert_eq!(stats.plan.kind, ActiveExpireCycleKind::Fast);
         assert!(stats.sampled_keys >= 1);
         assert!(stats.evicted_keys >= 1);
+        assert!(rt.server.store.stat_expired_keys >= 1);
+        assert!(rt.server.store.stat_expired_stale_perc >= 1);
+        assert!(rt.server.store.stat_expire_cycle_cpu_milliseconds <= 10);
 
         assert_eq!(
             rt.execute_frame(command(&[b"TTL", b"fr:p2c:008:exp"]), 10),
@@ -7755,11 +7921,35 @@ mod tests {
         assert_eq!(slow.plan.sample_limit, 4);
         assert_eq!(slow.sampled_keys, 4);
         assert_eq!(slow.evicted_keys, 4);
+        assert_eq!(rt.server.store.stat_expired_keys, 20);
+        assert_eq!(rt.server.store.stat_expired_stale_perc, 100);
 
         assert_eq!(
             rt.execute_frame(command(&[b"DBSIZE"]), 10),
             RespFrame::Integer(0)
         );
+    }
+
+    #[test]
+    fn config_resetstat_clears_expire_and_evict_counters() {
+        let mut rt = Runtime::default_strict();
+        rt.server.store.stat_total_commands_processed = 9;
+        rt.server.store.stat_total_connections_received = 4;
+        rt.server.store.stat_expired_keys = 3;
+        rt.server.store.stat_evicted_keys = 2;
+        rt.server.store.stat_expired_stale_perc = 50;
+        rt.server.store.stat_expire_cycle_cpu_milliseconds = 7;
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"RESETSTAT"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(rt.server.store.stat_total_commands_processed, 0);
+        assert_eq!(rt.server.store.stat_total_connections_received, 0);
+        assert_eq!(rt.server.store.stat_expired_keys, 0);
+        assert_eq!(rt.server.store.stat_evicted_keys, 0);
+        assert_eq!(rt.server.store.stat_expired_stale_perc, 0);
+        assert_eq!(rt.server.store.stat_expire_cycle_cpu_milliseconds, 0);
     }
 
     #[test]
@@ -10351,6 +10541,8 @@ mod tests {
             1,
         );
         assert_eq!(set, RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(rt.server.maxmemory_bytes, 1_073_741_824);
+        assert_eq!(rt.server.store.maxmemory_bytes_live, 1_073_741_824);
         // Verify the dynamic value
         let get2 = rt.execute_frame(command(&[b"CONFIG", b"GET", b"maxmemory"]), 2);
         assert_eq!(
@@ -10360,6 +10552,21 @@ mod tests {
                 RespFrame::BulkString(Some(b"1073741824".to_vec())),
             ]))
         );
+    }
+
+    #[test]
+    fn info_clients_reads_blocked_clients_from_runtime_context() {
+        let mut rt = Runtime::default_strict();
+        rt.mark_client_blocked(41);
+        rt.mark_client_blocked(42);
+
+        let out = rt.execute_frame(command(&[b"INFO", b"clients"]), 0);
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string");
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(info.contains("blocked_clients:2\r\n"));
+        assert!(info.contains("tracking_clients:0\r\n"));
     }
 
     #[test]

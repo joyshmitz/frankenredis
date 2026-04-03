@@ -682,7 +682,7 @@ pub fn dispatch_argv(
         Some(CommandId::Role) => return role_cmd(argv),
         Some(CommandId::Shutdown) => return shutdown_cmd(argv),
         Some(CommandId::Move) => return move_cmd(argv, store, now_ms),
-        Some(CommandId::Latency) => return latency_cmd(argv),
+        Some(CommandId::Latency) => return latency_cmd(argv, store),
         Some(CommandId::Bitfield) => return bitfield_cmd(argv, store, now_ms),
         Some(CommandId::BitfieldRo) => return bitfield_ro_cmd(argv, store, now_ms),
         Some(CommandId::Memory) => return memory_cmd(argv, store, now_ms),
@@ -8226,8 +8226,14 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str(&format!(
             "total_clients_connected_including_replicas:{connected}\r\n"
         ));
-        info.push_str("blocked_clients:0\r\n");
-        info.push_str("tracking_clients:0\r\n");
+        info.push_str(&format!(
+            "blocked_clients:{}\r\n",
+            store.stat_blocked_clients
+        ));
+        info.push_str(&format!(
+            "tracking_clients:{}\r\n",
+            store.stat_tracking_clients
+        ));
         info.push_str("clients_in_timeout_table:0\r\n");
         info.push_str("total_blocking_clients:0\r\n");
         info.push_str("total_blocking_clients_on_nokey:0\r\n");
@@ -8262,8 +8268,12 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("used_memory_startup:0\r\n");
         info.push_str(&format!("used_memory_dataset:{used_memory}\r\n"));
         info.push_str("used_memory_dataset_perc:100.00%\r\n");
-        info.push_str("maxmemory:0\r\n");
-        info.push_str("maxmemory_human:0B\r\n");
+        let maxmemory = store.maxmemory_bytes_live;
+        info.push_str(&format!("maxmemory:{maxmemory}\r\n"));
+        info.push_str(&format!(
+            "maxmemory_human:{}\r\n",
+            format_bytes_human(maxmemory)
+        ));
         info.push_str(&format!("maxmemory_policy:{policy_str}\r\n"));
         info.push_str(&format!("mem_fragmentation_ratio:{frag_ratio:.2}\r\n"));
         info.push_str("mem_allocator:rust-alloc\r\n");
@@ -8330,16 +8340,31 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("sync_full:0\r\n");
         info.push_str("sync_partial_ok:0\r\n");
         info.push_str("sync_partial_err:0\r\n");
-        info.push_str("expired_keys:0\r\n");
-        info.push_str("expired_stale_perc:0.00\r\n");
+        info.push_str(&format!("expired_keys:{}\r\n", store.stat_expired_keys));
+        info.push_str(&format!(
+            "expired_stale_perc:{:.2}\r\n",
+            store.stat_expired_stale_perc as f64
+        ));
         info.push_str("expired_time_cap_reached_count:0\r\n");
-        info.push_str("expire_cycle_cpu_milliseconds:0\r\n");
-        info.push_str("evicted_keys:0\r\n");
+        info.push_str(&format!(
+            "expire_cycle_cpu_milliseconds:{}\r\n",
+            store.stat_expire_cycle_cpu_milliseconds
+        ));
+        info.push_str(&format!("evicted_keys:{}\r\n", store.stat_evicted_keys));
         info.push_str("evicted_clients:0\r\n");
-        info.push_str("total_keys_expired:0\r\n");
-        info.push_str("total_keys_evicted:0\r\n");
-        info.push_str("keyspace_hits:0\r\n");
-        info.push_str("keyspace_misses:0\r\n");
+        info.push_str(&format!(
+            "total_keys_expired:{}\r\n",
+            store.stat_expired_keys
+        ));
+        info.push_str(&format!(
+            "total_keys_evicted:{}\r\n",
+            store.stat_evicted_keys
+        ));
+        info.push_str(&format!("keyspace_hits:{}\r\n", store.stat_keyspace_hits));
+        info.push_str(&format!(
+            "keyspace_misses:{}\r\n",
+            store.stat_keyspace_misses
+        ));
         info.push_str(&format!(
             "pubsub_channels:{}\r\n",
             store.subscribed_channels.len()
@@ -11403,7 +11428,66 @@ fn move_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     Ok(RespFrame::Integer(0))
 }
 
-fn latency_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn latency_graph(event: &str, samples: &[fr_store::LatencySample]) -> String {
+    let high = samples
+        .iter()
+        .map(|sample| sample.duration_ms)
+        .max()
+        .unwrap_or(0);
+    let low = samples
+        .iter()
+        .map(|sample| sample.duration_ms)
+        .min()
+        .unwrap_or(0);
+    let bars: String = samples
+        .iter()
+        .map(|sample| {
+            if high == 0 || sample.duration_ms.saturating_mul(8) >= high.saturating_mul(7) {
+                '#'
+            } else if sample.duration_ms.saturating_mul(8) >= high.saturating_mul(5) {
+                '*'
+            } else if sample.duration_ms.saturating_mul(8) >= high.saturating_mul(3) {
+                '+'
+            } else {
+                '.'
+            }
+        })
+        .collect();
+    let latest = samples.last().copied().unwrap_or(fr_store::LatencySample {
+        timestamp_sec: 0,
+        duration_ms: 0,
+    });
+    format!(
+        "{event} - high {high} ms, low {low} ms\n{bars}\nlatest sample @ {} ({}) ms",
+        latest.timestamp_sec, latest.duration_ms
+    )
+}
+
+fn latency_doctor_report(store: &Store) -> String {
+    let latest = store.latency_latest();
+    if latest.is_empty() {
+        return "I have no latency reports to analyze. Be happy!".to_string();
+    }
+
+    let mut report = String::from("I have reports for the following latency events:\n");
+    for (event, latest_sample) in latest {
+        let history = store.latency_history(&event);
+        let max = history
+            .iter()
+            .map(|sample| sample.duration_ms)
+            .max()
+            .unwrap_or(latest_sample.duration_ms);
+        report.push_str(&format!(
+            "- {event}: {} samples, latest {} ms, max {} ms\n",
+            history.len(),
+            latest_sample.duration_ms,
+            max
+        ));
+    }
+    report
+}
+
+fn latency_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("LATENCY"));
     }
@@ -11415,7 +11499,25 @@ fn latency_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 subcommand: "LATEST".to_string(),
             });
         }
-        Ok(RespFrame::Array(Some(Vec::new())))
+        let entries = store
+            .latency_latest()
+            .into_iter()
+            .map(|(event, latest_sample)| {
+                let max = store
+                    .latency_history(&event)
+                    .iter()
+                    .map(|sample| sample.duration_ms)
+                    .max()
+                    .unwrap_or(latest_sample.duration_ms);
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(event.into_bytes())),
+                    RespFrame::Integer(latest_sample.timestamp_sec as i64),
+                    RespFrame::Integer(latest_sample.duration_ms as i64),
+                    RespFrame::Integer(max as i64),
+                ]))
+            })
+            .collect();
+        Ok(RespFrame::Array(Some(entries)))
     } else if sub.eq_ignore_ascii_case("HISTORY") {
         if argv.len() != 3 {
             return Err(CommandError::WrongSubcommandArity {
@@ -11423,9 +11525,24 @@ fn latency_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 subcommand: "HISTORY".to_string(),
             });
         }
-        Ok(RespFrame::Array(Some(Vec::new())))
+        let event = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        let history = store
+            .latency_history(event)
+            .into_iter()
+            .map(|sample| {
+                RespFrame::Array(Some(vec![
+                    RespFrame::Integer(sample.timestamp_sec as i64),
+                    RespFrame::Integer(sample.duration_ms as i64),
+                ]))
+            })
+            .collect();
+        Ok(RespFrame::Array(Some(history)))
     } else if sub.eq_ignore_ascii_case("RESET") {
-        Ok(RespFrame::Integer(0))
+        let mut events = Vec::with_capacity(argv.len().saturating_sub(2));
+        for event in &argv[2..] {
+            events.push(std::str::from_utf8(event).map_err(|_| CommandError::InvalidUtf8Argument)?);
+        }
+        Ok(RespFrame::Integer(store.latency_reset(&events) as i64))
     } else if sub.eq_ignore_ascii_case("GRAPH") {
         if argv.len() != 3 {
             return Err(CommandError::WrongSubcommandArity {
@@ -11433,9 +11550,15 @@ fn latency_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 subcommand: "GRAPH".to_string(),
             });
         }
-        let event = String::from_utf8_lossy(&argv[2]);
-        Ok(RespFrame::Error(format!(
-            "No samples available for event '{event}'"
+        let event = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        let history = store.latency_history(event);
+        if history.is_empty() {
+            return Ok(RespFrame::Error(format!(
+                "No samples available for event '{event}'"
+            )));
+        }
+        Ok(RespFrame::BulkString(Some(
+            latency_graph(event, &history).into_bytes(),
         )))
     } else if sub.eq_ignore_ascii_case("DOCTOR") {
         if argv.len() != 2 {
@@ -11445,7 +11568,7 @@ fn latency_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             });
         }
         Ok(RespFrame::BulkString(Some(
-            b"I have no latency information to analyze.".to_vec(),
+            latency_doctor_report(store).into_bytes(),
         )))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
@@ -22743,9 +22866,117 @@ mod tests {
     #[test]
     fn latency_latest() {
         let mut store = Store::new();
+        store.record_latency_sample("command", 5, 10);
+        store.record_latency_sample("command", 8, 12);
+        store.record_latency_sample("fast-command", 2, 11);
         let out = dispatch_argv(&[b"LATENCY".to_vec(), b"LATEST".to_vec()], &mut store, 0)
             .expect("latency latest");
-        assert_eq!(out, RespFrame::Array(Some(Vec::new())));
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"command".to_vec())),
+                    RespFrame::Integer(12),
+                    RespFrame::Integer(8),
+                    RespFrame::Integer(8),
+                ])),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"fast-command".to_vec())),
+                    RespFrame::Integer(11),
+                    RespFrame::Integer(2),
+                    RespFrame::Integer(2),
+                ])),
+            ]))
+        );
+    }
+
+    #[test]
+    fn latency_history_and_reset_use_store_samples() {
+        let mut store = Store::new();
+        store.record_latency_sample("command", 5, 10);
+        store.record_latency_sample("command", 8, 12);
+        store.record_latency_sample("fast-command", 2, 11);
+
+        let history = dispatch_argv(
+            &[
+                b"LATENCY".to_vec(),
+                b"HISTORY".to_vec(),
+                b"command".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("latency history");
+        assert_eq!(
+            history,
+            RespFrame::Array(Some(vec![
+                RespFrame::Array(Some(vec![RespFrame::Integer(10), RespFrame::Integer(5)])),
+                RespFrame::Array(Some(vec![RespFrame::Integer(12), RespFrame::Integer(8)])),
+            ]))
+        );
+
+        let reset = dispatch_argv(
+            &[b"LATENCY".to_vec(), b"RESET".to_vec(), b"command".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("latency reset");
+        assert_eq!(reset, RespFrame::Integer(1));
+        assert!(store.latency_history("command").is_empty());
+        assert_eq!(store.latency_history("fast-command").len(), 1);
+    }
+
+    #[test]
+    fn latency_graph_and_doctor_use_real_tracker_state() {
+        let mut empty = Store::new();
+        let graph_empty = dispatch_argv(
+            &[b"LATENCY".to_vec(), b"GRAPH".to_vec(), b"command".to_vec()],
+            &mut empty,
+            0,
+        )
+        .expect("latency graph empty");
+        assert_eq!(
+            graph_empty,
+            RespFrame::Error("No samples available for event 'command'".to_string())
+        );
+        let doctor_empty = dispatch_argv(&[b"LATENCY".to_vec(), b"DOCTOR".to_vec()], &mut empty, 0)
+            .expect("latency doctor empty");
+        assert_eq!(
+            doctor_empty,
+            RespFrame::BulkString(Some(
+                b"I have no latency reports to analyze. Be happy!".to_vec(),
+            ))
+        );
+
+        let mut store = Store::new();
+        store.record_latency_sample("command", 3, 10);
+        store.record_latency_sample("command", 7, 12);
+
+        let graph = dispatch_argv(
+            &[b"LATENCY".to_vec(), b"GRAPH".to_vec(), b"command".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("latency graph");
+        match graph {
+            RespFrame::BulkString(Some(bytes)) => {
+                let text = String::from_utf8(bytes).expect("utf8");
+                assert!(text.contains("command - high 7 ms, low 3 ms"));
+                assert!(text.contains("latest sample @ 12 (7) ms"));
+            }
+            other => panic!("expected bulk string, got {other:?}"),
+        }
+
+        let doctor = dispatch_argv(&[b"LATENCY".to_vec(), b"DOCTOR".to_vec()], &mut store, 0)
+            .expect("latency doctor");
+        match doctor {
+            RespFrame::BulkString(Some(bytes)) => {
+                let text = String::from_utf8(bytes).expect("utf8");
+                assert!(text.contains("I have reports for the following latency events:"));
+                assert!(text.contains("- command: 2 samples, latest 7 ms, max 7 ms"));
+            }
+            other => panic!("expected bulk string, got {other:?}"),
+        }
     }
 
     #[test]
@@ -24499,6 +24730,59 @@ mod tests {
                 subcommand: "RESETSTAT".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn info_stats_reports_expire_and_evict_counters() {
+        let mut store = Store::new();
+        store.stat_expired_keys = 3;
+        store.stat_evicted_keys = 2;
+        store.stat_expired_stale_perc = 50;
+        store.stat_expire_cycle_cpu_milliseconds = 7;
+        store.stat_keyspace_hits = 11;
+        store.stat_keyspace_misses = 4;
+
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"stats".to_vec()], &mut store, 0)
+            .expect("info stats");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string");
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(info.contains("expired_keys:3\r\n"));
+        assert!(info.contains("expired_stale_perc:50.00\r\n"));
+        assert!(info.contains("expire_cycle_cpu_milliseconds:7\r\n"));
+        assert!(info.contains("evicted_keys:2\r\n"));
+        assert!(info.contains("total_keys_expired:3\r\n"));
+        assert!(info.contains("total_keys_evicted:2\r\n"));
+        assert!(info.contains("keyspace_hits:11\r\n"));
+        assert!(info.contains("keyspace_misses:4\r\n"));
+    }
+
+    #[test]
+    fn info_reports_live_client_and_memory_context() {
+        let mut store = Store::new();
+        store.stat_connected_clients = 4;
+        store.stat_blocked_clients = 2;
+        store.stat_tracking_clients = 1;
+        store.server_maxclients = 128;
+        store.maxmemory_bytes_live = 2048;
+
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"clients".to_vec(), b"memory".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("info clients memory");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string");
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(info.contains("connected_clients:4\r\n"));
+        assert!(info.contains("maxclients:128\r\n"));
+        assert!(info.contains("blocked_clients:2\r\n"));
+        assert!(info.contains("tracking_clients:1\r\n"));
+        assert!(info.contains("maxmemory:2048\r\n"));
+        assert!(info.contains("maxmemory_human:2.00K\r\n"));
     }
 
     #[test]

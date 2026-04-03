@@ -765,6 +765,7 @@ fn process_buffered_frames(
                     consumed_total += consumed;
                     continue;
                 }
+                runtime.set_blocked_clients_count_for_info(blocked_tokens.len());
                 // CLIENT PAUSE gate: delay command processing while paused.
                 if let RespFrame::Array(Some(ref items)) = frame {
                     let argv: Vec<Vec<u8>> = items

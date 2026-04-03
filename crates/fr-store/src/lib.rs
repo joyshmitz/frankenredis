@@ -788,10 +788,22 @@ pub struct Store {
     pub stat_total_connections_received: u64,
     /// Number of currently connected clients.
     pub stat_connected_clients: u64,
+    /// Number of clients currently blocked on a blocking operation.
+    pub stat_blocked_clients: u64,
+    /// Number of clients with client-side caching tracking enabled.
+    pub stat_tracking_clients: u64,
     /// Number of successful key lookups performed through store read/query APIs.
     pub stat_keyspace_hits: u64,
     /// Number of missing-key lookups performed through store read/query APIs.
     pub stat_keyspace_misses: u64,
+    /// Total keys removed due to expiration (lazy or active).
+    pub stat_expired_keys: u64,
+    /// Total keys removed due to maxmemory eviction.
+    pub stat_evicted_keys: u64,
+    /// Percentage of expired keys found during active-expire sampling.
+    pub stat_expired_stale_perc: u64,
+    /// Cumulative CPU time spent in active-expire cycles.
+    pub stat_expire_cycle_cpu_milliseconds: u64,
     /// Store-owned latency monitor state shared between runtime recording and command reads.
     pub latency_tracker: LatencyTracker,
     /// Server hz (event loop frequency), synced from runtime.
@@ -800,6 +812,8 @@ pub struct Store {
     pub server_repl_backlog_size: u64,
     /// Maximum number of clients, synced from runtime.
     pub server_maxclients: u64,
+    /// Live maxmemory setting, synced from runtime.
+    pub maxmemory_bytes_live: usize,
 }
 
 const DB_NAMESPACE_PREFIX: &[u8] = b"\0frdb\0";
@@ -867,12 +881,19 @@ impl Default for Store {
             stat_total_commands_processed: 0,
             stat_total_connections_received: 0,
             stat_connected_clients: 0,
+            stat_blocked_clients: 0,
+            stat_tracking_clients: 0,
             stat_keyspace_hits: 0,
             stat_keyspace_misses: 0,
+            stat_expired_keys: 0,
+            stat_evicted_keys: 0,
+            stat_expired_stale_perc: 0,
+            stat_expire_cycle_cpu_milliseconds: 0,
             latency_tracker: LatencyTracker::default(),
             server_hz: 10,
             server_repl_backlog_size: 1_048_576,
             server_maxclients: 10000,
+            maxmemory_bytes_live: 0,
         }
     }
 }
@@ -2128,6 +2149,7 @@ impl Store {
                     self.stream_groups.remove(candidate.as_slice());
                     self.stream_last_ids.remove(candidate.as_slice());
                     evicted_keys = evicted_keys.saturating_add(1);
+                    self.stat_evicted_keys = self.stat_evicted_keys.saturating_add(1);
                     // Emit evicted keyspace notification (use logical key)
                     let (db, logical_key) = match decode_db_key(&candidate) {
                         Some((db, lk)) => (db, lk.to_vec()),
@@ -2223,6 +2245,7 @@ impl Store {
                 self.stream_groups.remove(key.as_slice());
                 self.stream_last_ids.remove(key.as_slice());
                 evicted_keys = evicted_keys.saturating_add(1);
+                self.stat_expired_keys = self.stat_expired_keys.saturating_add(1);
             }
         }
 
@@ -6537,6 +6560,7 @@ impl Store {
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
             self.dirty = self.dirty.saturating_add(1);
+            self.stat_expired_keys = self.stat_expired_keys.saturating_add(1);
             // Emit expired keyspace notification (use logical key, not physical)
             let (db, logical_key) = match decode_db_key(key) {
                 Some((db, lk)) => (db, lk),
@@ -9397,6 +9421,7 @@ mod tests {
         assert!(store.exists(b"k", 5_999));
         assert!(!store.exists(b"k", 6_000));
         assert_eq!(store.get(b"k", 6_000).unwrap(), None);
+        assert_eq!(store.stat_expired_keys, 1);
     }
 
     #[test]
@@ -9409,6 +9434,7 @@ mod tests {
         let result = store.run_active_expire_cycle(10, None, 10);
         assert_eq!(result.sampled_keys, 3);
         assert_eq!(result.evicted_keys, 2);
+        assert_eq!(store.stat_expired_keys, 2);
         assert_eq!(store.dbsize_in_db(0), 1);
         assert_eq!(store.get(b"c", 10).unwrap(), Some(b"3".to_vec()));
     }
@@ -9471,6 +9497,7 @@ mod tests {
             store.run_bounded_eviction_loop(0, 64, 0, 1, 1, EvictionSafetyGateState::default());
         assert_eq!(result.status, EvictionLoopStatus::Running);
         assert!(result.evicted_keys >= 1);
+        assert!(store.stat_evicted_keys >= 1);
         assert!(result.bytes_to_free_after > 0);
     }
 
@@ -9487,6 +9514,7 @@ mod tests {
             store.run_bounded_eviction_loop(0, 64, 0, 2, 16, EvictionSafetyGateState::default());
         assert_eq!(result.status, EvictionLoopStatus::Ok);
         assert!(result.evicted_keys >= 1);
+        assert_eq!(store.stat_evicted_keys, result.evicted_keys as u64);
         assert_eq!(result.bytes_to_free_after, 0);
     }
 
