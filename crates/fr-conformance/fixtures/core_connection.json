@@ -1326,8 +1326,8 @@
         "somekey"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR no such key"
       }
     },
     {

@@ -678,7 +678,7 @@ pub fn dispatch_argv(
         Some(CommandId::EvalRo) => return eval_cmd(argv, store, now_ms),
         Some(CommandId::EvalshaRo) => return evalsha_cmd(argv, store, now_ms),
         Some(CommandId::Script) => return script_cmd(argv, store),
-        Some(CommandId::Debug) => return debug_cmd(argv),
+        Some(CommandId::Debug) => return debug_cmd(argv, store, now_ms),
         Some(CommandId::Role) => return role_cmd(argv),
         Some(CommandId::Shutdown) => return shutdown_cmd(argv),
         Some(CommandId::Move) => return move_cmd(argv, store, now_ms),
@@ -693,7 +693,7 @@ pub fn dispatch_argv(
         Some(CommandId::Info) => return info(argv, store, now_ms),
         Some(CommandId::Command) => return command_cmd(argv),
         Some(CommandId::Config) => return config_cmd(argv, store, now_ms),
-        Some(CommandId::Client) => return client_cmd(argv),
+        Some(CommandId::Client) => return client_cmd(argv, store),
         Some(CommandId::Time) => return time_cmd(argv, now_ms),
         Some(CommandId::Randomkey) => return randomkey(argv, store, now_ms),
         Some(CommandId::Scan) => return scan(argv, store, now_ms),
@@ -5059,6 +5059,14 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         .map(|(id, _)| format_stream_id(*id))
         .unwrap_or_else(|| b"0-0".to_vec());
     let len_i64 = i64::try_from(len).unwrap_or(i64::MAX);
+    let radix_tree_keys = i64::try_from(len).unwrap_or(i64::MAX);
+    let radix_tree_nodes = if len == 0 {
+        0
+    } else {
+        i64::try_from(len.saturating_add(1)).unwrap_or(i64::MAX)
+    };
+    let max_deleted_entry_id =
+        format_stream_id(store.stream_max_deleted_id(&argv[2]).unwrap_or((0, 0)));
 
     if full_mode {
         // FULL mode: include entries and detailed group info
@@ -5099,13 +5107,13 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
             RespFrame::BulkString(Some(b"length".to_vec())),
             RespFrame::Integer(len_i64),
             RespFrame::BulkString(Some(b"radix-tree-keys".to_vec())),
-            RespFrame::Integer(if len == 0 { 0 } else { 1 }),
+            RespFrame::Integer(radix_tree_keys),
             RespFrame::BulkString(Some(b"radix-tree-nodes".to_vec())),
-            RespFrame::Integer(if len == 0 { 0 } else { 2 }),
+            RespFrame::Integer(radix_tree_nodes),
             RespFrame::BulkString(Some(b"last-generated-id".to_vec())),
             RespFrame::BulkString(Some(last_generated_id)),
             RespFrame::BulkString(Some(b"max-deleted-entry-id".to_vec())),
-            RespFrame::BulkString(Some(b"0-0".to_vec())),
+            RespFrame::BulkString(Some(max_deleted_entry_id)),
             RespFrame::BulkString(Some(b"entries-added".to_vec())),
             RespFrame::Integer(len_i64),
             RespFrame::BulkString(Some(b"recorded-first-entry-id".to_vec())),
@@ -5132,15 +5140,14 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     Ok(RespFrame::Array(Some(vec![
         RespFrame::BulkString(Some(b"length".to_vec())),
         RespFrame::Integer(len_i64),
-        // Placeholder radix/listpack metrics until internal stream-node accounting lands.
         RespFrame::BulkString(Some(b"radix-tree-keys".to_vec())),
-        RespFrame::Integer(if len == 0 { 0 } else { 1 }),
+        RespFrame::Integer(radix_tree_keys),
         RespFrame::BulkString(Some(b"radix-tree-nodes".to_vec())),
-        RespFrame::Integer(if len == 0 { 0 } else { 2 }),
+        RespFrame::Integer(radix_tree_nodes),
         RespFrame::BulkString(Some(b"last-generated-id".to_vec())),
         RespFrame::BulkString(Some(last_generated_id)),
         RespFrame::BulkString(Some(b"max-deleted-entry-id".to_vec())),
-        RespFrame::BulkString(Some(b"0-0".to_vec())),
+        RespFrame::BulkString(Some(max_deleted_entry_id)),
         RespFrame::BulkString(Some(b"entries-added".to_vec())),
         RespFrame::Integer(len_i64),
         RespFrame::BulkString(Some(b"recorded-first-entry-id".to_vec())),
@@ -9829,7 +9836,39 @@ fn parse_config_usize(val: &str) -> Result<usize, CommandError> {
         .map_err(|_| CommandError::InvalidInteger)
 }
 
-fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn client_info_line(store: &Store, sub: &str) -> Vec<u8> {
+    let ctx = &store.dispatch_client_ctx;
+    let name = ctx
+        .client_name
+        .as_ref()
+        .map(|name| String::from_utf8_lossy(name).to_string())
+        .unwrap_or_default();
+    let user = String::from_utf8_lossy(&ctx.authenticated_user);
+    let lib_name = ctx.client_lib_name.as_deref().unwrap_or("");
+    let lib_ver = ctx.client_lib_ver.as_deref().unwrap_or("");
+    format!(
+        "id={} addr={} laddr=127.0.0.1:{} fd=0 name={} db={} sub={} psub={} ssub={} multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
+        ctx.client_id,
+        ctx.peer_addr,
+        store.server_port,
+        name,
+        ctx.db_index,
+        ctx.channel_subscriptions,
+        ctx.pattern_subscriptions,
+        ctx.shard_subscriptions,
+        ctx.multi_count,
+        ctx.watch_count,
+        sub.to_ascii_lowercase(),
+        user,
+        lib_name,
+        lib_ver,
+        ctx.resp_protocol_version,
+        ctx.flags,
+    )
+    .into_bytes()
+}
+
+fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("CLIENT"));
     }
@@ -9847,6 +9886,11 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                     .to_string(),
             ));
         }
+        store.dispatch_client_ctx.client_name = if argv[2].is_empty() {
+            None
+        } else {
+            Some(argv[2].clone())
+        };
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("GETNAME") {
         if argv.len() != 2 {
@@ -9855,7 +9899,9 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 subcommand: sub.to_string(),
             });
         }
-        Ok(RespFrame::BulkString(None))
+        Ok(RespFrame::BulkString(
+            store.dispatch_client_ctx.client_name.clone(),
+        ))
     } else if sub.eq_ignore_ascii_case("ID") {
         if argv.len() != 2 {
             return Err(CommandError::WrongSubcommandArity {
@@ -9863,7 +9909,9 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 subcommand: sub.to_string(),
             });
         }
-        Ok(RespFrame::Integer(1))
+        Ok(RespFrame::Integer(
+            i64::try_from(store.dispatch_client_ctx.client_id).unwrap_or(i64::MAX),
+        ))
     } else if sub.eq_ignore_ascii_case("LIST") || sub.eq_ignore_ascii_case("INFO") {
         if sub.eq_ignore_ascii_case("INFO") && argv.len() != 2 {
             return Err(CommandError::WrongSubcommandArity {
@@ -9871,18 +9919,20 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                 subcommand: sub.to_string(),
             });
         }
-        let info_line =
-            b"id=1 addr=127.0.0.1:0 laddr=127.0.0.1:6379 fd=0 name= db=0 sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|list user=default lib-name= lib-ver= resp=2 flags=N\r\n".to_vec();
+        let info_line = client_info_line(store, sub);
         if sub.eq_ignore_ascii_case("LIST") {
             let payload = if argv.len() == 2 {
                 info_line
             } else if argv.len() == 4 && argv[2].eq_ignore_ascii_case(b"TYPE") {
                 let kind =
                     std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-                if kind.eq_ignore_ascii_case("NORMAL") {
+                if (kind.eq_ignore_ascii_case("NORMAL") && !store.dispatch_client_ctx.is_pubsub)
+                    || (kind.eq_ignore_ascii_case("PUBSUB") && store.dispatch_client_ctx.is_pubsub)
+                {
                     info_line
                 } else if kind.eq_ignore_ascii_case("MASTER")
                     || kind.eq_ignore_ascii_case("REPLICA")
+                    || kind.eq_ignore_ascii_case("NORMAL")
                     || kind.eq_ignore_ascii_case("PUBSUB")
                 {
                     Vec::new()
@@ -9898,7 +9948,7 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                     if parsed_id <= 0 {
                         return Err(CommandError::Custom("ERR Invalid client ID".to_string()));
                     }
-                    if parsed_id == 1 {
+                    if parsed_id as u64 == store.dispatch_client_ctx.client_id {
                         payload.extend_from_slice(&info_line);
                     }
                 }
@@ -9908,9 +9958,7 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             };
             return Ok(RespFrame::BulkString(Some(payload)));
         }
-        Ok(RespFrame::BulkString(Some(
-            b"id=1 addr=127.0.0.1:0 laddr=127.0.0.1:6379 fd=0 name= db=0 sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|info user=default lib-name= lib-ver= resp=2 flags=N\r\n".to_vec(),
-        )))
+        Ok(RespFrame::BulkString(Some(info_line)))
     } else if sub.eq_ignore_ascii_case("NO-EVICT") || sub.eq_ignore_ascii_case("NO-TOUCH") {
         if argv.len() != 3 {
             return Err(CommandError::WrongSubcommandArity {
@@ -9941,6 +9989,11 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                         .to_string(),
                 ));
             }
+            store.dispatch_client_ctx.client_lib_name = if val.is_empty() {
+                None
+            } else {
+                Some(val.to_string())
+            };
         } else if attr.eq_ignore_ascii_case("LIB-VER") {
             if val.bytes().any(|b| b <= b' ') {
                 return Err(CommandError::Custom(
@@ -9948,6 +10001,11 @@ fn client_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                         .to_string(),
                 ));
             }
+            store.dispatch_client_ctx.client_lib_ver = if val.is_empty() {
+                None
+            } else {
+                Some(val.to_string())
+            };
         } else {
             return Err(CommandError::Custom(format!(
                 "ERR Unrecognized option '{attr}' for CLIENT SETINFO"
@@ -11356,7 +11414,7 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     }
 }
 
-fn debug_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("DEBUG"));
     }
@@ -11381,6 +11439,7 @@ fn debug_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         if value != 0 && value != 1 {
             return Err(CommandError::SyntaxError);
         }
+        store.active_expire_enabled = value == 1;
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("JMAP") {
         if argv.len() != 2 {
@@ -11388,12 +11447,25 @@ fn debug_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("RELOAD") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongArity("DEBUG"));
+        }
+        store.request_debug_reload();
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("OBJECT") {
         if argv.len() != 3 {
             return Err(CommandError::WrongArity("DEBUG"));
         }
-        Ok(RespFrame::SimpleString("OK".to_string()))
+        let key = &argv[2];
+        let Some(encoding) = store.object_encoding(key, now_ms) else {
+            return Ok(RespFrame::Error("ERR no such key".to_string()));
+        };
+        let serialized_len = store.memory_usage_for_key(key, now_ms).unwrap_or(0);
+        let idle_secs = store.object_idletime(key, now_ms).unwrap_or(0);
+        let debug_info = format!(
+            "Value at:0x0 refcount:1 encoding:{encoding} serializedlength:{serialized_len} lru:{idle_secs} lru_seconds_idle:{idle_secs}"
+        );
+        Ok(RespFrame::BulkString(Some(debug_info.into_bytes())))
     } else {
         Err(CommandError::UnknownSubcommand {
             command: "DEBUG",
@@ -18662,9 +18734,9 @@ mod tests {
                 RespFrame::BulkString(Some(b"length".to_vec())),
                 RespFrame::Integer(2),
                 RespFrame::BulkString(Some(b"radix-tree-keys".to_vec())),
-                RespFrame::Integer(1),
-                RespFrame::BulkString(Some(b"radix-tree-nodes".to_vec())),
                 RespFrame::Integer(2),
+                RespFrame::BulkString(Some(b"radix-tree-nodes".to_vec())),
+                RespFrame::Integer(3),
                 RespFrame::BulkString(Some(b"last-generated-id".to_vec())),
                 RespFrame::BulkString(Some(b"1001-0".to_vec())),
                 RespFrame::BulkString(Some(b"max-deleted-entry-id".to_vec())),
@@ -18689,6 +18761,98 @@ mod tests {
                     RespFrame::Array(Some(vec![
                         RespFrame::BulkString(Some(b"field2".to_vec())),
                         RespFrame::BulkString(Some(b"value2".to_vec())),
+                    ])),
+                ])),
+            ]))
+        );
+    }
+
+    #[test]
+    fn xinfo_stream_reports_live_deleted_id_and_radix_metrics() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1000-0".to_vec(),
+                b"field1".to_vec(),
+                b"value1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xadd 1");
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1000-1".to_vec(),
+                b"field2".to_vec(),
+                b"value2".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xadd 2");
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1001-0".to_vec(),
+                b"field3".to_vec(),
+                b"value3".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xadd 3");
+        dispatch_argv(
+            &[b"XDEL".to_vec(), b"s".to_vec(), b"1000-1".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("xdel");
+
+        let info = dispatch_argv(
+            &[b"XINFO".to_vec(), b"STREAM".to_vec(), b"s".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("xinfo stream");
+
+        assert_eq!(
+            info,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"length".to_vec())),
+                RespFrame::Integer(2),
+                RespFrame::BulkString(Some(b"radix-tree-keys".to_vec())),
+                RespFrame::Integer(2),
+                RespFrame::BulkString(Some(b"radix-tree-nodes".to_vec())),
+                RespFrame::Integer(3),
+                RespFrame::BulkString(Some(b"last-generated-id".to_vec())),
+                RespFrame::BulkString(Some(b"1001-0".to_vec())),
+                RespFrame::BulkString(Some(b"max-deleted-entry-id".to_vec())),
+                RespFrame::BulkString(Some(b"1000-1".to_vec())),
+                RespFrame::BulkString(Some(b"entries-added".to_vec())),
+                RespFrame::Integer(2),
+                RespFrame::BulkString(Some(b"recorded-first-entry-id".to_vec())),
+                RespFrame::BulkString(Some(b"1000-0".to_vec())),
+                RespFrame::BulkString(Some(b"groups".to_vec())),
+                RespFrame::Integer(0),
+                RespFrame::BulkString(Some(b"first-entry".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"1000-0".to_vec())),
+                    RespFrame::Array(Some(vec![
+                        RespFrame::BulkString(Some(b"field1".to_vec())),
+                        RespFrame::BulkString(Some(b"value1".to_vec())),
+                    ])),
+                ])),
+                RespFrame::BulkString(Some(b"last-entry".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"1001-0".to_vec())),
+                    RespFrame::Array(Some(vec![
+                        RespFrame::BulkString(Some(b"field3".to_vec())),
+                        RespFrame::BulkString(Some(b"value3".to_vec())),
                     ])),
                 ])),
             ]))
@@ -22841,6 +23005,73 @@ mod tests {
     }
 
     #[test]
+    fn debug_set_active_expire_toggles_store_flag() {
+        let mut store = Store::new();
+
+        let out = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"SET-ACTIVE-EXPIRE".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("disable active expire");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert!(!store.active_expire_enabled);
+
+        let out = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"SET-ACTIVE-EXPIRE".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("enable active expire");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert!(store.active_expire_enabled);
+    }
+
+    #[test]
+    fn debug_reload_sets_store_flag() {
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"DEBUG".to_vec(), b"RELOAD".to_vec()], &mut store, 0)
+            .expect("debug reload");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert!(store.take_debug_reload_requested());
+    }
+
+    #[test]
+    fn debug_object_reports_live_metadata() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"dbg:key".to_vec(), b"value".to_vec()],
+            &mut store,
+            10,
+        )
+        .expect("seed key");
+
+        let out = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"OBJECT".to_vec(), b"dbg:key".to_vec()],
+            &mut store,
+            20,
+        )
+        .expect("debug object");
+        let RespFrame::BulkString(Some(info)) = out else {
+            panic!("expected bulk string");
+        };
+        let info = String::from_utf8(info).expect("utf8");
+        assert!(info.contains("refcount:1"), "{info}");
+        assert!(info.contains("encoding:embstr"), "{info}");
+        assert!(info.contains("serializedlength:"), "{info}");
+        assert!(info.contains("lru:"), "{info}");
+        assert!(info.contains("lru_seconds_idle:"), "{info}");
+    }
+
+    #[test]
     fn shutdown_returns_ok() {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"SHUTDOWN".to_vec()], &mut store, 0).expect("shutdown");
@@ -25397,6 +25628,18 @@ mod tests {
                     .to_string()
             )
         );
+
+        let out = dispatch_argv(
+            &[b"CLIENT".to_vec(), b"SETNAME".to_vec(), b"bravo".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(
+            store.dispatch_client_ctx.client_name.as_deref(),
+            Some(b"bravo".as_slice())
+        );
     }
 
     #[test]
@@ -25432,6 +25675,49 @@ mod tests {
     }
 
     #[test]
+    fn client_commands_use_dispatch_client_context() {
+        let mut store = Store::new();
+        store.dispatch_client_ctx.client_id = 42;
+        store.dispatch_client_ctx.client_name = Some(b"alpha".to_vec());
+        store.dispatch_client_ctx.client_lib_name = Some("redis-rs".to_string());
+        store.dispatch_client_ctx.client_lib_ver = Some("1.2.3".to_string());
+        store.dispatch_client_ctx.db_index = 5;
+        store.dispatch_client_ctx.peer_addr = "10.0.0.9:7777".to_string();
+        store.dispatch_client_ctx.authenticated_user = b"alice".to_vec();
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        store.dispatch_client_ctx.channel_subscriptions = 2;
+        store.dispatch_client_ctx.pattern_subscriptions = 1;
+        store.dispatch_client_ctx.shard_subscriptions = 4;
+        store.dispatch_client_ctx.multi_count = 3;
+        store.dispatch_client_ctx.watch_count = 2;
+
+        let out = dispatch_argv(&[b"CLIENT".to_vec(), b"GETNAME".to_vec()], &mut store, 0).unwrap();
+        assert_eq!(out, RespFrame::BulkString(Some(b"alpha".to_vec())));
+
+        let out = dispatch_argv(&[b"CLIENT".to_vec(), b"ID".to_vec()], &mut store, 0).unwrap();
+        assert_eq!(out, RespFrame::Integer(42));
+
+        let out = dispatch_argv(&[b"CLIENT".to_vec(), b"INFO".to_vec()], &mut store, 0).unwrap();
+        let RespFrame::BulkString(Some(payload)) = out else {
+            panic!("expected bulk string");
+        };
+        let info = String::from_utf8(payload).expect("utf8");
+        assert!(info.contains("id=42 "), "{info}");
+        assert!(info.contains("addr=10.0.0.9:7777 "), "{info}");
+        assert!(info.contains("name=alpha "), "{info}");
+        assert!(info.contains("db=5 "), "{info}");
+        assert!(info.contains("sub=2 "), "{info}");
+        assert!(info.contains("psub=1 "), "{info}");
+        assert!(info.contains("ssub=4 "), "{info}");
+        assert!(info.contains("multi=3 "), "{info}");
+        assert!(info.contains("watch=2 "), "{info}");
+        assert!(info.contains("user=alice "), "{info}");
+        assert!(info.contains("lib-name=redis-rs "), "{info}");
+        assert!(info.contains("lib-ver=1.2.3 "), "{info}");
+        assert!(info.contains("resp=3 "), "{info}");
+    }
+
+    #[test]
     fn client_setinfo_matches_runtime_contract() {
         let mut store = Store::new();
         let out = dispatch_argv(
@@ -25446,6 +25732,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(
+            store.dispatch_client_ctx.client_lib_name.as_deref(),
+            Some("redis-py")
+        );
 
         let out = dispatch_argv(
             &[
@@ -25459,6 +25749,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(
+            store.dispatch_client_ctx.client_lib_ver.as_deref(),
+            Some("5.0.1")
+        );
 
         let err = dispatch_argv(
             &[
@@ -25563,6 +25857,7 @@ mod tests {
     #[test]
     fn client_list_supports_type_and_id_filters() {
         let mut store = Store::new();
+        store.dispatch_client_ctx.client_id = 77;
         let out = dispatch_argv(
             &[
                 b"CLIENT".to_vec(),
@@ -25577,7 +25872,7 @@ mod tests {
         let RespFrame::BulkString(Some(payload)) = out else {
             panic!("expected bulk string");
         };
-        assert!(String::from_utf8_lossy(&payload).contains("id=1 "));
+        assert!(String::from_utf8_lossy(&payload).contains("id=77 "));
 
         let out = dispatch_argv(
             &[
@@ -25592,12 +25887,13 @@ mod tests {
         .unwrap();
         assert_eq!(out, RespFrame::BulkString(Some(Vec::new())));
 
+        store.dispatch_client_ctx.is_pubsub = true;
         let out = dispatch_argv(
             &[
                 b"CLIENT".to_vec(),
                 b"LIST".to_vec(),
-                b"ID".to_vec(),
-                b"1".to_vec(),
+                b"TYPE".to_vec(),
+                b"PUBSUB".to_vec(),
             ],
             &mut store,
             0,
@@ -25606,7 +25902,23 @@ mod tests {
         let RespFrame::BulkString(Some(payload)) = out else {
             panic!("expected bulk string");
         };
-        assert!(String::from_utf8_lossy(&payload).contains("id=1 "));
+        assert!(String::from_utf8_lossy(&payload).contains("id=77 "));
+
+        let out = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"LIST".to_vec(),
+                b"ID".to_vec(),
+                b"77".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        let RespFrame::BulkString(Some(payload)) = out else {
+            panic!("expected bulk string");
+        };
+        assert!(String::from_utf8_lossy(&payload).contains("id=77 "));
 
         let err = dispatch_argv(
             &[

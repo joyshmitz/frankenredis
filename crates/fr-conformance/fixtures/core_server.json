@@ -1448,8 +1448,8 @@
         "RELOAD"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR error saving dataset to disk"
       }
     },
     {
@@ -1461,8 +1461,8 @@
         "somekey"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR no such key"
       }
     },
     {

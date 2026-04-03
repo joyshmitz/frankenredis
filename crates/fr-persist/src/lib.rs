@@ -393,6 +393,50 @@ fn rdb_decode_length(data: &[u8]) -> Option<(usize, usize)> {
 }
 
 /// Decode an RDB string. Returns `(bytes, consumed)` or `None`.
+fn lzf_decompress(input: &[u8], expected_len: usize) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(expected_len);
+    let mut cursor = 0usize;
+
+    while cursor < input.len() && output.len() < expected_len {
+        let ctrl = usize::from(*input.get(cursor)?);
+        cursor += 1;
+
+        if ctrl < 32 {
+            let literal_len = ctrl + 1;
+            let end = cursor.checked_add(literal_len)?;
+            let literal = input.get(cursor..end)?;
+            output.extend_from_slice(literal);
+            cursor = end;
+            continue;
+        }
+
+        let mut copy_len = (ctrl >> 5) + 2;
+        if copy_len == 9 {
+            copy_len = copy_len.checked_add(usize::from(*input.get(cursor)?))?;
+            cursor += 1;
+        }
+
+        let backref_low = usize::from(*input.get(cursor)?);
+        cursor += 1;
+        let backref = (((ctrl & 0x1F) << 8) | backref_low) + 1;
+        if backref > output.len() {
+            return None;
+        }
+
+        let copy_start = output.len() - backref;
+        for idx in 0..copy_len {
+            let byte = *output.get(copy_start + idx)?;
+            output.push(byte);
+        }
+    }
+
+    if cursor == input.len() && output.len() == expected_len {
+        Some(output)
+    } else {
+        None
+    }
+}
+
 fn rdb_decode_string(data: &[u8]) -> Option<(Vec<u8>, usize)> {
     let first = *data.first()?;
     let encoding = (first & 0xC0) >> 6;
@@ -421,7 +465,17 @@ fn rdb_decode_string(data: &[u8]) -> Option<(Vec<u8>, usize)> {
                 let val = i32::from_le_bytes([data[1], data[2], data[3], data[4]]);
                 Some((val.to_string().into_bytes(), 5))
             }
-            _ => None, // LZF or unknown special encoding not supported yet
+            3 => {
+                let (compressed_len, compressed_hdr) = rdb_decode_length(&data[1..])?;
+                let (uncompressed_len, uncompressed_hdr) =
+                    rdb_decode_length(&data[1 + compressed_hdr..])?;
+                let payload_start = 1 + compressed_hdr + uncompressed_hdr;
+                let payload_end = payload_start.checked_add(compressed_len)?;
+                let compressed = data.get(payload_start..payload_end)?;
+                let decompressed = lzf_decompress(compressed, uncompressed_len)?;
+                Some((decompressed, payload_end))
+            }
+            _ => None,
         }
     } else {
         let (len, hdr) = rdb_decode_length(data)?;
@@ -873,7 +927,24 @@ mod tests {
 
     // ── RDB tests ────────────────────────────────────────────────────
 
-    use super::{RDB_CHECKSUM_LEN, RdbEntry, RdbValue, decode_rdb, encode_rdb};
+    use super::{
+        RDB_CHECKSUM_LEN, RDB_OPCODE_EOF, RDB_TYPE_STRING, RdbEntry, RdbValue, crc64_redis,
+        decode_rdb, encode_rdb, lzf_decompress, rdb_encode_length, rdb_encode_string,
+    };
+
+    #[test]
+    fn lzf_decompresses_literal_runs() {
+        let compressed = [4, b'h', b'e', b'l', b'l', b'o'];
+        let decompressed = lzf_decompress(&compressed, 5).expect("literal decode");
+        assert_eq!(decompressed, b"hello");
+    }
+
+    #[test]
+    fn lzf_decompresses_back_references() {
+        let compressed = [2, b'a', b'b', b'c', 0x20, 0x02];
+        let decompressed = lzf_decompress(&compressed, 6).expect("backref decode");
+        assert_eq!(decompressed, b"abcabc");
+    }
 
     #[test]
     fn rdb_round_trip_string() {
@@ -997,6 +1068,33 @@ mod tests {
         let encoded = encode_rdb(&entries, &[]);
         let (decoded, _) = decode_rdb(&encoded).expect("decode");
         assert_eq!(decoded, entries);
+    }
+
+    #[test]
+    fn rdb_decodes_lzf_encoded_string_values() {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(b"REDIS0011");
+        encoded.push(RDB_TYPE_STRING);
+        rdb_encode_string(&mut encoded, b"msg");
+        encoded.push(0xC3);
+        rdb_encode_length(&mut encoded, 6);
+        rdb_encode_length(&mut encoded, 6);
+        encoded.extend_from_slice(&[2, b'a', b'b', b'c', 0x20, 0x02]);
+        encoded.push(RDB_OPCODE_EOF);
+        let checksum = crc64_redis(&encoded);
+        encoded.extend_from_slice(&checksum.to_le_bytes());
+
+        let (decoded, aux) = decode_rdb(&encoded).expect("decode lzf rdb");
+        assert!(aux.is_empty());
+        assert_eq!(
+            decoded,
+            vec![RdbEntry {
+                db: 0,
+                key: b"msg".to_vec(),
+                value: RdbValue::String(b"abcabc".to_vec()),
+                expire_ms: None,
+            }]
+        );
     }
 
     #[test]

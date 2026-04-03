@@ -725,6 +725,47 @@ impl ValueType {
 /// Default number of databases (matches Redis default).
 pub const DEFAULT_NUM_DATABASES: usize = 16;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DispatchClientContext {
+    pub client_id: u64,
+    pub client_name: Option<Vec<u8>>,
+    pub client_lib_name: Option<String>,
+    pub client_lib_ver: Option<String>,
+    pub db_index: usize,
+    pub flags: String,
+    pub peer_addr: String,
+    pub authenticated_user: Vec<u8>,
+    pub resp_protocol_version: i64,
+    pub channel_subscriptions: usize,
+    pub pattern_subscriptions: usize,
+    pub shard_subscriptions: usize,
+    pub multi_count: i64,
+    pub watch_count: usize,
+    pub is_pubsub: bool,
+}
+
+impl Default for DispatchClientContext {
+    fn default() -> Self {
+        Self {
+            client_id: 1,
+            client_name: None,
+            client_lib_name: None,
+            client_lib_ver: None,
+            db_index: 0,
+            flags: "N".to_string(),
+            peer_addr: "127.0.0.1:0".to_string(),
+            authenticated_user: b"default".to_vec(),
+            resp_protocol_version: 2,
+            channel_subscriptions: 0,
+            pattern_subscriptions: 0,
+            shard_subscriptions: 0,
+            multi_count: -1,
+            watch_count: 0,
+            is_pubsub: false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Store {
     entries: BTreeMap<Vec<u8>, Entry>,
@@ -735,6 +776,8 @@ pub struct Store {
     stream_groups: HashMap<Vec<u8>, StreamGroupState>,
     /// Per-stream last-generated-id set by XSETID (may be higher than max entry).
     stream_last_ids: HashMap<Vec<u8>, StreamId>,
+    /// Highest stream entry ID removed via XDEL/XTRIM for each stream key.
+    pub stream_max_deleted_ids: HashMap<Vec<u8>, StreamId>,
     /// Script cache: SHA1 hex string → script body.
     script_cache: HashMap<String, Vec<u8>>,
     /// Pub/Sub: channels this client is subscribed to.
@@ -831,6 +874,12 @@ pub struct Store {
     pub server_maxclients: u64,
     /// Live maxmemory setting, synced from runtime.
     pub maxmemory_bytes_live: usize,
+    /// Current client/session metadata for delegated dispatch paths such as Lua.
+    pub dispatch_client_ctx: DispatchClientContext,
+    /// Controls whether runtime active-expire cycles are allowed to run.
+    pub active_expire_enabled: bool,
+    /// Set by DEBUG RELOAD; runtime consumes it after command dispatch.
+    pub debug_reload_requested: bool,
 }
 
 const DB_NAMESPACE_PREFIX: &[u8] = b"\0frdb\0";
@@ -869,6 +918,7 @@ impl Default for Store {
             database_count: DEFAULT_NUM_DATABASES,
             stream_groups: HashMap::new(),
             stream_last_ids: HashMap::new(),
+            stream_max_deleted_ids: HashMap::new(),
             script_cache: HashMap::new(),
             subscribed_channels: HashSet::new(),
             subscribed_patterns: HashSet::new(),
@@ -915,6 +965,9 @@ impl Default for Store {
             server_repl_backlog_size: 1_048_576,
             server_maxclients: 10000,
             maxmemory_bytes_live: 0,
+            dispatch_client_ctx: DispatchClientContext::default(),
+            active_expire_enabled: true,
+            debug_reload_requested: false,
         }
     }
 }
@@ -1001,6 +1054,16 @@ impl Store {
 
     pub fn latency_reset(&mut self, events: &[&str]) -> usize {
         self.latency_tracker.reset(events)
+    }
+
+    fn update_stream_max_deleted_id(&mut self, key: &[u8], deleted_id: StreamId) {
+        let entry = self
+            .stream_max_deleted_ids
+            .entry(key.to_vec())
+            .or_insert((0, 0));
+        if deleted_id > *entry {
+            *entry = deleted_id;
+        }
     }
 
     pub fn reset_slowlog(&mut self) {
@@ -2722,20 +2785,35 @@ impl Store {
     ) -> Result<i64, StoreError> {
         self.drop_if_expired(key, now_ms);
         let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
-        let Value::Hash(m) = &mut entry.value else {
-            return Err(StoreError::WrongType);
+        let (res, is_empty) = {
+            let Value::Hash(m) = &mut entry.value else {
+                return Err(StoreError::WrongType);
+            };
+            let current_res = match m.get(field) {
+                Some(v) => parse_i64(v).map_err(|_| StoreError::HashValueNotInteger),
+                None => Ok(0),
+            };
+            let res = match current_res {
+                Ok(current) => match current.checked_add(delta) {
+                    Some(next) => {
+                        m.insert(field.to_vec(), next.to_string().into_bytes());
+                        Ok(next)
+                    }
+                    None => Err(StoreError::IntegerOverflow),
+                },
+                Err(e) => Err(e),
+            };
+            (res, m.is_empty())
         };
-        let current = match m.get(field) {
-            Some(v) => parse_i64(v).map_err(|_| StoreError::HashValueNotInteger)?,
-            None => 0,
-        };
-        let next = current
-            .checked_add(delta)
-            .ok_or(StoreError::IntegerOverflow)?;
-        m.insert(field.to_vec(), next.to_string().into_bytes());
-        entry.touch_write(now_ms);
-        self.dirty = self.dirty.saturating_add(1);
-        Ok(next)
+
+        if res.is_ok() {
+            entry.touch_write(now_ms);
+            self.dirty = self.dirty.saturating_add(1);
+        }
+        if is_empty {
+            self.internal_entries_remove(key);
+        }
+        res
     }
 
     pub fn hsetnx(
@@ -2786,23 +2864,38 @@ impl Store {
     ) -> Result<f64, StoreError> {
         self.drop_if_expired(key, now_ms);
         let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
-        let Value::Hash(m) = &mut entry.value else {
-            return Err(StoreError::WrongType);
+        let (res, is_empty) = {
+            let Value::Hash(m) = &mut entry.value else {
+                return Err(StoreError::WrongType);
+            };
+            let current_res = match m.get(field) {
+                Some(v) => parse_f64(v),
+                None => Ok(0.0),
+            };
+
+            let res = match current_res {
+                Ok(current) => {
+                    let next = current + delta;
+                    if next.is_nan() {
+                        Err(StoreError::IncrFloatNaN)
+                    } else {
+                        m.insert(field.to_vec(), next.to_string().into_bytes());
+                        Ok(next)
+                    }
+                }
+                Err(e) => Err(e),
+            };
+            (res, m.is_empty())
         };
-        let current = match m.get(field) {
-            Some(v) => parse_f64(v)?,
-            None => 0.0,
-        };
-        let next = current + delta;
-        // Redis allows infinity results from INCRBYFLOAT/HINCRBYFLOAT.
-        // Only NaN is rejected (e.g., inf + (-inf) = NaN).
-        if next.is_nan() {
-            return Err(StoreError::IncrFloatNaN);
+
+        if res.is_ok() {
+            entry.touch_write(now_ms);
+            self.dirty = self.dirty.saturating_add(1);
         }
-        m.insert(field.to_vec(), next.to_string().into_bytes());
-        entry.touch_write(now_ms);
-        self.dirty = self.dirty.saturating_add(1);
-        Ok(next)
+        if is_empty {
+            self.internal_entries_remove(key);
+        }
+        res
     }
 
     pub fn hrandfield(&mut self, key: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, StoreError> {
@@ -4264,7 +4357,7 @@ impl Store {
         }
 
         let entry = self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
-        let (added, changed) = {
+        let (added, changed, is_empty) = {
             let Value::SortedSet(zs) = &mut entry.value else {
                 return Err(StoreError::WrongType);
             };
@@ -4298,11 +4391,14 @@ impl Store {
                     }
                 }
             }
-            (added, changed)
+            (added, changed, zs.is_empty())
         };
         if added > 0 || changed > 0 {
             entry.touch_write(now_ms);
             self.dirty = self.dirty.saturating_add((added + changed) as u64);
+        }
+        if is_empty {
+            self.internal_entries_remove(key);
         }
         if opts.ch {
             Ok((added + changed, changed))
@@ -4718,38 +4814,43 @@ impl Store {
         }
 
         let entry = self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
-        let Value::SortedSet(zs) = &mut entry.value else {
-            return Err(StoreError::WrongType);
+        let (res, is_empty) = {
+            let Value::SortedSet(zs) = &mut entry.value else {
+                return Err(StoreError::WrongType);
+            };
+
+            let old_score = zs.get_score(&member);
+
+            let res = if (opts.nx && old_score.is_some()) || (opts.xx && old_score.is_none()) {
+                Ok(None)
+            } else {
+                let new_score = old_score.unwrap_or(0.0) + delta;
+
+                if new_score.is_nan() {
+                    Err(StoreError::IncrFloatNaN)
+                } else if let Some(old) = old_score {
+                    if (opts.gt && new_score <= old) || (opts.lt && new_score >= old) {
+                        Ok(None)
+                    } else {
+                        zs.insert(member, new_score);
+                        Ok(Some(new_score))
+                    }
+                } else {
+                    zs.insert(member, new_score);
+                    Ok(Some(new_score))
+                }
+            };
+            (res, zs.is_empty())
         };
 
-        let old_score = zs.get_score(&member);
-
-        if opts.nx && old_score.is_some() {
-            return Ok(None);
+        if let Ok(Some(_)) = res {
+            entry.touch_write(now_ms);
+            self.dirty = self.dirty.saturating_add(1);
         }
-        if opts.xx && old_score.is_none() {
-            return Ok(None);
+        if is_empty {
+            self.internal_entries_remove(key);
         }
-
-        let new_score = old_score.unwrap_or(0.0) + delta;
-
-        if new_score.is_nan() {
-            return Err(StoreError::IncrFloatNaN);
-        }
-
-        if let Some(old) = old_score {
-            if opts.gt && new_score <= old {
-                return Ok(None);
-            }
-            if opts.lt && new_score >= old {
-                return Ok(None);
-            }
-        }
-
-        zs.insert(member, new_score);
-        entry.touch_write(now_ms);
-        self.dirty = self.dirty.saturating_add(1);
-        Ok(Some(new_score))
+        res
     }
 
     /// Remove and return the member with the lowest score.
@@ -5390,6 +5491,7 @@ impl Store {
                 let mut entries = BTreeMap::new();
                 entries.insert(id, fields.to_vec());
                 self.stream_groups.remove(key);
+                self.stream_max_deleted_ids.remove(key);
                 // Set high watermark to the first entry's ID
                 self.stream_last_ids.insert(key.to_vec(), id);
                 self.internal_entries_insert(
@@ -5491,13 +5593,16 @@ impl Store {
 
     pub fn xdel(&mut self, key: &[u8], ids: &[StreamId], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get_mut(key) {
+        let mut max_deleted = None;
+        let result = match self.entries.get_mut(key) {
             Some(entry) => match &mut entry.value {
                 Value::Stream(entries) => {
                     let mut removed = 0usize;
                     for id in ids {
                         if entries.remove(id).is_some() {
                             removed = removed.saturating_add(1);
+                            max_deleted =
+                                Some(max_deleted.map_or(*id, |current: StreamId| current.max(*id)));
                         }
                     }
                     if let Some(groups) = self.stream_groups.get_mut(key) {
@@ -5516,12 +5621,17 @@ impl Store {
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
+        };
+        if let Some(max_deleted) = max_deleted {
+            self.update_stream_max_deleted_id(key, max_deleted);
         }
+        result
     }
 
     pub fn xtrim(&mut self, key: &[u8], max_len: usize, now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get_mut(key) {
+        let mut max_deleted = None;
+        let result = match self.entries.get_mut(key) {
             Some(entry) => match &mut entry.value {
                 Value::Stream(entries) => {
                     if entries.len() <= max_len {
@@ -5530,6 +5640,7 @@ impl Store {
                     let to_remove = entries.len() - max_len;
                     let remove_ids: Vec<StreamId> =
                         entries.keys().copied().take(to_remove).collect();
+                    max_deleted = remove_ids.last().copied();
                     for id in &remove_ids {
                         entries.remove(id);
                     }
@@ -5549,7 +5660,11 @@ impl Store {
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
+        };
+        if let Some(max_deleted) = max_deleted {
+            self.update_stream_max_deleted_id(key, max_deleted);
         }
+        result
     }
 
     /// XTRIM key MINID threshold — remove entries with IDs less than `min_id`.
@@ -5560,7 +5675,8 @@ impl Store {
         now_ms: u64,
     ) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get_mut(key) {
+        let mut max_deleted = None;
+        let result = match self.entries.get_mut(key) {
             Some(entry) => match &mut entry.value {
                 Value::Stream(entries) => {
                     let remove_ids: Vec<StreamId> = entries
@@ -5569,6 +5685,7 @@ impl Store {
                         .take_while(|id| *id < min_id)
                         .collect();
                     let removed = remove_ids.len();
+                    max_deleted = remove_ids.last().copied();
                     for id in &remove_ids {
                         entries.remove(id);
                     }
@@ -5579,12 +5696,20 @@ impl Store {
                             }
                         }
                     }
+                    if removed > 0 {
+                        entry.touch_write(now_ms);
+                        self.dirty = self.dirty.saturating_add(removed as u64);
+                    }
                     Ok(removed)
                 }
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(0),
+        };
+        if let Some(max_deleted) = max_deleted {
+            self.update_stream_max_deleted_id(key, max_deleted);
         }
+        result
     }
 
     pub fn xread(
@@ -6074,6 +6199,11 @@ impl Store {
             },
             None => Ok(None),
         }
+    }
+
+    #[must_use]
+    pub fn stream_max_deleted_id(&self, key: &[u8]) -> Option<StreamId> {
+        self.stream_max_deleted_ids.get(key).copied()
     }
 
     pub fn xgroup_create(
@@ -7545,6 +7675,15 @@ impl Store {
         self.entries
             .get(key)
             .map(|entry| estimate_entry_memory_usage_bytes(key, entry))
+    }
+
+    pub fn request_debug_reload(&mut self) {
+        self.debug_reload_requested = true;
+    }
+
+    #[must_use]
+    pub fn take_debug_reload_requested(&mut self) -> bool {
+        std::mem::take(&mut self.debug_reload_requested)
     }
 
     pub fn estimate_memory_usage_bytes(&self) -> usize {
@@ -11378,6 +11517,7 @@ mod tests {
         assert_eq!(info.0, 2);
         assert_eq!(info.1.expect("first").0, (1000, 0));
         assert_eq!(info.2.expect("last").0, (1001, 0));
+        assert_eq!(store.stream_max_deleted_id(b"s"), None);
     }
 
     #[test]
@@ -11387,6 +11527,29 @@ mod tests {
 
         store.set(b"str".to_vec(), b"value".to_vec(), None, 0);
         assert_eq!(store.xinfo_stream(b"str", 0), Err(StoreError::WrongType));
+    }
+
+    #[test]
+    fn stream_tracks_max_deleted_entry_id_across_xdel_and_xtrim() {
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1000, 0), &[(b"f1".to_vec(), b"v1".to_vec())], 0)
+            .unwrap();
+        store
+            .xadd(b"s", (1000, 1), &[(b"f2".to_vec(), b"v2".to_vec())], 0)
+            .unwrap();
+        store
+            .xadd(b"s", (1001, 0), &[(b"f3".to_vec(), b"v3".to_vec())], 0)
+            .unwrap();
+
+        assert_eq!(store.xdel(b"s", &[(1000, 1)], 0).unwrap(), 1);
+        assert_eq!(store.stream_max_deleted_id(b"s"), Some((1000, 1)));
+
+        assert_eq!(store.xtrim_minid(b"s", (1001, 0), 0).unwrap(), 1);
+        assert_eq!(store.stream_max_deleted_id(b"s"), Some((1000, 1)));
+
+        assert_eq!(store.xtrim(b"s", 0, 0).unwrap(), 1);
+        assert_eq!(store.stream_max_deleted_id(b"s"), Some((1001, 0)));
     }
 
     #[test]

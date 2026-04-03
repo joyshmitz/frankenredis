@@ -26,7 +26,7 @@ use fr_eventloop::{
 };
 use fr_persist::{
     AofRecord, PersistError, RdbEntry, RdbValue, argv_to_aof_records, decode_aof_stream,
-    decode_rdb, encode_aof_stream, encode_rdb, write_aof_file, write_rdb_file,
+    decode_rdb, encode_aof_stream, encode_rdb, read_rdb_file, write_aof_file, write_rdb_file,
 };
 use fr_protocol::{RespFrame, RespParseError};
 use fr_repl::{
@@ -34,8 +34,8 @@ use fr_repl::{
     evaluate_wait, evaluate_waitaof, parse_psync_reply,
 };
 use fr_store::{
-    EvictionLoopFailure, EvictionLoopResult, EvictionLoopStatus, EvictionSafetyGateState,
-    MaxmemoryPolicy, Store, decode_db_key, encode_db_key, glob_match,
+    DispatchClientContext, EvictionLoopFailure, EvictionLoopResult, EvictionLoopStatus,
+    EvictionSafetyGateState, MaxmemoryPolicy, Store, decode_db_key, encode_db_key, glob_match,
 };
 
 /// Return the ACL categories a command belongs to, using the COMMAND_TABLE metadata.
@@ -1358,6 +1358,21 @@ impl ServerState {
         now_ms: u64,
         cycle_kind: ActiveExpireCycleKind,
     ) -> ActiveExpireCycleStats {
+        if !self.store.active_expire_enabled {
+            let stats = ActiveExpireCycleStats {
+                plan: plan_active_expire_cycle(
+                    cycle_kind,
+                    0,
+                    self.active_expire_db_cursor,
+                    1,
+                    self.active_expire_budget,
+                ),
+                sampled_keys: 0,
+                evicted_keys: 0,
+            };
+            self.last_active_expire_cycle = Some(stats);
+            return stats;
+        }
         let start = Instant::now();
         let plan = plan_active_expire_cycle(
             cycle_kind,
@@ -1714,6 +1729,60 @@ impl Runtime {
         self.server.aof_selected_db = self.session.selected_db;
         self.session.selected_db = original_db;
         Ok(count)
+    }
+
+    fn handle_debug_reload_requested(&mut self, now_ms: u64) -> RespFrame {
+        let is_ephemeral = self.server.aof_path.is_none() && self.server.rdb_path.is_none();
+        let temp_path =
+            std::env::temp_dir().join(format!("debug_reload_{}.rdb", std::process::id()));
+
+        if is_ephemeral {
+            let entries = store_to_rdb_entries(&mut self.server.store, now_ms);
+            let aux = [
+                ("redis-ver", fr_store::REDIS_COMPAT_VERSION),
+                ("frankenredis", "true"),
+            ];
+            if write_rdb_file(&temp_path, &entries, &aux).is_err() {
+                return RespFrame::Error("ERR error saving RDB snapshot to disk".to_string());
+            }
+        } else if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
+            return reply;
+        }
+
+        if self.server.aof_path.is_some() {
+            return match self.load_aof(now_ms.saturating_add(1)) {
+                Ok(_) => RespFrame::SimpleString("OK".to_string()),
+                Err(_) => RespFrame::Error("ERR failed to reload dataset from AOF".to_string()),
+            };
+        }
+
+        let path = if is_ephemeral {
+            temp_path.clone()
+        } else {
+            self.server.rdb_path.clone().unwrap()
+        };
+
+        let result = match read_rdb_file(&path) {
+            Ok((entries, _aux)) => {
+                let mut store = Store::new();
+                if apply_rdb_entries_to_store(&mut store, &entries, now_ms.saturating_add(1))
+                    .is_err()
+                {
+                    RespFrame::Error("ERR failed to reload dataset from RDB".to_string())
+                } else {
+                    self.server.store = store;
+                    self.session.selected_db = 0;
+                    RespFrame::SimpleString("OK".to_string())
+                }
+            }
+            Err(_) => RespFrame::Error("ERR failed to reload dataset from RDB".to_string()),
+        };
+
+        if is_ephemeral {
+            let _ = std::fs::remove_file(temp_path);
+        }
+
+        result
     }
 
     #[must_use]
@@ -2834,6 +2903,9 @@ impl Runtime {
 
         match result {
             Ok(reply) => {
+                if self.server.store.take_debug_reload_requested() {
+                    return self.handle_debug_reload_requested(now_ms);
+                }
                 if dirty_after > dirty_before {
                     // Record AOF only for non-special commands (special ones record themselves)
                     if special_command.is_none() && !handled_migrate {
@@ -3361,6 +3433,88 @@ impl Runtime {
         rewritten
     }
 
+    fn current_dispatch_client_context(&self) -> DispatchClientContext {
+        let client_id = self.session.client_id;
+        let is_pubsub = self
+            .server
+            .pubsub_channel_subs
+            .values()
+            .any(|clients| clients.contains(&client_id))
+            || self
+                .server
+                .pubsub_pattern_subs
+                .values()
+                .any(|clients| clients.contains(&client_id))
+            || self
+                .server
+                .pubsub_shard_subs
+                .values()
+                .any(|clients| clients.contains(&client_id));
+        DispatchClientContext {
+            client_id,
+            client_name: self.session.client_name.clone(),
+            client_lib_name: self.session.client_lib_name.clone(),
+            client_lib_ver: self.session.client_lib_ver.clone(),
+            db_index: self.session.selected_db,
+            flags: if self.session.transaction_state.in_transaction {
+                "x".to_string()
+            } else {
+                "N".to_string()
+            },
+            peer_addr: self
+                .session
+                .peer_addr
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|| "127.0.0.1:0".to_string()),
+            authenticated_user: self.session.current_user_name().to_vec(),
+            resp_protocol_version: self.session.resp_protocol_version,
+            channel_subscriptions: self
+                .server
+                .pubsub_client_channels
+                .get(&client_id)
+                .map_or(0, HashSet::len),
+            pattern_subscriptions: self
+                .server
+                .pubsub_client_patterns
+                .get(&client_id)
+                .map_or(0, HashSet::len),
+            shard_subscriptions: self
+                .server
+                .pubsub_client_shard_channels
+                .get(&client_id)
+                .map_or(0, HashSet::len),
+            multi_count: if self.session.transaction_state.in_transaction {
+                self.session.transaction_state.command_queue.len() as i64
+            } else {
+                -1
+            },
+            watch_count: self.session.transaction_state.watched_keys.len(),
+            is_pubsub,
+        }
+    }
+
+    fn sync_dispatch_client_context_to_session(&mut self) {
+        self.session.client_name = self.server.store.dispatch_client_ctx.client_name.clone();
+        self.session.client_lib_name = self
+            .server
+            .store
+            .dispatch_client_ctx
+            .client_lib_name
+            .clone();
+        self.session.client_lib_ver = self.server.store.dispatch_client_ctx.client_lib_ver.clone();
+    }
+
+    fn dispatch_with_client_context(
+        &mut self,
+        argv: &[Vec<u8>],
+        now_ms: u64,
+    ) -> Result<RespFrame, CommandError> {
+        self.server.store.dispatch_client_ctx = self.current_dispatch_client_context();
+        let result = dispatch_argv(argv, &mut self.server.store, now_ms);
+        self.sync_dispatch_client_context_to_session();
+        result
+    }
+
     fn execute_db_scoped_command(
         &mut self,
         argv: &[Vec<u8>],
@@ -3397,7 +3551,7 @@ impl Runtime {
             return Ok(self.handle_client_command(argv, now_ms));
         }
         let namespaced = self.namespace_argv_for_selected_db(argv);
-        let mut reply = dispatch_argv(&namespaced, &mut self.server.store, now_ms)?;
+        let mut reply = self.dispatch_with_client_context(&namespaced, now_ms)?;
         self.strip_db_prefixes_from_frame(&mut reply);
         Ok(reply)
     }
@@ -6347,7 +6501,7 @@ impl Runtime {
 
         if delegated.len() > 1 {
             let namespaced = self.namespace_argv_for_selected_db(&delegated);
-            let mut reply = dispatch_argv(&namespaced, &mut self.server.store, now_ms)?;
+            let mut reply = self.dispatch_with_client_context(&namespaced, now_ms)?;
             self.strip_db_prefixes_from_frame(&mut reply);
             if let RespFrame::BulkString(Some(bytes)) = reply {
                 info.extend_from_slice(&bytes);
@@ -6506,7 +6660,7 @@ impl Runtime {
         }
 
         if subcommand == ClusterSubcommand::Dispatch {
-            return match dispatch_argv(argv, &mut self.server.store, now_ms) {
+            return match self.dispatch_with_client_context(argv, now_ms) {
                 Ok(reply) => reply,
                 Err(err) => (err).to_resp(),
             };
@@ -8126,6 +8280,44 @@ mod tests {
         assert!(info.contains("db=5"));
         assert!(info.contains("user=default"));
         assert!(info.contains("resp=3"));
+    }
+
+    #[test]
+    fn client_dispatch_context_flows_through_eval_and_syncs_back_to_session() {
+        let mut rt = Runtime::default_strict();
+        rt.session.client_name = Some(b"before".to_vec());
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"EVAL", b"return redis.call('CLIENT','ID')", b"0"]),
+                0,
+            ),
+            RespFrame::Integer(rt.session.client_id as i64)
+        );
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"EVAL",
+                    b"return redis.call('CLIENT','SETNAME','lua-client')",
+                    b"0",
+                ]),
+                1,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.session.client_name.as_deref(),
+            Some(b"lua-client".as_slice())
+        );
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"EVAL", b"return redis.call('CLIENT','GETNAME')", b"0"]),
+                2,
+            ),
+            RespFrame::BulkString(Some(b"lua-client".to_vec()))
+        );
     }
 
     #[test]
@@ -11617,6 +11809,72 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&aof_path);
+    }
+
+    #[test]
+    fn debug_reload_reloads_from_aof_snapshot() {
+        let dir = std::env::temp_dir().join("fr_runtime_debug_reload_aof_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let aof_path = dir.join("debug-reload.aof");
+
+        let mut rt = Runtime::default_strict();
+        rt.set_aof_path(aof_path.clone());
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"reload:key", b"two"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"DEBUG", b"RELOAD"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"reload:key"]), 3),
+            RespFrame::BulkString(Some(b"two".to_vec()))
+        );
+
+        let _ = std::fs::remove_file(&aof_path);
+    }
+
+    #[test]
+    fn debug_reload_reloads_from_rdb_snapshot_when_aof_is_disabled() {
+        let dir = std::env::temp_dir().join("fr_runtime_debug_reload_rdb_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let rdb_path = dir.join("debug-reload.rdb");
+
+        let mut rt = Runtime::default_strict();
+        rt.set_rdb_path(rdb_path.clone());
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"reload:key", b"two"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"DEBUG", b"RELOAD"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"reload:key"]), 3),
+            RespFrame::BulkString(Some(b"two".to_vec()))
+        );
+
+        let _ = std::fs::remove_file(&rdb_path);
+    }
+
+    #[test]
+    fn active_expire_cycle_is_skipped_when_debug_toggle_disables_it() {
+        let mut rt = Runtime::default_strict();
+        rt.server
+            .store
+            .set(b"expire-me".to_vec(), b"value".to_vec(), Some(1_000), 0);
+        rt.server.store.active_expire_enabled = false;
+
+        let stats = rt.run_active_expire_cycle(500, ActiveExpireCycleKind::Fast);
+
+        assert_eq!(stats.sampled_keys, 0);
+        assert_eq!(stats.evicted_keys, 0);
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"expire-me"]), 500),
+            RespFrame::BulkString(Some(b"value".to_vec()))
+        );
     }
 
     #[test]

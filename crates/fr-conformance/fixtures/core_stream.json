@@ -996,7 +996,7 @@
           },
           {
             "kind": "integer",
-            "value": 1
+            "value": 2
           },
           {
             "kind": "bulk",
@@ -1004,7 +1004,7 @@
           },
           {
             "kind": "integer",
-            "value": 2
+            "value": 3
           },
           {
             "kind": "bulk",
@@ -4962,9 +4962,9 @@
           {"kind":"bulk","value":"length"},
           {"kind":"integer","value":3},
           {"kind":"bulk","value":"radix-tree-keys"},
-          {"kind":"integer","value":1},
+          {"kind":"integer","value":3},
           {"kind":"bulk","value":"radix-tree-nodes"},
-          {"kind":"integer","value":2},
+          {"kind":"integer","value":4},
           {"kind":"bulk","value":"last-generated-id"},
           {"kind":"bulk","value":"3-1"},
           {"kind":"bulk","value":"max-deleted-entry-id"},
@@ -5003,9 +5003,9 @@
           {"kind":"bulk","value":"length"},
           {"kind":"integer","value":3},
           {"kind":"bulk","value":"radix-tree-keys"},
-          {"kind":"integer","value":1},
+          {"kind":"integer","value":3},
           {"kind":"bulk","value":"radix-tree-nodes"},
-          {"kind":"integer","value":2},
+          {"kind":"integer","value":4},
           {"kind":"bulk","value":"last-generated-id"},
           {"kind":"bulk","value":"3-1"},
           {"kind":"bulk","value":"max-deleted-entry-id"},
@@ -5070,9 +5070,9 @@
           {"kind":"bulk","value":"length"},
           {"kind":"integer","value":3},
           {"kind":"bulk","value":"radix-tree-keys"},
-          {"kind":"integer","value":1},
+          {"kind":"integer","value":3},
           {"kind":"bulk","value":"radix-tree-nodes"},
-          {"kind":"integer","value":2},
+          {"kind":"integer","value":4},
           {"kind":"bulk","value":"last-generated-id"},
           {"kind":"bulk","value":"3-1"},
           {"kind":"bulk","value":"max-deleted-entry-id"},
@@ -5124,9 +5124,9 @@
           {"kind":"bulk","value":"length"},
           {"kind":"integer","value":3},
           {"kind":"bulk","value":"radix-tree-keys"},
-          {"kind":"integer","value":1},
+          {"kind":"integer","value":3},
           {"kind":"bulk","value":"radix-tree-nodes"},
-          {"kind":"integer","value":2},
+          {"kind":"integer","value":4},
           {"kind":"bulk","value":"last-generated-id"},
           {"kind":"bulk","value":"3-1"},
           {"kind":"bulk","value":"max-deleted-entry-id"},

@@ -233,10 +233,15 @@ fn debug_jmap_returns_ok() {
 }
 
 #[test]
-fn debug_reload_returns_ok() {
+fn debug_reload_requires_configured_persistence() {
     let mut rt = Runtime::default_strict();
     let resp = rt.execute_frame(command(&[b"DEBUG", b"RELOAD"]), 0);
-    assert_eq!(resp, RespFrame::SimpleString("OK".to_string()));
+    assert_eq!(
+        resp,
+        RespFrame::Error(
+            "ERR DEBUG RELOAD requires configured appendonly or RDB persistence".to_string()
+        )
+    );
 }
 
 #[test]
