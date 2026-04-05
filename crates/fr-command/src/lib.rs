@@ -650,7 +650,7 @@ pub fn dispatch_argv(
         Some(CommandId::Slowlog) => return slowlog_cmd(argv, store),
         Some(CommandId::Save) => return save_cmd(argv, store, now_ms),
         Some(CommandId::Bgsave) => return bgsave_cmd(argv, store, now_ms),
-        Some(CommandId::Bgrewriteaof) => return bgrewriteaof_cmd(argv),
+        Some(CommandId::Bgrewriteaof) => return bgrewriteaof_cmd(argv, store),
         Some(CommandId::Lastsave) => return lastsave_cmd(argv, store),
         Some(CommandId::Swapdb) => return swapdb_cmd(argv),
         Some(CommandId::Blpop) => return blpop(argv, store, now_ms),
@@ -2417,7 +2417,6 @@ fn parse_f64_arg(arg: &[u8]) -> Result<f64, CommandError> {
     let text = std::str::from_utf8(arg)
         .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?;
     let val = text
-        .trim()
         .parse::<f64>()
         .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?;
     if val.is_nan() {
@@ -7364,10 +7363,59 @@ fn bytes_to_lossy_string(bytes: &[u8]) -> String {
 }
 
 fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
-    let text = std::str::from_utf8(arg).map_err(|_| CommandError::InvalidInteger)?;
-    text.trim()
-        .parse::<i64>()
-        .map_err(|_| CommandError::InvalidInteger)
+    let slen = arg.len();
+    if slen == 0 || slen > 20 {
+        return Err(CommandError::InvalidInteger);
+    }
+    if slen == 1 && arg[0] == b'0' {
+        return Ok(0);
+    }
+
+    let mut p = 0;
+    let negative = arg[0] == b'-';
+    if negative {
+        p += 1;
+        if p == slen {
+            return Err(CommandError::InvalidInteger);
+        }
+    }
+
+    if arg[p] >= b'1' && arg[p] <= b'9' {
+        let mut v: u64 = (arg[p] - b'0') as u64;
+        p += 1;
+        while p < slen {
+            let b = arg[p];
+            if b.is_ascii_digit() {
+                if v > (u64::MAX / 10) {
+                    return Err(CommandError::InvalidInteger);
+                }
+                v *= 10;
+                let digit = (b - b'0') as u64;
+                if v > (u64::MAX - digit) {
+                    return Err(CommandError::InvalidInteger);
+                }
+                v += digit;
+                p += 1;
+            } else {
+                return Err(CommandError::InvalidInteger);
+            }
+        }
+
+        if negative {
+            let limit = (i64::MIN as u64).wrapping_neg();
+            if v > limit {
+                return Err(CommandError::InvalidInteger);
+            }
+            return Ok(v.wrapping_neg() as i64);
+        } else {
+            if v > i64::MAX as u64 {
+                return Err(CommandError::InvalidInteger);
+            }
+            return Ok(v as i64);
+        }
+    }
+
+    Err(CommandError::InvalidInteger)
 }
 
 /// Parse an expire time argument for SET/GETEX commands.
@@ -8431,13 +8479,14 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
 
     // CPU section
     if section_requested("cpu") {
+        let (used_cpu_user, used_cpu_sys) = read_cpu_times();
         info.push_str("# CPU\r\n");
-        info.push_str("used_cpu_sys:0.000000\r\n");
-        info.push_str("used_cpu_user:0.000000\r\n");
+        info.push_str(&format!("used_cpu_sys:{used_cpu_sys:.6}\r\n"));
+        info.push_str(&format!("used_cpu_user:{used_cpu_user:.6}\r\n"));
         info.push_str("used_cpu_sys_children:0.000000\r\n");
         info.push_str("used_cpu_user_children:0.000000\r\n");
-        info.push_str("used_cpu_sys_main_thread:0.000000\r\n");
-        info.push_str("used_cpu_user_main_thread:0.000000\r\n");
+        info.push_str(&format!("used_cpu_sys_main_thread:{used_cpu_sys:.6}\r\n"));
+        info.push_str(&format!("used_cpu_user_main_thread:{used_cpu_user:.6}\r\n"));
         info.push_str("\r\n");
     }
 
@@ -10657,10 +10706,11 @@ fn bgsave_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     ))
 }
 
-fn bgrewriteaof_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn bgrewriteaof_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("BGREWRITEAOF"));
     }
+    store.request_bgrewriteaof();
     Ok(RespFrame::SimpleString(
         "Background append only file rewriting started".to_string(),
     ))
@@ -10671,6 +10721,35 @@ fn lastsave_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErr
         return Err(CommandError::WrongArity("LASTSAVE"));
     }
     Ok(RespFrame::Integer(store.last_save_time_sec as i64))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_proc_self_stat_cpu_times(stat_line: &str) -> Option<(f64, f64)> {
+    const LINUX_CLOCK_TICKS_PER_SECOND: f64 = 100.0;
+
+    let (_, rest) = stat_line.rsplit_once(") ")?;
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    let user_ticks = fields.get(11)?.parse::<u64>().ok()?;
+    let sys_ticks = fields.get(12)?.parse::<u64>().ok()?;
+    Some((
+        user_ticks as f64 / LINUX_CLOCK_TICKS_PER_SECOND,
+        sys_ticks as f64 / LINUX_CLOCK_TICKS_PER_SECOND,
+    ))
+}
+
+fn read_cpu_times() -> (f64, f64) {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/stat")
+            .ok()
+            .and_then(|stat| parse_linux_proc_self_stat_cpu_times(&stat))
+            .unwrap_or((0.0, 0.0))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        (0.0, 0.0)
+    }
 }
 
 /// Convert a `PubSubMessage` to the corresponding RESP push frame.
@@ -21856,6 +21935,7 @@ mod tests {
             out,
             RespFrame::SimpleString("Background append only file rewriting started".to_string())
         );
+        assert!(store.take_bgrewriteaof_requested());
     }
 
     #[test]
@@ -25080,6 +25160,16 @@ mod tests {
         assert!(info.contains("tracking_clients:1\r\n"));
         assert!(info.contains("maxmemory:2048\r\n"));
         assert!(info.contains("maxmemory_human:2.00K\r\n"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_linux_proc_self_stat_cpu_times_extracts_utime_and_stime() {
+        let sample = "12345 (frankenredis-server) R 1 2 3 4 5 6 7 8 9 10 345 678 19 20 21 22 23 24";
+        let (user_seconds, sys_seconds) =
+            crate::parse_linux_proc_self_stat_cpu_times(sample).expect("parse cpu times");
+        assert_eq!(user_seconds, 3.45);
+        assert_eq!(sys_seconds, 6.78);
     }
 
     #[test]

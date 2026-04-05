@@ -29,6 +29,11 @@ pub enum LuaValue {
 
 #[derive(Clone, Debug)]
 pub struct LuaTable {
+    pub inner: Rc<RefCell<LuaTableInner>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LuaTableInner {
     pub array: Vec<LuaValue>,
     pub string_hash: HashMap<Vec<u8>, LuaValue>,
     pub other_hash: Vec<(LuaValue, LuaValue)>,
@@ -76,13 +81,32 @@ pub struct LuaFunc {
 impl LuaTable {
     fn new() -> Self {
         Self {
-            array: Vec::new(),
-            string_hash: HashMap::new(),
-            other_hash: Vec::new(),
-            other_keys: HashSet::new(),
+            inner: Rc::new(RefCell::new(LuaTableInner {
+                array: Vec::new(),
+                string_hash: HashMap::new(),
+                other_hash: Vec::new(),
+                other_keys: HashSet::new(),
+            })),
         }
     }
+    fn get(&self, key: &LuaValue) -> LuaValue {
+        self.inner.borrow().get(key)
+    }
+    fn set(&self, key: LuaValue, value: LuaValue) {
+        self.inner.borrow_mut().set(key, value)
+    }
+    fn len(&self) -> usize {
+        self.inner.borrow().len()
+    }
+    fn hash_pairs(&self) -> Vec<(LuaValue, LuaValue)> {
+        self.inner.borrow().hash_pairs()
+    }
+    fn hash_is_empty(&self) -> bool {
+        self.inner.borrow().hash_is_empty()
+    }
+}
 
+impl LuaTableInner {
     fn get(&self, key: &LuaValue) -> LuaValue {
         match key {
             LuaValue::Number(n) => {
@@ -1523,7 +1547,7 @@ impl<'a> LuaState<'a> {
             globals.insert(name.to_string(), LuaValue::RustFunction(name.to_string()));
         }
         // Math library
-        let mut math_table = LuaTable::new();
+        let math_table = LuaTable::new();
         for name in &[
             "floor",
             "ceil",
@@ -1566,7 +1590,7 @@ impl<'a> LuaState<'a> {
         globals.insert("math".to_string(), LuaValue::Table(math_table));
 
         // String library
-        let mut string_table = LuaTable::new();
+        let string_table = LuaTable::new();
         for name in &[
             "sub", "len", "rep", "lower", "upper", "byte", "char", "reverse", "format", "find",
             "match", "gsub", "gmatch",
@@ -1579,7 +1603,7 @@ impl<'a> LuaState<'a> {
         globals.insert("string".to_string(), LuaValue::Table(string_table));
 
         // Table library
-        let mut table_lib = LuaTable::new();
+        let table_lib = LuaTable::new();
         for name in &["insert", "remove", "concat", "sort", "getn", "maxn"] {
             table_lib.set(
                 LuaValue::Str(name.as_bytes().to_vec()),
@@ -1589,7 +1613,7 @@ impl<'a> LuaState<'a> {
         globals.insert("table".to_string(), LuaValue::Table(table_lib));
 
         // cjson library (commonly used in Redis scripts)
-        let mut cjson_table = LuaTable::new();
+        let cjson_table = LuaTable::new();
         for name in &["encode", "decode"] {
             cjson_table.set(
                 LuaValue::Str(name.as_bytes().to_vec()),
@@ -1618,17 +1642,17 @@ impl<'a> LuaState<'a> {
     }
 
     pub fn set_keys_argv(&mut self, keys: Vec<LuaValue>, argv: Vec<LuaValue>) {
-        let mut keys_table = LuaTable::new();
-        keys_table.array = keys;
-        let mut argv_table = LuaTable::new();
-        argv_table.array = argv;
+        let keys_table = LuaTable::new();
+        keys_table.inner.borrow_mut().array = keys;
+        let argv_table = LuaTable::new();
+        argv_table.inner.borrow_mut().array = argv;
         self.globals
             .insert("KEYS".to_string(), LuaValue::Table(keys_table));
         self.globals
             .insert("ARGV".to_string(), LuaValue::Table(argv_table));
 
         // Set up redis table with call/pcall
-        let mut redis_table = LuaTable::new();
+        let redis_table = LuaTable::new();
         redis_table.set(
             LuaValue::Str(b"call".to_vec()),
             LuaValue::RustFunction("redis.call".to_string()),
@@ -1688,7 +1712,7 @@ impl<'a> LuaState<'a> {
             .insert("redis".to_string(), LuaValue::Table(redis_table));
 
         // Set up os table (Redis Lua only exposes os.clock)
-        let mut os_table = LuaTable::new();
+        let os_table = LuaTable::new();
         os_table.set(
             LuaValue::Str(b"clock".to_vec()),
             LuaValue::RustFunction("os.clock".to_string()),
@@ -2164,7 +2188,7 @@ impl<'a> LuaState<'a> {
                 Ok(results.into_iter().next().unwrap_or(LuaValue::Nil))
             }
             Expr::TableConstructor(fields) => {
-                let mut table = LuaTable::new();
+                let table = LuaTable::new();
                 let mut auto_idx = 1usize;
                 for field in fields {
                     match field {
@@ -2369,7 +2393,7 @@ impl<'a> LuaState<'a> {
                     .unwrap_or_default();
                 let msg_str = String::from_utf8_lossy(&msg).to_string();
                 Ok(vec![LuaValue::Table({
-                    let mut t = LuaTable::new();
+                    let t = LuaTable::new();
                     t.set(
                         LuaValue::Str(b"err".to_vec()),
                         LuaValue::Str(msg_str.into_bytes()),
@@ -2383,7 +2407,7 @@ impl<'a> LuaState<'a> {
                     .map(|a| a.to_display_string())
                     .unwrap_or_default();
                 Ok(vec![LuaValue::Table({
-                    let mut t = LuaTable::new();
+                    let t = LuaTable::new();
                     t.set(LuaValue::Str(b"ok".to_vec()), LuaValue::Str(msg));
                     t
                 })])
@@ -2560,8 +2584,11 @@ impl<'a> LuaState<'a> {
                 let table = args.first().cloned().unwrap_or(LuaValue::Nil);
                 let idx = args.get(1).and_then(|v| v.to_number()).unwrap_or(0.0) as usize + 1;
                 if let LuaValue::Table(t) = &table {
-                    if idx <= t.array.len() {
-                        Ok(vec![LuaValue::Number(idx as f64), t.array[idx - 1].clone()])
+                    if idx <= t.inner.borrow().array.len() {
+                        Ok(vec![
+                            LuaValue::Number(idx as f64),
+                            t.inner.borrow().array[idx - 1].clone(),
+                        ])
                     } else {
                         Ok(vec![LuaValue::Nil])
                     }
@@ -2615,8 +2642,11 @@ impl<'a> LuaState<'a> {
 
                 // Find next key after the given key.
                 if matches!(key, LuaValue::Nil) {
-                    if !t.array.is_empty() {
-                        return Ok(vec![LuaValue::Number(1.0), t.array[0].clone()]);
+                    if !t.inner.borrow().array.is_empty() {
+                        return Ok(vec![
+                            LuaValue::Number(1.0),
+                            t.inner.borrow().array[0].clone(),
+                        ]);
                     }
                     let hash_pairs = t.hash_pairs();
                     if let Some((k, v)) = hash_pairs.first() {
@@ -2627,11 +2657,11 @@ impl<'a> LuaState<'a> {
 
                 if let LuaValue::Number(n) = &key {
                     let idx = *n as usize;
-                    if idx >= 1 && idx <= t.array.len() && *n == idx as f64 {
-                        if idx < t.array.len() {
+                    if idx >= 1 && idx <= t.inner.borrow().array.len() && *n == idx as f64 {
+                        if idx < t.inner.borrow().array.len() {
                             return Ok(vec![
                                 LuaValue::Number((idx + 1) as f64),
-                                t.array[idx].clone(),
+                                t.inner.borrow().array[idx].clone(),
                             ]);
                         }
                         let hash_pairs = t.hash_pairs();
@@ -2663,12 +2693,16 @@ impl<'a> LuaState<'a> {
                 let table = args.first().cloned().unwrap_or(LuaValue::Nil);
                 let t = lua_table_arg("unpack", 1, &table)?;
                 let start = lua_optional_integer_arg("unpack", 2, args.get(1), 1)? as usize;
-                let end = lua_optional_integer_arg("unpack", 3, args.get(2), t.array.len() as i64)?
-                    as usize;
+                let end = lua_optional_integer_arg(
+                    "unpack",
+                    3,
+                    args.get(2),
+                    t.inner.borrow().array.len() as i64,
+                )? as usize;
                 let mut results = Vec::new();
                 for i in start..=end {
-                    if i >= 1 && i <= t.array.len() {
-                        results.push(t.array[i - 1].clone());
+                    if i >= 1 && i <= t.inner.borrow().array.len() {
+                        results.push(t.inner.borrow().array[i - 1].clone());
                     } else {
                         results.push(LuaValue::Nil);
                     }
@@ -3148,9 +3182,9 @@ impl<'a> LuaState<'a> {
                     }
                 }
                 // Build result table with all matches for iteration
-                let mut result_table = LuaTable::new();
+                let result_table = LuaTable::new();
                 for (i, cap_vals) in matches.iter().enumerate() {
-                    let mut row = LuaTable::new();
+                    let row = LuaTable::new();
                     for (j, val) in cap_vals.iter().enumerate() {
                         row.set(LuaValue::Number((j + 1) as f64), val.clone());
                     }
@@ -3166,7 +3200,7 @@ impl<'a> LuaState<'a> {
                 // The for-in loop handles this via repeated calls.
                 // We'll store all matches in the iterator's upvalue.
                 // Return a table with __gmatch_data so the for loop can consume it.
-                let mut iter_state = LuaTable::new();
+                let iter_state = LuaTable::new();
                 iter_state.set(
                     LuaValue::Str(b"__gmatch_data".to_vec()),
                     LuaValue::Table(result_table),
@@ -3231,20 +3265,20 @@ impl<'a> LuaState<'a> {
                     // table.insert(t, value) — append
                     let val = args[1].clone();
                     if let LuaValue::Table(ref mut t) = args[0] {
-                        t.array.push(val);
+                        t.inner.borrow_mut().array.push(val);
                     }
                 } else if args.len() >= 3 {
                     // table.insert(t, pos, value)
                     let pos = lua_required_integer_arg("insert", 2, &args[1])? as usize;
                     let val = args[2].clone();
                     if let LuaValue::Table(ref mut t) = args[0] {
-                        if pos < 1 || pos > t.array.len() + 1 {
+                        if pos < 1 || pos > t.inner.borrow().array.len() + 1 {
                             return Err(
                                 "bad argument #2 to 'insert' (position out of bounds)".to_string()
                             );
                         }
                         let idx = pos.saturating_sub(1);
-                        t.array.insert(idx, val);
+                        t.inner.borrow_mut().array.insert(idx, val);
                     }
                 }
                 Ok(vec![LuaValue::Nil])
@@ -3260,10 +3294,10 @@ impl<'a> LuaState<'a> {
                         "remove",
                         2,
                         pos_arg.as_ref(),
-                        t.array.len() as i64,
+                        t.inner.borrow().array.len() as i64,
                     )? as usize;
-                    let removed = if pos >= 1 && pos <= t.array.len() {
-                        t.array.remove(pos - 1)
+                    let removed = if pos >= 1 && pos <= t.inner.borrow().array.len() {
+                        t.inner.borrow_mut().array.remove(pos - 1)
                     } else {
                         LuaValue::Nil
                     };
@@ -3279,12 +3313,16 @@ impl<'a> LuaState<'a> {
                     .map(|a| a.to_display_string())
                     .unwrap_or_default();
                 let start = lua_optional_integer_arg("concat", 3, args.get(2), 1)? as usize;
-                let end = lua_optional_integer_arg("concat", 4, args.get(3), t.array.len() as i64)?
-                    as usize;
+                let end = lua_optional_integer_arg(
+                    "concat",
+                    4,
+                    args.get(3),
+                    t.inner.borrow().array.len() as i64,
+                )? as usize;
                 let mut parts: Vec<Vec<u8>> = Vec::new();
                 for i in start..=end {
-                    if i >= 1 && i <= t.array.len() {
-                        parts.push(t.array[i - 1].to_display_string());
+                    if i >= 1 && i <= t.inner.borrow().array.len() {
+                        parts.push(t.inner.borrow().array[i - 1].to_display_string());
                     }
                 }
                 let mut result = Vec::new();
@@ -3301,7 +3339,7 @@ impl<'a> LuaState<'a> {
                     let comp_fn = args.get(1).cloned();
                     // Extract array so we can call comparator without borrow conflicts
                     let mut arr = if let LuaValue::Table(ref mut t) = args[0] {
-                        std::mem::take(&mut t.array)
+                        std::mem::take(&mut t.inner.borrow_mut().array)
                     } else {
                         return Ok(vec![LuaValue::Nil]);
                     };
@@ -3337,7 +3375,7 @@ impl<'a> LuaState<'a> {
                     }
                     // Put array back
                     if let LuaValue::Table(ref mut t) = args[0] {
-                        t.array = arr;
+                        t.inner.borrow_mut().array = arr;
                     }
                 }
                 Ok(vec![LuaValue::Nil])
@@ -3356,15 +3394,15 @@ impl<'a> LuaState<'a> {
                 if let LuaValue::Table(t) = &table {
                     let mut max_n: f64 = 0.0;
                     // Check array part
-                    if !t.array.is_empty() {
-                        max_n = t.array.len() as f64;
+                    if !t.inner.borrow().array.is_empty() {
+                        max_n = t.inner.borrow().array.len() as f64;
                     }
                     // Check hash part for numeric keys
-                    for (k, _) in &t.other_hash {
+                    for (k, _) in t.inner.borrow().other_hash.clone() {
                         if let LuaValue::Number(n) = k
-                            && n > &max_n
+                            && n > max_n
                         {
-                            max_n = *n;
+                            max_n = n;
                         }
                     }
                     Ok(vec![LuaValue::Number(max_n)])
@@ -3410,7 +3448,7 @@ impl<'a> LuaState<'a> {
                     _ => format!("{e:?}"),
                 };
                 if is_pcall {
-                    let mut t = LuaTable::new();
+                    let t = LuaTable::new();
                     t.set(
                         LuaValue::Str(b"err".to_vec()),
                         LuaValue::Str(err_msg.into_bytes()),
@@ -3803,7 +3841,7 @@ fn lua_gsub_replace(s: &[u8], m: &LuaPatMatch, repl: &[u8]) -> Vec<u8> {
 fn resp_to_lua(frame: &RespFrame) -> LuaValue {
     match frame {
         RespFrame::SimpleString(s) => {
-            let mut t = LuaTable::new();
+            let t = LuaTable::new();
             t.set(
                 LuaValue::Str(b"ok".to_vec()),
                 LuaValue::Str(s.as_bytes().to_vec()),
@@ -3811,7 +3849,7 @@ fn resp_to_lua(frame: &RespFrame) -> LuaValue {
             LuaValue::Table(t)
         }
         RespFrame::Error(s) => {
-            let mut t = LuaTable::new();
+            let t = LuaTable::new();
             t.set(
                 LuaValue::Str(b"err".to_vec()),
                 LuaValue::Str(s.as_bytes().to_vec()),
@@ -3823,7 +3861,7 @@ fn resp_to_lua(frame: &RespFrame) -> LuaValue {
         RespFrame::BulkString(Some(data)) => LuaValue::Str(data.clone()),
         RespFrame::Array(None) => LuaValue::Bool(false),
         RespFrame::Array(Some(items)) | RespFrame::Sequence(items) => {
-            let mut t = LuaTable::new();
+            let t = LuaTable::new();
             for (i, item) in items.iter().enumerate() {
                 t.set(LuaValue::Number((i + 1) as f64), resp_to_lua(item));
             }
@@ -3852,11 +3890,11 @@ pub fn lua_to_resp(val: &LuaValue) -> RespFrame {
             }
             // Convert array part to RESP array (stop at first nil, matching Redis)
             let mut items = Vec::new();
-            for item in &t.array {
+            for item in t.inner.borrow().array.clone() {
                 if matches!(item, LuaValue::Nil) {
                     break;
                 }
-                items.push(lua_to_resp(item));
+                items.push(lua_to_resp(&item));
             }
             RespFrame::Array(Some(items))
         }
@@ -4148,11 +4186,17 @@ fn lua_value_to_json(val: &LuaValue) -> String {
         }
         LuaValue::Str(s) => json_escape_bytes(s),
         LuaValue::Table(t) => {
-            if !t.array.is_empty() && t.hash_is_empty() {
+            if !t.inner.borrow().array.is_empty() && t.hash_is_empty() {
                 // JSON array
-                let items: Vec<String> = t.array.iter().map(lua_value_to_json).collect();
+                let items: Vec<String> = t
+                    .inner
+                    .borrow()
+                    .array
+                    .iter()
+                    .map(lua_value_to_json)
+                    .collect();
                 format!("[{}]", items.join(","))
-            } else if t.array.is_empty() && !t.hash_is_empty() {
+            } else if t.inner.borrow().array.is_empty() && !t.hash_is_empty() {
                 // JSON object
                 let hash_pairs = t.hash_pairs();
                 let pairs: Vec<String> = hash_pairs
@@ -4163,12 +4207,12 @@ fn lua_value_to_json(val: &LuaValue) -> String {
                     })
                     .collect();
                 format!("{{{}}}", pairs.join(","))
-            } else if t.array.is_empty() && t.hash_is_empty() {
+            } else if t.inner.borrow().array.is_empty() && t.hash_is_empty() {
                 "{}".to_string()
             } else {
                 // Mixed — encode as object with numeric string keys for array part
                 let mut pairs: Vec<String> = Vec::new();
-                for (i, v) in t.array.iter().enumerate() {
+                for (i, v) in t.inner.borrow().array.iter().enumerate() {
                     pairs.push(format!("\"{}\":{}", i + 1, lua_value_to_json(v)));
                 }
                 for (k, v) in &t.hash_pairs() {
@@ -4250,9 +4294,9 @@ fn json_to_lua_value(s: &str) -> Result<LuaValue, String> {
             return Ok(LuaValue::Table(LuaTable::new()));
         }
         let items = split_json_values(inner)?;
-        let mut t = LuaTable::new();
+        let t = LuaTable::new();
         for item in items {
-            t.array.push(json_to_lua_value(&item)?);
+            t.inner.borrow_mut().array.push(json_to_lua_value(&item)?);
         }
         Ok(LuaValue::Table(t))
     } else if s.starts_with('{') && s.ends_with('}') {
@@ -4261,7 +4305,7 @@ fn json_to_lua_value(s: &str) -> Result<LuaValue, String> {
             return Ok(LuaValue::Table(LuaTable::new()));
         }
         let pairs = split_json_values(inner)?;
-        let mut t = LuaTable::new();
+        let t = LuaTable::new();
         for pair in pairs {
             if let Some(colon_pos) = find_json_colon(&pair) {
                 let key = pair[..colon_pos].trim();
@@ -4371,7 +4415,7 @@ mod tests {
 
     #[test]
     fn cjson_encode_escapes_object_keys() {
-        let mut table = LuaTable::new();
+        let table = LuaTable::new();
         table.set(
             LuaValue::Str(b"say\"hi\\there\n".to_vec()),
             LuaValue::Number(1.0),
@@ -4401,7 +4445,7 @@ mod tests {
 
     #[test]
     fn lua_table_numeric_keys_do_not_use_epsilon_matching() {
-        let mut table = LuaTable::new();
+        let table = LuaTable::new();
         table.set(LuaValue::Number(1.0), LuaValue::Str(b"exact".to_vec()));
 
         let exact = table.get(&LuaValue::Number(1.0));
@@ -4678,7 +4722,7 @@ mod tests {
 
     #[test]
     fn cjson_encode_sorts_string_hash_keys() {
-        let mut table = LuaTable::new();
+        let table = LuaTable::new();
         table.set(LuaValue::Str(b"z".to_vec()), LuaValue::Number(1.0));
         table.set(LuaValue::Str(b"a".to_vec()), LuaValue::Number(2.0));
 

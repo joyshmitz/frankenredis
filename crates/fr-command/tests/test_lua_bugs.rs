@@ -16,3 +16,17 @@ fn test_lua_empty_loop() {
     let res = eval_script(script, &[], &[], &mut store, 0);
     println!("{:?}", res);
 }
+
+#[test]
+fn test_lua_table_ref() {
+    let mut store = Store::new();
+    let script = b"
+        local a = {}
+        local b = a
+        b[1] = 'hello'
+        return a[1]
+    ";
+    let res = eval_script(script, &[], &[], &mut store, 0);
+    println!("table ref res: {:?}", res);
+    assert!(res.is_ok());
+}
