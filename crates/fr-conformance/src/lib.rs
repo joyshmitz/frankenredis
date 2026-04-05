@@ -107,6 +107,8 @@ pub enum ExpectedFrame {
     Error { value: String },
     Integer { value: i64 },
     Bulk { value: Option<String> },
+    BulkContainsAll { value: Vec<String> },
+    BulkNotContainsAll { value: Vec<String> },
     Array { value: Vec<ExpectedFrame> },
     NullArray,
     AnyInteger,
@@ -987,6 +989,12 @@ fn expected_to_frame(expected: &ExpectedFrame) -> RespFrame {
         ExpectedFrame::Bulk { value } => {
             RespFrame::BulkString(value.as_ref().map(|v| v.as_bytes().to_vec()))
         }
+        ExpectedFrame::BulkContainsAll { value } => {
+            RespFrame::BulkString(Some(value.join(" ").into_bytes()))
+        }
+        ExpectedFrame::BulkNotContainsAll { value } => {
+            RespFrame::BulkString(Some(value.join(" ").into_bytes()))
+        }
         ExpectedFrame::Array { value } => {
             RespFrame::Array(Some(value.iter().map(expected_to_frame).collect()))
         }
@@ -1004,6 +1012,20 @@ fn frame_matches_expected(actual: &RespFrame, expected: &ExpectedFrame) -> bool 
         ExpectedFrame::AnyArray => {
             matches!(actual, RespFrame::Array(Some(_)) | RespFrame::Sequence(_))
         }
+        ExpectedFrame::BulkContainsAll { value } => match actual {
+            RespFrame::BulkString(Some(bytes)) => {
+                let text = String::from_utf8_lossy(bytes);
+                value.iter().all(|needle| text.contains(needle))
+            }
+            _ => false,
+        },
+        ExpectedFrame::BulkNotContainsAll { value } => match actual {
+            RespFrame::BulkString(Some(bytes)) => {
+                let text = String::from_utf8_lossy(bytes);
+                value.iter().all(|needle| !text.contains(needle))
+            }
+            _ => false,
+        },
         ExpectedFrame::Array { value } => match actual {
             RespFrame::Array(Some(items)) => {
                 items.len() == value.len()
@@ -1360,6 +1382,7 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use crate::frame_matches_expected;
     use fr_config::{
         DecisionAction, DriftSeverity, HardenedDeviationCategory, Mode, RuntimePolicy, ThreatClass,
         TlsAuthClients, TlsConfig, TlsProtocol,
@@ -5002,6 +5025,42 @@ mod tests {
         let expected: ExpectedFrame =
             serde_json::from_str(raw).expect("null-array expected-frame JSON should parse");
         assert_eq!(expected_to_frame(&expected), RespFrame::Array(None));
+    }
+
+    #[test]
+    fn expected_frame_bulk_contains_all_matches_bulk_payload_substrings() {
+        let raw = r#"{
+            "kind": "bulk_contains_all",
+            "value": ["alpha", "beta"]
+        }"#;
+        let expected: ExpectedFrame =
+            serde_json::from_str(raw).expect("bulk-contains-all expected-frame JSON should parse");
+        assert!(frame_matches_expected(
+            &RespFrame::BulkString(Some(b"zero alpha middle beta omega".to_vec())),
+            &expected
+        ));
+        assert!(!frame_matches_expected(
+            &RespFrame::BulkString(Some(b"alpha only".to_vec())),
+            &expected
+        ));
+    }
+
+    #[test]
+    fn expected_frame_bulk_not_contains_all_rejects_forbidden_substrings() {
+        let raw = r#"{
+            "kind": "bulk_not_contains_all",
+            "value": ["alpha", "beta"]
+        }"#;
+        let expected: ExpectedFrame = serde_json::from_str(raw)
+            .expect("bulk-not-contains-all expected-frame JSON should parse");
+        assert!(frame_matches_expected(
+            &RespFrame::BulkString(Some(b"zero gamma omega".to_vec())),
+            &expected
+        ));
+        assert!(!frame_matches_expected(
+            &RespFrame::BulkString(Some(b"zero alpha omega".to_vec())),
+            &expected
+        ));
     }
 
     #[test]

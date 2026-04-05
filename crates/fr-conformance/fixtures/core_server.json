@@ -972,8 +972,91 @@
       }
     },
     {
-      "name": "latency_graph_no_samples",
+      "name": "latency_set_threshold_one",
       "now_ms": 17003,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "latency-monitor-threshold",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "latency_trigger_debug_sleep",
+      "now_ms": 17004,
+      "argv": [
+        "DEBUG",
+        "SLEEP",
+        "0.01"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "latency_latest_after_sample",
+      "now_ms": 17005,
+      "argv": [
+        "LATENCY",
+        "LATEST"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "command" },
+              { "kind": "any_integer" },
+              { "kind": "any_integer" },
+              { "kind": "any_integer" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "latency_history_after_sample",
+      "now_ms": 17006,
+      "argv": [
+        "LATENCY",
+        "HISTORY",
+        "command"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "any_integer" },
+              { "kind": "any_integer" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "latency_reset_after_sample",
+      "now_ms": 17007,
+      "argv": [
+        "LATENCY",
+        "RESET",
+        "command"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "latency_graph_no_samples",
+      "now_ms": 17008,
       "argv": [
         "LATENCY",
         "GRAPH",
@@ -986,7 +1069,7 @@
     },
     {
       "name": "latency_wrong_arity",
-      "now_ms": 17004,
+      "now_ms": 17009,
       "argv": [
         "LATENCY"
       ],
@@ -997,7 +1080,7 @@
     },
     {
       "name": "latency_unknown_subcommand",
-      "now_ms": 17005,
+      "now_ms": 17010,
       "argv": [
         "LATENCY",
         "BOGUS"
@@ -1463,6 +1546,49 @@
       "expect": {
         "kind": "error",
         "value": "ERR no such key"
+      }
+    },
+    {
+      "name": "debug_object_setup_key",
+      "now_ms": 24001,
+      "argv": [
+        "SET",
+        "debug_object_key",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "debug_object_reports_live_metadata",
+      "now_ms": 24001,
+      "argv": [
+        "DEBUG",
+        "OBJECT",
+        "debug_object_key"
+      ],
+      "expect": {
+        "kind": "bulk_contains_all",
+        "value": [
+          "encoding:embstr",
+          "serializedlength:",
+          "lru_seconds_idle:"
+        ]
+      }
+    },
+    {
+      "name": "debug_set_active_expire_off_ok",
+      "now_ms": 24002,
+      "argv": [
+        "DEBUG",
+        "SET-ACTIVE-EXPIRE",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
       }
     },
     {
@@ -3239,6 +3365,113 @@
       ],
       "expect": {
         "kind": "any_bulk"
+      }
+    },
+    {
+      "name": "info_stats_reset_for_live_counter_checks",
+      "now_ms": 60001,
+      "argv": [
+        "CONFIG",
+        "RESETSTAT"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "info_stats_setup_hit_key",
+      "now_ms": 60001,
+      "argv": [
+        "SET",
+        "info_stats_hit",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "info_stats_hit_existing_key",
+      "now_ms": 60002,
+      "argv": [
+        "GET",
+        "info_stats_hit"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "value"
+      }
+    },
+    {
+      "name": "info_stats_miss_missing_key",
+      "now_ms": 60002,
+      "argv": [
+        "GET",
+        "info_stats_missing"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
+    },
+    {
+      "name": "info_stats_setup_expiring_key",
+      "now_ms": 60002,
+      "argv": [
+        "SET",
+        "info_stats_expired",
+        "gone",
+        "PX",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "info_stats_expired_key_counts_as_miss",
+      "now_ms": 60004,
+      "argv": [
+        "GET",
+        "info_stats_expired"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
+    },
+    {
+      "name": "info_stats_section_reports_live_counters",
+      "now_ms": 60005,
+      "argv": [
+        "INFO",
+        "stats"
+      ],
+      "expect": {
+        "kind": "bulk_contains_all",
+        "value": [
+          "keyspace_hits:",
+          "keyspace_misses:",
+          "expired_keys:1\r\n"
+        ]
+      }
+    },
+    {
+      "name": "info_stats_section_no_stub_zero_counters",
+      "now_ms": 60005,
+      "argv": [
+        "INFO",
+        "stats"
+      ],
+      "expect": {
+        "kind": "bulk_not_contains_all",
+        "value": [
+          "keyspace_hits:0\r\n",
+          "keyspace_misses:0\r\n"
+        ]
       }
     },
     {

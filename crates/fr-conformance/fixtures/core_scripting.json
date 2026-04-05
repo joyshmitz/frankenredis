@@ -28,6 +28,84 @@
       }
     },
     {
+      "name": "eval_client_setname_updates_session_context",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return redis.call('CLIENT','SETNAME','lua-client')",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "eval_client_getname_reads_session_context",
+      "now_ms": 0,
+      "argv": [
+        "EVAL",
+        "return redis.call('CLIENT','GETNAME')",
+        "0"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "lua-client"
+      }
+    },
+    {
+      "name": "eval_slowlog_threshold_zero",
+      "now_ms": 1,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "slowlog-log-slower-than",
+        "0"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "eval_slowlog_reset_before_lua_check",
+      "now_ms": 1,
+      "argv": [
+        "SLOWLOG",
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "eval_slowlog_seed_command",
+      "now_ms": 1,
+      "argv": [
+        "SET",
+        "lua_slowlog_key",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "eval_slowlog_len_uses_store_backed_data",
+      "now_ms": 1,
+      "argv": [
+        "EVAL",
+        "return redis.call('SLOWLOG','LEN')",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
       "name": "eval_return_nil",
       "now_ms": 0,
       "argv": [

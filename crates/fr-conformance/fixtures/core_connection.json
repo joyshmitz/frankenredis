@@ -1957,8 +1957,8 @@
         "RELOAD"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR DEBUG RELOAD requires configured appendonly or RDB persistence"
       }
     },
     {

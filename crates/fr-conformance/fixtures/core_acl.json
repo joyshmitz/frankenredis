@@ -1840,6 +1840,42 @@
       "now_ms": 703,
       "argv": ["ACL", "DRYRUN", "granreset", "DEL", "k"],
       "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "acl_save_load_roundtrip_setuser",
+      "now_ms": 800,
+      "argv": ["ACL", "SETUSER", "persistme", "on", ">persistpass", "+@all"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "acl_save_load_roundtrip_save",
+      "now_ms": 801,
+      "argv": ["ACL", "SAVE"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "acl_save_load_roundtrip_deluser",
+      "now_ms": 802,
+      "argv": ["ACL", "DELUSER", "persistme"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "acl_save_load_roundtrip_user_gone_before_load",
+      "now_ms": 803,
+      "argv": ["ACL", "GETUSER", "persistme"],
+      "expect": { "kind": "bulk", "value": null }
+    },
+    {
+      "name": "acl_save_load_roundtrip_load",
+      "now_ms": 804,
+      "argv": ["ACL", "LOAD"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "acl_save_load_roundtrip_user_restored",
+      "now_ms": 805,
+      "argv": ["ACL", "GETUSER", "persistme"],
+      "expect": { "kind": "any_array" }
     }
   ]
 }

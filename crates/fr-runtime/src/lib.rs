@@ -1732,20 +1732,7 @@ impl Runtime {
     }
 
     fn handle_debug_reload_requested(&mut self, now_ms: u64) -> RespFrame {
-        let is_ephemeral = self.server.aof_path.is_none() && self.server.rdb_path.is_none();
-        let temp_path =
-            std::env::temp_dir().join(format!("debug_reload_{}.rdb", std::process::id()));
-
-        if is_ephemeral {
-            let entries = store_to_rdb_entries(&mut self.server.store, now_ms);
-            let aux = [
-                ("redis-ver", fr_store::REDIS_COMPAT_VERSION),
-                ("frankenredis", "true"),
-            ];
-            if write_rdb_file(&temp_path, &entries, &aux).is_err() {
-                return RespFrame::Error("ERR error saving RDB snapshot to disk".to_string());
-            }
-        } else if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
+        if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
             return reply;
         }
 
@@ -1756,33 +1743,26 @@ impl Runtime {
             };
         }
 
-        let path = if is_ephemeral {
-            temp_path.clone()
-        } else {
-            self.server.rdb_path.clone().unwrap()
+        let Some(path) = self.server.rdb_path.clone() else {
+            return RespFrame::Error(
+                "ERR DEBUG RELOAD requires configured appendonly or RDB persistence".to_string(),
+            );
         };
 
-        let result = match read_rdb_file(&path) {
+        match read_rdb_file(&path) {
             Ok((entries, _aux)) => {
                 let mut store = Store::new();
                 if apply_rdb_entries_to_store(&mut store, &entries, now_ms.saturating_add(1))
                     .is_err()
                 {
-                    RespFrame::Error("ERR failed to reload dataset from RDB".to_string())
-                } else {
-                    self.server.store = store;
-                    self.session.selected_db = 0;
-                    RespFrame::SimpleString("OK".to_string())
+                    return RespFrame::Error("ERR failed to reload dataset from RDB".to_string());
                 }
+                self.server.store = store;
+                self.session.selected_db = 0;
+                RespFrame::SimpleString("OK".to_string())
             }
             Err(_) => RespFrame::Error("ERR failed to reload dataset from RDB".to_string()),
-        };
-
-        if is_ephemeral {
-            let _ = std::fs::remove_file(temp_path);
         }
-
-        result
     }
 
     #[must_use]
@@ -2903,9 +2883,6 @@ impl Runtime {
 
         match result {
             Ok(reply) => {
-                if self.server.store.take_debug_reload_requested() {
-                    return self.handle_debug_reload_requested(now_ms);
-                }
                 if dirty_after > dirty_before {
                     // Record AOF only for non-special commands (special ones record themselves)
                     if special_command.is_none() && !handled_migrate {
@@ -3510,9 +3487,24 @@ impl Runtime {
         now_ms: u64,
     ) -> Result<RespFrame, CommandError> {
         self.server.store.dispatch_client_ctx = self.current_dispatch_client_context();
-        let result = dispatch_argv(argv, &mut self.server.store, now_ms);
+        let mut result = dispatch_argv(argv, &mut self.server.store, now_ms);
         self.sync_dispatch_client_context_to_session();
+        if result.is_ok()
+            && let Some(reply) = self.handle_deferred_store_runtime_action(now_ms)
+        {
+            result = Ok(reply);
+        }
         result
+    }
+
+    fn handle_deferred_store_runtime_action(&mut self, now_ms: u64) -> Option<RespFrame> {
+        if self.server.store.take_debug_reload_requested() {
+            return Some(self.handle_debug_reload_requested(now_ms));
+        }
+        if self.server.store.take_bgrewriteaof_requested() {
+            return Some(self.handle_bgrewriteaof_requested(now_ms));
+        }
+        None
     }
 
     fn execute_db_scoped_command(
@@ -5771,6 +5763,10 @@ impl Runtime {
         if argv.len() != 1 {
             return CommandError::WrongArity("BGREWRITEAOF").to_resp();
         }
+        self.handle_bgrewriteaof_requested(now_ms)
+    }
+
+    fn handle_bgrewriteaof_requested(&mut self, now_ms: u64) -> RespFrame {
         let Some(path) = &self.server.aof_path else {
             return RespFrame::Error(
                 "ERR appendonly is disabled, cannot rewrite append only file".to_string(),
@@ -5876,7 +5872,7 @@ impl Runtime {
                 ])));
             }
             if replies.len() == 1 {
-                return replies.into_iter().next().expect("single reply");
+                return replies.pop().unwrap_or(RespFrame::BulkString(None));
             }
             return RespFrame::Sequence(replies);
         }
@@ -5890,7 +5886,7 @@ impl Runtime {
             ])));
         }
         if replies.len() == 1 {
-            return replies.into_iter().next().expect("single reply");
+            return replies.pop().unwrap_or(RespFrame::BulkString(None));
         }
         RespFrame::Sequence(replies)
     }
@@ -5909,7 +5905,7 @@ impl Runtime {
             ])));
         }
         if replies.len() == 1 {
-            return replies.into_iter().next().expect("single reply");
+            return replies.pop().unwrap_or(RespFrame::BulkString(None));
         }
         RespFrame::Sequence(replies)
     }
@@ -5941,7 +5937,7 @@ impl Runtime {
                 ])));
             }
             if replies.len() == 1 {
-                return replies.into_iter().next().expect("single reply");
+                return replies.pop().unwrap_or(RespFrame::BulkString(None));
             }
             return RespFrame::Sequence(replies);
         }
@@ -5955,7 +5951,7 @@ impl Runtime {
             ])));
         }
         if replies.len() == 1 {
-            return replies.into_iter().next().expect("single reply");
+            return replies.pop().unwrap_or(RespFrame::BulkString(None));
         }
         RespFrame::Sequence(replies)
     }
@@ -6097,7 +6093,7 @@ impl Runtime {
             ])));
         }
         if replies.len() == 1 {
-            return replies.into_iter().next().expect("single reply");
+            return replies.pop().unwrap_or(RespFrame::BulkString(None));
         }
         RespFrame::Sequence(replies)
     }
@@ -6129,7 +6125,7 @@ impl Runtime {
                 ])));
             }
             if replies.len() == 1 {
-                return replies.into_iter().next().expect("single reply");
+                return replies.pop().unwrap_or(RespFrame::BulkString(None));
             }
             return RespFrame::Sequence(replies);
         }
@@ -6143,7 +6139,7 @@ impl Runtime {
             ])));
         }
         if replies.len() == 1 {
-            return replies.into_iter().next().expect("single reply");
+            return replies.pop().unwrap_or(RespFrame::BulkString(None));
         }
         RespFrame::Sequence(replies)
     }
@@ -7344,9 +7340,59 @@ fn digest_bytes(bytes: &[u8]) -> String {
 }
 
 fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
-    let text = std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
-    text.parse::<i64>()
-        .map_err(|_| CommandError::InvalidInteger)
+    let slen = arg.len();
+    if slen == 0 || slen > 20 {
+        return Err(CommandError::InvalidInteger);
+    }
+    if slen == 1 && arg[0] == b'0' {
+        return Ok(0);
+    }
+
+    let mut p = 0;
+    let negative = arg[0] == b'-';
+    if negative {
+        p += 1;
+        if p == slen {
+            return Err(CommandError::InvalidInteger);
+        }
+    }
+
+    if arg[p] >= b'1' && arg[p] <= b'9' {
+        let mut v: u64 = (arg[p] - b'0') as u64;
+        p += 1;
+        while p < slen {
+            let b = arg[p];
+            if b.is_ascii_digit() {
+                if v > (u64::MAX / 10) {
+                    return Err(CommandError::InvalidInteger);
+                }
+                v *= 10;
+                let digit = (b - b'0') as u64;
+                if v > (u64::MAX - digit) {
+                    return Err(CommandError::InvalidInteger);
+                }
+                v += digit;
+                p += 1;
+            } else {
+                return Err(CommandError::InvalidInteger);
+            }
+        }
+
+        if negative {
+            let limit = (i64::MIN as u64).wrapping_neg();
+            if v > limit {
+                return Err(CommandError::InvalidInteger);
+            }
+            return Ok(v.wrapping_neg() as i64);
+        } else {
+            if v > i64::MAX as u64 {
+                return Err(CommandError::InvalidInteger);
+            }
+            return Ok(v as i64);
+        }
+    }
+
+    Err(CommandError::InvalidInteger)
 }
 
 fn hello_bulk(value: &str) -> RespFrame {
@@ -11806,6 +11852,48 @@ mod tests {
         assert_eq!(
             restored.execute_frame(command(&[b"GET", b"swap_key"]), 106),
             RespFrame::BulkString(Some(b"db0".to_vec()))
+        );
+
+        let _ = std::fs::remove_file(&aof_path);
+    }
+
+    #[test]
+    fn eval_bgrewriteaof_rewrites_aof_snapshot() {
+        let dir = std::env::temp_dir().join("fr_runtime_eval_bgrewriteaof_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let aof_path = dir.join("eval_bgrewriteaof.aof");
+        let stale_records = vec![AofRecord {
+            argv: vec![b"SET".to_vec(), b"stale".to_vec(), b"old".to_vec()],
+        }];
+        write_aof_file(&aof_path, &stale_records).expect("seed stale aof");
+
+        let mut rt = Runtime::default_strict();
+        rt.set_aof_path(aof_path.clone());
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"fresh", b"value"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"EVAL", b"return redis.call('BGREWRITEAOF')", b"0"]),
+                1,
+            ),
+            RespFrame::SimpleString("Background append only file rewriting started".to_string())
+        );
+
+        let mut restored = Runtime::default_strict();
+        restored.set_aof_path(aof_path.clone());
+        let loaded = restored.load_aof(100).expect("load rewritten aof");
+        assert!(loaded > 0, "rewritten AOF should contain snapshot records");
+
+        assert_eq!(
+            restored.execute_frame(command(&[b"GET", b"stale"]), 101),
+            RespFrame::BulkString(None)
+        );
+        assert_eq!(
+            restored.execute_frame(command(&[b"GET", b"fresh"]), 102),
+            RespFrame::BulkString(Some(b"value".to_vec()))
         );
 
         let _ = std::fs::remove_file(&aof_path);
