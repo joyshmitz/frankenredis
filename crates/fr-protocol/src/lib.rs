@@ -271,7 +271,7 @@ fn read_line(input: &[u8], start: usize) -> Result<(&[u8], usize), RespParseErro
 
 #[cfg(test)]
 mod tests {
-    use super::{RespFrame, RespParseError, parse_frame};
+    use super::{ParserConfig, RespFrame, RespParseError, parse_frame, parse_frame_with_config};
 
     const PACKET_ID: &str = "FR-P2C-002";
     const SCHEMA_VERSION: &str = "fr_testlog_v1";
@@ -745,6 +745,118 @@ mod tests {
             input_acc.as_slice(),
             output_acc.as_slice(),
             "protocol.depth_or_size_resource_clamp",
+        );
+        event.assert_schema_contract();
+    }
+
+    #[test]
+    fn fr_p2c_002_u013_bulk_limit_clamp_holds_at_boundary() {
+        let config = ParserConfig {
+            max_bulk_len: 5,
+            ..ParserConfig::default()
+        };
+        let accepted =
+            parse_frame_with_config(b"$5\r\nhello\r\n", &config).expect("bulk at limit parses");
+        assert_eq!(
+            accepted.frame,
+            RespFrame::BulkString(Some(b"hello".to_vec()))
+        );
+        assert_eq!(accepted.consumed, b"$5\r\nhello\r\n".len());
+
+        let rejected = parse_frame_with_config(b"$6\r\nhello!\r\n", &config)
+            .expect_err("bulk above limit must fail");
+        assert_eq!(rejected, RespParseError::BulkLengthTooLarge);
+
+        let mut input_acc = Vec::new();
+        input_acc.extend_from_slice(b"$5\r\nhello\r\n");
+        input_acc.extend_from_slice(b"$6\r\nhello!\r\n");
+
+        let mut output_acc = Vec::new();
+        output_acc.extend_from_slice(accepted.frame.to_bytes().as_slice());
+        output_acc.extend_from_slice(rejected.to_string().as_bytes());
+
+        let event = build_event(
+            "fr_p2c_002_u013_bulk_limit_clamp_holds_at_boundary",
+            "unit",
+            67,
+            input_acc.as_slice(),
+            output_acc.as_slice(),
+            "protocol.bulk_length_clamp_enforced",
+        );
+        event.assert_schema_contract();
+    }
+
+    #[test]
+    fn fr_p2c_002_u014_array_limit_clamp_holds_at_boundary() {
+        let config = ParserConfig {
+            max_array_len: 1,
+            ..ParserConfig::default()
+        };
+        let accepted =
+            parse_frame_with_config(b"*1\r\n+OK\r\n", &config).expect("array at limit parses");
+        assert_eq!(
+            accepted.frame,
+            RespFrame::Array(Some(vec![RespFrame::SimpleString("OK".to_string())]))
+        );
+        assert_eq!(accepted.consumed, b"*1\r\n+OK\r\n".len());
+
+        let rejected = parse_frame_with_config(b"*2\r\n+OK\r\n+OK\r\n", &config)
+            .expect_err("array above limit must fail");
+        assert_eq!(rejected, RespParseError::MultibulkLengthTooLarge);
+
+        let mut input_acc = Vec::new();
+        input_acc.extend_from_slice(b"*1\r\n+OK\r\n");
+        input_acc.extend_from_slice(b"*2\r\n+OK\r\n+OK\r\n");
+
+        let mut output_acc = Vec::new();
+        output_acc.extend_from_slice(accepted.frame.to_bytes().as_slice());
+        output_acc.extend_from_slice(rejected.to_string().as_bytes());
+
+        let event = build_event(
+            "fr_p2c_002_u014_array_limit_clamp_holds_at_boundary",
+            "unit",
+            71,
+            input_acc.as_slice(),
+            output_acc.as_slice(),
+            "protocol.array_length_clamp_enforced",
+        );
+        event.assert_schema_contract();
+    }
+
+    #[test]
+    fn fr_p2c_002_u015_recursion_limit_clamp_holds_at_boundary() {
+        let config = ParserConfig {
+            max_recursion_depth: 2,
+            ..ParserConfig::default()
+        };
+        let accepted_frame = nested_singleton_array(2);
+        let accepted_bytes = accepted_frame.to_bytes();
+        let accepted = parse_frame_with_config(accepted_bytes.as_slice(), &config)
+            .expect("frame at recursion limit parses");
+        assert_eq!(accepted.frame, accepted_frame);
+        assert_eq!(accepted.consumed, accepted_bytes.len());
+
+        let rejected_frame = nested_singleton_array(3);
+        let rejected_bytes = rejected_frame.to_bytes();
+        let rejected = parse_frame_with_config(rejected_bytes.as_slice(), &config)
+            .expect_err("frame above recursion limit must fail");
+        assert_eq!(rejected, RespParseError::RecursionLimitExceeded);
+
+        let mut input_acc = Vec::new();
+        input_acc.extend_from_slice(accepted_bytes.as_slice());
+        input_acc.extend_from_slice(rejected_bytes.as_slice());
+
+        let mut output_acc = Vec::new();
+        output_acc.extend_from_slice(accepted.frame.to_bytes().as_slice());
+        output_acc.extend_from_slice(rejected.to_string().as_bytes());
+
+        let event = build_event(
+            "fr_p2c_002_u015_recursion_limit_clamp_holds_at_boundary",
+            "unit",
+            73,
+            input_acc.as_slice(),
+            output_acc.as_slice(),
+            "protocol.recursion_limit_clamp_enforced",
         );
         event.assert_schema_contract();
     }
