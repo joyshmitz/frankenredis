@@ -8264,7 +8264,9 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str(&format!("uptime_in_days:{}\r\n", uptime_s / 86400));
         info.push_str(&format!("hz:{}\r\n", store.server_hz));
         info.push_str(&format!("configured_hz:{}\r\n", store.server_hz));
-        info.push_str("lru_clock:0\r\n");
+        // Redis LRU clock: seconds / 10, masked to 24 bits.
+        let lru_clock = (now_ms / 10_000) & 0xFF_FFFF;
+        info.push_str(&format!("lru_clock:{lru_clock}\r\n"));
         let exe = std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "/usr/local/bin/frankenredis".to_string());
@@ -8294,7 +8296,10 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             store.stat_tracking_clients
         ));
         info.push_str("clients_in_timeout_table:0\r\n");
-        info.push_str("total_blocking_clients:0\r\n");
+        info.push_str(&format!(
+            "total_blocking_clients:{}\r\n",
+            store.stat_blocked_clients
+        ));
         info.push_str("total_blocking_clients_on_nokey:0\r\n");
         info.push_str("\r\n");
     }
@@ -8313,6 +8318,18 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             1.0
         };
 
+        // Update peak memory high-water mark.
+        if used_memory > store.stat_used_memory_peak {
+            store.stat_used_memory_peak = used_memory;
+        }
+        let peak = store.stat_used_memory_peak;
+        let peak_human = format_bytes_human(peak);
+        let peak_perc = if peak > 0 {
+            (used_memory as f64 / peak as f64) * 100.0
+        } else {
+            100.0
+        };
+
         info.push_str("# Memory\r\n");
         info.push_str(&format!("used_memory:{used_memory}\r\n"));
         info.push_str(&format!("used_memory_human:{used_memory_human}\r\n"));
@@ -8320,9 +8337,9 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str(&format!(
             "used_memory_rss_human:{used_memory_rss_human}\r\n"
         ));
-        info.push_str(&format!("used_memory_peak:{used_memory}\r\n"));
-        info.push_str(&format!("used_memory_peak_human:{used_memory_human}\r\n"));
-        info.push_str("used_memory_peak_perc:100.00%\r\n");
+        info.push_str(&format!("used_memory_peak:{peak}\r\n"));
+        info.push_str(&format!("used_memory_peak_human:{peak_human}\r\n"));
+        info.push_str(&format!("used_memory_peak_perc:{peak_perc:.2}%\r\n"));
         info.push_str("used_memory_overhead:0\r\n");
         info.push_str("used_memory_startup:0\r\n");
         info.push_str(&format!("used_memory_dataset:{used_memory}\r\n"));

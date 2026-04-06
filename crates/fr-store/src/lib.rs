@@ -894,6 +894,8 @@ pub struct Store {
     pub debug_reload_requested: bool,
     /// Set by BGREWRITEAOF in delegated dispatch paths; runtime consumes it after dispatch.
     pub bgrewriteaof_requested: bool,
+    /// Peak memory usage high-water mark (bytes).
+    pub stat_used_memory_peak: usize,
     /// Connections rejected due to maxclients limit.
     pub stat_rejected_connections: u64,
     /// Full resyncs completed (PSYNC FULLRESYNC).
@@ -1015,6 +1017,7 @@ impl Default for Store {
             active_expire_enabled: true,
             debug_reload_requested: false,
             bgrewriteaof_requested: false,
+            stat_used_memory_peak: 0,
             stat_rejected_connections: 0,
             stat_sync_full: 0,
             stat_sync_partial_ok: 0,
