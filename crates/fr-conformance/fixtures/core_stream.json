@@ -4429,7 +4429,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR timeout is not a float or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     },
     {

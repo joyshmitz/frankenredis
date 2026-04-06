@@ -4266,7 +4266,7 @@ fn xread(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                 return Err(CommandError::WrongArity("XREAD"));
             }
             // Validate the timeout but ignore it (non-blocking only)
-            let _timeout = parse_blocking_timeout(&argv[idx + 1])?;
+            let _deadline_ms = parse_blocking_deadline_milliseconds(&argv[idx + 1], now_ms)?;
             idx += 2;
             continue;
         }
@@ -4352,7 +4352,7 @@ fn xreadgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
                 return Err(CommandError::WrongArity("XREADGROUP"));
             }
             // Validate the timeout but ignore it (non-blocking only)
-            let _timeout = parse_blocking_timeout(&argv[idx + 1])?;
+            let _deadline_ms = parse_blocking_deadline_milliseconds(&argv[idx + 1], now_ms)?;
             idx += 2;
             continue;
         }
@@ -12417,6 +12417,10 @@ fn blocking_timeout_out_of_range_error() -> CommandError {
     CommandError::Custom("ERR timeout is out of range".to_string())
 }
 
+fn blocking_timeout_integer_error() -> CommandError {
+    CommandError::Custom("ERR timeout is not an integer or out of range".to_string())
+}
+
 /// Parse and validate a seconds-based blocking timeout, returning the absolute
 /// deadline in milliseconds using Redis' ceil-to-next-millisecond semantics.
 fn parse_blocking_deadline_seconds(arg: &[u8], now_ms: u64) -> Result<u64, CommandError> {
@@ -12437,6 +12441,23 @@ fn parse_blocking_deadline_seconds(arg: &[u8], now_ms: u64) -> Result<u64, Comma
 
     now_ms
         .checked_add(delta_ms as u64)
+        .ok_or_else(blocking_timeout_out_of_range_error)
+}
+
+/// Parse and validate a millisecond blocking timeout, returning the absolute
+/// deadline in milliseconds using Redis' integer-only semantics.
+fn parse_blocking_deadline_milliseconds(arg: &[u8], now_ms: u64) -> Result<u64, CommandError> {
+    let text = std::str::from_utf8(arg).map_err(|_| blocking_timeout_integer_error())?;
+    let timeout_ms: i64 = text.parse().map_err(|_| blocking_timeout_integer_error())?;
+    if timeout_ms < 0 {
+        return Err(CommandError::Custom("ERR timeout is negative".to_string()));
+    }
+    if timeout_ms == 0 {
+        return Ok(u64::MAX);
+    }
+
+    now_ms
+        .checked_add(timeout_ms as u64)
         .ok_or_else(blocking_timeout_out_of_range_error)
 }
 
@@ -12995,7 +13016,7 @@ mod tests {
     use super::{
         COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec, classify_command, dispatch_argv,
         drain_pubsub_messages, eq_ascii_command, execute_migrate, frame_to_argv, is_write_command,
-        parse_migrate_request, pubsub_message_to_frame,
+        parse_blocking_deadline_milliseconds, parse_migrate_request, pubsub_message_to_frame,
     };
 
     fn classify_command_linear(cmd: &[u8]) -> Option<CommandId> {
@@ -17832,7 +17853,7 @@ mod tests {
             )
         );
 
-        // XREAD BLOCK is now accepted (non-blocking stub) — verify it doesn't error
+        // Integer BLOCK values are accepted (non-blocking stub) — verify it doesn't error.
         let block_result = dispatch_argv(
             &[
                 b"XREAD".to_vec(),
@@ -17846,6 +17867,25 @@ mod tests {
             0,
         );
         assert!(block_result.is_ok());
+
+        let fractional_block = dispatch_argv(
+            &[
+                b"XREAD".to_vec(),
+                b"BLOCK".to_vec(),
+                b"1.5".to_vec(),
+                b"STREAMS".to_vec(),
+                b"s".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        assert_eq!(
+            fractional_block,
+            Err(CommandError::Custom(
+                "ERR timeout is not an integer or out of range".to_string()
+            ))
+        );
 
         let bad_keyword = dispatch_argv(
             &[
@@ -18126,7 +18166,7 @@ mod tests {
             )
         );
 
-        // XREADGROUP BLOCK is now accepted (non-blocking stub) — verify it doesn't error
+        // Integer BLOCK values are accepted (non-blocking stub) — verify it doesn't error.
         let block_result = dispatch_argv(
             &[
                 b"XREADGROUP".to_vec(),
@@ -18143,6 +18183,28 @@ mod tests {
             0,
         );
         assert!(block_result.is_ok());
+
+        let fractional_block = dispatch_argv(
+            &[
+                b"XREADGROUP".to_vec(),
+                b"GROUP".to_vec(),
+                b"g1".to_vec(),
+                b"c1".to_vec(),
+                b"BLOCK".to_vec(),
+                b"1.5".to_vec(),
+                b"STREAMS".to_vec(),
+                b"s".to_vec(),
+                b">".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        assert_eq!(
+            fractional_block,
+            Err(CommandError::Custom(
+                "ERR timeout is not an integer or out of range".to_string()
+            ))
+        );
 
         let syntax_streams = dispatch_argv(
             &[
@@ -18196,6 +18258,27 @@ mod tests {
             wrongtype,
             CommandError::Store(fr_store::StoreError::WrongType)
         ));
+    }
+
+    #[test]
+    fn blocking_deadline_milliseconds_requires_integer_and_rejects_overflow() {
+        assert_eq!(
+            parse_blocking_deadline_milliseconds(b"0", 123),
+            Ok(u64::MAX)
+        );
+        assert_eq!(parse_blocking_deadline_milliseconds(b"5", 123), Ok(128));
+        assert_eq!(
+            parse_blocking_deadline_milliseconds(b"1.5", 123),
+            Err(CommandError::Custom(
+                "ERR timeout is not an integer or out of range".to_string()
+            ))
+        );
+        assert_eq!(
+            parse_blocking_deadline_milliseconds(b"1", u64::MAX),
+            Err(CommandError::Custom(
+                "ERR timeout is out of range".to_string()
+            ))
+        );
     }
 
     #[test]

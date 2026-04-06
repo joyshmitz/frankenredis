@@ -1566,11 +1566,10 @@ fn parse_xread_block_deadline(items: &[RespFrame], now_ms: u64) -> Option<u64> {
         if ms < 0 {
             return None;
         }
-        return Some(if ms == 0 {
-            u64::MAX
-        } else {
-            now_ms.saturating_add(ms as u64)
-        });
+        if ms == 0 {
+            return Some(u64::MAX);
+        }
+        return now_ms.checked_add(ms as u64);
     }
     None // BLOCK keyword not found
 }
@@ -2304,9 +2303,10 @@ mod tests {
         CheckBlockedClientsContext, InlineParseResult, PendingClientUnblocksContext,
         REPLICA_ACK_INTERVAL_MS, REPLICA_RECONNECT_BACKOFF_MS, ReplicaPrimaryConnection,
         ReplicaSyncState, apply_pending_client_unblocks, check_blocked_clients,
-        drain_replica_stream, drive_replica_sync, parse_blocking_deadline, read_frame_from_stream,
-        replica_handshake_frame, replica_handshake_read_timeout, replication_follow_up_bytes,
-        server_help_text, should_try_inline_parsing, try_build_blocked_state,
+        drain_replica_stream, drive_replica_sync, parse_blocking_deadline,
+        parse_xread_block_deadline, read_frame_from_stream, replica_handshake_frame,
+        replica_handshake_read_timeout, replication_follow_up_bytes, server_help_text,
+        should_try_inline_parsing, try_build_blocked_state,
     };
     use fr_config::RuntimePolicy;
     use fr_protocol::{ParserConfig, RespFrame};
@@ -3174,6 +3174,36 @@ mod tests {
         ]));
         let blocked = try_build_blocked_state(&frame, 1_000).expect("must block");
         assert_eq!(blocked.deadline_ms, 1_001);
+    }
+
+    #[test]
+    fn parse_xread_block_deadline_rejects_fractional_and_out_of_range_values() {
+        let fractional = vec![
+            RespFrame::BulkString(Some(b"XREAD".to_vec())),
+            RespFrame::BulkString(Some(b"BLOCK".to_vec())),
+            RespFrame::BulkString(Some(b"1.5".to_vec())),
+        ];
+        assert_eq!(parse_xread_block_deadline(&fractional, 123), None);
+
+        let overflow = vec![
+            RespFrame::BulkString(Some(b"XREAD".to_vec())),
+            RespFrame::BulkString(Some(b"BLOCK".to_vec())),
+            RespFrame::BulkString(Some(b"1".to_vec())),
+        ];
+        assert_eq!(parse_xread_block_deadline(&overflow, u64::MAX), None);
+    }
+
+    #[test]
+    fn blocking_state_builder_rejects_fractional_xread_block_timeout() {
+        let frame = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"XREAD".to_vec())),
+            RespFrame::BulkString(Some(b"BLOCK".to_vec())),
+            RespFrame::BulkString(Some(b"1.5".to_vec())),
+            RespFrame::BulkString(Some(b"STREAMS".to_vec())),
+            RespFrame::BulkString(Some(b"stream".to_vec())),
+            RespFrame::BulkString(Some(b"0-0".to_vec())),
+        ]));
+        assert!(try_build_blocked_state(&frame, 1_000).is_none());
     }
 
     #[test]
