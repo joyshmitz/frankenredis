@@ -2121,6 +2121,21 @@ impl Runtime {
         self.server.store.stat_connected_clients += 1;
     }
 
+    /// Track network input bytes for INFO stats.
+    pub fn track_net_input_bytes(&mut self, bytes: u64) {
+        self.server.store.stat_total_net_input_bytes += bytes;
+    }
+
+    /// Track network output bytes for INFO stats.
+    pub fn track_net_output_bytes(&mut self, bytes: u64) {
+        self.server.store.stat_total_net_output_bytes += bytes;
+    }
+
+    /// Record an instantaneous ops/sec sample. Call once per server-hz tick.
+    pub fn record_ops_sec_sample(&mut self, elapsed_ms: u64) {
+        self.server.store.record_ops_sec_sample(elapsed_ms);
+    }
+
     /// Track a client disconnection for INFO stats.
     pub fn track_connection_closed(&mut self) {
         self.server.store.stat_connected_clients =
@@ -4194,17 +4209,7 @@ impl Runtime {
                 }
                 .to_resp();
             }
-            // Reset tracked statistics: slowlog, command counters, connection counters
-            self.server.store.reset_slowlog();
-            self.server.store.stat_total_commands_processed = 0;
-            self.server.store.stat_total_connections_received = 0;
-            self.server.store.stat_total_error_replies = 0;
-            self.server.store.stat_total_reads_processed = 0;
-            self.server.store.stat_total_writes_processed = 0;
-            self.server.store.stat_expired_keys = 0;
-            self.server.store.stat_evicted_keys = 0;
-            self.server.store.stat_expired_stale_perc = 0;
-            self.server.store.stat_expire_cycle_cpu_milliseconds = 0;
+            self.server.store.reset_info_stats();
             return RespFrame::SimpleString("OK".to_string());
         }
         if sub.eq_ignore_ascii_case("REWRITE") {
@@ -5732,8 +5737,8 @@ impl Runtime {
         if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
             return reply;
         }
-        self.server.store.mark_saved_at(now_ms);
-        self.server.last_save_time_sec = now_ms / 1000;
+        self.server.store.record_save(now_ms, false);
+        self.server.last_save_time_sec = self.server.store.last_save_time_sec;
         RespFrame::SimpleString("OK".to_string())
     }
 
@@ -5754,8 +5759,8 @@ impl Runtime {
         if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
             return reply;
         }
-        self.server.store.mark_saved_at(now_ms);
-        self.server.last_save_time_sec = now_ms / 1000;
+        self.server.store.record_save(now_ms, true);
+        self.server.last_save_time_sec = self.server.store.last_save_time_sec;
         RespFrame::SimpleString("Background saving started".to_string())
     }
 
@@ -5812,6 +5817,7 @@ impl Runtime {
         if let Err(_e) = write_aof_file(path, &records) {
             return RespFrame::Error("ERR error rewriting AOF file".to_string());
         }
+        self.server.store.record_aof_rewrite(now_ms);
         RespFrame::SimpleString("Background append only file rewriting started".to_string())
     }
 
@@ -6580,9 +6586,18 @@ impl Runtime {
             self.server.store.last_save_time_sec
         ));
         info.push_str("rdb_last_bgsave_status:ok\r\n");
-        info.push_str("rdb_last_bgsave_time_sec:-1\r\n");
+        info.push_str(&format!(
+            "rdb_last_bgsave_time_sec:{}\r\n",
+            self.server
+                .store
+                .stat_rdb_last_bgsave_time_sec
+                .map_or(-1, |ts| ts as i64)
+        ));
         info.push_str("rdb_current_bgsave_time_sec:-1\r\n");
-        info.push_str("rdb_saves:0\r\n");
+        info.push_str(&format!(
+            "rdb_saves:{}\r\n",
+            self.server.store.stat_rdb_saves
+        ));
         info.push_str("rdb_last_cow_size:0\r\n");
         info.push_str(&format!(
             "aof_enabled:{}\r\n",
@@ -6590,7 +6605,13 @@ impl Runtime {
         ));
         info.push_str("aof_rewrite_in_progress:0\r\n");
         info.push_str("aof_rewrite_scheduled:0\r\n");
-        info.push_str("aof_last_rewrite_time_sec:-1\r\n");
+        info.push_str(&format!(
+            "aof_last_rewrite_time_sec:{}\r\n",
+            self.server
+                .store
+                .stat_aof_last_rewrite_time_sec
+                .map_or(-1, |ts| ts as i64)
+        ));
         info.push_str("aof_current_rewrite_time_sec:-1\r\n");
         info.push_str("aof_last_bgrewrite_status:ok\r\n");
         info.push_str("aof_last_write_status:ok\r\n");
@@ -11837,6 +11858,8 @@ mod tests {
         };
         let info = String::from_utf8(info_bytes).expect("utf8 info");
         assert!(info.contains("rdb_last_save_time:1700000005\r\n"), "{info}");
+        assert!(info.contains("rdb_saves:1\r\n"), "{info}");
+        assert!(info.contains("rdb_last_bgsave_time_sec:-1\r\n"), "{info}");
     }
 
     #[test]
@@ -11953,6 +11976,13 @@ mod tests {
             restored.execute_frame(command(&[b"GET", b"swap_key"]), 106),
             RespFrame::BulkString(Some(b"db0".to_vec()))
         );
+
+        let info = rt.execute_frame(command(&[b"INFO", b"persistence"]), 8);
+        let RespFrame::BulkString(Some(info_bytes)) = info else {
+            panic!("expected bulk INFO response");
+        };
+        let info = String::from_utf8(info_bytes).expect("utf8 info");
+        assert!(info.contains("aof_last_rewrite_time_sec:0\r\n"), "{info}");
 
         let _ = std::fs::remove_file(&aof_path);
     }

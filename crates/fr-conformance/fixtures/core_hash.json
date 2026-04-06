@@ -1103,8 +1103,8 @@
         "inf"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "inf"
+        "kind": "error",
+        "value": "ERR increment would produce NaN or Infinity"
       }
     },
     {
@@ -1632,8 +1632,8 @@
         "inf"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "inf"
+        "kind": "error",
+        "value": "ERR increment would produce NaN or Infinity"
       }
     },
     {
@@ -1992,8 +1992,8 @@
         "inf"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "inf"
+        "kind": "error",
+        "value": "ERR increment would produce NaN or Infinity"
       }
     },
     {
@@ -2006,7 +2006,7 @@
       ],
       "expect": {
         "kind": "bulk",
-        "value": "inf"
+        "value": null
       }
     },
     {
@@ -2019,8 +2019,8 @@
         "-inf"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "-inf"
+        "kind": "error",
+        "value": "ERR increment would produce NaN or Infinity"
       }
     },
     {

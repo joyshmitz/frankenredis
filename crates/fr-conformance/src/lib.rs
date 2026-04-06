@@ -5657,4 +5657,53 @@ mod tests {
             .expect("hardened noauth event");
         assert_eq!(hardened_event.mode, Mode::Hardened);
     }
+
+    // --- Comprehensive core fixture coverage ---
+    // Each core_*.json fixture gets a dedicated test to catch regressions early.
+
+    macro_rules! core_fixture_test {
+        ($name:ident, $file:expr) => {
+            #[test]
+            fn $name() {
+                let cfg = HarnessConfig::default_paths();
+                let report = run_fixture(&cfg, $file).expect(concat!("fixture: ", $file));
+                assert_eq!(
+                    report.total, report.passed,
+                    "{} mismatches: {:?}",
+                    $file, report.failed
+                );
+                assert!(report.failed.is_empty());
+            }
+        };
+    }
+
+    core_fixture_test!(conformance_core_hash, "core_hash.json");
+    core_fixture_test!(conformance_core_list, "core_list.json");
+    core_fixture_test!(conformance_core_set, "core_set.json");
+    core_fixture_test!(conformance_core_zset, "core_zset.json");
+    core_fixture_test!(conformance_core_generic, "core_generic.json");
+    core_fixture_test!(conformance_core_expiry, "core_expiry.json");
+    core_fixture_test!(conformance_core_scan, "core_scan.json");
+    core_fixture_test!(conformance_core_sort, "core_sort.json");
+    core_fixture_test!(conformance_core_bitmap, "core_bitmap.json");
+    core_fixture_test!(conformance_core_hyperloglog, "core_hyperloglog.json");
+    core_fixture_test!(conformance_core_geo, "core_geo.json");
+    core_fixture_test!(conformance_core_stream, "core_stream.json");
+    core_fixture_test!(conformance_core_pubsub, "core_pubsub.json");
+    core_fixture_test!(conformance_core_scripting, "core_scripting.json");
+    core_fixture_test!(conformance_core_transaction, "core_transaction.json");
+    core_fixture_test!(conformance_core_connection, "core_connection.json");
+    core_fixture_test!(conformance_core_server, "core_server.json");
+    core_fixture_test!(conformance_core_config, "core_config.json");
+    core_fixture_test!(conformance_core_client, "core_client.json");
+    core_fixture_test!(conformance_core_copy, "core_copy.json");
+    core_fixture_test!(conformance_core_blocking, "core_blocking.json");
+    core_fixture_test!(conformance_core_function, "core_function.json");
+    core_fixture_test!(conformance_core_object, "core_object.json");
+    core_fixture_test!(conformance_core_cluster, "core_cluster.json");
+    core_fixture_test!(conformance_core_replication, "core_replication.json");
+    core_fixture_test!(conformance_core_module_sentinel, "core_module_sentinel.json");
+    core_fixture_test!(conformance_core_migrate, "core_migrate.json");
+    core_fixture_test!(conformance_core_pfdebug, "core_pfdebug.json");
+    core_fixture_test!(conformance_core_wait, "core_wait.json");
 }

@@ -2417,6 +2417,7 @@ fn parse_f64_arg(arg: &[u8]) -> Result<f64, CommandError> {
     let text = std::str::from_utf8(arg)
         .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?;
     let val = text
+        .trim()
         .parse::<f64>()
         .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?;
     if val.is_nan() {
@@ -7378,6 +7379,9 @@ fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
         if p == slen {
             return Err(CommandError::InvalidInteger);
         }
+        if slen == 2 && arg[1] == b'0' {
+            return Ok(0);
+        }
     }
 
     if arg[p] >= b'1' && arg[p] <= b'9' {
@@ -8356,14 +8360,20 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             store.last_save_time_sec
         ));
         info.push_str("rdb_last_bgsave_status:ok\r\n");
-        info.push_str("rdb_last_bgsave_time_sec:-1\r\n");
+        info.push_str(&format!(
+            "rdb_last_bgsave_time_sec:{}\r\n",
+            store.stat_rdb_last_bgsave_time_sec.map_or(-1, |ts| ts as i64)
+        ));
         info.push_str("rdb_current_bgsave_time_sec:-1\r\n");
-        info.push_str("rdb_saves:0\r\n");
+        info.push_str(&format!("rdb_saves:{}\r\n", store.stat_rdb_saves));
         info.push_str("rdb_last_cow_size:0\r\n");
         info.push_str("aof_enabled:0\r\n");
         info.push_str("aof_rewrite_in_progress:0\r\n");
         info.push_str("aof_rewrite_scheduled:0\r\n");
-        info.push_str("aof_last_rewrite_time_sec:-1\r\n");
+        info.push_str(&format!(
+            "aof_last_rewrite_time_sec:{}\r\n",
+            store.stat_aof_last_rewrite_time_sec.map_or(-1, |ts| ts as i64)
+        ));
         info.push_str("aof_current_rewrite_time_sec:-1\r\n");
         info.push_str("aof_last_bgrewrite_status:ok\r\n");
         info.push_str("aof_last_write_status:ok\r\n");
@@ -8382,13 +8392,28 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             "total_commands_processed:{}\r\n",
             store.stat_total_commands_processed
         ));
-        info.push_str("instantaneous_ops_per_sec:0\r\n");
-        info.push_str("total_net_input_bytes:0\r\n");
-        info.push_str("total_net_output_bytes:0\r\n");
+        info.push_str(&format!(
+            "instantaneous_ops_per_sec:{}\r\n",
+            store.instantaneous_ops_per_sec()
+        ));
+        info.push_str(&format!(
+            "total_net_input_bytes:{}\r\n",
+            store.stat_total_net_input_bytes
+        ));
+        info.push_str(&format!(
+            "total_net_output_bytes:{}\r\n",
+            store.stat_total_net_output_bytes
+        ));
         info.push_str("total_net_repl_input_bytes:0\r\n");
         info.push_str("total_net_repl_output_bytes:0\r\n");
-        info.push_str("instantaneous_input_kbps:0.00\r\n");
-        info.push_str("instantaneous_output_kbps:0.00\r\n");
+        info.push_str(&format!(
+            "instantaneous_input_kbps:{:.2}\r\n",
+            store.instantaneous_input_kbps()
+        ));
+        info.push_str(&format!(
+            "instantaneous_output_kbps:{:.2}\r\n",
+            store.instantaneous_output_kbps()
+        ));
         info.push_str("instantaneous_input_repl_kbps:0.00\r\n");
         info.push_str("instantaneous_output_repl_kbps:0.00\r\n");
         info.push_str("rejected_connections:0\r\n");
@@ -9624,7 +9649,16 @@ fn config_cmd(
         }
         config_apply_store_sets(&argv[2..], store)?;
         Ok(RespFrame::SimpleString("OK".to_string()))
-    } else if sub.eq_ignore_ascii_case("RESETSTAT") || sub.eq_ignore_ascii_case("REWRITE") {
+    } else if sub.eq_ignore_ascii_case("RESETSTAT") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: sub.to_string(),
+            });
+        }
+        store.reset_info_stats();
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("REWRITE") {
         if argv.len() != 2 {
             return Err(CommandError::WrongSubcommandArity {
                 command: "CONFIG",
@@ -10693,7 +10727,7 @@ fn save_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("SAVE"));
     }
-    store.mark_saved_at(now_ms);
+    store.record_save(now_ms, false);
     Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
@@ -10708,7 +10742,7 @@ fn bgsave_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             return Err(CommandError::SyntaxError);
         }
     }
-    store.mark_saved_at(now_ms);
+    store.record_save(now_ms, true);
     // Optional SCHEDULE argument — accepted but ignored
     Ok(RespFrame::SimpleString(
         "Background saving started".to_string(),
@@ -20206,7 +20240,7 @@ mod tests {
     }
 
     #[test]
-    fn incrbyfloat_preserves_infinity_until_nan_transition() {
+    fn incrbyfloat_rejects_infinity_result() {
         let mut store = Store::new();
         dispatch_argv(
             &[b"SET".to_vec(), b"k".to_vec(), b"0".to_vec()],
@@ -20215,32 +20249,38 @@ mod tests {
         )
         .expect("set");
 
-        let inf = dispatch_argv(
+        // Redis rejects INCRBYFLOAT when the result would be infinite.
+        let inf_err = dispatch_argv(
             &[b"INCRBYFLOAT".to_vec(), b"k".to_vec(), b"inf".to_vec()],
             &mut store,
             0,
         )
-        .expect("incrbyfloat inf");
-        assert_eq!(inf, RespFrame::BulkString(Some(b"inf".to_vec())));
+        .unwrap_err();
+        assert_eq!(
+            inf_err.to_resp(),
+            RespFrame::Error("ERR increment would produce NaN or Infinity".to_string())
+        );
 
-        let keep_inf = dispatch_argv(
-            &[b"INCRBYFLOAT".to_vec(), b"k".to_vec(), b"0".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect("incrbyfloat keep inf");
-        assert_eq!(keep_inf, RespFrame::BulkString(Some(b"inf".to_vec())));
-
-        let nan_transition = dispatch_argv(
+        // Negative infinity is also rejected.
+        let neg_inf_err = dispatch_argv(
             &[b"INCRBYFLOAT".to_vec(), b"k".to_vec(), b"-inf".to_vec()],
             &mut store,
             0,
         )
         .unwrap_err();
         assert_eq!(
-            nan_transition.to_resp(),
+            neg_inf_err.to_resp(),
             RespFrame::Error("ERR increment would produce NaN or Infinity".to_string())
         );
+
+        // Original value unchanged after rejected increments.
+        let val = dispatch_argv(
+            &[b"GET".to_vec(), b"k".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("get");
+        assert_eq!(val, RespFrame::BulkString(Some(b"0".to_vec())));
     }
 
     #[test]
@@ -21969,6 +22009,7 @@ mod tests {
     fn info_persistence_reports_tracked_last_save_time() {
         let mut store = Store::new();
         dispatch_argv(&[b"SAVE".to_vec()], &mut store, 1_700_000_005_000).expect("save");
+        dispatch_argv(&[b"BGSAVE".to_vec()], &mut store, 1_700_000_007_000).expect("bgsave");
 
         let out = dispatch_argv(&[b"INFO".to_vec(), b"persistence".to_vec()], &mut store, 0)
             .expect("info persistence");
@@ -21976,7 +22017,10 @@ mod tests {
             panic!("expected bulk string");
         };
         let info = String::from_utf8(bytes).expect("utf8 info");
-        assert!(info.contains("rdb_last_save_time:1700000005\r\n"), "{info}");
+        assert!(info.contains("rdb_last_save_time:1700000007\r\n"), "{info}");
+        assert!(info.contains("rdb_last_bgsave_time_sec:1700000007\r\n"), "{info}");
+        assert!(info.contains("rdb_saves:2\r\n"), "{info}");
+        assert!(info.contains("aof_last_rewrite_time_sec:-1\r\n"), "{info}");
     }
 
     #[test]
@@ -25119,6 +25163,35 @@ mod tests {
     }
 
     #[test]
+    fn config_resetstat_clears_info_stats_counters() {
+        let mut store = Store::new();
+        store.stat_total_commands_processed = 12;
+        store.stat_total_connections_received = 2;
+        store.stat_total_error_replies = 9;
+        store.stat_total_reads_processed = 13;
+        store.stat_total_writes_processed = 7;
+        store.stat_expired_keys = 3;
+        store.stat_evicted_keys = 2;
+        store.stat_expired_stale_perc = 50;
+        store.stat_expire_cycle_cpu_milliseconds = 7;
+        store.record_slowlog(&[b"GET".to_vec(), b"k".to_vec()], 20_000, 1);
+
+        let out = dispatch_argv(&[b"CONFIG".to_vec(), b"RESETSTAT".to_vec()], &mut store, 0)
+            .expect("config resetstat");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(store.stat_total_commands_processed, 0);
+        assert_eq!(store.stat_total_connections_received, 0);
+        assert_eq!(store.stat_total_error_replies, 0);
+        assert_eq!(store.stat_total_reads_processed, 0);
+        assert_eq!(store.stat_total_writes_processed, 0);
+        assert_eq!(store.stat_expired_keys, 0);
+        assert_eq!(store.stat_evicted_keys, 0);
+        assert_eq!(store.stat_expired_stale_perc, 0);
+        assert_eq!(store.stat_expire_cycle_cpu_milliseconds, 0);
+        assert_eq!(store.slowlog_len(), 0);
+    }
+
+    #[test]
     fn info_stats_reports_expire_and_evict_counters() {
         let mut store = Store::new();
         store.stat_expired_keys = 3;
@@ -25148,6 +25221,30 @@ mod tests {
         assert!(info.contains("total_error_replies:9\r\n"));
         assert!(info.contains("total_reads_processed:13\r\n"));
         assert!(info.contains("total_writes_processed:7\r\n"));
+    }
+
+    #[test]
+    fn info_stats_reports_network_byte_counters() {
+        let mut store = Store::new();
+        store.stat_total_net_input_bytes = 12345;
+        store.stat_total_net_output_bytes = 67890;
+        // Simulate ops sampling: 500 cmds in 100ms = 5000 ops/sec per sample
+        store.stat_total_commands_processed = 500;
+        store.record_ops_sec_sample(100);
+
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"stats".to_vec()], &mut store, 0)
+            .expect("info stats");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string");
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(info.contains("total_net_input_bytes:12345\r\n"), "{info}");
+        assert!(info.contains("total_net_output_bytes:67890\r\n"), "{info}");
+        // With only 1 of 16 samples filled, ops/sec = 5000/16 = 312
+        assert!(
+            info.contains("instantaneous_ops_per_sec:312\r\n"),
+            "{info}"
+        );
     }
 
     #[test]

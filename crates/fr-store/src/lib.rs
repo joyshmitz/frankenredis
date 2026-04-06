@@ -813,6 +813,12 @@ pub struct Store {
 
     /// Unix timestamp of the last successful SAVE/BGSAVE observed by this store.
     pub last_save_time_sec: u64,
+    /// Number of successful SAVE/BGSAVE operations observed by this store.
+    pub stat_rdb_saves: u64,
+    /// Unix timestamp of the last successful BGSAVE, if any.
+    pub stat_rdb_last_bgsave_time_sec: Option<u64>,
+    /// Unix timestamp of the last successful AOF rewrite, if any.
+    pub stat_aof_last_rewrite_time_sec: Option<u64>,
 
     /// Current recursion depth of Lua script execution.
     pub script_nesting_level: usize,
@@ -888,6 +894,24 @@ pub struct Store {
     pub debug_reload_requested: bool,
     /// Set by BGREWRITEAOF in delegated dispatch paths; runtime consumes it after dispatch.
     pub bgrewriteaof_requested: bool,
+    /// Total bytes received from client connections (non-replication).
+    pub stat_total_net_input_bytes: u64,
+    /// Total bytes sent to client connections (non-replication).
+    pub stat_total_net_output_bytes: u64,
+    /// Ring buffer for instantaneous ops/sec sampling (16 samples, ~100ms apart).
+    ops_sec_samples: [u64; 16],
+    /// Index into `ops_sec_samples` ring buffer.
+    ops_sec_idx: usize,
+    /// `stat_total_commands_processed` at the time of the last sample.
+    ops_sec_last_sample_count: u64,
+    /// Ring buffer for instantaneous input kbps sampling (16 samples).
+    input_kbps_samples: [f64; 16],
+    /// Ring buffer for instantaneous output kbps sampling (16 samples).
+    output_kbps_samples: [f64; 16],
+    /// `stat_total_net_input_bytes` at the time of the last sample.
+    net_input_last_sample_bytes: u64,
+    /// `stat_total_net_output_bytes` at the time of the last sample.
+    net_output_last_sample_bytes: u64,
 }
 
 const DB_NAMESPACE_PREFIX: &[u8] = b"\0frdb\0";
@@ -946,6 +970,9 @@ impl Default for Store {
             rng_seed: 0xDEADBEEF_C0FFEE11,
             dirty: 0,
             last_save_time_sec: 0,
+            stat_rdb_saves: 0,
+            stat_rdb_last_bgsave_time_sec: None,
+            stat_aof_last_rewrite_time_sec: None,
             script_nesting_level: 0,
             expires_count: 0,
             notify_keyspace_events: 0,
@@ -980,6 +1007,15 @@ impl Default for Store {
             active_expire_enabled: true,
             debug_reload_requested: false,
             bgrewriteaof_requested: false,
+            stat_total_net_input_bytes: 0,
+            stat_total_net_output_bytes: 0,
+            ops_sec_samples: [0; 16],
+            ops_sec_idx: 0,
+            ops_sec_last_sample_count: 0,
+            input_kbps_samples: [0.0; 16],
+            output_kbps_samples: [0.0; 16],
+            net_input_last_sample_bytes: 0,
+            net_output_last_sample_bytes: 0,
         }
     }
 }
@@ -1036,6 +1072,99 @@ impl Store {
 
     pub fn mark_saved_at(&mut self, now_ms: u64) {
         self.last_save_time_sec = now_ms / 1000;
+    }
+
+    pub fn record_save(&mut self, now_ms: u64, background: bool) {
+        self.mark_saved_at(now_ms);
+        self.stat_rdb_saves = self.stat_rdb_saves.saturating_add(1);
+        if background {
+            self.stat_rdb_last_bgsave_time_sec = Some(self.last_save_time_sec);
+        }
+    }
+
+    pub fn record_aof_rewrite(&mut self, now_ms: u64) {
+        self.stat_aof_last_rewrite_time_sec = Some(now_ms / 1000);
+    }
+
+    /// Record a periodic sample for ops/sec and throughput calculations.
+    /// Call this once per server-hz tick (e.g. every 100ms at 10hz).
+    /// `elapsed_ms` is the wall-clock time since the last sample (typically ~100ms).
+    pub fn record_ops_sec_sample(&mut self, elapsed_ms: u64) {
+        let current = self.stat_total_commands_processed;
+        let delta = current.saturating_sub(self.ops_sec_last_sample_count);
+        // Scale delta to a per-second rate: ops_in_window * (1000 / elapsed_ms)
+        let ops_per_sec = delta
+            .saturating_mul(1000)
+            .checked_div(elapsed_ms)
+            .unwrap_or(0);
+        self.ops_sec_samples[self.ops_sec_idx] = ops_per_sec;
+        self.ops_sec_last_sample_count = current;
+
+        // Network throughput: bytes/sec → kbps
+        let elapsed_sec = elapsed_ms as f64 / 1000.0;
+        let in_delta = self
+            .stat_total_net_input_bytes
+            .saturating_sub(self.net_input_last_sample_bytes);
+        let out_delta = self
+            .stat_total_net_output_bytes
+            .saturating_sub(self.net_output_last_sample_bytes);
+        self.input_kbps_samples[self.ops_sec_idx] = if elapsed_sec > 0.0 {
+            (in_delta as f64 / 1024.0) / elapsed_sec
+        } else {
+            0.0
+        };
+        self.output_kbps_samples[self.ops_sec_idx] = if elapsed_sec > 0.0 {
+            (out_delta as f64 / 1024.0) / elapsed_sec
+        } else {
+            0.0
+        };
+        self.net_input_last_sample_bytes = self.stat_total_net_input_bytes;
+        self.net_output_last_sample_bytes = self.stat_total_net_output_bytes;
+
+        self.ops_sec_idx = (self.ops_sec_idx + 1) % 16;
+    }
+
+    /// Return the averaged instantaneous ops/sec across the sample ring buffer.
+    #[must_use]
+    pub fn instantaneous_ops_per_sec(&self) -> u64 {
+        let sum: u64 = self.ops_sec_samples.iter().sum();
+        sum / 16
+    }
+
+    /// Return the averaged instantaneous input throughput in KiB/sec.
+    #[must_use]
+    pub fn instantaneous_input_kbps(&self) -> f64 {
+        let sum: f64 = self.input_kbps_samples.iter().sum();
+        sum / 16.0
+    }
+
+    /// Return the averaged instantaneous output throughput in KiB/sec.
+    #[must_use]
+    pub fn instantaneous_output_kbps(&self) -> f64 {
+        let sum: f64 = self.output_kbps_samples.iter().sum();
+        sum / 16.0
+    }
+
+    pub fn reset_info_stats(&mut self) {
+        self.reset_slowlog();
+        self.stat_total_commands_processed = 0;
+        self.stat_total_connections_received = 0;
+        self.stat_total_error_replies = 0;
+        self.stat_total_reads_processed = 0;
+        self.stat_total_writes_processed = 0;
+        self.stat_expired_keys = 0;
+        self.stat_evicted_keys = 0;
+        self.stat_expired_stale_perc = 0;
+        self.stat_expire_cycle_cpu_milliseconds = 0;
+        self.stat_total_net_input_bytes = 0;
+        self.stat_total_net_output_bytes = 0;
+        self.ops_sec_samples = [0; 16];
+        self.ops_sec_idx = 0;
+        self.ops_sec_last_sample_count = 0;
+        self.input_kbps_samples = [0.0; 16];
+        self.output_kbps_samples = [0.0; 16];
+        self.net_input_last_sample_bytes = 0;
+        self.net_output_last_sample_bytes = 0;
     }
 
     fn record_keyspace_lookup(&mut self, key: &[u8], now_ms: u64) -> bool {
@@ -8876,6 +9005,9 @@ fn parse_i64(bytes: &[u8]) -> Result<i64, StoreError> {
         if p == slen {
             return Err(StoreError::ValueNotInteger);
         }
+        if slen == 2 && bytes[1] == b'0' {
+            return Ok(0);
+        }
     }
 
     if bytes[p] >= b'1' && bytes[p] <= b'9' {
@@ -8918,7 +9050,7 @@ fn parse_i64(bytes: &[u8]) -> Result<i64, StoreError> {
 
 fn parse_f64(bytes: &[u8]) -> Result<f64, StoreError> {
     let text = std::str::from_utf8(bytes).map_err(|_| StoreError::ValueNotFloat)?;
-    let val = text.parse::<f64>().map_err(|_| StoreError::ValueNotFloat)?;
+    let val = text.trim().parse::<f64>().map_err(|_| StoreError::ValueNotFloat)?;
     if val.is_nan() {
         return Err(StoreError::ValueNotFloat);
     }
@@ -12746,5 +12878,65 @@ mod tests {
             store.dirty > before,
             "XGROUP DESTROY must increment dirty for AOF"
         );
+    }
+
+    #[test]
+    fn ops_sec_sampling_computes_average() {
+        let mut store = Store::new();
+        // Simulate 100 commands processed over 100ms intervals.
+        for i in 1..=16 {
+            store.stat_total_commands_processed = i * 100;
+            store.record_ops_sec_sample(100);
+        }
+        // Each sample: 100 ops in 100ms = 1000 ops/sec.
+        assert_eq!(store.instantaneous_ops_per_sec(), 1000);
+    }
+
+    #[test]
+    fn ops_sec_ring_buffer_wraps() {
+        let mut store = Store::new();
+        // Fill the 16-slot ring buffer with 500 ops/sec samples.
+        // Each tick: 50 ops in 100ms = 500 ops/sec.
+        for i in 1..=16 {
+            store.stat_total_commands_processed = i * 50;
+            store.record_ops_sec_sample(100);
+        }
+        assert_eq!(store.instantaneous_ops_per_sec(), 500);
+
+        // Now overwrite all 16 slots with 1000 ops/sec samples.
+        // Each tick: 100 ops in 100ms = 1000 ops/sec.
+        let base = store.stat_total_commands_processed;
+        for i in 1..=16 {
+            store.stat_total_commands_processed = base + i * 100;
+            store.record_ops_sec_sample(100);
+        }
+        assert_eq!(store.instantaneous_ops_per_sec(), 1000);
+    }
+
+    #[test]
+    fn network_byte_counters_track_throughput() {
+        let mut store = Store::new();
+        store.stat_total_net_input_bytes = 10240;
+        store.stat_total_net_output_bytes = 20480;
+        store.record_ops_sec_sample(1000); // 1 second elapsed
+
+        // 10240 bytes/sec = 10.0 KiB/sec input
+        assert!((store.instantaneous_input_kbps() - 10.0 / 16.0).abs() < 0.01);
+        // 20480 bytes/sec = 20.0 KiB/sec output
+        assert!((store.instantaneous_output_kbps() - 20.0 / 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn reset_info_stats_clears_network_counters() {
+        let mut store = Store::new();
+        store.stat_total_net_input_bytes = 1000;
+        store.stat_total_net_output_bytes = 2000;
+        store.stat_total_commands_processed = 500;
+        store.record_ops_sec_sample(100);
+        store.reset_info_stats();
+        assert_eq!(store.stat_total_net_input_bytes, 0);
+        assert_eq!(store.stat_total_net_output_bytes, 0);
+        assert_eq!(store.instantaneous_ops_per_sec(), 0);
+        assert_eq!(store.instantaneous_input_kbps(), 0.0);
     }
 }
