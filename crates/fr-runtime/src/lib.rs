@@ -8199,6 +8199,15 @@ mod tests {
         rt.server.store.stat_evicted_keys = 2;
         rt.server.store.stat_expired_stale_perc = 50;
         rt.server.store.stat_expire_cycle_cpu_milliseconds = 7;
+        rt.server.store.stat_keyspace_hits = 11;
+        rt.server.store.stat_keyspace_misses = 4;
+        rt.server.store.stat_rejected_connections = 2;
+        rt.server.store.stat_sync_full = 1;
+        rt.server.store.stat_sync_partial_ok = 3;
+        rt.server.store.stat_sync_partial_err = 1;
+        rt.server.store.stat_used_memory_peak = 999;
+        rt.server.store.stat_total_net_input_bytes = 1000;
+        rt.server.store.stat_total_net_output_bytes = 2000;
 
         assert_eq!(
             rt.execute_frame(command(&[b"CONFIG", b"RESETSTAT"]), 0),
@@ -8213,6 +8222,15 @@ mod tests {
         assert_eq!(rt.server.store.stat_evicted_keys, 0);
         assert_eq!(rt.server.store.stat_expired_stale_perc, 0);
         assert_eq!(rt.server.store.stat_expire_cycle_cpu_milliseconds, 0);
+        assert_eq!(rt.server.store.stat_keyspace_hits, 0);
+        assert_eq!(rt.server.store.stat_keyspace_misses, 0);
+        assert_eq!(rt.server.store.stat_rejected_connections, 0);
+        assert_eq!(rt.server.store.stat_sync_full, 0);
+        assert_eq!(rt.server.store.stat_sync_partial_ok, 0);
+        assert_eq!(rt.server.store.stat_sync_partial_err, 0);
+        assert_eq!(rt.server.store.stat_used_memory_peak, 0);
+        assert_eq!(rt.server.store.stat_total_net_input_bytes, 0);
+        assert_eq!(rt.server.store.stat_total_net_output_bytes, 0);
     }
 
     #[test]

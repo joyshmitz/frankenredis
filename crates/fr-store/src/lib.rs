@@ -1171,6 +1171,13 @@ impl Store {
         self.stat_evicted_keys = 0;
         self.stat_expired_stale_perc = 0;
         self.stat_expire_cycle_cpu_milliseconds = 0;
+        self.stat_keyspace_hits = 0;
+        self.stat_keyspace_misses = 0;
+        self.stat_rejected_connections = 0;
+        self.stat_sync_full = 0;
+        self.stat_sync_partial_ok = 0;
+        self.stat_sync_partial_err = 0;
+        self.stat_used_memory_peak = 0;
         self.stat_total_net_input_bytes = 0;
         self.stat_total_net_output_bytes = 0;
         self.ops_sec_samples = [0; 16];
