@@ -233,7 +233,7 @@ impl Default for TlsConfig {
 impl TlsConfig {
     #[must_use]
     pub fn tls_enabled(&self) -> bool {
-        self.tls_port.is_some()
+        self.tls_port.is_some_and(|port| port != 0)
     }
 }
 
@@ -781,6 +781,52 @@ mod tests {
     }
 
     #[test]
+    fn fr_p2c_009_u003_tls_port_zero_is_disabled_sentinel() {
+        let config = TlsConfig {
+            tls_port: Some(0),
+            cert_file: None,
+            key_file: None,
+            ca_file: None,
+            protocols: vec![TlsProtocol::TlsV1_2],
+            ciphers: None,
+            auth_clients: TlsAuthClients::Required,
+            cluster_announce_tls_port: None,
+            max_new_tls_connections_per_cycle: 16,
+        };
+
+        assert!(!config.tls_enabled());
+        validate_tls_config(&config).expect("tls-port 0 without material should stay disabled");
+        let rewrite = rewrite_tls_directives(&config).expect("rewrite");
+        assert_eq!(rewrite[0], ("tls-port".to_string(), "0".to_string()));
+        assert!(!rewrite.iter().any(|(name, _)| matches!(
+            name.as_str(),
+            "tls-cert-file" | "tls-key-file" | "tls-ca-file" | "tls-ciphers"
+        )));
+    }
+
+    #[test]
+    fn fr_p2c_009_u004_cluster_tls_port_requires_nonzero_tls_port() {
+        let config = TlsConfig {
+            tls_port: Some(0),
+            cert_file: None,
+            key_file: None,
+            ca_file: None,
+            protocols: vec![TlsProtocol::TlsV1_2],
+            ciphers: None,
+            auth_clients: TlsAuthClients::Required,
+            cluster_announce_tls_port: Some(16380),
+            max_new_tls_connections_per_cycle: 16,
+        };
+
+        let err =
+            validate_tls_config(&config).expect_err("cluster announce should require enabled TLS");
+        assert_eq!(
+            err.reason_code(),
+            "tlscfg.operational_knob_contract_violation"
+        );
+    }
+
+    #[test]
     fn fr_p2c_009_u008_directive_registry_validation_contract() {
         let policy = tls_directive_policy(TlsDirective::TlsKeyFile);
         assert!(policy.mutable_at_runtime);
@@ -813,6 +859,43 @@ mod tests {
         assert_eq!(plan.listener_transition, TlsListenerTransition::Enable);
         assert!(plan.requires_context_swap);
         assert!(plan.requires_connection_type_configure);
+    }
+
+    #[test]
+    fn fr_p2c_009_u011_runtime_apply_plan_disables_tls_port_zero_candidate() {
+        let current = TlsRuntimeState {
+            active_config: Some(TlsConfig {
+                tls_port: Some(6380),
+                cert_file: Some("cert.pem".to_string()),
+                key_file: Some("key.pem".to_string()),
+                ca_file: Some("ca.pem".to_string()),
+                protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+                ciphers: Some("HIGH:!aNULL".to_string()),
+                auth_clients: TlsAuthClients::Required,
+                cluster_announce_tls_port: None,
+                max_new_tls_connections_per_cycle: 64,
+            }),
+            tls_listener_enabled: true,
+            tcp_listener_enabled: true,
+            connection_type_configured: true,
+        };
+        let candidate = TlsConfig {
+            tls_port: Some(0),
+            cert_file: None,
+            key_file: None,
+            ca_file: None,
+            protocols: vec![TlsProtocol::TlsV1_2],
+            ciphers: None,
+            auth_clients: TlsAuthClients::Required,
+            cluster_announce_tls_port: None,
+            max_new_tls_connections_per_cycle: 16,
+        };
+
+        let plan = plan_tls_runtime_apply(&current, candidate).expect("plan");
+        assert_eq!(plan.listener_transition, TlsListenerTransition::Disable);
+        assert!(plan.requires_context_swap);
+        assert!(!plan.requires_connection_type_configure);
+        assert!(!plan.candidate_config.tls_enabled());
     }
 
     #[test]
