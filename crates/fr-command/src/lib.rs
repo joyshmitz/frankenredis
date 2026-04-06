@@ -8308,8 +8308,8 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     if section_requested("memory") {
         let used_memory = store.estimate_memory_usage_bytes();
         let used_memory_human = format_bytes_human(used_memory);
-        // RSS approximation: use used_memory since we don't have OS-level info
-        let used_memory_rss = used_memory;
+        // Read real RSS from /proc/self/status on Linux; fall back to used_memory.
+        let used_memory_rss = read_rss_bytes().unwrap_or(used_memory);
         let used_memory_rss_human = format_bytes_human(used_memory_rss);
         let policy_str = store.maxmemory_policy.as_config_str();
         let frag_ratio = if used_memory > 0 {
@@ -10818,6 +10818,28 @@ fn read_cpu_times() -> (f64, f64) {
     #[cfg(not(target_os = "linux"))]
     {
         (0.0, 0.0)
+    }
+}
+
+/// Read the resident set size (RSS) from `/proc/self/status` on Linux.
+/// Returns `None` on non-Linux or if parsing fails.
+fn read_rss_bytes() -> Option<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                // Format: "VmRSS:    12345 kB"
+                let kb_str = rest.trim().strip_suffix("kB")?.trim();
+                let kb: usize = kb_str.parse().ok()?;
+                return Some(kb * 1024);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
     }
 }
 
