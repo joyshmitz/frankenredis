@@ -834,6 +834,10 @@ pub struct Store {
     /// Number of keys currently tracked in the expires set.
     pub expires_count: usize,
 
+    /// Cached memory usage to avoid O(N) calculation on every command.
+    pub cached_memory_usage_bytes: std::cell::Cell<usize>,
+    pub cached_memory_usage_dirty: std::cell::Cell<u64>,
+
     /// Keyspace notification flags (parsed from notify-keyspace-events config).
     pub notify_keyspace_events: u32,
 
@@ -999,6 +1003,8 @@ impl Default for Store {
             aof_enabled: false,
             script_nesting_level: 0,
             expires_count: 0,
+            cached_memory_usage_bytes: std::cell::Cell::new(0),
+            cached_memory_usage_dirty: std::cell::Cell::new(0),
             notify_keyspace_events: 0,
             keyspace_notifications: Vec::new(),
             server_run_id: generate_run_id(),
@@ -2462,6 +2468,7 @@ impl Store {
                     self.stream_last_ids.remove(candidate.as_slice());
                     evicted_keys = evicted_keys.saturating_add(1);
                     self.stat_evicted_keys = self.stat_evicted_keys.saturating_add(1);
+                    self.cached_memory_usage_bytes.set(0); // Force cache invalidation to track exact bytes freed
                     // Emit evicted keyspace notification (use logical key)
                     let (db, logical_key) = match decode_db_key(&candidate) {
                         Some((db, lk)) => (db, lk.to_vec()),
@@ -7889,10 +7896,29 @@ impl Store {
     }
 
     pub fn estimate_memory_usage_bytes(&self) -> usize {
-        self.entries
+        let cached_bytes = self.cached_memory_usage_bytes.get();
+        let cached_dirty = self.cached_memory_usage_dirty.get();
+
+        let mutations = self
+            .dirty
+            .saturating_add(self.stat_evicted_keys)
+            .saturating_add(self.stat_expired_keys);
+
+        // Return cached value if we haven't mutated much since last calculation.
+        // We recompute roughly every 64 mutations to amortize O(N) cost while staying accurate.
+        if cached_bytes > 0 && mutations.saturating_sub(cached_dirty) < 64 {
+            return cached_bytes;
+        }
+
+        let usage = self
+            .entries
             .iter()
             .map(|(key, entry)| estimate_entry_memory_usage_bytes(key, entry))
-            .sum()
+            .sum();
+
+        self.cached_memory_usage_bytes.set(usage);
+        self.cached_memory_usage_dirty.set(mutations);
+        usage
     }
 
     fn select_eviction_candidate(&mut self, _now_ms: u64) -> Option<Vec<u8>> {
@@ -9104,7 +9130,10 @@ fn parse_i64(bytes: &[u8]) -> Result<i64, StoreError> {
 
 fn parse_f64(bytes: &[u8]) -> Result<f64, StoreError> {
     let text = std::str::from_utf8(bytes).map_err(|_| StoreError::ValueNotFloat)?;
-    let val = text.trim().parse::<f64>().map_err(|_| StoreError::ValueNotFloat)?;
+    let val = text
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| StoreError::ValueNotFloat)?;
     if val.is_nan() {
         return Err(StoreError::ValueNotFloat);
     }
