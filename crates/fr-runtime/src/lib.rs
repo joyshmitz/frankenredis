@@ -3515,13 +3515,16 @@ impl Runtime {
     }
 
     fn capture_aof_record(&mut self, argv: &[Vec<u8>]) {
+        let is_select = argv.first().is_some_and(|cmd| eq_ascii_token(cmd, b"SELECT"));
         if Runtime::command_advances_replication_offset(argv)
             && self.server.aof_selected_db != self.session.selected_db
         {
-            self.server.capture_aof_record(&[
-                b"SELECT".to_vec(),
-                self.session.selected_db.to_string().into_bytes(),
-            ]);
+            if !is_select {
+                self.server.capture_aof_record(&[
+                    b"SELECT".to_vec(),
+                    self.session.selected_db.to_string().into_bytes(),
+                ]);
+            }
             self.server.aof_selected_db = self.session.selected_db;
         }
         self.server.capture_aof_record(argv);
