@@ -1227,10 +1227,10 @@ fn tcp_watch_exec_succeeds_without_concurrent_modification() {
 fn wait_for_replica_sync(replica_port: u16, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Some(info) = fetch_info_replication(replica_port) {
-            if info.contains("master_link_status:up") {
-                return;
-            }
+        if let Some(info) = fetch_info_replication(replica_port)
+            && info.contains("master_link_status:up")
+        {
+            return;
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -1292,11 +1292,11 @@ fn tcp_frankenredis_to_frankenredis_fullresync_and_live_streaming() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut live_replicated = false;
     while Instant::now() < deadline {
-        if let Some(bytes) = fetch_string_value(replica_port, b"live-9") {
-            if bytes == b"streamed-9" {
-                live_replicated = true;
-                break;
-            }
+        if let Some(bytes) = fetch_string_value(replica_port, b"live-9")
+            && bytes == b"streamed-9"
+        {
+            live_replicated = true;
+            break;
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -1327,11 +1327,11 @@ fn tcp_frankenredis_to_frankenredis_fullresync_and_live_streaming() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut counter_replicated = false;
     while Instant::now() < deadline {
-        if let Some(bytes) = fetch_string_value(replica_port, b"counter") {
-            if bytes == b"50" {
-                counter_replicated = true;
-                break;
-            }
+        if let Some(bytes) = fetch_string_value(replica_port, b"counter")
+            && bytes == b"50"
+        {
+            counter_replicated = true;
+            break;
         }
         thread::sleep(Duration::from_millis(100));
     }
