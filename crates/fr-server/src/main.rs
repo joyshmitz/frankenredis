@@ -352,14 +352,20 @@ fn main() -> ExitCode {
     }
 
     // Configure and load RDB snapshot persistence if requested.
+    // When both AOF and RDB are configured, AOF takes precedence for data loading
+    // (matches Redis behavior). RDB path is still set so SAVE/BGSAVE can write snapshots.
     if let Some(path) = &rdb_path {
         runtime.set_rdb_path(std::path::PathBuf::from(path));
-        match runtime.load_rdb(now_ms()) {
-            Ok(0) => eprintln!("RDB: no existing file or empty (will create on SAVE/BGSAVE)"),
-            Ok(n) => eprintln!("RDB: loaded {n} entries from {path}"),
-            Err(e) => {
-                eprintln!("RDB: load warning: {e:?} (starting with empty store)");
+        if aof_path.is_none() {
+            match runtime.load_rdb(now_ms()) {
+                Ok(0) => eprintln!("RDB: no existing file or empty (will create on SAVE/BGSAVE)"),
+                Ok(n) => eprintln!("RDB: loaded {n} entries from {path}"),
+                Err(e) => {
+                    eprintln!("RDB: load warning: {e:?} (starting with empty store)");
+                }
             }
+        } else {
+            eprintln!("RDB: snapshot path configured (AOF takes precedence for data loading)");
         }
     }
 
