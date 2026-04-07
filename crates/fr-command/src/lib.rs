@@ -117,7 +117,13 @@ pub fn command_key_indexes(argv: &[Vec<u8>]) -> Vec<usize> {
     };
 
     // Handle special cases not fully described by first/last/step in COMMAND_TABLE.
-    if cmd_name.eq_ignore_ascii_case("EVAL") || cmd_name.eq_ignore_ascii_case("EVALSHA") {
+    if cmd_name.eq_ignore_ascii_case("EVAL")
+        || cmd_name.eq_ignore_ascii_case("EVALSHA")
+        || cmd_name.eq_ignore_ascii_case("EVAL_RO")
+        || cmd_name.eq_ignore_ascii_case("EVALSHA_RO")
+        || cmd_name.eq_ignore_ascii_case("FCALL")
+        || cmd_name.eq_ignore_ascii_case("FCALL_RO")
+    {
         if argv.len() < 3 {
             return Vec::new();
         }
