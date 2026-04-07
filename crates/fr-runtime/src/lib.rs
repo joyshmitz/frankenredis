@@ -1775,6 +1775,22 @@ impl Runtime {
         Ok(count)
     }
 
+    /// Load an RDB snapshot from the configured path, replacing store state.
+    /// Returns the number of entries loaded, or an error.
+    pub fn load_rdb(&mut self, now_ms: u64) -> Result<usize, PersistError> {
+        let path = match &self.server.rdb_path {
+            Some(path) => path.clone(),
+            None => return Ok(0),
+        };
+        let (entries, _aux) = read_rdb_file(&path)?;
+        let count = entries.len();
+        let mut store = Store::new();
+        apply_rdb_entries_to_store(&mut store, &entries, now_ms)?;
+        store.set_aof_enabled(self.server.store.aof_enabled);
+        self.server.store = store;
+        Ok(count)
+    }
+
     fn handle_debug_reload_requested(&mut self, now_ms: u64) -> RespFrame {
         if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
             return reply;
@@ -2153,6 +2169,11 @@ impl Runtime {
         // Ensure the new session is correctly associated with this server's state.
         session.refresh_authentication_for_server(&self.server.auth_state, true);
         std::mem::replace(&mut self.session, session)
+    }
+
+    /// Retrieve the current client session ID.
+    pub fn client_id(&self) -> u64 {
+        self.session.client_id
     }
 
     /// Track a new client connection for INFO stats.

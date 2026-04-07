@@ -882,4 +882,46 @@ mod tests {
                 .to_vec()
         );
     }
+
+    // ── Proptest fuzz tests ──────────────────────────────────────────
+
+    mod fuzz {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+            #[test]
+            fn parse_frame_never_panics(data: Vec<u8>) {
+                let _ = parse_frame(&data);
+            }
+
+            #[test]
+            fn parse_frame_with_config_never_panics(data: Vec<u8>) {
+                let config = ParserConfig::default();
+                let _ = parse_frame_with_config(&data, &config);
+            }
+
+            #[test]
+            fn parse_frame_with_tight_limits_never_panics(data: Vec<u8>) {
+                let config = ParserConfig {
+                    max_bulk_len: 64,
+                    max_array_len: 4,
+                    max_recursion_depth: 2,
+                };
+                let _ = parse_frame_with_config(&data, &config);
+            }
+
+            #[test]
+            fn parse_frame_with_resp_prefix_never_panics(
+                prefix in prop::sample::select(vec![b'+', b'-', b':', b'$', b'*']),
+                payload: Vec<u8>,
+            ) {
+                let mut data = vec![prefix];
+                data.extend_from_slice(&payload);
+                let _ = parse_frame(&data);
+            }
+        }
+    }
 }

@@ -4,7 +4,7 @@
   <img src="frankenredis_illustration.webp" alt="FrankenRedis - memory-safe clean-room Redis reimplementation in Rust">
 </div>
 
-FrankenRedis is a clean-room Rust reimplementation targeting grand-scope excellence: semantic fidelity, mathematical rigor, operational safety, and profile-proven performance.
+FrankenRedis is a clean-room Rust reimplementation targeting grand-scope excellence: semantic fidelity, operational safety, and performance-focused design.
 
 Absolute project goal: full drop-in replacement parity with legacy Redis behavior for the complete intended Redis surface, not a permanently reduced feature subset.
 
@@ -16,12 +16,15 @@ This is treated as a core identity constraint, not a best-effort nice-to-have.
 
 ## Methodological DNA
 
-This project uses four pervasive disciplines:
+This project applies frankenlibc/frankenfs compatibility-security thinking: strict vs hardened mode separation, fail-closed compatibility gates, and explicit drift ledgers. This is implemented and enforced throughout the codebase via `fr-config::Mode` and the runtime policy system.
 
-1. alien-artifact-coding for decision theory, confidence calibration, and explainability.
-2. extreme-software-optimization for profile-first, proof-backed performance work.
-3. RaptorQ-everywhere for self-healing durability of long-lived artifacts and state.
-4. frankenlibc/frankenfs compatibility-security thinking: strict vs hardened mode separation, fail-closed compatibility gates, and explicit drift ledgers.
+## Roadmap
+
+The following disciplines are planned but not yet integrated:
+
+1. **alien-artifact-coding** for decision theory, confidence calibration, and explainability. Status: not started.
+2. **extreme-software-optimization** for profile-first, proof-backed performance work. Status: optimization proof artifacts exist (`ISOMORPHISM_PROOF_ROUND{1,2}.md`), but workload benchmarks against live servers are pending.
+3. **RaptorQ-everywhere** for self-healing durability of long-lived artifacts and state. Status: not started, no crate dependency added.
 
 ## Current State
 

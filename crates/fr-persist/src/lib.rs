@@ -456,7 +456,8 @@ fn lzf_decompress(input: &[u8], expected_len: usize) -> Option<Vec<u8>> {
     if expected_len > 536_870_912 {
         return None;
     }
-    let mut output = Vec::with_capacity(expected_len);
+    // Cap initial allocation to avoid OOM from malicious RDB payloads.
+    let mut output = Vec::with_capacity(expected_len.min(8192));
     let mut cursor = 0usize;
 
     while cursor < input.len() && output.len() < expected_len {
@@ -1506,5 +1507,34 @@ mod tests {
         assert_eq!(aux.get("redis-ver").map(String::as_str), Some("7.0.0"));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ── Proptest fuzz tests ──────────────────────────────────────────
+
+    mod fuzz {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+            #[test]
+            fn decode_rdb_never_panics(data: Vec<u8>) {
+                let _ = decode_rdb(&data);
+            }
+
+            #[test]
+            fn decode_aof_stream_never_panics(data: Vec<u8>) {
+                let _ = decode_aof_stream(&data);
+            }
+
+            #[test]
+            fn decode_rdb_with_valid_header_never_panics(payload: Vec<u8>) {
+                // Start with valid RDB magic + version, then random payload.
+                let mut data = b"REDIS0011".to_vec();
+                data.extend_from_slice(&payload);
+                let _ = decode_rdb(&data);
+            }
+        }
     }
 }

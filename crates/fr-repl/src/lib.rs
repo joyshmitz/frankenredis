@@ -210,6 +210,9 @@ pub fn parse_psync_reply(line: &str) -> Result<PsyncReply, ReplError> {
             state: HandshakeState::PsyncSent,
         });
     };
+    if kind == "CONTINUE" {
+        return Ok(PsyncReply::Continue);
+    }
     if kind != "FULLRESYNC" {
         return Err(ReplError::PsyncReplyStateMismatch {
             state: HandshakeState::PsyncSent,

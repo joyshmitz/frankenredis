@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -81,6 +82,60 @@ fn connect_client(port: u16) -> TcpStream {
             }
             Err(err) => panic!("failed to connect to 127.0.0.1:{port}: {err}"),
         }
+    }
+}
+
+struct BufferedTcpClient {
+    stream: TcpStream,
+    read_buf: Vec<u8>,
+}
+
+impl BufferedTcpClient {
+    fn connect(port: u16) -> Self {
+        Self {
+            stream: connect_client(port),
+            read_buf: Vec::new(),
+        }
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) {
+        self.stream.write_all(bytes).expect("write bytes to server");
+    }
+
+    fn read_response(&mut self) -> RespFrame {
+        let mut buf = vec![0u8; 65536];
+        let deadline = Instant::now() + Duration::from_secs(20);
+
+        loop {
+            if let Ok(parsed) = parse_frame(&self.read_buf) {
+                let consumed = parsed.consumed;
+                self.read_buf.drain(..consumed);
+                return parsed.frame;
+            }
+
+            match self.stream.read(&mut buf) {
+                Ok(0) => panic!("server closed connection unexpectedly"),
+                Ok(n) => self.read_buf.extend_from_slice(&buf[..n]),
+                Err(ref err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for server response"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("read from server: {err}"),
+            }
+        }
+    }
+
+    fn send_command(&mut self, parts: &[&[u8]]) -> RespFrame {
+        self.write_all(&encode_command(parts));
+        self.read_response()
     }
 }
 
@@ -185,6 +240,15 @@ fn spawn_legacy_redis(port: u16) -> ManagedChild {
 }
 
 fn spawn_frankenredis(port: u16, primary_port: Option<u16>) -> ManagedChild {
+    spawn_frankenredis_opts(port, primary_port, None, None)
+}
+
+fn spawn_frankenredis_opts(
+    port: u16,
+    primary_port: Option<u16>,
+    aof_path: Option<&str>,
+    rdb_path: Option<&str>,
+) -> ManagedChild {
     let log_dir = unique_temp_dir("frankenredis-server-log");
     let log_path = log_dir.join("stderr.log");
     let log_file = std::fs::File::create(&log_path).expect("create replica log file");
@@ -203,6 +267,12 @@ fn spawn_frankenredis(port: u16, primary_port: Option<u16>) -> ManagedChild {
             .arg("--replicaof")
             .arg("127.0.0.1")
             .arg(primary_port.to_string());
+    }
+    if let Some(path) = aof_path {
+        command.arg("--aof").arg(path);
+    }
+    if let Some(path) = rdb_path {
+        command.arg("--rdb").arg(path);
     }
     let child = ManagedChild::spawn(command, Some(log_path));
     wait_for_port(port);
@@ -233,6 +303,121 @@ fn send_shutdown_nosave(port: u16) {
     if let Ok(mut client) = TcpStream::connect(format!("127.0.0.1:{port}")) {
         let _ = client.set_read_timeout(Some(Duration::from_millis(250)));
         let _ = client.write_all(&encode_command(&[b"SHUTDOWN", b"NOSAVE"]));
+    }
+}
+
+fn assert_positive_integer_response(response: RespFrame) {
+    match response {
+        RespFrame::Integer(value) => assert!(value > 0, "expected positive integer, got {value}"),
+        other => panic!("expected integer response, got {other:?}"),
+    }
+}
+
+fn run_multi_client_workload(port: u16, pipeline_depth: usize) {
+    const CLIENTS: usize = 10;
+    const OPS_PER_CLIENT: usize = 100;
+    assert!(pipeline_depth > 0, "pipeline depth must be positive");
+    let barrier = Arc::new(Barrier::new(CLIENTS + 1));
+    let mut handles = Vec::with_capacity(CLIENTS);
+
+    for thread_id in 0..CLIENTS {
+        let barrier = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || {
+            let mut client = BufferedTcpClient::connect(port);
+            barrier.wait();
+
+            let mut batch_start = 0usize;
+            while batch_start < OPS_PER_CLIENT {
+                let batch_end = (batch_start + pipeline_depth).min(OPS_PER_CLIENT);
+                let mut key_values = Vec::with_capacity(batch_end - batch_start);
+                let mut set_pipeline = Vec::new();
+
+                for op_index in batch_start..batch_end {
+                    let key = format!("client_{thread_id}_key_{op_index}").into_bytes();
+                    let value = format!("value_{thread_id}_{op_index}").into_bytes();
+                    set_pipeline.extend_from_slice(&encode_command(&[
+                        b"SET",
+                        key.as_slice(),
+                        value.as_slice(),
+                    ]));
+                    key_values.push((key, value));
+                }
+
+                client.write_all(&set_pipeline);
+                for _ in batch_start..batch_end {
+                    assert_eq!(
+                        client.read_response(),
+                        RespFrame::SimpleString("OK".to_string())
+                    );
+                }
+
+                let mut get_pipeline = Vec::new();
+                for (key, _) in &key_values {
+                    get_pipeline.extend_from_slice(&encode_command(&[b"GET", key.as_slice()]));
+                }
+                client.write_all(&get_pipeline);
+                for (_, value) in &key_values {
+                    assert_eq!(
+                        client.read_response(),
+                        RespFrame::BulkString(Some(value.clone()))
+                    );
+                }
+
+                let mut incr_pipeline = Vec::new();
+                for _ in batch_start..batch_end {
+                    incr_pipeline.extend_from_slice(&encode_command(&[b"INCR", b"global_counter"]));
+                }
+                client.write_all(&incr_pipeline);
+                for _ in batch_start..batch_end {
+                    assert_positive_integer_response(client.read_response());
+                }
+
+                let mut lpush_pipeline = Vec::new();
+                for (key, _) in &key_values {
+                    lpush_pipeline.extend_from_slice(&encode_command(&[
+                        b"LPUSH",
+                        b"global_list",
+                        key.as_slice(),
+                    ]));
+                }
+                client.write_all(&lpush_pipeline);
+                for _ in batch_start..batch_end {
+                    assert_positive_integer_response(client.read_response());
+                }
+
+                batch_start = batch_end;
+            }
+        }));
+    }
+
+    barrier.wait();
+    for handle in handles {
+        handle.join().expect("client workload thread");
+    }
+
+    let mut verifier = BufferedTcpClient::connect(port);
+    assert_eq!(
+        verifier.send_command(&[b"GET", b"global_counter"]),
+        RespFrame::BulkString(Some((CLIENTS * OPS_PER_CLIENT).to_string().into_bytes()))
+    );
+    assert_eq!(
+        verifier.send_command(&[b"LLEN", b"global_list"]),
+        RespFrame::Integer((CLIENTS * OPS_PER_CLIENT) as i64)
+    );
+    assert_eq!(
+        verifier.send_command(&[b"DBSIZE"]),
+        RespFrame::Integer((CLIENTS * OPS_PER_CLIENT + 2) as i64)
+    );
+
+    for thread_id in 0..CLIENTS {
+        for op_index in 0..OPS_PER_CLIENT {
+            let key = format!("client_{thread_id}_key_{op_index}");
+            let expected = format!("value_{thread_id}_{op_index}");
+            assert_eq!(
+                verifier.send_command(&[b"GET", key.as_bytes()]),
+                RespFrame::BulkString(Some(expected.into_bytes()))
+            );
+        }
     }
 }
 
@@ -536,6 +721,624 @@ fn tcp_replicaof_cli_flag_bootstraps_replica_link_on_startup() {
         replicated,
         "replica started with --replicaof never applied the replicated write; latest INFO: {last_info_after_write:?}; replica log: {:?}",
         replica.log_contents()
+    );
+
+    send_shutdown_nosave(replica_port);
+    send_shutdown_nosave(primary_port);
+}
+
+#[test]
+fn tcp_multi_client_concurrent_access_roundtrip() {
+    let port = reserve_port();
+    let _server = spawn_frankenredis(port, None);
+    run_multi_client_workload(port, 1);
+    send_shutdown_nosave(port);
+}
+
+#[test]
+fn tcp_multi_client_concurrent_access_roundtrip_with_pipeline_depth_ten() {
+    let port = reserve_port();
+    let _server = spawn_frankenredis(port, None);
+    run_multi_client_workload(port, 10);
+    send_shutdown_nosave(port);
+}
+
+// ---------- Persistence restart tests ----------
+
+#[test]
+fn tcp_aof_restart_preserves_all_data() {
+    let tmp = unique_temp_dir("frankenredis-aof-restart");
+    let aof_file = tmp.join("test.aof");
+    let aof_path = aof_file.to_str().unwrap();
+    let port1 = reserve_port();
+
+    // Phase 1: Start server with AOF, write data, then kill.
+    {
+        let _server = spawn_frankenredis_opts(port1, None, Some(aof_path), None);
+        let mut client = connect_client(port1);
+
+        for i in 0..20 {
+            let key = format!("str-key-{i}");
+            let val = format!("value-{i}");
+            let resp = send_command(&mut client, &[b"SET", key.as_bytes(), val.as_bytes()]);
+            assert_eq!(resp, RespFrame::SimpleString("OK".to_string()));
+        }
+        for i in 0..5 {
+            let elem = format!("elem-{i}");
+            send_command(&mut client, &[b"RPUSH", b"mylist", elem.as_bytes()]);
+        }
+        for i in 0..5 {
+            let field = format!("field-{i}");
+            let val = format!("hval-{i}");
+            send_command(
+                &mut client,
+                &[b"HSET", b"myhash", field.as_bytes(), val.as_bytes()],
+            );
+        }
+        for i in 0..5 {
+            let member = format!("member-{i}");
+            send_command(&mut client, &[b"SADD", b"myset", member.as_bytes()]);
+        }
+        for i in 0..5 {
+            let score = format!("{}", (i + 1) * 10);
+            let member = format!("zmem-{i}");
+            send_command(
+                &mut client,
+                &[b"ZADD", b"myzset", score.as_bytes(), member.as_bytes()],
+            );
+        }
+
+        let dbsize = send_command(&mut client, &[b"DBSIZE"]);
+        assert_eq!(dbsize, RespFrame::Integer(24));
+
+        // Flush AOF to disk before killing the server.
+        let rewrite = send_command(&mut client, &[b"BGREWRITEAOF"]);
+        assert!(
+            matches!(rewrite, RespFrame::SimpleString(_)),
+            "BGREWRITEAOF failed: {rewrite:?}"
+        );
+
+        drop(client);
+        // _server dropped here — process killed, port freed.
+    }
+
+    assert!(aof_file.exists(), "AOF file was not created");
+    assert!(
+        aof_file.metadata().unwrap().len() > 0,
+        "AOF file is empty"
+    );
+
+    // Phase 2: Restart on new port with same AOF, verify all data survived.
+    let port2 = reserve_port();
+    {
+        let _server = spawn_frankenredis_opts(port2, None, Some(aof_path), None);
+        let mut client = connect_client(port2);
+
+        let dbsize = send_command(&mut client, &[b"DBSIZE"]);
+        assert_eq!(
+            dbsize,
+            RespFrame::Integer(24),
+            "DBSIZE mismatch after AOF restart"
+        );
+        for i in 0..20 {
+            let key = format!("str-key-{i}");
+            let expected = format!("value-{i}");
+            let resp = send_command(&mut client, &[b"GET", key.as_bytes()]);
+            assert_eq!(
+                resp,
+                RespFrame::BulkString(Some(expected.into_bytes())),
+                "string key {key} mismatch after AOF restart"
+            );
+        }
+        assert_eq!(
+            send_command(&mut client, &[b"LLEN", b"mylist"]),
+            RespFrame::Integer(5),
+            "list length mismatch"
+        );
+        assert_eq!(
+            send_command(&mut client, &[b"HLEN", b"myhash"]),
+            RespFrame::Integer(5),
+            "hash length mismatch"
+        );
+        assert_eq!(
+            send_command(&mut client, &[b"SCARD", b"myset"]),
+            RespFrame::Integer(5),
+            "set cardinality mismatch"
+        );
+        assert_eq!(
+            send_command(&mut client, &[b"ZCARD", b"myzset"]),
+            RespFrame::Integer(5),
+            "zset cardinality mismatch"
+        );
+        assert_eq!(
+            send_command(&mut client, &[b"ZSCORE", b"myzset", b"zmem-2"]),
+            RespFrame::BulkString(Some(b"30".to_vec())),
+            "zset score mismatch"
+        );
+
+        send_shutdown_nosave(port2);
+    }
+}
+
+#[test]
+fn tcp_rdb_restart_preserves_all_data() {
+    let tmp = unique_temp_dir("frankenredis-rdb-restart");
+    let rdb_file = tmp.join("test.rdb");
+    let rdb_path = rdb_file.to_str().unwrap();
+    let port1 = reserve_port();
+
+    // Phase 1: Start server with RDB, write data, SAVE, then kill.
+    {
+        let _server = spawn_frankenredis_opts(port1, None, None, Some(rdb_path));
+        let mut client = connect_client(port1);
+
+        for i in 0..20 {
+            let key = format!("rdb-key-{i}");
+            let val = format!("rdb-val-{i}");
+            send_command(&mut client, &[b"SET", key.as_bytes(), val.as_bytes()]);
+        }
+        for i in 0..5 {
+            let elem = format!("rdb-elem-{i}");
+            send_command(&mut client, &[b"RPUSH", b"rdb-list", elem.as_bytes()]);
+        }
+        for i in 0..5 {
+            let field = format!("f{i}");
+            let val = format!("v{i}");
+            send_command(
+                &mut client,
+                &[b"HSET", b"rdb-hash", field.as_bytes(), val.as_bytes()],
+            );
+        }
+        for i in 0..5 {
+            let member = format!("s{i}");
+            send_command(&mut client, &[b"SADD", b"rdb-set", member.as_bytes()]);
+        }
+        for i in 0..5 {
+            let score = format!("{}", (i + 1) * 100);
+            let member = format!("z{i}");
+            send_command(
+                &mut client,
+                &[b"ZADD", b"rdb-zset", score.as_bytes(), member.as_bytes()],
+            );
+        }
+
+        // Force RDB snapshot before kill.
+        let save_resp = send_command(&mut client, &[b"SAVE"]);
+        assert_eq!(save_resp, RespFrame::SimpleString("OK".to_string()));
+
+        drop(client);
+        // _server dropped here — process killed, port freed.
+    }
+
+    assert!(rdb_file.exists(), "RDB file was not created");
+    assert!(
+        rdb_file.metadata().unwrap().len() > 0,
+        "RDB file is empty"
+    );
+
+    // Phase 2: Restart on new port with same RDB, verify all data survived.
+    let port2 = reserve_port();
+    {
+        let _server = spawn_frankenredis_opts(port2, None, None, Some(rdb_path));
+        let mut client = connect_client(port2);
+
+        let dbsize = send_command(&mut client, &[b"DBSIZE"]);
+        assert_eq!(
+            dbsize,
+            RespFrame::Integer(24),
+            "DBSIZE mismatch after RDB restart"
+        );
+        for i in 0..20 {
+            let key = format!("rdb-key-{i}");
+            let expected = format!("rdb-val-{i}");
+            let resp = send_command(&mut client, &[b"GET", key.as_bytes()]);
+            assert_eq!(
+                resp,
+                RespFrame::BulkString(Some(expected.into_bytes())),
+                "string key {key} mismatch after RDB restart"
+            );
+        }
+        assert_eq!(
+            send_command(&mut client, &[b"LLEN", b"rdb-list"]),
+            RespFrame::Integer(5),
+            "list length mismatch"
+        );
+        assert_eq!(
+            send_command(&mut client, &[b"HLEN", b"rdb-hash"]),
+            RespFrame::Integer(5),
+            "hash length mismatch"
+        );
+        assert_eq!(
+            send_command(&mut client, &[b"SCARD", b"rdb-set"]),
+            RespFrame::Integer(5),
+            "set cardinality mismatch"
+        );
+        assert_eq!(
+            send_command(&mut client, &[b"ZCARD", b"rdb-zset"]),
+            RespFrame::Integer(5),
+            "zset cardinality mismatch"
+        );
+        assert_eq!(
+            send_command(&mut client, &[b"ZSCORE", b"rdb-zset", b"z3"]),
+            RespFrame::BulkString(Some(b"400".to_vec())),
+            "zset score mismatch"
+        );
+
+        send_shutdown_nosave(port2);
+    }
+}
+
+// ---------- Pub/Sub cross-client tests ----------
+
+/// Read multiple RESP frames from a stream until we get the expected count.
+fn read_responses(stream: &mut TcpStream, count: usize) -> Vec<RespFrame> {
+    let mut frames = Vec::new();
+    let mut buf = vec![0u8; 65536];
+    let mut accumulated = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    while frames.len() < count {
+        match stream.read(&mut buf) {
+            Ok(0) => panic!("server closed connection while waiting for {count} frames"),
+            Ok(n) => {
+                accumulated.extend_from_slice(&buf[..n]);
+                while let Ok(parsed) = parse_frame(&accumulated) {
+                    frames.push(parsed.frame);
+                    accumulated.drain(..parsed.consumed);
+                    if frames.len() >= count {
+                        break;
+                    }
+                }
+            }
+            Err(ref err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for {count} frames (got {})",
+                    frames.len()
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => panic!("read error: {err}"),
+        }
+    }
+    frames
+}
+
+fn pubsub_subscribe_frame(channel: &str, count: i64) -> RespFrame {
+    RespFrame::Array(Some(vec![
+        RespFrame::BulkString(Some(b"subscribe".to_vec())),
+        RespFrame::BulkString(Some(channel.as_bytes().to_vec())),
+        RespFrame::Integer(count),
+    ]))
+}
+
+fn pubsub_message_frame(channel: &str, data: &str) -> RespFrame {
+    RespFrame::Array(Some(vec![
+        RespFrame::BulkString(Some(b"message".to_vec())),
+        RespFrame::BulkString(Some(channel.as_bytes().to_vec())),
+        RespFrame::BulkString(Some(data.as_bytes().to_vec())),
+    ]))
+}
+
+#[test]
+fn tcp_pubsub_basic_cross_client_delivery() {
+    let port = reserve_port();
+    let _server = spawn_frankenredis(port, None);
+
+    let mut sub_client = connect_client(port);
+    sub_client
+        .write_all(&encode_command(&[b"SUBSCRIBE", b"channel1"]))
+        .unwrap();
+    let confirms = read_responses(&mut sub_client, 1);
+    assert_eq!(confirms[0], pubsub_subscribe_frame("channel1", 1));
+
+    let mut pub_client = connect_client(port);
+    let pub_resp = send_command(&mut pub_client, &[b"PUBLISH", b"channel1", b"hello"]);
+    assert_eq!(pub_resp, RespFrame::Integer(1), "expected 1 subscriber");
+
+    let msgs = read_responses(&mut sub_client, 1);
+    assert_eq!(msgs[0], pubsub_message_frame("channel1", "hello"));
+
+    sub_client
+        .write_all(&encode_command(&[b"UNSUBSCRIBE", b"channel1"]))
+        .unwrap();
+    let unsub = read_responses(&mut sub_client, 1);
+    assert_eq!(
+        unsub[0],
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"unsubscribe".to_vec())),
+            RespFrame::BulkString(Some(b"channel1".to_vec())),
+            RespFrame::Integer(0),
+        ]))
+    );
+
+    let pub_resp2 = send_command(&mut pub_client, &[b"PUBLISH", b"channel1", b"gone"]);
+    assert_eq!(
+        pub_resp2,
+        RespFrame::Integer(0),
+        "expected 0 subscribers after unsubscribe"
+    );
+
+    send_shutdown_nosave(port);
+}
+
+#[test]
+fn tcp_pubsub_multiple_subscribers() {
+    let port = reserve_port();
+    let _server = spawn_frankenredis(port, None);
+
+    let mut sub_a = connect_client(port);
+    sub_a
+        .write_all(&encode_command(&[b"SUBSCRIBE", b"chat"]))
+        .unwrap();
+    let _ = read_responses(&mut sub_a, 1);
+
+    let mut sub_b = connect_client(port);
+    sub_b
+        .write_all(&encode_command(&[b"SUBSCRIBE", b"chat"]))
+        .unwrap();
+    let _ = read_responses(&mut sub_b, 1);
+
+    let mut pub_client = connect_client(port);
+    let pub_resp = send_command(&mut pub_client, &[b"PUBLISH", b"chat", b"broadcast"]);
+    assert_eq!(pub_resp, RespFrame::Integer(2), "expected 2 subscribers");
+
+    let msg_a = read_responses(&mut sub_a, 1);
+    assert_eq!(msg_a[0], pubsub_message_frame("chat", "broadcast"));
+    let msg_b = read_responses(&mut sub_b, 1);
+    assert_eq!(msg_b[0], pubsub_message_frame("chat", "broadcast"));
+
+    send_shutdown_nosave(port);
+}
+
+#[test]
+fn tcp_pubsub_pattern_subscribe() {
+    let port = reserve_port();
+    let _server = spawn_frankenredis(port, None);
+
+    let mut sub_client = connect_client(port);
+    sub_client
+        .write_all(&encode_command(&[b"PSUBSCRIBE", b"news.*"]))
+        .unwrap();
+    let confirms = read_responses(&mut sub_client, 1);
+    assert_eq!(
+        confirms[0],
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"psubscribe".to_vec())),
+            RespFrame::BulkString(Some(b"news.*".to_vec())),
+            RespFrame::Integer(1),
+        ]))
+    );
+
+    let mut pub_client = connect_client(port);
+    let pub_resp = send_command(&mut pub_client, &[b"PUBLISH", b"news.sports", b"goal!"]);
+    assert_eq!(pub_resp, RespFrame::Integer(1));
+
+    let msgs = read_responses(&mut sub_client, 1);
+    assert_eq!(
+        msgs[0],
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"pmessage".to_vec())),
+            RespFrame::BulkString(Some(b"news.*".to_vec())),
+            RespFrame::BulkString(Some(b"news.sports".to_vec())),
+            RespFrame::BulkString(Some(b"goal!".to_vec())),
+        ]))
+    );
+
+    let pub_resp2 = send_command(&mut pub_client, &[b"PUBLISH", b"weather.rain", b"wet"]);
+    assert_eq!(
+        pub_resp2,
+        RespFrame::Integer(0),
+        "non-matching channel should have 0 subscribers"
+    );
+
+    send_shutdown_nosave(port);
+}
+
+// ---------- Transaction isolation tests ----------
+
+#[test]
+fn tcp_watch_exec_aborts_on_concurrent_modification() {
+    let port = reserve_port();
+    let _server = spawn_frankenredis(port, None);
+
+    // Initialize the key.
+    let mut setup = connect_client(port);
+    send_command(&mut setup, &[b"SET", b"watched-key", b"0"]);
+    drop(setup);
+
+    // Client A: WATCH, read, then MULTI/EXEC — but Client B modifies in between.
+    let mut client_a = connect_client(port);
+    let mut client_b = connect_client(port);
+
+    // A watches the key.
+    let watch_resp = send_command(&mut client_a, &[b"WATCH", b"watched-key"]);
+    assert_eq!(watch_resp, RespFrame::SimpleString("OK".to_string()));
+
+    // A reads current value.
+    let val = send_command(&mut client_a, &[b"GET", b"watched-key"]);
+    assert_eq!(val, RespFrame::BulkString(Some(b"0".to_vec())));
+
+    // B modifies the key while A has it watched.
+    let set_resp = send_command(&mut client_b, &[b"SET", b"watched-key", b"1"]);
+    assert_eq!(set_resp, RespFrame::SimpleString("OK".to_string()));
+
+    // A starts a transaction and tries to set the key.
+    let multi_resp = send_command(&mut client_a, &[b"MULTI"]);
+    assert_eq!(multi_resp, RespFrame::SimpleString("OK".to_string()));
+
+    let queued = send_command(&mut client_a, &[b"SET", b"watched-key", b"2"]);
+    assert_eq!(queued, RespFrame::SimpleString("QUEUED".to_string()));
+
+    // EXEC should return null array (transaction aborted because watched key was modified).
+    let exec_resp = send_command(&mut client_a, &[b"EXEC"]);
+    assert_eq!(
+        exec_resp,
+        RespFrame::Array(None),
+        "EXEC should return nil when WATCH detects modification"
+    );
+
+    // The value should be "1" (Client B's write), not "2" (Client A's aborted write).
+    let final_val = send_command(&mut client_b, &[b"GET", b"watched-key"]);
+    assert_eq!(
+        final_val,
+        RespFrame::BulkString(Some(b"1".to_vec())),
+        "value should be Client B's write, not the aborted transaction"
+    );
+
+    send_shutdown_nosave(port);
+}
+
+#[test]
+fn tcp_watch_exec_succeeds_without_concurrent_modification() {
+    let port = reserve_port();
+    let _server = spawn_frankenredis(port, None);
+
+    let mut client = connect_client(port);
+    send_command(&mut client, &[b"SET", b"counter", b"10"]);
+
+    // WATCH + MULTI/EXEC with no interference should succeed.
+    send_command(&mut client, &[b"WATCH", b"counter"]);
+    send_command(&mut client, &[b"MULTI"]);
+    send_command(&mut client, &[b"INCR", b"counter"]);
+    let exec_resp = send_command(&mut client, &[b"EXEC"]);
+
+    // EXEC should return array with INCR result.
+    assert_eq!(
+        exec_resp,
+        RespFrame::Array(Some(vec![RespFrame::Integer(11)])),
+        "EXEC should succeed when WATCH key is unmodified"
+    );
+
+    let val = send_command(&mut client, &[b"GET", b"counter"]);
+    assert_eq!(val, RespFrame::BulkString(Some(b"11".to_vec())));
+
+    send_shutdown_nosave(port);
+}
+
+// ---------- Cross-process replication tests ----------
+
+/// Wait for a replica to report master_link_status:up in INFO replication.
+fn wait_for_replica_sync(replica_port: u16, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Some(info) = fetch_info_replication(replica_port) {
+            if info.contains("master_link_status:up") {
+                return;
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    panic!(
+        "replica on port {replica_port} did not sync within {timeout:?}; last INFO: {:?}",
+        fetch_info_replication(replica_port)
+    );
+}
+
+#[test]
+fn tcp_frankenredis_to_frankenredis_fullresync_and_live_streaming() {
+    let primary_port = reserve_port();
+    let replica_port = reserve_port();
+
+    // Start primary.
+    let _primary = spawn_frankenredis(primary_port, None);
+
+    // Write initial data to primary before replica connects.
+    let mut client = connect_client(primary_port);
+    for i in 0..20 {
+        let key = format!("initial-{i}");
+        let val = format!("val-{i}");
+        send_command(&mut client, &[b"SET", key.as_bytes(), val.as_bytes()]);
+    }
+    for i in 0..5 {
+        let elem = format!("item-{i}");
+        send_command(&mut client, &[b"RPUSH", b"repl-list", elem.as_bytes()]);
+    }
+
+    // Start replica pointing to primary.
+    let _replica = spawn_frankenredis(replica_port, Some(primary_port));
+
+    // Wait for replica to complete full resync.
+    wait_for_replica_sync(replica_port, Duration::from_secs(10));
+
+    // Verify initial data replicated via FULLRESYNC.
+    let mut replica_client = connect_client(replica_port);
+    for i in 0..20 {
+        let key = format!("initial-{i}");
+        let expected = format!("val-{i}");
+        let val = send_command(&mut replica_client, &[b"GET", key.as_bytes()]);
+        assert_eq!(
+            val,
+            RespFrame::BulkString(Some(expected.into_bytes())),
+            "key {key} missing after FULLRESYNC"
+        );
+    }
+    let llen = send_command(&mut replica_client, &[b"LLEN", b"repl-list"]);
+    assert_eq!(llen, RespFrame::Integer(5), "list not replicated");
+
+    // Phase 2: Live streaming — write more data to primary after replica is synced.
+    for i in 0..10 {
+        let key = format!("live-{i}");
+        let val = format!("streamed-{i}");
+        send_command(&mut client, &[b"SET", key.as_bytes(), val.as_bytes()]);
+    }
+
+    // Wait for live commands to propagate.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut live_replicated = false;
+    while Instant::now() < deadline {
+        if let Some(bytes) = fetch_string_value(replica_port, b"live-9") {
+            if bytes == b"streamed-9" {
+                live_replicated = true;
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        live_replicated,
+        "live-streamed keys did not propagate to replica"
+    );
+
+    // Verify all live keys on replica.
+    for i in 0..10 {
+        let key = format!("live-{i}");
+        let expected = format!("streamed-{i}");
+        let val = send_command(&mut replica_client, &[b"GET", key.as_bytes()]);
+        assert_eq!(
+            val,
+            RespFrame::BulkString(Some(expected.into_bytes())),
+            "live key {key} not replicated"
+        );
+    }
+
+    // Verify INCR propagation.
+    send_command(&mut client, &[b"SET", b"counter", b"0"]);
+    for _ in 0..50 {
+        send_command(&mut client, &[b"INCR", b"counter"]);
+    }
+
+    // Wait for counter to reach 50 on replica.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut counter_replicated = false;
+    while Instant::now() < deadline {
+        if let Some(bytes) = fetch_string_value(replica_port, b"counter") {
+            if bytes == b"50" {
+                counter_replicated = true;
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        counter_replicated,
+        "INCR counter did not propagate to replica; got {:?}",
+        fetch_string_value(replica_port, b"counter")
     );
 
     send_shutdown_nosave(replica_port);

@@ -351,10 +351,16 @@ fn main() -> ExitCode {
         }
     }
 
-    // Configure RDB snapshot persistence if requested.
+    // Configure and load RDB snapshot persistence if requested.
     if let Some(path) = &rdb_path {
         runtime.set_rdb_path(std::path::PathBuf::from(path));
-        eprintln!("RDB: snapshot path configured at {path} (SAVE/BGSAVE will write here)");
+        match runtime.load_rdb(now_ms()) {
+            Ok(0) => eprintln!("RDB: no existing file or empty (will create on SAVE/BGSAVE)"),
+            Ok(n) => eprintln!("RDB: loaded {n} entries from {path}"),
+            Err(e) => {
+                eprintln!("RDB: load warning: {e:?} (starting with empty store)");
+            }
+        }
     }
 
     let addr: SocketAddr = match format!("{bind_addr}:{port}").parse() {
@@ -872,7 +878,7 @@ fn process_buffered_frames(
                     } else {
                         conn.blocked = Some(blocked);
                         blocked_tokens.insert(token);
-                        runtime.mark_client_blocked(conn.session.client_id);
+                        runtime.mark_client_blocked(runtime.client_id());
                         consumed_total += consumed;
                         break; // Stop processing — client is now blocked.
                     }
@@ -883,7 +889,7 @@ fn process_buffered_frames(
                     replication_follow_up_bytes(runtime, &parsed_frame, &response, ts)
                 {
                     conn.write_buf.extend_from_slice(&follow_up);
-                    if runtime.is_replica(conn.session.client_id) {
+                    if runtime.is_replica(runtime.client_id()) {
                         conn.replication_sent_offset = Some(runtime.replication_primary_offset());
                     }
                 }
@@ -1964,7 +1970,7 @@ fn check_blocked_clients(ctx: CheckBlockedClientsContext<'_>) {
             conn.write_buf.extend_from_slice(&response.to_bytes());
             conn.blocked = None;
             blocked_tokens.remove(&token);
-            runtime.mark_client_unblocked(conn.session.client_id);
+            runtime.mark_client_unblocked(runtime.client_id());
 
             // Process any commands the client pipelined while blocked.
             if !conn.read_buf.is_empty() {
