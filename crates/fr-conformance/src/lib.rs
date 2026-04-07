@@ -5702,7 +5702,10 @@ mod tests {
     core_fixture_test!(conformance_core_object, "core_object.json");
     core_fixture_test!(conformance_core_cluster, "core_cluster.json");
     core_fixture_test!(conformance_core_replication, "core_replication.json");
-    core_fixture_test!(conformance_core_module_sentinel, "core_module_sentinel.json");
+    core_fixture_test!(
+        conformance_core_module_sentinel,
+        "core_module_sentinel.json"
+    );
     core_fixture_test!(conformance_core_migrate, "core_migrate.json");
     core_fixture_test!(conformance_core_pfdebug, "core_pfdebug.json");
     core_fixture_test!(conformance_core_wait, "core_wait.json");

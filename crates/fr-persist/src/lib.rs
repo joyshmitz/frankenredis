@@ -852,9 +852,8 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                                                 .map_err(|_| PersistError::InvalidFrame)?,
                                         );
                                         cursor += 8;
-                                        let (pe_consumer, pec) =
-                                            rdb_decode_string(&data[cursor..])
-                                                .ok_or(PersistError::InvalidFrame)?;
+                                        let (pe_consumer, pec) = rdb_decode_string(&data[cursor..])
+                                            .ok_or(PersistError::InvalidFrame)?;
                                         cursor += pec;
                                         if cursor + 16 > data.len() {
                                             return Err(PersistError::InvalidFrame);

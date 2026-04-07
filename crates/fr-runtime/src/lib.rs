@@ -8407,12 +8407,8 @@ mod tests {
         assert_eq!(rt.server.store.stat_unexpected_error_replies, 1);
         assert_eq!(rt.server.store.stat_total_error_replies, 1);
 
-        rt.apply_replication_sync_payload(
-            "CONTINUE",
-            b"*2\r\n$4\r\nNOPE\r\n$3\r\nbad\r\n",
-            1,
-        )
-        .expect("replication payload should decode");
+        rt.apply_replication_sync_payload("CONTINUE", b"*2\r\n$4\r\nNOPE\r\n$3\r\nbad\r\n", 1)
+            .expect("replication payload should decode");
         assert_eq!(rt.server.store.stat_unexpected_error_replies, 2);
         assert_eq!(rt.server.store.stat_total_error_replies, 2);
 
