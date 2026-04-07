@@ -5682,6 +5682,32 @@ impl Store {
         }
     }
 
+    /// Return consumer group state for a stream key (for RDB persistence).
+    #[must_use]
+    pub fn stream_consumer_groups(&self, key: &[u8]) -> Option<&StreamGroupState> {
+        self.stream_groups.get(key)
+    }
+
+    /// Restore a consumer group from RDB snapshot data (bypasses normal validation).
+    pub fn restore_stream_group(
+        &mut self,
+        key: &[u8],
+        group_name: Vec<u8>,
+        last_delivered_id: StreamId,
+        consumers: BTreeSet<Vec<u8>>,
+        pending: StreamPendingEntries,
+    ) {
+        let groups = self.stream_groups.entry(key.to_vec()).or_default();
+        groups.insert(
+            group_name,
+            StreamGroup {
+                last_delivered_id,
+                consumers,
+                pending,
+            },
+        );
+    }
+
     pub fn xadd(
         &mut self,
         key: &[u8],

@@ -7627,7 +7627,31 @@ fn store_to_rdb_entries(store: &mut Store, now_ms: u64) -> Vec<RdbEntry> {
                     })
                     .collect();
                 let watermark = store.stream_watermark(&key).unwrap_or(None);
-                RdbValue::Stream(stream_entries, watermark)
+                let groups = store
+                    .stream_consumer_groups(&key)
+                    .map(|gs| {
+                        gs.iter()
+                            .map(|(name, group)| fr_persist::RdbStreamConsumerGroup {
+                                name: name.clone(),
+                                last_delivered_id_ms: group.last_delivered_id.0,
+                                last_delivered_id_seq: group.last_delivered_id.1,
+                                consumers: group.consumers.iter().cloned().collect(),
+                                pending: group
+                                    .pending
+                                    .iter()
+                                    .map(|((ms, seq), pe)| fr_persist::RdbStreamPendingEntry {
+                                        entry_id_ms: *ms,
+                                        entry_id_seq: *seq,
+                                        consumer: pe.consumer.clone(),
+                                        deliveries: pe.deliveries,
+                                        last_delivered_ms: pe.last_delivered_ms,
+                                    })
+                                    .collect(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                RdbValue::Stream(stream_entries, watermark, groups)
             }
         };
         entries.push(RdbEntry {
@@ -7705,7 +7729,7 @@ fn apply_rdb_entries_to_store(
                     );
                 }
             }
-            RdbValue::Stream(stream_entries, watermark) => {
+            RdbValue::Stream(stream_entries, watermark, groups) => {
                 for (ms, seq, fields) in stream_entries {
                     let field_pairs: Vec<(Vec<u8>, Vec<u8>)> =
                         fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -7713,6 +7737,29 @@ fn apply_rdb_entries_to_store(
                 }
                 if let Some((wm_ms, wm_seq)) = watermark {
                     let _ = store.xsetid(&key, (*wm_ms, *wm_seq), now_ms);
+                }
+                // Restore consumer groups from RDB snapshot.
+                for group in groups {
+                    let consumers: std::collections::BTreeSet<Vec<u8>> =
+                        group.consumers.iter().cloned().collect();
+                    let mut pending = std::collections::BTreeMap::new();
+                    for pe in &group.pending {
+                        pending.insert(
+                            (pe.entry_id_ms, pe.entry_id_seq),
+                            fr_store::StreamPendingEntry {
+                                consumer: pe.consumer.clone(),
+                                deliveries: pe.deliveries,
+                                last_delivered_ms: pe.last_delivered_ms,
+                            },
+                        );
+                    }
+                    store.restore_stream_group(
+                        &key,
+                        group.name.clone(),
+                        (group.last_delivered_id_ms, group.last_delivered_id_seq),
+                        consumers,
+                        pending,
+                    );
                 }
                 if let Some(expires_at_ms) = entry.expire_ms {
                     store.expire_at_milliseconds(

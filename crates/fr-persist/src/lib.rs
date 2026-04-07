@@ -176,6 +176,26 @@ pub struct RdbEntry {
 /// Stream entry: (ms, seq, fields).
 pub type StreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 
+/// A pending entry in a consumer group (PEL entry).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RdbStreamPendingEntry {
+    pub entry_id_ms: u64,
+    pub entry_id_seq: u64,
+    pub consumer: Vec<u8>,
+    pub deliveries: u64,
+    pub last_delivered_ms: u64,
+}
+
+/// A consumer group persisted in an RDB snapshot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RdbStreamConsumerGroup {
+    pub name: Vec<u8>,
+    pub last_delivered_id_ms: u64,
+    pub last_delivered_id_seq: u64,
+    pub consumers: Vec<Vec<u8>>,
+    pub pending: Vec<RdbStreamPendingEntry>,
+}
+
 /// Value types supported in our RDB format.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RdbValue {
@@ -184,8 +204,12 @@ pub enum RdbValue {
     Set(Vec<Vec<u8>>),
     Hash(Vec<(Vec<u8>, Vec<u8>)>),
     SortedSet(Vec<(Vec<u8>, f64)>),
-    /// Stream: entries + optional last-generated-id watermark.
-    Stream(Vec<StreamEntry>, Option<(u64, u64)>),
+    /// Stream: entries + optional watermark + consumer groups.
+    Stream(
+        Vec<StreamEntry>,
+        Option<(u64, u64)>,
+        Vec<RdbStreamConsumerGroup>,
+    ),
 }
 
 /// Encode an RDB length using Redis's variable-length encoding.
@@ -327,7 +351,7 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
                     buf.extend_from_slice(&score.to_le_bytes());
                 }
             }
-            RdbValue::Stream(stream_entries, watermark) => {
+            RdbValue::Stream(stream_entries, watermark, groups) => {
                 buf.push(RDB_TYPE_STREAM);
                 rdb_encode_string(&mut buf, &entry.key);
                 let (wm_ms, wm_seq) = watermark.unwrap_or((0, 0));
@@ -341,6 +365,25 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
                     for (fname, fval) in fields {
                         rdb_encode_string(&mut buf, fname);
                         rdb_encode_string(&mut buf, fval);
+                    }
+                }
+                // Consumer groups
+                rdb_encode_length(&mut buf, groups.len());
+                for group in groups {
+                    rdb_encode_string(&mut buf, &group.name);
+                    buf.extend_from_slice(&group.last_delivered_id_ms.to_le_bytes());
+                    buf.extend_from_slice(&group.last_delivered_id_seq.to_le_bytes());
+                    rdb_encode_length(&mut buf, group.consumers.len());
+                    for consumer in &group.consumers {
+                        rdb_encode_string(&mut buf, consumer);
+                    }
+                    rdb_encode_length(&mut buf, group.pending.len());
+                    for pe in &group.pending {
+                        buf.extend_from_slice(&pe.entry_id_ms.to_le_bytes());
+                        buf.extend_from_slice(&pe.entry_id_seq.to_le_bytes());
+                        rdb_encode_string(&mut buf, &pe.consumer);
+                        buf.extend_from_slice(&pe.deliveries.to_le_bytes());
+                        buf.extend_from_slice(&pe.last_delivered_ms.to_le_bytes());
                     }
                 }
             }
@@ -753,7 +796,103 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                             }
                             stream_entries.push((ms, seq, fields));
                         }
-                        RdbValue::Stream(stream_entries, watermark)
+                        // Decode consumer groups (if present — backwards compat).
+                        let groups =
+                            if let Some((group_count, gc)) = rdb_decode_length(&data[cursor..]) {
+                                cursor += gc;
+                                let mut groups = Vec::with_capacity(group_count.min(256));
+                                for _ in 0..group_count {
+                                    let (name, nc) = rdb_decode_string(&data[cursor..])
+                                        .ok_or(PersistError::InvalidFrame)?;
+                                    cursor += nc;
+                                    if cursor + 16 > data.len() {
+                                        return Err(PersistError::InvalidFrame);
+                                    }
+                                    let ld_ms = u64::from_le_bytes(
+                                        data[cursor..cursor + 8]
+                                            .try_into()
+                                            .map_err(|_| PersistError::InvalidFrame)?,
+                                    );
+                                    cursor += 8;
+                                    let ld_seq = u64::from_le_bytes(
+                                        data[cursor..cursor + 8]
+                                            .try_into()
+                                            .map_err(|_| PersistError::InvalidFrame)?,
+                                    );
+                                    cursor += 8;
+                                    // Consumers list
+                                    let (consumer_count, cc) = rdb_decode_length(&data[cursor..])
+                                        .ok_or(PersistError::InvalidFrame)?;
+                                    cursor += cc;
+                                    let mut consumers = Vec::with_capacity(consumer_count.min(256));
+                                    for _ in 0..consumer_count {
+                                        let (cname, cnc) = rdb_decode_string(&data[cursor..])
+                                            .ok_or(PersistError::InvalidFrame)?;
+                                        cursor += cnc;
+                                        consumers.push(cname);
+                                    }
+                                    // Pending entries
+                                    let (pel_count, pc) = rdb_decode_length(&data[cursor..])
+                                        .ok_or(PersistError::InvalidFrame)?;
+                                    cursor += pc;
+                                    let mut pending = Vec::with_capacity(pel_count.min(4096));
+                                    for _ in 0..pel_count {
+                                        if cursor + 40 > data.len() {
+                                            return Err(PersistError::InvalidFrame);
+                                        }
+                                        let eid_ms = u64::from_le_bytes(
+                                            data[cursor..cursor + 8]
+                                                .try_into()
+                                                .map_err(|_| PersistError::InvalidFrame)?,
+                                        );
+                                        cursor += 8;
+                                        let eid_seq = u64::from_le_bytes(
+                                            data[cursor..cursor + 8]
+                                                .try_into()
+                                                .map_err(|_| PersistError::InvalidFrame)?,
+                                        );
+                                        cursor += 8;
+                                        let (pe_consumer, pec) =
+                                            rdb_decode_string(&data[cursor..])
+                                                .ok_or(PersistError::InvalidFrame)?;
+                                        cursor += pec;
+                                        if cursor + 16 > data.len() {
+                                            return Err(PersistError::InvalidFrame);
+                                        }
+                                        let deliveries = u64::from_le_bytes(
+                                            data[cursor..cursor + 8]
+                                                .try_into()
+                                                .map_err(|_| PersistError::InvalidFrame)?,
+                                        );
+                                        cursor += 8;
+                                        let last_del_ms = u64::from_le_bytes(
+                                            data[cursor..cursor + 8]
+                                                .try_into()
+                                                .map_err(|_| PersistError::InvalidFrame)?,
+                                        );
+                                        cursor += 8;
+                                        pending.push(RdbStreamPendingEntry {
+                                            entry_id_ms: eid_ms,
+                                            entry_id_seq: eid_seq,
+                                            consumer: pe_consumer,
+                                            deliveries,
+                                            last_delivered_ms: last_del_ms,
+                                        });
+                                    }
+                                    groups.push(RdbStreamConsumerGroup {
+                                        name,
+                                        last_delivered_id_ms: ld_ms,
+                                        last_delivered_id_seq: ld_seq,
+                                        consumers,
+                                        pending,
+                                    });
+                                }
+                                groups
+                            } else {
+                                // Old format without consumer groups.
+                                Vec::new()
+                            };
+                        RdbValue::Stream(stream_entries, watermark, groups)
                     }
                     _ => return Err(PersistError::InvalidFrame),
                 };
@@ -935,8 +1074,9 @@ mod tests {
     // ── RDB tests ────────────────────────────────────────────────────
 
     use super::{
-        RDB_CHECKSUM_LEN, RDB_OPCODE_EOF, RDB_TYPE_STRING, RdbEntry, RdbValue, crc64_redis,
-        decode_rdb, encode_rdb, lzf_decompress, rdb_encode_length, rdb_encode_string,
+        RDB_CHECKSUM_LEN, RDB_OPCODE_EOF, RDB_TYPE_STRING, RdbEntry, RdbStreamConsumerGroup,
+        RdbStreamPendingEntry, RdbValue, crc64_redis, decode_rdb, encode_rdb, lzf_decompress,
+        rdb_encode_length, rdb_encode_string,
     };
 
     #[test]
@@ -1190,6 +1330,7 @@ mod tests {
                     (1001, 0, vec![(b"name".to_vec(), b"Bob".to_vec())]),
                 ],
                 Some((1001, 0)),
+                Vec::new(),
             ),
             expire_ms: None,
         }];
@@ -1203,7 +1344,7 @@ mod tests {
         let entries = vec![RdbEntry {
             db: 0,
             key: b"emptystream".to_vec(),
-            value: RdbValue::Stream(vec![], None),
+            value: RdbValue::Stream(vec![], None, Vec::new()),
             expire_ms: None,
         }];
         let encoded = encode_rdb(&entries, &[]);
@@ -1219,8 +1360,50 @@ mod tests {
             value: RdbValue::Stream(
                 vec![(5000, 1, vec![(b"field".to_vec(), b"value".to_vec())])],
                 Some((5000, 1)),
+                Vec::new(),
             ),
             expire_ms: Some(9_999_999),
+        }];
+        let encoded = encode_rdb(&entries, &[]);
+        let (decoded, _) = decode_rdb(&encoded).expect("decode");
+        assert_eq!(decoded, entries);
+    }
+
+    #[test]
+    fn rdb_round_trip_stream_with_consumer_groups() {
+        let entries = vec![RdbEntry {
+            db: 0,
+            key: b"cg_stream".to_vec(),
+            value: RdbValue::Stream(
+                vec![
+                    (1000, 0, vec![(b"msg".to_vec(), b"hello".to_vec())]),
+                    (1001, 0, vec![(b"msg".to_vec(), b"world".to_vec())]),
+                ],
+                Some((1001, 0)),
+                vec![RdbStreamConsumerGroup {
+                    name: b"mygroup".to_vec(),
+                    last_delivered_id_ms: 1001,
+                    last_delivered_id_seq: 0,
+                    consumers: vec![b"alice".to_vec(), b"bob".to_vec()],
+                    pending: vec![
+                        RdbStreamPendingEntry {
+                            entry_id_ms: 1000,
+                            entry_id_seq: 0,
+                            consumer: b"alice".to_vec(),
+                            deliveries: 2,
+                            last_delivered_ms: 5000,
+                        },
+                        RdbStreamPendingEntry {
+                            entry_id_ms: 1001,
+                            entry_id_seq: 0,
+                            consumer: b"bob".to_vec(),
+                            deliveries: 1,
+                            last_delivered_ms: 6000,
+                        },
+                    ],
+                }],
+            ),
+            expire_ms: None,
         }];
         let encoded = encode_rdb(&entries, &[]);
         let (decoded, _) = decode_rdb(&encoded).expect("decode");
@@ -1261,6 +1444,7 @@ mod tests {
                 value: RdbValue::Stream(
                     vec![(100, 0, vec![(b"k".to_vec(), b"v".to_vec())])],
                     Some((100, 0)),
+                    Vec::new(),
                 ),
                 expire_ms: Some(1_000_000),
             },
