@@ -561,9 +561,11 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                 let (value, consumed) =
                     rdb_decode_string(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                 cursor += consumed;
-                if let (Ok(k), Ok(v)) = (String::from_utf8(key), String::from_utf8(value)) {
-                    aux.insert(k, v);
-                }
+                // Use lossy conversion to preserve AUX metadata even with
+                // non-UTF8 bytes rather than silently discarding fields.
+                let k = String::from_utf8_lossy(&key).into_owned();
+                let v = String::from_utf8_lossy(&value).into_owned();
+                aux.insert(k, v);
             }
             RDB_OPCODE_SELECTDB => {
                 let (db, consumed) =
