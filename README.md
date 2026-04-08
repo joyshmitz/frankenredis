@@ -23,7 +23,7 @@ This project applies frankenlibc/frankenfs compatibility-security thinking: stri
 The following disciplines are planned but not yet integrated:
 
 1. **alien-artifact-coding** for decision theory, confidence calibration, and explainability. Status: not started.
-2. **extreme-software-optimization** for profile-first, proof-backed performance work. Status: optimization proof artifacts exist (`ISOMORPHISM_PROOF_ROUND{1,2}.md`), but workload benchmarks against live servers are pending.
+2. **extreme-software-optimization** for profile-first, proof-backed performance work. Status: optimization proof artifacts exist (`ISOMORPHISM_PROOF_ROUND{1,2}.md`), the live-server benchmark harness/baselines/regression gate now exist (`crates/fr-bench`, `baselines/`, `scripts/benchmark_gate.sh`), and the active blocker is the severe throughput gap versus legacy Redis rather than lack of measurement.
 3. **RaptorQ-everywhere** for self-healing durability of long-lived artifacts and state. Status: not started, no crate dependency added.
 
 ## Current State
@@ -38,6 +38,10 @@ The following disciplines are planned but not yet integrated:
   - replication sync baseline: `PSYNC`/`SYNC` negotiation, full-resync snapshot apply, partial backlog replay, replica reconnect flow, and live replication offset reporting
   - strict/hardened compatibility gate + runtime evidence/structured-log baseline
   - fixture-driven conformance harness (`core_*` families + phase2c packet suites)
+- live performance instrumentation landed:
+  - `crates/fr-bench` TCP benchmark harness with HdrHistogram latency reporting
+  - checked-in FrankenRedis vs Redis baseline artifacts under `baselines/`
+  - `scripts/record_baselines.sh` for baseline capture and `scripts/benchmark_gate.sh` for regression checks
 - checked-in optimization and proof artifacts currently include:
   - `artifacts/optimization/phase2c-gate/baseline_hyperfine.json`
   - `artifacts/optimization/phase2c-gate/baseline_strace.txt`
@@ -46,6 +50,18 @@ The following disciplines are planned but not yet integrated:
   - `artifacts/optimization/ISOMORPHISM_PROOF_ROUND1.md`
   - `artifacts/optimization/ISOMORPHISM_PROOF_ROUND2.md`
   - `artifacts/phase2c/schema/topology_lock_v1.json`
+
+## Current Benchmark Evidence
+
+Initial live-server baselines were captured on April 7, 2026 against FrankenRedis `v0.1.0` and Redis `7.2.4`.
+
+- `SET`: FrankenRedis `1240.93 ops/sec` vs Redis `94402.47 ops/sec`; p99 `58,847us` vs `1,022us`
+- `GET`: FrankenRedis `1204.65 ops/sec` vs Redis `91142.35 ops/sec`; p99 `51,647us` vs `1,038us`
+- `MIXED`: FrankenRedis `1159.23 ops/sec` vs Redis `96834.08 ops/sec`; p99 `65,791us` vs `1,002us`
+- `INCR`: FrankenRedis `1176.59 ops/sec` vs Redis `95183.76 ops/sec`; p99 `66,559us` vs `996us`
+- `PIPELINE16`: FrankenRedis `1221.37 ops/sec` vs Redis `860900.42 ops/sec`; p50/p99 `693,759us / 857,087us` vs `759us / 1,817us`
+
+Conclusion: the repo now has real performance evidence and a regression gate, but the headline performance story is currently negative. The immediate optimization priority is root-causing and closing this gap while preserving strict Redis-observable semantics.
 
 ## Full Drop-In Parity Contract
 
@@ -90,11 +106,12 @@ Maintain deterministic command semantics, expiration behavior, and AOF/RDB recov
 
 ## Next Steps
 
-1. Expand conformance fixtures until all command families and compatibility-critical behaviors are covered.
-2. Expand persistence and replication invariants from the implemented sync baseline to broader legacy-oracle parity coverage.
-3. Add Asupersync-backed runtime adapter and FrankenTUI operator dashboard adapter.
-4. Implement RaptorQ sidecar pipeline for all durability-critical artifacts.
-5. Run optimization loop with one lever per commit and isomorphism proofs while preserving strict parity.
+1. Root-cause and reduce the severe throughput/latency gap versus legacy Redis while preserving strict parity.
+2. Expand conformance fixtures until all command families and compatibility-critical behaviors are covered.
+3. Expand persistence and replication invariants from the implemented sync baseline to broader legacy-oracle parity coverage.
+4. Add Asupersync-backed runtime adapter and FrankenTUI operator dashboard adapter.
+5. Implement RaptorQ sidecar pipeline for all durability-critical artifacts.
+6. Run optimization loop with one lever per commit and isomorphism proofs while preserving strict parity.
 
 ## Porting Artifact Set
 
@@ -116,6 +133,9 @@ rch exec -- cargo test --workspace
 rch exec -- cargo test -p fr-conformance -- --nocapture
 rch exec -- cargo run -p fr-conformance --bin phase2c_schema_gate -- --optimization-gate
 rch exec -- cargo bench
+
+# Baseline capture (build step uses rch when available)
+./scripts/record_baselines.sh
 
 # The benchmark gate runs locally and offloads only its release build step via rch.
 ./scripts/benchmark_gate.sh
