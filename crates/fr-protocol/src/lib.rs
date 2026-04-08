@@ -22,6 +22,7 @@ impl RespFrame {
     }
 
     pub fn encode_into(&self, out: &mut Vec<u8>) {
+        use std::io::Write;
         match self {
             Self::SimpleString(s) => {
                 out.extend_from_slice(b"+");
@@ -35,13 +36,13 @@ impl RespFrame {
             }
             Self::Integer(n) => {
                 out.extend_from_slice(b":");
-                out.extend_from_slice(n.to_string().as_bytes());
+                let _ = write!(out, "{}", n);
                 out.extend_from_slice(b"\r\n");
             }
             Self::BulkString(None) => out.extend_from_slice(b"$-1\r\n"),
             Self::BulkString(Some(bytes)) => {
                 out.extend_from_slice(b"$");
-                out.extend_from_slice(bytes.len().to_string().as_bytes());
+                let _ = write!(out, "{}", bytes.len());
                 out.extend_from_slice(b"\r\n");
                 out.extend_from_slice(bytes);
                 out.extend_from_slice(b"\r\n");
@@ -49,7 +50,7 @@ impl RespFrame {
             Self::Array(None) => out.extend_from_slice(b"*-1\r\n"),
             Self::Array(Some(frames)) => {
                 out.extend_from_slice(b"*");
-                out.extend_from_slice(frames.len().to_string().as_bytes());
+                let _ = write!(out, "{}", frames.len());
                 out.extend_from_slice(b"\r\n");
                 for frame in frames {
                     frame.encode_into(out);
