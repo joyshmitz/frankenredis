@@ -61,7 +61,24 @@ Initial live-server baselines were captured on April 7, 2026 against FrankenRedi
 - `INCR`: FrankenRedis `1176.59 ops/sec` vs Redis `95183.76 ops/sec`; p99 `66,559us` vs `996us`
 - `PIPELINE16`: FrankenRedis `1221.37 ops/sec` vs Redis `860900.42 ops/sec`; p50/p99 `693,759us / 857,087us` vs `759us / 1,817us`
 
-Conclusion: the repo now has real performance evidence and a regression gate, but the headline performance story is currently negative. The immediate optimization priority is root-causing and closing this gap while preserving strict Redis-observable semantics.
+### Throughput-gap recovery (April 9, 2026)
+
+Profile-driven optimization (`frankenredis-zjii`) closed most of the gap. Two
+fixes — lazy threat-event digests and an ACL category short-circuit — moved
+FrankenRedis from ~1.3% of Redis throughput to **79–99% on per-command
+workloads** and **31% on `pipeline=16`**:
+
+- `SET` p1: **75,054 ops/sec** (79% of Redis)
+- `GET` p1: **90,567 ops/sec** (99% of Redis)
+- `INCR` p1: **81,383 ops/sec** (86% of Redis)
+- `MIXED` p1: **80,372 ops/sec** (83% of Redis)
+- `SET` p16: **268,414 ops/sec** (31% of Redis)
+- `GET` p16: **433,970 ops/sec**
+- `MIXED` p16: **310,564 ops/sec**
+
+See `artifacts/optimization/throughput-gap/ISOMORPHISM_PROOF_LAZY_DIGEST.md`
+for the full investigation, before/after flamegraphs, and the semantic-drift
+note for the threat-event ledger.
 
 ## Full Drop-In Parity Contract
 

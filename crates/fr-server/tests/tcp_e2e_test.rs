@@ -803,10 +803,7 @@ fn tcp_aof_restart_preserves_all_data() {
     }
 
     assert!(aof_file.exists(), "AOF file was not created");
-    assert!(
-        aof_file.metadata().unwrap().len() > 0,
-        "AOF file is empty"
-    );
+    assert!(aof_file.metadata().unwrap().len() > 0, "AOF file is empty");
 
     // Phase 2: Restart on new port with same AOF, verify all data survived.
     let port2 = reserve_port();
@@ -911,10 +908,7 @@ fn tcp_rdb_restart_preserves_all_data() {
     }
 
     assert!(rdb_file.exists(), "RDB file was not created");
-    assert!(
-        rdb_file.metadata().unwrap().len() > 0,
-        "RDB file is empty"
-    );
+    assert!(rdb_file.metadata().unwrap().len() > 0, "RDB file is empty");
 
     // Phase 2: Restart on new port with same RDB, verify all data survived.
     let port2 = reserve_port();
