@@ -12200,7 +12200,7 @@ fn bitfield_clamp_with_overflow(
                 if i64_overflowed {
                     // If it overflowed i64 addition, value wrapped around.
                     // If value is negative, it overflowed past MAX. If positive, past MIN.
-                    let clamped = if value < 0 { i64::MAX } else { i64::MIN };
+                    let clamped = if value < 0 { max } else { min };
                     (clamped, true)
                 } else {
                     let clamped = value.clamp(min, max);

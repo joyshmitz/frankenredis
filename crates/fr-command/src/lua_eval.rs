@@ -2830,7 +2830,7 @@ impl<'a> LuaState<'a> {
                     }
                     _ => {
                         return Err(
-                            "bad argument #2 to 'setmetatable' (nil or table expected)".to_string(),
+                            "bad argument #2 to 'setmetatable' (nil or table expected)".to_string()
                         );
                     }
                 }
@@ -3040,12 +3040,8 @@ impl<'a> LuaState<'a> {
                 Ok(vec![LuaValue::Number(0.0)])
             }
             // ── Coroutine stubs (not supported, matches Redis) ──────────
-            "coroutine.create"
-            | "coroutine.resume"
-            | "coroutine.yield"
-            | "coroutine.status"
-            | "coroutine.wrap"
-            | "coroutine.running" => {
+            "coroutine.create" | "coroutine.resume" | "coroutine.yield" | "coroutine.status"
+            | "coroutine.wrap" | "coroutine.running" => {
                 Err("attempt to call a nil value".to_string())
             }
             // ── String library ──────────────────────────────────────────
@@ -4870,16 +4866,14 @@ mod tests {
     fn coroutine_table_is_accessible() {
         let mut store = Store::new();
         let result = eval_script(b"return type(coroutine)", &[], &[], &mut store, 0);
-        assert_eq!(
-            result,
-            Ok(RespFrame::BulkString(Some(b"table".to_vec())))
-        );
+        assert_eq!(result, Ok(RespFrame::BulkString(Some(b"table".to_vec()))));
     }
 
     #[test]
     fn setmetatable_and_getmetatable_work() {
         let mut store = Store::new();
-        let script = b"local t = {}; local mt = {x=42}; setmetatable(t, mt); return getmetatable(t).x";
+        let script =
+            b"local t = {}; local mt = {x=42}; setmetatable(t, mt); return getmetatable(t).x";
         let result = eval_script(script, &[], &[], &mut store, 0);
         assert_eq!(result, Ok(RespFrame::Integer(42)));
     }
@@ -4889,10 +4883,7 @@ mod tests {
         let mut store = Store::new();
         let script = b"local base = {greeting = 'hello'}; local t = {}; setmetatable(t, {__index = base}); return t.greeting";
         let result = eval_script(script, &[], &[], &mut store, 0);
-        assert_eq!(
-            result,
-            Ok(RespFrame::BulkString(Some(b"hello".to_vec())))
-        );
+        assert_eq!(result, Ok(RespFrame::BulkString(Some(b"hello".to_vec()))));
     }
 
     #[test]
@@ -4906,7 +4897,8 @@ mod tests {
     #[test]
     fn metatable_index_does_not_override_existing() {
         let mut store = Store::new();
-        let script = b"local base = {x=1}; local t = {x=2}; setmetatable(t, {__index=base}); return t.x";
+        let script =
+            b"local base = {x=1}; local t = {x=2}; setmetatable(t, {__index=base}); return t.x";
         let result = eval_script(script, &[], &[], &mut store, 0);
         assert_eq!(result, Ok(RespFrame::Integer(2)));
     }
@@ -4914,7 +4906,8 @@ mod tests {
     #[test]
     fn setmetatable_nil_removes_metatable() {
         let mut store = Store::new();
-        let script = b"local t = {}; setmetatable(t, {__index={x=1}}); setmetatable(t, nil); return t.x";
+        let script =
+            b"local t = {}; setmetatable(t, {__index={x=1}}); setmetatable(t, nil); return t.x";
         let result = eval_script(script, &[], &[], &mut store, 0);
         assert_eq!(result, Ok(RespFrame::BulkString(None)));
     }
