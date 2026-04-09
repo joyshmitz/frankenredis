@@ -375,18 +375,13 @@ impl SortedSet {
     fn insert(&mut self, member: Vec<u8>, score: f64) -> bool {
         let score = canonicalize_zero_score(score);
         if let Some(old_score) = self.dict.insert(member.clone(), score) {
-            let old_canonical = canonicalize_zero_score(old_score);
-            if old_canonical.total_cmp(&score).is_eq() {
-                if old_score.total_cmp(&score).is_eq() {
-                    return false;
-                }
-                self.ordered
-                    .remove(&ScoreMember::actual(old_score, member.clone()));
-                self.ordered.insert(ScoreMember::actual(score, member), ());
+            if old_score.total_cmp(&score).is_eq() {
                 return false;
             }
             self.ordered
                 .remove(&ScoreMember::actual(old_score, member.clone()));
+            self.ordered.insert(ScoreMember::actual(score, member), ());
+            return false;
         }
         self.ordered.insert(ScoreMember::actual(score, member), ());
         true
@@ -1759,6 +1754,15 @@ impl Store {
         now_ms: u64,
     ) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
+        if value.is_empty() {
+            return match self.entries.get(key) {
+                Some(entry) => match &entry.value {
+                    Value::String(v) => Ok(v.len()),
+                    _ => Err(StoreError::WrongType),
+                },
+                None => Ok(0),
+            };
+        }
         let needed = offset + value.len();
         match self.entries.get_mut(key) {
             Some(entry) => {
@@ -3625,7 +3629,7 @@ impl Store {
                             }
                         });
                     } else if count < 0 {
-                        let limit = (-count) as u64;
+                        let limit = count.unsigned_abs();
                         let total = l.iter().filter(|v| v.as_slice() == value).count() as u64;
                         let skip = total.saturating_sub(limit);
                         let mut seen = 0_u64;
@@ -4224,18 +4228,45 @@ impl Store {
         for key in keys {
             self.drop_if_expired(key, now_ms);
         }
-        let mut result = BTreeSet::new();
-        for key in keys {
+
+        let mut max_card = 0;
+        let mut base_idx = None;
+        for (i, key) in keys.iter().enumerate() {
             if let Some(entry) = self.entries.get_mut(*key) {
                 match &entry.value {
                     Value::Set(s) => {
-                        result.extend(s.iter().cloned());
+                        let len = s.len();
+                        if len > max_card {
+                            max_card = len;
+                            base_idx = Some(i);
+                        }
                         entry.touch(now_ms);
                     }
                     _ => return Err(StoreError::WrongType),
                 }
             }
         }
+
+        let Some(base_idx) = base_idx else {
+            return Ok(Vec::new());
+        };
+
+        let mut result = match &self.entries.get(keys[base_idx]).unwrap().value {
+            Value::Set(s) => s.clone(),
+            _ => unreachable!(),
+        };
+
+        for (i, key) in keys.iter().enumerate() {
+            if i == base_idx {
+                continue;
+            }
+            if let Some(entry) = self.entries.get(*key)
+                && let Value::Set(s) = &entry.value
+            {
+                result.extend(s.iter().cloned());
+            }
+        }
+
         let mut v: Vec<Vec<u8>> = result.into_iter().collect();
         v.sort();
         Ok(v)
@@ -4616,8 +4647,14 @@ impl Store {
                         } else {
                             true
                         };
-                        if should_update && zs.insert(member.clone(), *score) {
-                            changed += 1;
+                        if should_update {
+                            let old_canonical = canonicalize_zero_score(old_score);
+                            let new_canonical = canonicalize_zero_score(*score);
+                            let score_changed = !old_canonical.total_cmp(&new_canonical).is_eq();
+                            zs.insert(member.clone(), *score);
+                            if score_changed {
+                                changed += 1;
+                            }
                         }
                     }
                     None => {
@@ -9438,8 +9475,8 @@ fn hll_rho(w: u64) -> u8 {
     if w == 0 {
         return (width + 1) as u8;
     }
-    let lz = w.leading_zeros() - HLL_P; // subtract the high bits that don't belong to w
-    (lz + 1) as u8
+    let tz = w.trailing_zeros();
+    (tz + 1) as u8
 }
 
 fn hll_parse_registers(data: &[u8]) -> Result<Vec<u8>, StoreError> {
