@@ -7128,6 +7128,8 @@ pub fn execute_migrate(
         RespFrame::SimpleString("OK".to_string())
     };
 
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+
     Ok(MigrateOutcome {
         reply,
         deleted_keys: deleted_target_keys,

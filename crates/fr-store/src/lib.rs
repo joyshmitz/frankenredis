@@ -769,7 +769,8 @@ impl Default for DispatchClientContext {
 
 #[derive(Debug)]
 pub struct Store {
-    entries: BTreeMap<Vec<u8>, Entry>,
+    entries: HashMap<Vec<u8>, Entry>,
+    ordered_keys: BTreeSet<Vec<u8>>,
     db_key_counts: Vec<usize>,
     db_expires_counts: Vec<usize>,
     /// Number of databases (configurable at startup, default 16).
@@ -991,7 +992,8 @@ pub fn read_rss_bytes() -> Option<usize> {
 impl Default for Store {
     fn default() -> Self {
         Self {
-            entries: BTreeMap::new(),
+            entries: HashMap::new(),
+            ordered_keys: BTreeSet::new(),
             db_key_counts: vec![0; DEFAULT_NUM_DATABASES],
             db_expires_counts: vec![0; DEFAULT_NUM_DATABASES],
             database_count: DEFAULT_NUM_DATABASES,
@@ -1110,6 +1112,24 @@ impl Store {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn ordered_physical_keys_in_db(&self, db: usize) -> Vec<Vec<u8>> {
+        if db == 0 {
+            return self
+                .ordered_keys
+                .iter()
+                .filter(|key| decode_db_key(key).is_none())
+                .cloned()
+                .collect();
+        }
+
+        let prefix = encode_db_key(db, b"");
+        self.ordered_keys
+            .range(prefix.clone()..)
+            .take_while(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect()
     }
 
     #[must_use]
@@ -1409,7 +1429,7 @@ impl Store {
                 removed = removed.saturating_add(1);
             }
         }
-        self.dirty += removed;
+        self.dirty = self.dirty.saturating_add(removed);
         removed
     }
 
@@ -2223,37 +2243,18 @@ impl Store {
 
     #[must_use]
     pub fn keys_in_db(&mut self, db: usize, now_ms: u64) -> Vec<Vec<u8>> {
-        if db == 0 {
-            let physical_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
-            for key in &physical_keys {
-                self.drop_if_expired(key, now_ms);
-            }
-            return self
-                .entries
-                .keys()
-                .filter(|k| decode_db_key(k).is_none())
-                .cloned()
-                .collect();
-        }
-
-        let prefix = encode_db_key(db, b"");
-        let physical_keys: Vec<Vec<u8>> = self
-            .entries
-            .range(prefix.clone()..)
-            .take_while(|(k, _)| k.starts_with(&prefix))
-            .map(|(k, _)| k.clone())
-            .collect();
+        let physical_keys = self.ordered_physical_keys_in_db(db);
 
         for key in &physical_keys {
             self.drop_if_expired(key, now_ms);
         }
 
-        self.entries
-            .range(prefix.clone()..)
-            .take_while(|(k, _)| k.starts_with(&prefix))
-            .map(|(k, _)| {
-                let (_, logical) = decode_db_key(k).expect("well-formed DB key");
-                logical.to_vec()
+        self.ordered_physical_keys_in_db(db)
+            .into_iter()
+            .map(|key| {
+                decode_db_key(&key)
+                    .map(|(_, logical)| logical.to_vec())
+                    .unwrap_or(key)
             })
             .collect()
     }
@@ -2262,14 +2263,14 @@ impl Store {
     pub fn keys_matching(&mut self, pattern: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
         // Fallback to O(N) scan across all databases if DB index is not known.
         // This is primarily for unit tests and direct fr-command usage.
-        let physical_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
+        let physical_keys: Vec<Vec<u8>> = self.ordered_keys.iter().cloned().collect();
         for key in &physical_keys {
             self.drop_if_expired(key, now_ms);
         }
 
         let mut result: Vec<Vec<u8>> = self
-            .entries
-            .keys()
+            .ordered_keys
+            .iter()
             .filter(|key| glob_match(pattern, key))
             .cloned()
             .collect();
@@ -2279,39 +2280,19 @@ impl Store {
 
     #[must_use]
     pub fn keys_matching_in_db(&mut self, db: usize, pattern: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
-        if db == 0 {
-            let physical_keys: Vec<Vec<u8>> = self.entries.keys().cloned().collect();
-            for key in &physical_keys {
-                self.drop_if_expired(key, now_ms);
-            }
-            let mut result: Vec<Vec<u8>> = self
-                .entries
-                .keys()
-                .filter(|k| decode_db_key(k).is_none() && glob_match(pattern, k))
-                .cloned()
-                .collect();
-            result.sort();
-            return result;
-        }
-
-        let prefix = encode_db_key(db, b"");
-        let physical_keys: Vec<Vec<u8>> = self
-            .entries
-            .range(prefix.clone()..)
-            .take_while(|(k, _)| k.starts_with(&prefix))
-            .map(|(k, _)| k.clone())
-            .collect();
+        let physical_keys = self.ordered_physical_keys_in_db(db);
 
         for key in &physical_keys {
             self.drop_if_expired(key, now_ms);
         }
 
         let mut result: Vec<Vec<u8>> = self
-            .entries
-            .range(prefix.clone()..)
-            .take_while(|(k, _)| k.starts_with(&prefix))
-            .filter_map(|(k, _)| {
-                let (_, logical) = decode_db_key(k)?;
+            .ordered_physical_keys_in_db(db)
+            .into_iter()
+            .filter_map(|key| {
+                let logical = decode_db_key(&key)
+                    .map(|(_, logical)| logical)
+                    .unwrap_or(key.as_slice());
                 if glob_match(pattern, logical) {
                     Some(logical.to_vec())
                 } else {
@@ -2357,11 +2338,12 @@ impl Store {
     fn internal_entry(&mut self, key: Vec<u8>, default_value: Value, now_ms: u64) -> &mut Entry {
         let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
         match self.entries.entry(key) {
-            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::btree_map::Entry::Vacant(entry) => {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
                 if db < self.database_count {
                     self.db_key_counts[db] = self.db_key_counts[db].saturating_add(1);
                 }
+                self.ordered_keys.insert(entry.key().clone());
                 entry.insert(Entry::new(default_value, None, now_ms))
             }
         }
@@ -2369,6 +2351,7 @@ impl Store {
 
     fn internal_entries_insert(&mut self, key: Vec<u8>, mut entry: Entry) -> Option<Entry> {
         let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
+        let is_new_key = !self.entries.contains_key(&key);
 
         if let Some(old_entry) = self.entries.get(&key) {
             entry.modification_count = old_entry.modification_count.wrapping_add(1);
@@ -2379,6 +2362,9 @@ impl Store {
             if db < self.database_count {
                 self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
             }
+        }
+        if is_new_key {
+            self.ordered_keys.insert(key.clone());
         }
         if let Some(old) = self.entries.insert(key, entry) {
             if old.expires_at_ms.is_some() {
@@ -2398,6 +2384,7 @@ impl Store {
 
     fn internal_entries_remove(&mut self, key: &[u8]) -> Option<Entry> {
         if let Some(entry) = self.entries.remove(key) {
+            self.ordered_keys.remove(key);
             let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
             if db < self.database_count {
                 self.db_key_counts[db] = self.db_key_counts[db].saturating_sub(1);
@@ -2577,16 +2564,21 @@ impl Store {
 
         let keys_to_check: Vec<Vec<u8>> = match start_cursor {
             Some(ref k) => {
-                let mut it = self.entries.range(k.clone()..).map(|(k, _)| k.clone());
+                let mut it = self.ordered_keys.range(k.clone()..).cloned();
                 let mut collected: Vec<Vec<u8>> = it.by_ref().take(sample_limit).collect();
                 if collected.len() < sample_limit {
                     // Wrap around
                     let remaining = sample_limit - collected.len();
-                    collected.extend(self.entries.keys().take(remaining).cloned());
+                    collected.extend(self.ordered_keys.iter().take(remaining).cloned());
                 }
                 collected
             }
-            None => self.entries.keys().take(sample_limit).cloned().collect(),
+            None => self
+                .ordered_keys
+                .iter()
+                .take(sample_limit)
+                .cloned()
+                .collect(),
         };
 
         let mut evicted_keys = 0usize;
@@ -2612,10 +2604,10 @@ impl Store {
         }
 
         let next_cursor = keys_to_check.last().and_then(|last| {
-            self.entries
+            self.ordered_keys
                 .range((Excluded(last.clone()), Unbounded))
                 .next()
-                .map(|(k, _)| k.clone())
+                .cloned()
         });
 
         ActiveExpireCycleResult {
@@ -7565,7 +7557,10 @@ impl Store {
         }
 
         let mut processed = 0;
-        for (key, entry) in self.entries.iter().skip(start) {
+        for key in self.ordered_keys.iter().skip(start) {
+            let Some(entry) = self.entries.get(key) else {
+                continue;
+            };
             pos += 1;
             processed += 1;
             if evaluate_expiry(now_ms, entry.expires_at_ms).should_evict {
@@ -7910,7 +7905,10 @@ impl Store {
     #[must_use]
     pub fn state_digest(&self) -> String {
         let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-        for (key, entry) in &self.entries {
+        for key in &self.ordered_keys {
+            let Some(entry) = self.entries.get(key) else {
+                continue;
+            };
             hash = fnv1a_update(hash, key);
             match &entry.value {
                 Value::String(v) => {
@@ -8816,7 +8814,7 @@ impl Store {
     /// Return all key names in the store (sorted for determinism).
     #[must_use]
     pub fn all_keys(&self) -> Vec<Vec<u8>> {
-        self.entries.keys().cloned().collect()
+        self.ordered_keys.iter().cloned().collect()
     }
 
     /// Drop a key if it has expired. Public wrapper for RDB/snapshot use.

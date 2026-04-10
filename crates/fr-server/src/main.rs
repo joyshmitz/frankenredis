@@ -656,6 +656,7 @@ fn accept_connections(
                     Interest::READABLE | Interest::WRITABLE,
                 ) {
                     eprintln!("warn: failed to register client: {e}");
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
                     continue;
                 }
 
