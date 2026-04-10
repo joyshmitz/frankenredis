@@ -5,7 +5,7 @@ pub use lua_eval::eval_script;
 
 use fr_protocol::RespFrame;
 use fr_store::{
-    MaxmemoryPolicy, PttlValue, PubSubMessage, ScoreBound, Store, StoreError,
+    ExpireTimeValue, MaxmemoryPolicy, PttlValue, PubSubMessage, ScoreBound, Store, StoreError,
     StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply,
     StreamGroupReadCursor, StreamGroupReadOptions, StreamId, ValueType, crc16_slot, glob_match,
     read_rss_bytes,
@@ -1750,7 +1750,11 @@ fn set(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
         None
     };
 
-    let key_exists = store.exists(&argv[1], now_ms);
+    let key_exists = if get {
+        old_value.is_some()
+    } else {
+        store.exists(&argv[1], now_ms)
+    };
     if nx && key_exists {
         return Ok(if get {
             RespFrame::BulkString(old_value)
@@ -2031,12 +2035,10 @@ fn expiretime(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     if argv.len() != 2 {
         return Err(CommandError::WrongArity("EXPIRETIME"));
     }
-    if !store.exists(&argv[1], now_ms) {
-        return Ok(RespFrame::Integer(-2));
-    }
-    let value = match store.get_expires_at_ms(&argv[1], now_ms) {
-        Some(abs_ms) => (abs_ms / 1000) as i64,
-        None => -1,
+    let value = match store.expiretime_value(&argv[1], now_ms) {
+        ExpireTimeValue::KeyMissing => -2,
+        ExpireTimeValue::NoExpiry => -1,
+        ExpireTimeValue::ExpiresAt(abs_ms) => (abs_ms / 1000) as i64,
     };
     Ok(RespFrame::Integer(value))
 }
@@ -2049,12 +2051,10 @@ fn pexpiretime(
     if argv.len() != 2 {
         return Err(CommandError::WrongArity("PEXPIRETIME"));
     }
-    if !store.exists(&argv[1], now_ms) {
-        return Ok(RespFrame::Integer(-2));
-    }
-    let value = match store.get_expires_at_ms(&argv[1], now_ms) {
-        Some(abs_ms) => abs_ms as i64,
-        None => -1,
+    let value = match store.expiretime_value(&argv[1], now_ms) {
+        ExpireTimeValue::KeyMissing => -2,
+        ExpireTimeValue::NoExpiry => -1,
+        ExpireTimeValue::ExpiresAt(abs_ms) => abs_ms as i64,
     };
     Ok(RespFrame::Integer(value))
 }
@@ -2295,18 +2295,15 @@ fn lpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
     if argv.len() == 3 {
         let count = parse_u64_arg(&argv[2])? as usize;
-        // Redis returns nil (not empty array) when key doesn't exist with COUNT
-        if !store.exists(&argv[1], now_ms) {
-            return Ok(RespFrame::BulkString(None));
-        }
-        let mut result = Vec::new();
-        for _ in 0..count {
-            match store.lpop(&argv[1], now_ms)? {
-                Some(v) => result.push(RespFrame::BulkString(Some(v))),
-                None => break,
-            }
-        }
-        return Ok(RespFrame::Array(Some(result)));
+        let values = match store.lpop_count(&argv[1], count, now_ms)? {
+            None => return Ok(RespFrame::BulkString(None)),
+            Some(values) => values,
+        };
+        let frames = values
+            .into_iter()
+            .map(|v| RespFrame::BulkString(Some(v)))
+            .collect();
+        return Ok(RespFrame::Array(Some(frames)));
     }
     let value = store.lpop(&argv[1], now_ms)?;
     Ok(RespFrame::BulkString(value))
@@ -2318,18 +2315,15 @@ fn rpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
     if argv.len() == 3 {
         let count = parse_u64_arg(&argv[2])? as usize;
-        // Redis returns nil (not empty array) when key doesn't exist with COUNT
-        if !store.exists(&argv[1], now_ms) {
-            return Ok(RespFrame::BulkString(None));
-        }
-        let mut result = Vec::new();
-        for _ in 0..count {
-            match store.rpop(&argv[1], now_ms)? {
-                Some(v) => result.push(RespFrame::BulkString(Some(v))),
-                None => break,
-            }
-        }
-        return Ok(RespFrame::Array(Some(result)));
+        let values = match store.rpop_count(&argv[1], count, now_ms)? {
+            None => return Ok(RespFrame::BulkString(None)),
+            Some(values) => values,
+        };
+        let frames = values
+            .into_iter()
+            .map(|v| RespFrame::BulkString(Some(v)))
+            .collect();
+        return Ok(RespFrame::Array(Some(frames)));
     }
     let value = store.rpop(&argv[1], now_ms)?;
     Ok(RespFrame::BulkString(value))
@@ -4071,12 +4065,15 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         idx += 2;
     }
 
+    let (stream_exists, last_id) = if nomkstream {
+        store.xlast_id_with_existence(&argv[1], now_ms)?
+    } else {
+        (true, store.xlast_id(&argv[1], now_ms)?)
+    };
     // NOMKSTREAM: if key doesn't exist, return nil (but proceed if key exists, even empty)
-    if nomkstream && !store.exists(&argv[1], now_ms) {
+    if nomkstream && !stream_exists {
         return Ok(RespFrame::BulkString(None));
     }
-
-    let last_id = store.xlast_id(&argv[1], now_ms)?;
     let id = if eq_ascii_command(&argv[id_idx], b"*") {
         next_auto_stream_id(last_id, now_ms)
     } else if let Some(partial_ms) = parse_partial_auto_id(&argv[id_idx]) {

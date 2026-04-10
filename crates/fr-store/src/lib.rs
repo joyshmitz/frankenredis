@@ -514,6 +514,13 @@ pub enum PttlValue {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpireTimeValue {
+    KeyMissing,
+    NoExpiry,
+    ExpiresAt(u64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueType {
     String,
     Hash,
@@ -1417,6 +1424,16 @@ impl Store {
     pub fn get_expires_at_ms(&mut self, key: &[u8], now_ms: u64) -> Option<u64> {
         self.drop_if_expired(key, now_ms);
         self.entries.get(key).and_then(|entry| entry.expires_at_ms)
+    }
+
+    pub fn expiretime_value(&mut self, key: &[u8], now_ms: u64) -> ExpireTimeValue {
+        if !self.record_keyspace_lookup(key, now_ms) {
+            return ExpireTimeValue::KeyMissing;
+        }
+        match self.entries.get(key).and_then(|entry| entry.expires_at_ms) {
+            Some(expires_at_ms) => ExpireTimeValue::ExpiresAt(expires_at_ms),
+            None => ExpireTimeValue::NoExpiry,
+        }
     }
 
     pub fn del(&mut self, keys: &[Vec<u8>], now_ms: u64) -> u64 {
@@ -3325,6 +3342,47 @@ impl Store {
         }
     }
 
+    pub fn lpop_count(
+        &mut self,
+        key: &[u8],
+        count: usize,
+        now_ms: u64,
+    ) -> Result<Option<Vec<Vec<u8>>>, StoreError> {
+        self.drop_if_expired(key, now_ms);
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                self.stat_keyspace_hits = self.stat_keyspace_hits.saturating_add(1);
+                match &mut entry.value {
+                    Value::List(l) => {
+                        let mut result = Vec::new();
+                        for _ in 0..count {
+                            match l.pop_front() {
+                                Some(v) => result.push(v),
+                                None => break,
+                            }
+                        }
+                        if !result.is_empty() {
+                            self.dirty = self.dirty.saturating_add(result.len() as u64);
+                        }
+                        if l.is_empty() {
+                            self.internal_entries_remove(key);
+                            self.stream_groups.remove(key);
+                            self.stream_last_ids.remove(key);
+                        } else if !result.is_empty() {
+                            entry.touch_write(now_ms);
+                        }
+                        Ok(Some(result))
+                    }
+                    _ => Err(StoreError::WrongType),
+                }
+            }
+            None => {
+                self.stat_keyspace_misses = self.stat_keyspace_misses.saturating_add(1);
+                Ok(None)
+            }
+        }
+    }
+
     pub fn rpop(&mut self, key: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
         match self.entries.get_mut(key) {
@@ -3346,6 +3404,47 @@ impl Store {
                 _ => Err(StoreError::WrongType),
             },
             None => Ok(None),
+        }
+    }
+
+    pub fn rpop_count(
+        &mut self,
+        key: &[u8],
+        count: usize,
+        now_ms: u64,
+    ) -> Result<Option<Vec<Vec<u8>>>, StoreError> {
+        self.drop_if_expired(key, now_ms);
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                self.stat_keyspace_hits = self.stat_keyspace_hits.saturating_add(1);
+                match &mut entry.value {
+                    Value::List(l) => {
+                        let mut result = Vec::new();
+                        for _ in 0..count {
+                            match l.pop_back() {
+                                Some(v) => result.push(v),
+                                None => break,
+                            }
+                        }
+                        if !result.is_empty() {
+                            self.dirty = self.dirty.saturating_add(result.len() as u64);
+                        }
+                        if l.is_empty() {
+                            self.internal_entries_remove(key);
+                            self.stream_groups.remove(key);
+                            self.stream_last_ids.remove(key);
+                        } else if !result.is_empty() {
+                            entry.touch_write(now_ms);
+                        }
+                        Ok(Some(result))
+                    }
+                    _ => Err(StoreError::WrongType),
+                }
+            }
+            None => {
+                self.stat_keyspace_misses = self.stat_keyspace_misses.saturating_add(1);
+                Ok(None)
+            }
         }
     }
 
@@ -5705,24 +5804,40 @@ impl Store {
         }
     }
 
-    pub fn xlast_id(&mut self, key: &[u8], now_ms: u64) -> Result<Option<StreamId>, StoreError> {
+    pub fn xlast_id_with_existence(
+        &mut self,
+        key: &[u8],
+        now_ms: u64,
+    ) -> Result<(bool, Option<StreamId>), StoreError> {
         self.drop_if_expired(key, now_ms);
         match self.entries.get(key) {
-            Some(entry) => match &entry.value {
-                Value::Stream(entries) => {
-                    let btree_last = entries.last_key_value().map(|(id, _)| *id);
-                    let xsetid_last = self.stream_last_ids.get(key).copied();
-                    Ok(match (btree_last, xsetid_last) {
-                        (Some(a), Some(b)) => Some(a.max(b)),
-                        (Some(a), None) => Some(a),
-                        (None, Some(b)) => Some(b),
-                        (None, None) => None,
-                    })
+            Some(entry) => {
+                self.stat_keyspace_hits = self.stat_keyspace_hits.saturating_add(1);
+                match &entry.value {
+                    Value::Stream(entries) => {
+                        let btree_last = entries.last_key_value().map(|(id, _)| *id);
+                        let xsetid_last = self.stream_last_ids.get(key).copied();
+                        let last_id = match (btree_last, xsetid_last) {
+                            (Some(a), Some(b)) => Some(a.max(b)),
+                            (Some(a), None) => Some(a),
+                            (None, Some(b)) => Some(b),
+                            (None, None) => None,
+                        };
+                        Ok((true, last_id))
+                    }
+                    _ => Err(StoreError::WrongType),
                 }
-                _ => Err(StoreError::WrongType),
-            },
-            None => Ok(None),
+            }
+            None => {
+                self.stat_keyspace_misses = self.stat_keyspace_misses.saturating_add(1);
+                Ok((false, None))
+            }
         }
+    }
+
+    pub fn xlast_id(&mut self, key: &[u8], now_ms: u64) -> Result<Option<StreamId>, StoreError> {
+        let (_, last_id) = self.xlast_id_with_existence(key, now_ms)?;
+        Ok(last_id)
     }
 
     pub fn stream_watermark(&self, key: &[u8]) -> Result<Option<StreamId>, StoreError> {
@@ -9745,11 +9860,12 @@ fn match_character_class(pattern: &[u8], pi: usize, ch: u8) -> Option<(bool, usi
 #[cfg(test)]
 mod tests {
     use super::{
-        EvictionLoopFailure, EvictionLoopStatus, EvictionSafetyGateState, LatencySample,
-        MaxmemoryPolicy, MaxmemoryPressureLevel, NOTIFY_EVICTED, NOTIFY_EXPIRED, NOTIFY_KEYEVENT,
-        PttlValue, ScoreBound, ScoreMember, Store, StoreError, StreamAutoClaimOptions,
-        StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply, StreamGroupReadCursor,
-        StreamGroupReadOptions, StreamPendingEntry, Value, ValueType, encode_db_key,
+        EvictionLoopFailure, EvictionLoopStatus, EvictionSafetyGateState, ExpireTimeValue,
+        LatencySample, MaxmemoryPolicy, MaxmemoryPressureLevel, NOTIFY_EVICTED, NOTIFY_EXPIRED,
+        NOTIFY_KEYEVENT, PttlValue, ScoreBound, ScoreMember, Store, StoreError,
+        StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply,
+        StreamGroupReadCursor, StreamGroupReadOptions, StreamPendingEntry, Value, ValueType,
+        encode_db_key,
     };
 
     fn group_read_options(
@@ -9935,6 +10051,29 @@ mod tests {
         assert!(store.expire_seconds(b"k", 5, 1_000));
         assert_eq!(store.pttl(b"k", 1_000), PttlValue::Remaining(5_000));
         assert_eq!(store.pttl(b"k", 6_001), PttlValue::KeyMissing);
+    }
+
+    #[test]
+    fn expiretime_value_reports_state() {
+        let mut store = Store::new();
+        assert_eq!(
+            store.expiretime_value(b"missing", 0),
+            ExpireTimeValue::KeyMissing
+        );
+        store.set(b"k".to_vec(), b"v".to_vec(), None, 1_000);
+        assert_eq!(
+            store.expiretime_value(b"k", 1_000),
+            ExpireTimeValue::NoExpiry
+        );
+        assert!(store.expire_milliseconds(b"k", 5_000, 1_000));
+        assert_eq!(
+            store.expiretime_value(b"k", 1_000),
+            ExpireTimeValue::ExpiresAt(6_000)
+        );
+        assert_eq!(
+            store.expiretime_value(b"k", 6_001),
+            ExpireTimeValue::KeyMissing
+        );
     }
 
     #[test]
@@ -10660,6 +10799,24 @@ mod tests {
         assert_eq!(store.lpop(b"l", 0).unwrap(), Some(b"a".to_vec()));
         assert!(!store.exists(b"l", 0));
         assert_eq!(store.lpop(b"l", 0).unwrap(), None);
+    }
+
+    #[test]
+    fn lpop_rpop_count_handles_missing_and_empty() {
+        let mut store = Store::new();
+        assert_eq!(store.lpop_count(b"missing", 2, 0).unwrap(), None);
+        store
+            .rpush(b"l", &[b"a".to_vec(), b"b".to_vec(), b"c".to_vec()], 0)
+            .unwrap();
+        assert_eq!(
+            store.lpop_count(b"l", 2, 0).unwrap(),
+            Some(vec![b"a".to_vec(), b"b".to_vec()])
+        );
+        assert_eq!(
+            store.rpop_count(b"l", 5, 0).unwrap(),
+            Some(vec![b"c".to_vec()])
+        );
+        assert!(!store.exists(b"l", 0));
     }
 
     #[test]
@@ -12100,6 +12257,29 @@ mod tests {
 
         let groups = store.xinfo_groups(b"s", 0).unwrap().expect("groups");
         assert_eq!(groups, vec![(b"g1".to_vec(), 0, 0, (0, 0))]);
+    }
+
+    #[test]
+    fn stream_xlast_id_with_existence_reports_empty_streams() {
+        let mut store = Store::new();
+        assert_eq!(
+            store.xlast_id_with_existence(b"s", 0).unwrap(),
+            (false, None)
+        );
+
+        assert!(store.xgroup_create(b"s", b"g1", (0, 0), true, 0).unwrap());
+        assert_eq!(
+            store.xlast_id_with_existence(b"s", 0).unwrap(),
+            (true, None)
+        );
+
+        store
+            .xadd(b"s", (1000, 0), &[(b"f".to_vec(), b"v".to_vec())], 0)
+            .unwrap();
+        assert_eq!(
+            store.xlast_id_with_existence(b"s", 0).unwrap(),
+            (true, Some((1000, 0)))
+        );
     }
 
     #[test]
