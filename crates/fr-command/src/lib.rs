@@ -10,8 +10,10 @@ use fr_store::{
     StreamGroupReadCursor, StreamGroupReadOptions, StreamId, ValueType, crc16_slot, glob_match,
     read_rss_bytes,
 };
+use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8918,21 +8920,98 @@ pub fn get_command_flags(name: &[u8]) -> Option<&'static str> {
         .map(|&(_, _, flags, ..)| flags)
 }
 
+const ACL_CATEGORIES: &[&str] = &[
+    "keyspace",
+    "read",
+    "write",
+    "set",
+    "sortedset",
+    "list",
+    "hash",
+    "string",
+    "bitmap",
+    "hyperloglog",
+    "geo",
+    "stream",
+    "pubsub",
+    "admin",
+    "fast",
+    "slow",
+    "blocking",
+    "dangerous",
+    "connection",
+    "transaction",
+    "scripting",
+    "server",
+    "generic",
+];
+
+struct AclCategoryMaps {
+    by_category: HashMap<&'static str, Vec<&'static str>>,
+    by_command: HashMap<&'static str, Vec<&'static str>>,
+}
+
+static ACL_CATEGORY_MAPS: OnceLock<AclCategoryMaps> = OnceLock::new();
+
+fn acl_category_maps() -> &'static AclCategoryMaps {
+    ACL_CATEGORY_MAPS.get_or_init(|| {
+        let mut by_category: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+        for &cat in ACL_CATEGORIES {
+            by_category.insert(cat, Vec::new());
+        }
+
+        let mut by_command: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+        for &(name, _arity, flags, _first, _last, _step) in COMMAND_TABLE.iter() {
+            let mut categories = Vec::new();
+            for &cat in ACL_CATEGORIES {
+                if command_matches_acl_category(name, flags, cat) {
+                    categories.push(cat);
+                    if let Some(list) = by_category.get_mut(cat) {
+                        list.push(name);
+                    }
+                }
+            }
+            if !categories.is_empty() {
+                by_command.insert(name, categories);
+            }
+        }
+
+        AclCategoryMaps {
+            by_category,
+            by_command,
+        }
+    })
+}
+
 /// Return commands that belong to the given ACL category.
 /// Redis maps commands to categories based on data type (string, hash, list, set,
 /// sortedset, geo, stream, bitmap, hyperloglog), access type (read, write),
 /// and command group (admin, fast, slow, pubsub, scripting, transaction, connection,
 /// keyspace, generic, blocking, dangerous, server).
-pub fn commands_in_acl_category(category: &str) -> Vec<&'static str> {
-    // Build the category → command mapping from COMMAND_TABLE flags and command names.
+pub fn commands_in_acl_category(category: &str) -> &'static [&'static str] {
+    let maps = acl_category_maps();
+    if let Some(cmds) = maps.by_category.get(category) {
+        return cmds.as_slice();
+    }
     let cat_lower = category.to_ascii_lowercase();
-    COMMAND_TABLE
-        .iter()
-        .filter(|&&(name, _arity, flags, _first, _last, _step)| {
-            command_matches_acl_category(name, flags, &cat_lower)
-        })
-        .map(|&(name, ..)| name)
-        .collect()
+    maps.by_category
+        .get(cat_lower.as_str())
+        .map(|cmds| cmds.as_slice())
+        .unwrap_or(&[])
+}
+
+/// Return ACL categories for a given command name.
+/// Pass lowercase command names to avoid allocations on the hot path.
+pub fn command_acl_categories(command: &str) -> &'static [&'static str] {
+    let maps = acl_category_maps();
+    if let Some(cats) = maps.by_command.get(command) {
+        return cats.as_slice();
+    }
+    let cmd_lower = command.to_ascii_lowercase();
+    maps.by_command
+        .get(cmd_lower.as_str())
+        .map(|cats| cats.as_slice())
+        .unwrap_or(&[])
 }
 
 fn command_matches_acl_category(name: &str, flags: &str, category: &str) -> bool {
@@ -9255,7 +9334,7 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                     std::str::from_utf8(&argv[4]).map_err(|_| CommandError::InvalidUtf8Argument)?;
                 let cmds = commands_in_acl_category(category);
                 let names: Vec<RespFrame> = cmds
-                    .into_iter()
+                    .iter()
                     .map(|name| RespFrame::BulkString(Some(name.as_bytes().to_vec())))
                     .collect();
                 return Ok(RespFrame::Array(Some(names)));

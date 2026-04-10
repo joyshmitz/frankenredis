@@ -7,8 +7,8 @@ use std::{
 };
 
 use fr_command::{
-    CommandError, MigrateKeySpec, commands_in_acl_category, dispatch_argv, execute_migrate,
-    frame_to_argv, parse_migrate_request,
+    CommandError, MigrateKeySpec, command_acl_categories, commands_in_acl_category, dispatch_argv,
+    execute_migrate, frame_to_argv, parse_migrate_request,
 };
 use fr_config::{
     DecisionAction, DriftSeverity, HardenedDeviationCategory, Mode, RuntimePolicy, ThreatClass,
@@ -37,59 +37,6 @@ use fr_store::{
     DispatchClientContext, EvictionLoopFailure, EvictionLoopResult, EvictionLoopStatus,
     EvictionSafetyGateState, MaxmemoryPolicy, Store, decode_db_key, encode_db_key, glob_match,
 };
-
-/// Return the ACL categories a command belongs to, using the COMMAND_TABLE metadata.
-fn command_categories(cmd_name: &str) -> Vec<String> {
-    let Some(flags) = fr_command::get_command_flags(cmd_name.as_bytes()) else {
-        return Vec::new();
-    };
-    // The ACL category names used by Redis map to flag words and data-type names.
-    // We check against the known category set.
-    const ACL_CATEGORIES: &[&str] = &[
-        "keyspace",
-        "read",
-        "write",
-        "set",
-        "sortedset",
-        "list",
-        "hash",
-        "string",
-        "bitmap",
-        "hyperloglog",
-        "geo",
-        "stream",
-        "pubsub",
-        "admin",
-        "fast",
-        "slow",
-        "blocking",
-        "dangerous",
-        "connection",
-        "transaction",
-        "scripting",
-        "server",
-        "generic",
-    ];
-    let flag_list: Vec<&str> = flags.split_whitespace().collect();
-    let mut cats = Vec::new();
-    for &cat in ACL_CATEGORIES {
-        // Check if the command's flags contain the category name.
-        if flag_list.iter().any(|f| f.eq_ignore_ascii_case(cat)) {
-            cats.push(cat.to_string());
-        }
-    }
-    // Also check if the command appears in category listing (handles edge cases where
-    // flag names differ from category names, e.g., "generic" vs "keyspace").
-    for &cat in ACL_CATEGORIES {
-        if !cats.iter().any(|c| c == cat) {
-            let cat_cmds = commands_in_acl_category(cat);
-            if cat_cmds.iter().any(|c| c.eq_ignore_ascii_case(cmd_name)) {
-                cats.push(cat.to_string());
-            }
-        }
-    }
-    cats
-}
 
 static PACKET_COUNTER: AtomicU64 = AtomicU64::new(1);
 static CLIENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -359,11 +306,11 @@ impl AclUser {
 
         // Check category-level permissions.
         // Get the categories this command belongs to.
-        let cmd_categories = command_categories(&cmd_lower);
+        let cmd_categories = command_acl_categories(cmd_lower.as_str());
 
         // If any denied category contains this command, deny it.
         for denied_cat in &self.denied_categories {
-            if cmd_categories.iter().any(|c| c == denied_cat) {
+            if cmd_categories.contains(&denied_cat.as_str()) {
                 return false;
             }
         }
@@ -371,7 +318,7 @@ impl AclUser {
         // If we have allowed categories, check if any match.
         if !self.allowed_categories.is_empty() {
             for allowed_cat in &self.allowed_categories {
-                if cmd_categories.iter().any(|c| c == allowed_cat) {
+                if cmd_categories.contains(&allowed_cat.as_str()) {
                     return true;
                 }
             }
@@ -3011,7 +2958,7 @@ impl Runtime {
             return reply;
         }
 
-        let _ = self.run_active_expire_cycle(now_ms, ActiveExpireCycleKind::Fast);
+        // Active expiry is driven by the server tick; command paths rely on lazy expiry.
         let dirty_before = self.server.store.dirty;
         let start = Instant::now();
         let handled_migrate = argv

@@ -2166,7 +2166,7 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
                 ));
                 let response = runtime.execute_frame(frame, now_ms);
                 if matches!(response, RespFrame::Error(_)) {
-                    continue;
+                    return Some(response);
                 }
                 // ZPOPMAX returns [member, score]. BZPOPMAX needs [key, member, score]
                 if response != RespFrame::Array(None)
@@ -2269,13 +2269,16 @@ fn propagate_writes_to_replicas(
     write_tokens: &mut HashSet<Token>,
 ) {
     let primary_offset = runtime.replication_primary_offset();
+    let mut encoded_stream: Option<Vec<u8>> = None;
     for (&token, conn) in clients.iter_mut() {
         if let Some(sent_offset) = conn.replication_sent_offset
             && sent_offset < primary_offset
         {
-            let bytes = runtime.encoded_aof_stream_from_offset(sent_offset.0);
+            let stream = encoded_stream.get_or_insert_with(|| runtime.encoded_aof_stream());
+            let start = usize::try_from(sent_offset.0).unwrap_or(usize::MAX);
+            let bytes = stream.get(start..).unwrap_or(&[]);
             if !bytes.is_empty() {
-                conn.write_buf.extend_from_slice(&bytes);
+                conn.write_buf.extend_from_slice(bytes);
                 write_tokens.insert(token);
                 let _ = poll.registry().reregister(
                     &mut conn.stream,
@@ -2457,14 +2460,14 @@ fn handle_writable(
 #[cfg(test)]
 mod tests {
     use crate::{
-        CheckBlockedClientsContext, InlineParseResult, PendingClientUnblocksContext,
+        BlockingOp, CheckBlockedClientsContext, InlineParseResult, PendingClientUnblocksContext,
         REPLICA_ACK_INTERVAL_MS, REPLICA_RECONNECT_BACKOFF_MS, ReplicaPrimaryConnection,
         ReplicaSyncState, apply_pending_client_unblocks, check_blocked_clients,
         drain_replica_stream, drive_replica_sync, encode_eof_marked_replication_snapshot,
         encode_replication_snapshot, find_crlf, parse_blocking_deadline,
         parse_xread_block_deadline, read_frame_from_stream, replica_handshake_frame,
         replica_handshake_read_timeout, replication_follow_up_bytes, server_help_text,
-        should_try_inline_parsing, try_build_blocked_state,
+        should_try_inline_parsing, try_build_blocked_state, try_fulfill_blocked,
     };
     use fr_config::RuntimePolicy;
     use fr_protocol::{ParserConfig, RespFrame};
@@ -3529,6 +3532,29 @@ mod tests {
         ]));
         let blocked = try_build_blocked_state(&frame, 1_000).expect("must block");
         assert_eq!(blocked.deadline_ms, 1_001);
+    }
+
+    #[test]
+    fn bzpopmax_propagates_wrongtype_error() {
+        let mut runtime = Runtime::new(RuntimePolicy::hardened());
+        let now_ms = 1_000;
+        let _ = runtime.execute_frame(
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"SET".to_vec())),
+                RespFrame::BulkString(Some(b"myzset".to_vec())),
+                RespFrame::BulkString(Some(b"value".to_vec())),
+            ])),
+            now_ms,
+        );
+
+        let op = BlockingOp::BZpopMax {
+            keys: vec![b"myzset".to_vec()],
+        };
+        let response = try_fulfill_blocked(&op, &mut runtime, now_ms + 1);
+        match response {
+            Some(RespFrame::Error(_)) => {}
+            other => panic!("expected wrongtype error, got {other:?}"),
+        }
     }
 
     #[test]
