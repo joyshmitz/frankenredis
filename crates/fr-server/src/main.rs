@@ -1239,6 +1239,9 @@ fn read_replication_snapshot_from_stream(
                     {
                         let snapshot = read_buf[..marker_index].to_vec();
                         read_buf.drain(..marker_index + eof_mark.len());
+                        if read_buf.starts_with(b"\r\n") {
+                            read_buf.drain(..2);
+                        }
                         return Ok(snapshot);
                     }
                     read_more_replication_bytes(stream, read_buf, query_buffer_limit)?;
@@ -1260,6 +1263,9 @@ fn read_replication_snapshot_from_stream(
             }
             let snapshot = read_buf[..data_len].to_vec();
             read_buf.drain(..data_len);
+            if read_buf.starts_with(b"\r\n") {
+                read_buf.drain(..2);
+            }
             return Ok(snapshot);
         }
         read_more_replication_bytes(stream, read_buf, query_buffer_limit)?;
@@ -2510,8 +2516,9 @@ mod tests {
         consume_complete_replication_prefix, drain_replica_stream, drive_replica_sync,
         encode_eof_marked_replication_snapshot, encode_replication_snapshot, find_crlf,
         parse_blocking_deadline, parse_xread_block_deadline, read_frame_from_stream,
-        replica_handshake_frame, replica_handshake_read_timeout, replication_follow_up_bytes,
-        server_help_text, should_try_inline_parsing, sync_replica_with_primary,
+        read_replication_snapshot_from_stream, replica_handshake_frame,
+        replica_handshake_read_timeout, replication_follow_up_bytes, server_help_text,
+        should_try_inline_parsing, sync_replica_with_primary,
         try_build_blocked_state, try_fulfill_blocked,
     };
     use fr_config::RuntimePolicy;
@@ -2991,6 +2998,23 @@ mod tests {
             .expect("prefix parse");
         assert_eq!(payload, frame1_bytes);
         assert_eq!(read_buf, frame2_bytes[split_at..]);
+    }
+
+    #[test]
+    fn replication_snapshot_reader_consumes_trailing_crlf() {
+        let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let _writer = StdTcpStream::connect(addr).expect("connect writer");
+        let (mut stream, _) = listener.accept().expect("accept reader");
+
+        let mut read_buf = Vec::new();
+        read_buf.extend_from_slice(b"$3\r\nabc\r\n*1\r\n$4\r\nPING\r\n");
+
+        let snapshot =
+            read_replication_snapshot_from_stream(&mut stream, &mut read_buf, usize::MAX)
+                .expect("snapshot");
+        assert_eq!(snapshot, b"abc");
+        assert_eq!(read_buf, b"*1\r\n$4\r\nPING\r\n");
     }
 
     #[test]
