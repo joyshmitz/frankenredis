@@ -846,20 +846,14 @@ fn process_buffered_frames(
                 }
                 runtime.set_blocked_clients_count_for_info(blocked_tokens.len());
                 // CLIENT PAUSE gate: delay command processing while paused.
-                if let RespFrame::Array(Some(ref items)) = frame {
-                    let argv: Vec<Vec<u8>> = items
-                        .iter()
-                        .filter_map(|f| match f {
-                            RespFrame::BulkString(Some(b)) => Some(b.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    if runtime.is_command_paused(&argv, ts) && !is_client_pause_exempt(&argv) {
-                        // Don't process the command — leave it in the read buffer.
-                        // Track paused token so we can re-process when pause expires.
-                        paused_tokens.insert(token);
-                        break;
-                    }
+                if let Ok(argv) = fr_command::frame_to_argv(&frame)
+                    && runtime.is_command_paused(&argv, ts)
+                    && !is_client_pause_exempt(&argv)
+                {
+                    // Don't process the command — leave it in the read buffer.
+                    // Track paused token so we can re-process when pause expires.
+                    paused_tokens.insert(token);
+                    break;
                 }
                 let response = runtime.execute_frame(frame.clone(), ts);
                 let parsed_frame = frame;
@@ -2379,12 +2373,8 @@ fn deliver_pubsub_messages(
 
 /// Check if a command is allowed in subscription mode. Returns Some(error) if rejected.
 fn check_subscription_mode_gate(frame: &RespFrame, _in_sub_mode: bool) -> Option<RespFrame> {
-    let RespFrame::Array(Some(items)) = frame else {
-        return None;
-    };
-    let Some(RespFrame::BulkString(Some(cmd))) = items.first() else {
-        return None;
-    };
+    let argv = fr_command::frame_to_argv(frame).ok()?;
+    let cmd = argv.first()?;
     // Commands allowed in subscription mode per Redis behavior
     if cmd.eq_ignore_ascii_case(b"SUBSCRIBE")
         || cmd.eq_ignore_ascii_case(b"UNSUBSCRIBE")
@@ -2413,12 +2403,10 @@ fn is_client_pause_exempt(argv: &[Vec<u8>]) -> bool {
 }
 
 fn is_quit_frame(frame: &RespFrame) -> bool {
-    if let RespFrame::Array(Some(items)) = frame
-        && let Some(RespFrame::BulkString(Some(cmd))) = items.first()
-    {
-        return cmd.eq_ignore_ascii_case(b"QUIT");
-    }
-    false
+    fr_command::frame_to_argv(frame)
+        .ok()
+        .and_then(|argv| argv.first().cloned())
+        .is_some_and(|cmd| cmd.eq_ignore_ascii_case(b"QUIT"))
 }
 
 fn handle_writable(
@@ -3918,6 +3906,161 @@ mod tests {
         assert_eq!(response, *b"+OK\r\n");
         assert!(conn.read_buf.is_empty());
         assert!(!runtime.is_client_paused(ts + 1));
+    }
+
+    #[test]
+    fn client_pause_blocks_simple_string_command_frames() {
+        use crate::ClientConnection;
+        use fr_runtime::Runtime;
+        use mio::Token;
+        use std::collections::HashSet;
+        use std::net::{TcpListener, TcpStream};
+
+        let mut runtime = Runtime::default_strict();
+        let ts = 5;
+        let session = runtime.new_session();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+        let (_server_stream, _server_addr) = listener.accept().unwrap();
+        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session);
+
+        let pause = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"CLIENT".to_vec())),
+            RespFrame::BulkString(Some(b"PAUSE".to_vec())),
+            RespFrame::BulkString(Some(b"1000".to_vec())),
+            RespFrame::BulkString(Some(b"ALL".to_vec())),
+        ]));
+        assert_eq!(
+            runtime.execute_frame(pause, ts),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert!(runtime.is_client_paused(ts + 1));
+
+        let ping = RespFrame::Array(Some(vec![RespFrame::SimpleString("PING".to_string())]));
+        conn.read_buf.extend_from_slice(&ping.to_bytes());
+
+        let mut blocked_tokens = HashSet::new();
+        let mut closing_tokens = HashSet::new();
+        let mut write_tokens = HashSet::new();
+        let mut paused_tokens = HashSet::new();
+        crate::process_buffered_frames(
+            Token(1),
+            &mut conn,
+            &mut runtime,
+            &mut blocked_tokens,
+            &mut closing_tokens,
+            &mut write_tokens,
+            &mut paused_tokens,
+            ts + 1,
+        );
+
+        assert!(paused_tokens.contains(&Token(1)));
+        assert!(conn.write_buf.is_empty());
+        assert!(!conn.read_buf.is_empty());
+    }
+
+    #[test]
+    fn subscription_gate_rejects_simple_string_commands() {
+        use crate::ClientConnection;
+        use fr_runtime::Runtime;
+        use mio::Token;
+        use std::collections::HashSet;
+        use std::net::{TcpListener, TcpStream};
+
+        let mut runtime = Runtime::default_strict();
+        let ts = 10;
+        let session = runtime.new_session();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+        let (_server_stream, _server_addr) = listener.accept().unwrap();
+        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session);
+
+        let subscribe = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"SUBSCRIBE".to_vec())),
+            RespFrame::BulkString(Some(b"chan".to_vec())),
+        ]));
+        let prev = runtime.swap_session(std::mem::take(&mut conn.session));
+        let _subscribe_reply = runtime.execute_frame(subscribe, ts);
+        conn.session = runtime.swap_session(prev);
+
+        let set_frame = RespFrame::Array(Some(vec![
+            RespFrame::SimpleString("SET".to_string()),
+            RespFrame::SimpleString("k".to_string()),
+            RespFrame::SimpleString("v".to_string()),
+        ]));
+        conn.read_buf.extend_from_slice(&set_frame.to_bytes());
+
+        let mut blocked_tokens = HashSet::new();
+        let mut closing_tokens = HashSet::new();
+        let mut write_tokens = HashSet::new();
+        let mut paused_tokens = HashSet::new();
+        let prev = runtime.swap_session(std::mem::take(&mut conn.session));
+        crate::process_buffered_frames(
+            Token(1),
+            &mut conn,
+            &mut runtime,
+            &mut blocked_tokens,
+            &mut closing_tokens,
+            &mut write_tokens,
+            &mut paused_tokens,
+            ts + 1,
+        );
+        conn.session = runtime.swap_session(prev);
+
+        let parsed = fr_protocol::parse_frame(&conn.write_buf).expect("parse reply");
+        if let RespFrame::Error(msg) = parsed.frame {
+            assert!(msg.contains("SET"), "unexpected error: {msg}");
+        } else {
+            assert!(
+                matches!(parsed.frame, RespFrame::Error(_)),
+                "expected error reply"
+            );
+        }
+    }
+
+    #[test]
+    fn simple_string_quit_closes_connection() {
+        use crate::ClientConnection;
+        use fr_runtime::Runtime;
+        use mio::Token;
+        use std::collections::HashSet;
+        use std::net::{TcpListener, TcpStream};
+
+        let mut runtime = Runtime::default_strict();
+        let session = runtime.new_session();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+        let (_server_stream, _server_addr) = listener.accept().unwrap();
+        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session);
+
+        let quit = RespFrame::Array(Some(vec![RespFrame::SimpleString("QUIT".to_string())]));
+        conn.read_buf.extend_from_slice(&quit.to_bytes());
+
+        let mut blocked_tokens = HashSet::new();
+        let mut closing_tokens = HashSet::new();
+        let mut write_tokens = HashSet::new();
+        let mut paused_tokens = HashSet::new();
+        let prev = runtime.swap_session(std::mem::take(&mut conn.session));
+        crate::process_buffered_frames(
+            Token(1),
+            &mut conn,
+            &mut runtime,
+            &mut blocked_tokens,
+            &mut closing_tokens,
+            &mut write_tokens,
+            &mut paused_tokens,
+            1,
+        );
+        conn.session = runtime.swap_session(prev);
+
+        assert!(conn.closing);
+        assert!(closing_tokens.contains(&Token(1)));
     }
 
     #[test]
