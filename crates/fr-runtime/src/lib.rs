@@ -2662,7 +2662,16 @@ impl Runtime {
         // No eager digest computation here. Threat events compute their own
         // digests on demand inside record_threat_event, so the success path
         // pays nothing for the evidence ledger.
-        let reply = self.execute_frame_internal(frame, argv_result, now_ms, packet_id);
+        let disable_touch = self.session.client_no_touch
+            && argv_result
+                .as_ref()
+                .ok()
+                .and_then(|argv| argv.first())
+                .map(|cmd| !eq_ascii_token(cmd, b"TOUCH"))
+                .unwrap_or(false);
+        let reply = fr_store::with_touch_disabled(disable_touch, || {
+            self.execute_frame_internal(frame, argv_result, now_ms, packet_id)
+        });
         if matches!(reply, RespFrame::Error(_)) {
             self.server.store.stat_total_error_replies += 1;
             if self.execution_source.counts_as_unexpected_error_reply() {
@@ -13126,6 +13135,36 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"ACL", b"LOAD"]), 1),
             RespFrame::Error("ERR There is no configured ACL file".to_string())
+        );
+    }
+
+    #[test]
+    fn client_no_touch_skips_lru_updates_except_touch_command() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"k", b"v"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"NO-TOUCH", b"ON"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"k"]), 1_000),
+            RespFrame::BulkString(Some(b"v".to_vec()))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"OBJECT", b"IDLETIME", b"k"]), 2_000),
+            RespFrame::Integer(2)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"TOUCH", b"k"]), 2_500),
+            RespFrame::Integer(1)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"OBJECT", b"IDLETIME", b"k"]), 3_000),
+            RespFrame::Integer(0)
         );
     }
 }

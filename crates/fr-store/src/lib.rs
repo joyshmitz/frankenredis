@@ -1,11 +1,47 @@
 #![forbid(unsafe_code)]
 
 use fr_expire::evaluate_expiry;
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ops::Bound::{Excluded, Included, Unbounded};
 
 /// Redis-compatible version string. Single source of truth for all version reporting.
 pub const REDIS_COMPAT_VERSION: &str = "7.2.0";
+
+thread_local! {
+    static TOUCH_DISABLED: Cell<bool> = const { Cell::new(false) };
+}
+
+struct TouchGuard {
+    previous: bool,
+}
+
+impl TouchGuard {
+    fn new(disabled: bool) -> Self {
+        let previous = TOUCH_DISABLED.with(|flag| {
+            let prev = flag.get();
+            flag.set(disabled);
+            prev
+        });
+        Self { previous }
+    }
+}
+
+impl Drop for TouchGuard {
+    fn drop(&mut self) {
+        TOUCH_DISABLED.with(|flag| flag.set(self.previous));
+    }
+}
+
+fn touch_disabled() -> bool {
+    TOUCH_DISABLED.with(Cell::get)
+}
+
+/// Temporarily disable LRU/LFU touch updates for the current thread.
+pub fn with_touch_disabled<T>(disabled: bool, f: impl FnOnce() -> T) -> T {
+    let _guard = TouchGuard::new(disabled);
+    f()
+}
 
 // ── Keyspace notification flags (matching Redis server.h) ───────────
 pub const NOTIFY_KEYSPACE: u32 = 1 << 0; // K
@@ -493,6 +529,9 @@ impl Entry {
     }
 
     fn touch(&mut self, now_ms: u64) {
+        if touch_disabled() {
+            return;
+        }
         self.last_access_ms = now_ms;
     }
 
