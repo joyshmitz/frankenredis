@@ -7869,12 +7869,15 @@ impl Store {
         }
     }
 
-    /// TOUCH: returns count of keys that exist (and updates last access time in Redis, here just checks existence).
+    /// TOUCH: returns count of keys that exist and updates last access time.
     pub fn touch(&mut self, keys: &[&[u8]], now_ms: u64) -> i64 {
         let mut count = 0i64;
         for &key in keys {
-            self.drop_if_expired(key, now_ms);
-            if self.entries.contains_key(key) {
+            if !self.record_keyspace_lookup(key, now_ms) {
+                continue;
+            }
+            if let Some(entry) = self.entries.get_mut(key) {
+                entry.touch(now_ms);
                 count += 1;
             }
         }
@@ -7923,11 +7926,21 @@ impl Store {
     /// Returns empty vec if key does not exist.
     /// Returns Err(WrongType) for non-sortable types (string, hash, stream).
     pub fn sort_elements(&mut self, key: &[u8], now_ms: u64) -> Result<Vec<Vec<u8>>, StoreError> {
-        self.drop_if_expired(key, now_ms);
+        if !self.record_keyspace_lookup(key, now_ms) {
+            return Ok(Vec::new());
+        }
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
-                Value::List(l) => Ok(l.iter().cloned().collect()),
-                Value::Set(s) => Ok(s.iter().cloned().collect()),
+                Value::List(l) => {
+                    let result = l.iter().cloned().collect();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
+                Value::Set(s) => {
+                    let result = s.iter().cloned().collect();
+                    entry.touch(now_ms);
+                    Ok(result)
+                }
                 Value::SortedSet(zs) => {
                     let result = zs.iter_asc().map(|(m, _)| m.clone()).collect();
                     entry.touch(now_ms);
@@ -9947,6 +9960,59 @@ mod tests {
 
         assert_eq!(store.stat_keyspace_hits, 7);
         assert_eq!(store.stat_keyspace_misses, 3);
+    }
+
+    #[test]
+    fn touch_and_sort_update_lru_and_keyspace_stats() {
+        let mut store = Store::new();
+        store
+            .rpush(b"list", &[b"item".to_vec()], 10)
+            .expect("rpush");
+        store.sadd(b"set", &[b"member".to_vec()], 10).expect("sadd");
+        store.reset_info_stats();
+
+        assert_eq!(
+            store
+                .entries
+                .get(b"list".as_ref())
+                .expect("list entry")
+                .last_access_ms,
+            10
+        );
+        assert_eq!(
+            store
+                .entries
+                .get(b"set".as_ref())
+                .expect("set entry")
+                .last_access_ms,
+            10
+        );
+
+        let touched = store.touch(&[b"list", b"missing"], 100);
+        assert_eq!(touched, 1);
+        assert_eq!(
+            store
+                .entries
+                .get(b"list".as_ref())
+                .expect("list entry")
+                .last_access_ms,
+            100
+        );
+        assert_eq!(store.stat_keyspace_hits, 1);
+        assert_eq!(store.stat_keyspace_misses, 1);
+
+        let elements = store.sort_elements(b"set", 200).expect("sort elements");
+        assert_eq!(elements, vec![b"member".to_vec()]);
+        assert_eq!(
+            store
+                .entries
+                .get(b"set".as_ref())
+                .expect("set entry")
+                .last_access_ms,
+            200
+        );
+        assert_eq!(store.stat_keyspace_hits, 2);
+        assert_eq!(store.stat_keyspace_misses, 1);
     }
 
     #[test]
