@@ -2019,7 +2019,9 @@ impl<'a> LuaState<'a> {
         for name in &names[1..names.len() - 1] {
             let next = match &current {
                 LuaValue::Table(t) => t.get(&LuaValue::Str(name.as_bytes().to_vec())),
-                _ => unreachable!("current should stay a table while walking nested fields"),
+                other => {
+                    return Err(format!("attempt to index a {} value", other.type_name()));
+                }
             };
             if !matches!(next, LuaValue::Table(_)) {
                 return Err(format!("attempt to index a {} value", next.type_name()));
@@ -2345,7 +2347,7 @@ impl<'a> LuaState<'a> {
                     BinOp::Div => a / b,
                     BinOp::Mod => a - (a / b).floor() * b,
                     BinOp::Pow => a.powf(b),
-                    _ => unreachable!(),
+                    _ => return Err("unsupported arithmetic operator".to_string()),
                 };
                 Ok(LuaValue::Number(result))
             }
@@ -2363,14 +2365,14 @@ impl<'a> LuaState<'a> {
                         BinOp::Gt => a > b,
                         BinOp::Le => a <= b,
                         BinOp::Ge => a >= b,
-                        _ => unreachable!(),
+                        _ => return Err("unsupported comparison operator".to_string()),
                     },
                     (LuaValue::Str(a), LuaValue::Str(b)) => match op {
                         BinOp::Lt => a < b,
                         BinOp::Gt => a > b,
                         BinOp::Le => a <= b,
                         BinOp::Ge => a >= b,
-                        _ => unreachable!(),
+                        _ => return Err("unsupported comparison operator".to_string()),
                     },
                     _ => {
                         return Err("attempt to compare incompatible types".to_string());
@@ -2378,7 +2380,9 @@ impl<'a> LuaState<'a> {
                 };
                 Ok(LuaValue::Bool(result))
             }
-            BinOp::And | BinOp::Or => unreachable!("handled in eval_expr"),
+            BinOp::And | BinOp::Or => {
+                Err("unexpected logical operator in binary evaluation".to_string())
+            }
         }
     }
 
