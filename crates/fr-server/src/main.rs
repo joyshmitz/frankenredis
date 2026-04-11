@@ -586,6 +586,7 @@ fn main() -> ExitCode {
                 client_id_to_token.remove(&conn.session.client_id);
                 // Clean up Pub/Sub subscriptions and stats for this client.
                 runtime.pubsub_cleanup_client(conn.session.client_id);
+                runtime.cleanup_disconnected_client(conn.session.client_id);
                 runtime.track_connection_closed();
                 let _ = poll.registry().deregister(&mut conn.stream);
                 let _ = conn.stream.shutdown(std::net::Shutdown::Both);

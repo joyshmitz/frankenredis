@@ -2217,6 +2217,20 @@ impl Runtime {
             self.server.store.stat_connected_clients.saturating_sub(1);
     }
 
+    /// Clean up replication/monitor state for a disconnected client.
+    pub fn cleanup_disconnected_client(&mut self, client_id: u64) {
+        self.disable_monitor(client_id);
+        if self
+            .server
+            .replication_runtime_state
+            .replicas
+            .remove(&client_id)
+            .is_some()
+        {
+            self.server.refresh_replica_ack_snapshots();
+        }
+    }
+
     /// Drain pending pub/sub messages for the current session's client.
     pub fn drain_pending_pubsub(&mut self) -> Vec<fr_store::PubSubMessage> {
         // First drain any messages from the per-client Store (legacy path for
@@ -10224,6 +10238,39 @@ mod tests {
         let info = String::from_utf8(info_bytes).expect("utf8 info");
         assert!(info.contains("repl_backlog_size:0\r\n"), "{info}");
         assert!(info.contains("repl_backlog_histlen:0\r\n"), "{info}");
+    }
+
+    #[test]
+    fn cleanup_disconnected_client_clears_replica_and_monitor_state() {
+        let mut rt = Runtime::default_strict();
+        let client_id = rt.session.client_id;
+
+        let _ = rt.execute_frame(command(&[b"PSYNC", b"?", b"-1"]), 0);
+        assert!(
+            rt.server
+                .replication_runtime_state
+                .replicas
+                .contains_key(&client_id)
+        );
+        assert_eq!(rt.server.replication_ack_state.replica_ack_offsets.len(), 1);
+
+        rt.enable_monitor();
+        assert!(rt.server.monitor_clients.contains(&client_id));
+
+        rt.cleanup_disconnected_client(client_id);
+        assert!(
+            !rt.server
+                .replication_runtime_state
+                .replicas
+                .contains_key(&client_id)
+        );
+        assert!(
+            rt.server
+                .replication_ack_state
+                .replica_ack_offsets
+                .is_empty()
+        );
+        assert!(!rt.server.monitor_clients.contains(&client_id));
     }
 
     #[test]
