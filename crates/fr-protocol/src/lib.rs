@@ -263,7 +263,7 @@ fn read_line(input: &[u8], start: usize) -> Result<(&[u8], usize), RespParseErro
             return Ok((&input[start..i], i + 2));
         }
         i += 1;
-        if i >= max_line_end {
+        if i > max_line_end {
             return Err(RespParseError::LineTooLong);
         }
     }
@@ -272,7 +272,10 @@ fn read_line(input: &[u8], start: usize) -> Result<(&[u8], usize), RespParseErro
 
 #[cfg(test)]
 mod tests {
-    use super::{ParserConfig, RespFrame, RespParseError, parse_frame, parse_frame_with_config};
+    use super::{
+        MAX_LINE_LENGTH, ParserConfig, RespFrame, RespParseError, parse_frame,
+        parse_frame_with_config,
+    };
 
     const PACKET_ID: &str = "FR-P2C-002";
     const SCHEMA_VERSION: &str = "fr_testlog_v1";
@@ -544,6 +547,26 @@ mod tests {
             "protocol.invalid_length_rejected",
         );
         event.assert_schema_contract();
+    }
+
+    #[test]
+    fn fr_p2c_002_u005_line_length_limit_is_inclusive() {
+        let mut ok = Vec::with_capacity(MAX_LINE_LENGTH + 3);
+        ok.push(b'+');
+        ok.extend(std::iter::repeat_n(b'a', MAX_LINE_LENGTH));
+        ok.extend_from_slice(b"\r\n");
+        let parsed = parse_frame(ok.as_slice()).expect("line at limit must parse");
+        assert_eq!(
+            parsed.frame,
+            RespFrame::SimpleString("a".repeat(MAX_LINE_LENGTH))
+        );
+
+        let mut too_long = Vec::with_capacity(MAX_LINE_LENGTH + 4);
+        too_long.push(b'+');
+        too_long.extend(std::iter::repeat_n(b'a', MAX_LINE_LENGTH + 1));
+        too_long.extend_from_slice(b"\r\n");
+        let err = parse_frame(too_long.as_slice()).expect_err("line beyond limit must fail");
+        assert_eq!(err, RespParseError::LineTooLong);
     }
 
     #[test]
