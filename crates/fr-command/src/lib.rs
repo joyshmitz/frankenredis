@@ -2419,8 +2419,14 @@ fn sismember(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
 fn parse_f64_arg(arg: &[u8]) -> Result<f64, CommandError> {
     let text = std::str::from_utf8(arg)
         .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?;
+    let bytes = text.as_bytes();
+    if bytes.is_empty()
+        || bytes[0].is_ascii_whitespace()
+        || bytes[bytes.len() - 1].is_ascii_whitespace()
+    {
+        return Err(CommandError::Store(fr_store::StoreError::ValueNotFloat));
+    }
     let val = text
-        .trim()
         .parse::<f64>()
         .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?;
     if val.is_nan() {
@@ -2569,8 +2575,16 @@ fn geo_decode_score(score: f64) -> Option<(f64, f64)> {
 fn parse_geo_f64(arg: &[u8]) -> Result<f64, RespFrame> {
     let text = std::str::from_utf8(arg)
         .map_err(|_| RespFrame::Error("ERR value is not a valid float".to_string()))?;
+    let bytes = text.as_bytes();
+    if bytes.is_empty()
+        || bytes[0].is_ascii_whitespace()
+        || bytes[bytes.len() - 1].is_ascii_whitespace()
+    {
+        return Err(RespFrame::Error(
+            "ERR value is not a valid float".to_string(),
+        ));
+    }
     let val = text
-        .trim()
         .parse::<f64>()
         .map_err(|_| RespFrame::Error("ERR value is not a valid float".to_string()))?;
     if val.is_nan() {
@@ -7454,21 +7468,23 @@ fn parse_set_expire_arg(arg: &[u8]) -> Result<u64, CommandError> {
 }
 
 fn parse_u64_arg(arg: &[u8]) -> Result<u64, CommandError> {
-    let text = std::str::from_utf8(arg).map_err(|_| CommandError::InvalidInteger)?;
-    text.parse::<u64>()
-        .map_err(|_| CommandError::InvalidInteger)
+    let val = parse_i64_arg(arg)?;
+    if val < 0 {
+        return Err(CommandError::InvalidInteger);
+    }
+    Ok(val as u64)
 }
 
 /// Parse a LIMIT count that can be negative (Redis uses -1 to mean "unlimited").
 /// Returns None for negative values, Some(n) for non-negative.
 fn parse_limit_count_arg(arg: &[u8]) -> Result<Option<usize>, CommandError> {
-    let text = std::str::from_utf8(arg).map_err(|_| CommandError::InvalidInteger)?;
-    let val: i64 = text.parse().map_err(|_| CommandError::InvalidInteger)?;
+    let val = parse_i64_arg(arg)?;
     if val < 0 {
-        Ok(None)
-    } else {
-        Ok(Some(val as usize))
+        return Ok(None);
     }
+    usize::try_from(val)
+        .map(Some)
+        .map_err(|_| CommandError::InvalidInteger)
 }
 
 fn parse_expire_options(extra_args: &[Vec<u8>]) -> Result<ExpireOptions, CommandError> {
@@ -18391,6 +18407,64 @@ mod tests {
                 "ERR timeout is out of range".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn count_parsers_reject_noncanonical_tokens() {
+        assert_eq!(
+            crate::parse_u64_arg(b"+1"),
+            Err(CommandError::InvalidInteger)
+        );
+        assert_eq!(
+            crate::parse_u64_arg(b"001"),
+            Err(CommandError::InvalidInteger)
+        );
+        assert_eq!(crate::parse_u64_arg(b"0"), Ok(0));
+        assert_eq!(crate::parse_u64_arg(b"5"), Ok(5));
+
+        assert_eq!(
+            crate::parse_limit_count_arg(b"+1"),
+            Err(CommandError::InvalidInteger)
+        );
+        assert_eq!(
+            crate::parse_limit_count_arg(b"001"),
+            Err(CommandError::InvalidInteger)
+        );
+        assert_eq!(crate::parse_limit_count_arg(b"-1"), Ok(None));
+        assert_eq!(crate::parse_limit_count_arg(b"0"), Ok(Some(0)));
+    }
+
+    #[test]
+    fn float_parsers_reject_whitespace() {
+        assert!(matches!(
+            crate::parse_f64_arg(b" 1"),
+            Err(CommandError::Store(fr_store::StoreError::ValueNotFloat))
+        ));
+        assert!(matches!(
+            crate::parse_f64_arg(b"1 "),
+            Err(CommandError::Store(fr_store::StoreError::ValueNotFloat))
+        ));
+        assert!(matches!(
+            crate::parse_f64_arg(b"\t1"),
+            Err(CommandError::Store(fr_store::StoreError::ValueNotFloat))
+        ));
+        assert!(matches!(
+            crate::parse_f64_arg(b"1\t"),
+            Err(CommandError::Store(fr_store::StoreError::ValueNotFloat))
+        ));
+        assert_eq!(crate::parse_f64_arg(b"1"), Ok(1.0));
+        assert_eq!(crate::parse_f64_arg(b"-1.5"), Ok(-1.5));
+
+        assert!(matches!(
+            crate::parse_geo_f64(b" 1"),
+            Err(RespFrame::Error(msg)) if msg == "ERR value is not a valid float"
+        ));
+        assert!(matches!(
+            crate::parse_geo_f64(b"1 "),
+            Err(RespFrame::Error(msg)) if msg == "ERR value is not a valid float"
+        ));
+        assert_eq!(crate::parse_geo_f64(b"1"), Ok(1.0));
+        assert_eq!(crate::parse_geo_f64(b"-1.5"), Ok(-1.5));
     }
 
     #[test]
