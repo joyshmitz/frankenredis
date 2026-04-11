@@ -2229,13 +2229,7 @@ impl Store {
                 }
             }
             Value::Set(s) => {
-                if s.len() <= self.set_max_intset_entries
-                    && s.iter().all(|m| {
-                        std::str::from_utf8(m)
-                            .ok()
-                            .and_then(|s| s.parse::<i64>().ok())
-                            .is_some()
-                    })
+                if s.len() <= self.set_max_intset_entries && s.iter().all(|m| parse_i64(m).is_ok())
                 {
                     "intset"
                 } else if s.len() <= self.set_max_listpack_entries
@@ -10352,6 +10346,17 @@ mod tests {
         let _ = store.rpush(b"list", &[large], 0);
 
         assert_eq!(store.object_encoding(b"list", 0), Some("quicklist"));
+    }
+
+    #[test]
+    fn object_encoding_set_rejects_noncanonical_integer_members() {
+        let mut store = Store::new();
+        store.sadd(b"s", &[b"01".to_vec()], 0).expect("sadd");
+        assert_eq!(store.object_encoding(b"s", 0), Some("listpack"));
+
+        let mut store = Store::new();
+        store.sadd(b"t", &[b"1".to_vec()], 0).expect("sadd");
+        assert_eq!(store.object_encoding(b"t", 0), Some("intset"));
     }
 
     #[test]

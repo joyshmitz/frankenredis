@@ -981,12 +981,8 @@ fn parse_db_index_arg(
     out_of_range_message: &'static str,
     database_count: usize,
 ) -> Result<usize, RespFrame> {
-    let parsed = std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse::<i64>().ok())
-        .ok_or_else(|| {
-            RespFrame::Error("ERR value is not an integer or out of range".to_string())
-        })?;
+    let parsed = parse_i64_arg(arg)
+        .map_err(|_| RespFrame::Error("ERR value is not an integer or out of range".to_string()))?;
     if (0..database_count as i64).contains(&parsed) {
         Ok(parsed as usize)
     } else {
@@ -4171,20 +4167,12 @@ impl Runtime {
         if argv.len() == 2 {
             RespFrame::Array(Some(Vec::new()))
         } else if argv.len() == 3 {
-            let sub = match std::str::from_utf8(&argv[2]) {
-                Ok(s) => s,
-                Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
-            };
-            if sub.eq_ignore_ascii_case("RESET") {
+            if eq_ascii_token(&argv[2], b"RESET") {
                 RespFrame::SimpleString("OK".to_string())
             } else {
-                match sub.parse::<i64>() {
+                match parse_i64_arg(&argv[2]) {
                     Ok(_) => RespFrame::Array(Some(Vec::new())),
-                    Err(_) => CommandError::UnknownSubcommand {
-                        command: "ACL",
-                        subcommand: "LOG".to_string(),
-                    }
-                    .to_resp(),
+                    Err(_) => CommandError::InvalidInteger.to_resp(),
                 }
             }
         } else {
@@ -6432,10 +6420,8 @@ impl Runtime {
                 if i + 1 >= argv.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                let parsed = std::str::from_utf8(&argv[i + 1])
-                    .map_err(|_| CommandError::InvalidInteger)?
-                    .parse::<i64>()
-                    .map_err(|_| CommandError::InvalidInteger)?;
+                let parsed =
+                    parse_i64_arg(&argv[i + 1]).map_err(|_| CommandError::InvalidInteger)?;
                 if parsed <= 0 {
                     return Err(CommandError::InvalidInteger);
                 }
@@ -9129,6 +9115,34 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"GET", b"swap"]), 11),
             RespFrame::BulkString(Some(b"db0".to_vec()))
+        );
+    }
+
+    #[test]
+    fn select_rejects_noncanonical_db_index() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"+1"]), 0),
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"01"]), 1),
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+    }
+
+    #[test]
+    fn scan_count_rejects_noncanonical_integer() {
+        let mut rt = Runtime::default_strict();
+        let reply = rt.execute_frame(command(&[b"SCAN", b"0", b"COUNT", b"+1"]), 0);
+        assert_eq!(
+            reply,
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+        let reply = rt.execute_frame(command(&[b"SCAN", b"0", b"COUNT", b"01"]), 1);
+        assert_eq!(
+            reply,
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
         );
     }
 
@@ -13109,6 +13123,19 @@ mod tests {
         assert!(
             matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
             "DEL should be denied despite +@all, got: {reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_log_rejects_noncanonical_integer() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"LOG", b"+1"]), 0),
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"LOG", b"foo"]), 1),
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
         );
     }
 

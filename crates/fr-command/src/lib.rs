@@ -8222,10 +8222,7 @@ fn select(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     if argv.len() != 2 {
         return Err(CommandError::WrongArity("SELECT"));
     }
-    let db = std::str::from_utf8(&argv[1])
-        .map_err(|_| CommandError::InvalidInteger)?
-        .parse::<i64>()
-        .map_err(|_| CommandError::InvalidInteger)?;
+    let db = parse_i64_arg(&argv[1])?;
     if db == 0 {
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else {
@@ -10463,10 +10460,7 @@ fn parse_scan_args(
             if i + 1 >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            let c = std::str::from_utf8(&argv[i + 1])
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
-                .ok_or(CommandError::InvalidInteger)?;
+            let c = parse_i64_arg(&argv[i + 1])?;
             if c <= 0 {
                 return Err(CommandError::InvalidInteger);
             }
@@ -28245,6 +28239,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r, RespFrame::Integer(5));
+    }
+
+    #[test]
+    fn scan_count_rejects_noncanonical_integer() {
+        let mut store = Store::new();
+        store
+            .hset(b"h", b"field".to_vec(), b"value".to_vec(), 0)
+            .expect("hset");
+        let err = dispatch_argv(
+            &[
+                b"HSCAN".to_vec(),
+                b"h".to_vec(),
+                b"0".to_vec(),
+                b"COUNT".to_vec(),
+                b"+1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::InvalidInteger);
     }
 
     #[test]
