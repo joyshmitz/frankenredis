@@ -18,30 +18,45 @@ fn command(parts: &[&[u8]]) -> RespFrame {
 
 /// Extract cursor and keys from a SCAN-family response [cursor, [elements...]].
 fn parse_scan_response(frame: &RespFrame) -> (u64, Vec<Vec<u8>>) {
-    let items = match frame {
-        RespFrame::Array(Some(items)) => items,
-        other => panic!("expected array from SCAN, got: {other:?}"),
+    assert!(
+        matches!(frame, RespFrame::Array(Some(_))),
+        "expected array from SCAN, got: {frame:?}"
+    );
+    let RespFrame::Array(Some(items)) = frame else {
+        return (0, Vec::new());
     };
     assert_eq!(items.len(), 2, "SCAN response must have 2 elements");
 
-    let cursor = match &items[0] {
-        RespFrame::BulkString(Some(c)) => String::from_utf8_lossy(c).parse::<u64>().unwrap(),
-        other => panic!("expected bulk string cursor, got: {other:?}"),
+    let cursor_frame = &items[0];
+    assert!(
+        matches!(cursor_frame, RespFrame::BulkString(Some(_))),
+        "expected bulk string cursor, got: {cursor_frame:?}"
+    );
+    let RespFrame::BulkString(Some(c)) = cursor_frame else {
+        return (0, Vec::new());
     };
+    let parsed = String::from_utf8_lossy(c).parse::<u64>();
+    assert!(parsed.is_ok(), "cursor should parse as u64");
+    let cursor = parsed.unwrap_or(0);
 
-    let elements = match &items[1] {
-        RespFrame::Array(Some(elems)) => elems
-            .iter()
-            .filter_map(|e| {
-                if let RespFrame::BulkString(Some(b)) = e {
-                    Some(b.clone())
-                } else {
-                    None
-                }
-            })
-            .collect(),
-        other => panic!("expected array of elements, got: {other:?}"),
+    let elements_frame = &items[1];
+    assert!(
+        matches!(elements_frame, RespFrame::Array(Some(_))),
+        "expected array of elements, got: {elements_frame:?}"
+    );
+    let RespFrame::Array(Some(elems)) = elements_frame else {
+        return (0, Vec::new());
     };
+    let elements = elems
+        .iter()
+        .filter_map(|e| {
+            if let RespFrame::BulkString(Some(b)) = e {
+                Some(b.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
 
     (cursor, elements)
 }
