@@ -7570,23 +7570,14 @@ impl Store {
             let idx = (self.next_rand() as usize) % self.entries.len();
             let key = self.entries.keys().nth(idx).cloned()?;
 
-            // Check if it's expired. If so, drop it and try again.
-            let should_evict = evaluate_expiry(
-                now_ms,
-                self.entries.get(&key).and_then(|entry| entry.expires_at_ms),
-            )
-            .should_evict;
-            if should_evict {
-                self.internal_entries_remove(&key);
-                self.stream_groups.remove(key.as_slice());
-                self.stream_last_ids.remove(key.as_slice());
-                self.dirty = self.dirty.saturating_add(1);
-                if self.entries.is_empty() {
-                    return None;
-                }
-                continue;
+            // Check if it's expired. If so, drop it (with stats/notifications) and try again.
+            self.drop_if_expired(&key, now_ms);
+            if self.entries.contains_key(&key) {
+                return Some(key);
             }
-            return Some(key);
+            if self.entries.is_empty() {
+                return None;
+            }
         }
 
         // Fallback: if we failed many times, just pick the first key that isn't expired.
@@ -7601,13 +7592,9 @@ impl Store {
                 break;
             }
         }
-        let reaped = expired_keys.len() as u64;
         for key in expired_keys {
-            self.internal_entries_remove(&key);
-            self.stream_groups.remove(key.as_slice());
-            self.stream_last_ids.remove(key.as_slice());
+            self.drop_if_expired(&key, now_ms);
         }
-        self.dirty = self.dirty.saturating_add(reaped);
         result
     }
 
@@ -10169,6 +10156,20 @@ mod tests {
         assert_eq!(
             store.drain_keyspace_notifications(),
             vec![(b"__keyevent@2__:expired".to_vec(), b"expiring".to_vec())]
+        );
+    }
+
+    #[test]
+    fn randomkey_reaps_expired_keys_with_stats_and_notifications() {
+        let mut store = Store::new();
+        store.notify_keyspace_events = NOTIFY_KEYEVENT | NOTIFY_EXPIRED;
+        store.set(b"exp".to_vec(), b"v".to_vec(), Some(5), 0);
+
+        assert_eq!(store.randomkey(6), None);
+        assert_eq!(store.stat_expired_keys, 1);
+        assert_eq!(
+            store.drain_keyspace_notifications(),
+            vec![(b"__keyevent@0__:expired".to_vec(), b"exp".to_vec())]
         );
     }
 
