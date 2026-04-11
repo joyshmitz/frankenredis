@@ -1148,34 +1148,38 @@ fn read_more_replication_bytes(
     query_buffer_limit: usize,
 ) -> io::Result<()> {
     let mut chunk = [0u8; 8192];
-    match stream.read(&mut chunk) {
-        Ok(0) => Err(io::Error::new(
-            ErrorKind::UnexpectedEof,
-            "primary closed replication stream",
-        )),
-        Ok(n) => match validate_read_path(read_buf.len(), n, query_buffer_limit, false) {
-            Ok(_) => {
-                read_buf.extend_from_slice(&chunk[..n]);
-                Ok(())
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "primary closed replication stream",
+                ));
             }
-            Err(err) => Err(io::Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "replication read exceeded query buffer limit ({})",
-                    err.reason_code()
-                ),
-            )),
-        },
-        Err(ref err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-            Err(io::Error::new(
-                ErrorKind::TimedOut,
-                "timed out waiting for replication frame",
-            ))
+            Ok(n) => {
+                return match validate_read_path(read_buf.len(), n, query_buffer_limit, false) {
+                    Ok(_) => {
+                        read_buf.extend_from_slice(&chunk[..n]);
+                        Ok(())
+                    }
+                    Err(err) => Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "replication read exceeded query buffer limit ({})",
+                            err.reason_code()
+                        ),
+                    )),
+                };
+            }
+            Err(ref err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                return Err(io::Error::new(
+                    ErrorKind::TimedOut,
+                    "timed out waiting for replication frame",
+                ));
+            }
+            Err(ref err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
         }
-        Err(ref err) if err.kind() == ErrorKind::Interrupted => {
-            read_more_replication_bytes(stream, read_buf, query_buffer_limit)
-        }
-        Err(err) => Err(err),
     }
 }
 

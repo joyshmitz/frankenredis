@@ -1983,7 +1983,7 @@ impl<'a> LuaState<'a> {
                     self.globals.insert(names[0].clone(), func);
                 } else {
                     // Nested field assignment: a.b.c = func
-                    self.set_nested_field(names, func);
+                    self.set_nested_field(names, func)?;
                 }
                 Ok(ControlFlow::None)
             }
@@ -2001,9 +2001,9 @@ impl<'a> LuaState<'a> {
         }
     }
 
-    fn set_nested_field(&mut self, names: &[String], value: LuaValue) {
+    fn set_nested_field(&mut self, names: &[String], value: LuaValue) -> Result<(), String> {
         if names.len() < 2 {
-            return;
+            return Ok(());
         }
         let root_name = &names[0];
         let mut current = self
@@ -2011,13 +2011,20 @@ impl<'a> LuaState<'a> {
             .get(root_name)
             .cloned()
             .unwrap_or(LuaValue::Nil);
+        if !matches!(current, LuaValue::Table(_)) {
+            return Err(format!("attempt to index a {} value", current.type_name()));
+        }
         // Navigate to the parent table
         let mut path: Vec<LuaValue> = vec![current.clone()];
         for name in &names[1..names.len() - 1] {
-            current = match &current {
+            let next = match &current {
                 LuaValue::Table(t) => t.get(&LuaValue::Str(name.as_bytes().to_vec())),
-                _ => LuaValue::Nil,
+                _ => unreachable!("current should stay a table while walking nested fields"),
             };
+            if !matches!(next, LuaValue::Table(_)) {
+                return Err(format!("attempt to index a {} value", next.type_name()));
+            }
+            current = next;
             path.push(current.clone());
         }
         // Set the value in the innermost table
@@ -2034,6 +2041,7 @@ impl<'a> LuaState<'a> {
             }
             self.globals.insert(root_name.clone(), val);
         }
+        Ok(())
     }
 
     fn assign_to(
@@ -4515,6 +4523,17 @@ mod tests {
     };
 
     #[test]
+    fn function_decl_errors_on_missing_table_path() {
+        let mut store = Store::new();
+        let err = eval_script(b"function a.b.c() return 1 end", &[], &[], &mut store, 0)
+            .expect_err("expected error");
+        assert!(
+            err.contains("attempt to index a nil value"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn cjson_encode_escapes_object_keys() {
         let table = LuaTable::new();
         table.set(
@@ -4637,7 +4656,7 @@ mod tests {
                 "Unexpected string error: {}",
                 e
             ),
-            other => panic!("Expected iteration limit error, got {:?}", other),
+            other => unreachable!("Expected iteration limit error, got {other:?}"),
         }
     }
 
@@ -4845,7 +4864,7 @@ mod tests {
     fn cjson_decode_understands_control_character_escapes() {
         match json_to_lua_value("\"\\b\\f\\u0001\"") {
             Ok(LuaValue::Str(bytes)) => assert_eq!(bytes, vec![0x08, 0x0C, 0x01]),
-            other => panic!("unexpected decode result: {other:?}"),
+            other => unreachable!("unexpected decode result: {other:?}"),
         }
     }
 
