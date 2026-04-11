@@ -2687,7 +2687,7 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
 
     // Parse option flags
     while i < argv.len() {
-        let opt = std::str::from_utf8(&argv[i]).unwrap_or("");
+        let opt = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if opt.eq_ignore_ascii_case("NX") {
             nx = true;
         } else if opt.eq_ignore_ascii_case("XX") {
@@ -5330,7 +5330,7 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     // parse optional ENTRIESADDED / MAXDELETEDID (accept but ignore)
     let mut i = 3;
     while i < argv.len() {
-        let kw = std::str::from_utf8(&argv[i]).unwrap_or("");
+        let kw = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if kw.eq_ignore_ascii_case("ENTRIESADDED") {
             i += 2; // skip arg
         } else if kw.eq_ignore_ascii_case("MAXDELETEDID") {
@@ -5352,15 +5352,27 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
 
 fn lolwut_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     // LOLWUT [VERSION version]
-    let version = if argv.len() >= 3 {
-        let ver_kw = std::str::from_utf8(&argv[1]).unwrap_or("");
+    let version = if argv.len() == 1 {
+        1
+    } else {
+        let ver_kw =
+            std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if ver_kw.eq_ignore_ascii_case("VERSION") {
-            parse_i64_arg(&argv[2]).unwrap_or(1) as u32
+            if argv.len() < 3 {
+                return Err(CommandError::WrongArity("LOLWUT"));
+            }
+            let ver = parse_i64_arg(&argv[2])?;
+            let ver = u32::try_from(ver).map_err(|_| CommandError::InvalidInteger)?;
+            for arg in &argv[3..] {
+                parse_i64_arg(arg)?;
+            }
+            ver
         } else {
+            for arg in &argv[1..] {
+                parse_i64_arg(arg)?;
+            }
             1
         }
-    } else {
-        1
     };
     let art = generate_lolwut_art(version);
     Ok(RespFrame::BulkString(Some(art.into_bytes())))
@@ -5471,7 +5483,8 @@ fn cluster_cmd(
             return Err(CommandError::WrongArity("CLUSTER"));
         }
         if argv.len() == 3 {
-            let mode = std::str::from_utf8(&argv[2]).unwrap_or("");
+            let mode =
+                std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if !mode.eq_ignore_ascii_case("HARD") && !mode.eq_ignore_ascii_case("SOFT") {
                 return Err(CommandError::SyntaxError);
             }
@@ -5540,7 +5553,7 @@ fn replconf_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("REPLCONF"));
     }
-    let sub = std::str::from_utf8(&argv[1]).unwrap_or("");
+    let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("ACK") {
         if argv.len() != 3 {
             return Err(CommandError::WrongArity("REPLCONF"));
@@ -5607,8 +5620,8 @@ fn replicaof_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     if argv.len() < 3 {
         return Err(CommandError::WrongArity("REPLICAOF"));
     }
-    let host = std::str::from_utf8(&argv[1]).unwrap_or("");
-    let port = std::str::from_utf8(&argv[2]).unwrap_or("");
+    let host = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+    let port = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if host.eq_ignore_ascii_case("NO") && port.eq_ignore_ascii_case("ONE") {
         Ok(RespFrame::SimpleString("OK Already a master".to_string()))
     } else {
@@ -5763,7 +5776,8 @@ fn function_cmd(
         let mut replace = false;
         let code_idx;
         if argv.len() >= 4 {
-            let flag = std::str::from_utf8(&argv[2]).unwrap_or("");
+            let flag =
+                std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if flag.eq_ignore_ascii_case("REPLACE") {
                 replace = true;
                 code_idx = 3;
@@ -5786,11 +5800,14 @@ fn function_cmd(
         let mut with_code = false;
         let mut i = 2;
         while i < argv.len() {
-            let arg = std::str::from_utf8(&argv[i]).unwrap_or("");
+            let arg =
+                std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if arg.eq_ignore_ascii_case("LIBRARYNAME") {
                 i += 1;
                 if i < argv.len() {
-                    pattern = Some(std::str::from_utf8(&argv[i]).unwrap_or("*").to_string());
+                    let pat = std::str::from_utf8(&argv[i])
+                        .map_err(|_| CommandError::InvalidUtf8Argument)?;
+                    pattern = Some(pat.to_string());
                 }
             } else if arg.eq_ignore_ascii_case("WITHCODE") {
                 with_code = true;
@@ -5863,7 +5880,7 @@ fn function_cmd(
             return Err(CommandError::WrongArity("FUNCTION"));
         }
         let policy = if argv.len() >= 4 {
-            std::str::from_utf8(&argv[3]).unwrap_or("")
+            std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?
         } else {
             ""
         };
@@ -5876,7 +5893,8 @@ fn function_cmd(
             return Err(CommandError::WrongArity("FUNCTION"));
         }
         if argv.len() == 3 {
-            let mode = std::str::from_utf8(&argv[2]).unwrap_or("");
+            let mode =
+                std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if !mode.eq_ignore_ascii_case("ASYNC") && !mode.eq_ignore_ascii_case("SYNC") {
                 return Ok(RespFrame::Error(
                     "ERR FUNCTION FLUSH only supports ASYNC and SYNC options".to_string(),
@@ -6954,14 +6972,14 @@ pub fn parse_migrate_request(argv: &[Vec<u8>]) -> Result<MigrateRequest, Command
             if i + 1 >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            auth_password = Some(argv[i + 1].clone());
+            auth_password = Some(argv[i + 1].clone()); // ubs:ignore (user-supplied)
             i += 2;
         } else if arg.eq_ignore_ascii_case("AUTH2") {
             if i + 2 >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
             auth_username = Some(argv[i + 1].clone());
-            auth_password = Some(argv[i + 2].clone());
+            auth_password = Some(argv[i + 2].clone()); // ubs:ignore (user-supplied)
             i += 3;
         } else if arg.eq_ignore_ascii_case("KEYS") {
             keys_mode = true;
@@ -7213,7 +7231,8 @@ fn failover_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             i += 3;
             // Check for FORCE
             if i < argv.len() {
-                let next = std::str::from_utf8(&argv[i]).unwrap_or("");
+                let next =
+                    std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
                 if next.eq_ignore_ascii_case("FORCE") {
                     _force = true;
                     i += 1;
@@ -7324,7 +7343,7 @@ fn sentinel_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("SENTINEL"));
     }
-    let sub = std::str::from_utf8(&argv[1]).unwrap_or("");
+    let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
             return Err(CommandError::WrongArity("SENTINEL"));
@@ -8168,7 +8187,7 @@ fn parse_zstore_args(
     let mut aggregate: Vec<u8> = b"SUM".to_vec();
     let mut i = start;
     while i < argv.len() {
-        let kw = std::str::from_utf8(&argv[i]).unwrap_or("");
+        let kw = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if kw.eq_ignore_ascii_case("WEIGHTS") {
             i += 1;
             if i + numkeys > argv.len() {
@@ -10520,7 +10539,7 @@ fn parse_scan_args(
     let mut type_filter: Option<Vec<u8>> = None;
     let mut i = start_idx;
     while i < argv.len() {
-        let kw = std::str::from_utf8(&argv[i]).unwrap_or("");
+        let kw = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if kw.eq_ignore_ascii_case("MATCH") {
             if i + 1 >= argv.len() {
                 return Err(CommandError::SyntaxError);
@@ -10561,7 +10580,7 @@ fn scan(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
 
     // Apply TYPE filter if specified
     let keys: Vec<Vec<u8>> = if let Some(ref tf) = type_filter {
-        let tf_str = std::str::from_utf8(tf).unwrap_or("");
+        let tf_str = std::str::from_utf8(tf).map_err(|_| CommandError::InvalidUtf8Argument)?;
         keys.into_iter()
             .filter(|k| {
                 store
@@ -10930,7 +10949,8 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
         ])))
     } else {
-        let sub_str = std::str::from_utf8(&argv[1]).unwrap_or("?");
+        let sub_str =
+            std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         Ok(RespFrame::Error(format!(
             "ERR Unknown subcommand or wrong number of arguments for '{}'. Try MEMORY HELP.",
             sub_str.to_ascii_lowercase()
@@ -11706,7 +11726,8 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             });
         }
         if argv.len() == 3 {
-            let mode = std::str::from_utf8(&argv[2]).unwrap_or("");
+            let mode =
+                std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if !mode.eq_ignore_ascii_case("ASYNC") && !mode.eq_ignore_ascii_case("SYNC") {
                 return Ok(RespFrame::Error(
                     "ERR SCRIPT FLUSH only supports ASYNC and SYNC options".to_string(),
@@ -12778,7 +12799,7 @@ fn restore_cmd(
     let mut absttl = false;
     let mut i = 4;
     while i < argv.len() {
-        let opt = std::str::from_utf8(&argv[i]).unwrap_or("");
+        let opt = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if opt.eq_ignore_ascii_case("REPLACE") {
             replace = true;
             i += 1;
@@ -12910,7 +12931,14 @@ fn sort_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
             let mut scored: Vec<(f64, usize)> = Vec::with_capacity(elements.len());
             for (idx, sk) in sort_keys.iter().enumerate() {
                 let val = sk.as_deref().unwrap_or(b"0");
-                let s = std::str::from_utf8(val).unwrap_or("0");
+                let s = match std::str::from_utf8(val) {
+                    Ok(text) => text,
+                    Err(_) => {
+                        return Ok(RespFrame::Error(
+                            "ERR One or more scores can't be converted into double".to_string(),
+                        ));
+                    }
+                };
                 let Ok(score) = s.trim().parse::<f64>() else {
                     return Ok(RespFrame::Error(
                         "ERR One or more scores can't be converted into double".to_string(),
@@ -13127,7 +13155,7 @@ fn copy_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     let mut replace = false;
     let mut i = 3;
     while i < argv.len() {
-        let arg = std::str::from_utf8(&argv[i]).unwrap_or("");
+        let arg = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if arg.eq_ignore_ascii_case("REPLACE") {
             replace = true;
         } else if arg.eq_ignore_ascii_case("DB") {
