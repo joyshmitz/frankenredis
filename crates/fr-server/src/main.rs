@@ -1713,7 +1713,12 @@ fn parse_blocking_deadline(timeout_bytes: &[u8], now_ms: u64) -> Option<u64> {
 
 /// Extract the BLOCK timeout from XREAD/XREADGROUP args and compute a deadline.
 fn parse_xread_block_deadline(items: &[RespFrame], now_ms: u64) -> Option<u64> {
-    for (i, item) in items.iter().enumerate() {
+    let streams_pos = items.iter().position(|item| match item {
+        RespFrame::BulkString(Some(arg)) => arg.eq_ignore_ascii_case(b"STREAMS"),
+        _ => false,
+    });
+    let search_end = streams_pos.unwrap_or(items.len());
+    for (i, item) in items.iter().take(search_end).enumerate() {
         let RespFrame::BulkString(Some(arg)) = item else {
             continue;
         };
@@ -3620,6 +3625,17 @@ mod tests {
             RespFrame::BulkString(Some(b"1".to_vec())),
         ];
         assert_eq!(parse_xread_block_deadline(&overflow, u64::MAX), None);
+    }
+
+    #[test]
+    fn parse_xread_block_deadline_ignores_block_after_streams() {
+        let items = vec![
+            RespFrame::BulkString(Some(b"XREAD".to_vec())),
+            RespFrame::BulkString(Some(b"STREAMS".to_vec())),
+            RespFrame::BulkString(Some(b"BLOCK".to_vec())),
+            RespFrame::BulkString(Some(b"0-0".to_vec())),
+        ];
+        assert_eq!(parse_xread_block_deadline(&items, 123), None);
     }
 
     #[test]
