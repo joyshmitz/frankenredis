@@ -8160,15 +8160,16 @@ fn zunionstore(
         return Err(CommandError::WrongArity("ZUNIONSTORE"));
     }
     let dest = &argv[1];
-    let numkeys = std::str::from_utf8(&argv[2])
-        .map_err(|_| CommandError::InvalidInteger)?
-        .parse::<usize>()
-        .map_err(|_| CommandError::InvalidInteger)?;
-    if numkeys == 0 {
+    let numkeys_val = parse_i64_arg(&argv[2])?;
+    if numkeys_val < 0 {
+        return Err(CommandError::InvalidInteger);
+    }
+    if numkeys_val == 0 {
         return Ok(RespFrame::Error(
             "ERR at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE".to_string(),
         ));
     }
+    let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
     if argv.len() < 3 + numkeys {
         return Err(CommandError::SyntaxError);
     }
@@ -8189,15 +8190,16 @@ fn zinterstore(
         return Err(CommandError::WrongArity("ZINTERSTORE"));
     }
     let dest = &argv[1];
-    let numkeys = std::str::from_utf8(&argv[2])
-        .map_err(|_| CommandError::InvalidInteger)?
-        .parse::<usize>()
-        .map_err(|_| CommandError::InvalidInteger)?;
-    if numkeys == 0 {
+    let numkeys_val = parse_i64_arg(&argv[2])?;
+    if numkeys_val < 0 {
+        return Err(CommandError::InvalidInteger);
+    }
+    if numkeys_val == 0 {
         return Ok(RespFrame::Error(
             "ERR at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE".to_string(),
         ));
     }
+    let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
     if argv.len() < 3 + numkeys {
         return Err(CommandError::SyntaxError);
     }
@@ -28318,6 +28320,36 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn zstore_numkeys_rejects_noncanonical_integers() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[
+                b"ZUNIONSTORE".to_vec(),
+                b"dest".to_vec(),
+                b"+1".to_vec(),
+                b"z1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::InvalidInteger);
+
+        let err = dispatch_argv(
+            &[
+                b"ZINTERSTORE".to_vec(),
+                b"dest".to_vec(),
+                b"01".to_vec(),
+                b"z1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::InvalidInteger);
     }
 
     #[test]
