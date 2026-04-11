@@ -2122,8 +2122,12 @@ impl Store {
 
     #[must_use]
     pub fn value_type(&mut self, key: &[u8], now_ms: u64) -> Option<ValueType> {
-        self.drop_if_expired(key, now_ms);
-        self.entries.get(key).map(|entry| match &entry.value {
+        if !self.record_keyspace_lookup(key, now_ms) {
+            return None;
+        }
+        let entry = self.entries.get_mut(key)?;
+        entry.touch(now_ms);
+        Some(match &entry.value {
             Value::String(_) => ValueType::String,
             Value::Hash(_) => ValueType::Hash,
             Value::List(_) => ValueType::List,
@@ -2141,8 +2145,11 @@ impl Store {
     /// Return the Redis-compatible encoding name for the value at `key`.
     #[must_use]
     pub fn object_encoding(&mut self, key: &[u8], now_ms: u64) -> Option<&'static str> {
-        self.drop_if_expired(key, now_ms);
-        self.entries.get(key).map(|entry| match &entry.value {
+        if !self.record_keyspace_lookup(key, now_ms) {
+            return None;
+        }
+        let entry = self.entries.get(key)?;
+        let encoding = match &entry.value {
             Value::String(v) => {
                 // Redis returns "int" for strings that are the canonical
                 // representation of an i64 (round-trip: parse then format must match)
@@ -2207,7 +2214,11 @@ impl Store {
                 }
             }
             Value::Stream(_) => "stream",
-        })
+        };
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.touch(now_ms);
+        }
+        Some(encoding)
     }
 
     /// Return idle time in seconds for a key (time since last access).
@@ -10537,6 +10548,39 @@ mod tests {
         assert_eq!(store.value_type(b"missing", 0), None);
         store.set(b"k".to_vec(), b"v".to_vec(), None, 0);
         assert_eq!(store.value_type(b"k", 0), Some(ValueType::String));
+    }
+
+    #[test]
+    fn type_and_encoding_update_keyspace_stats_and_lru() {
+        let mut store = Store::new();
+        store.set(b"k".to_vec(), b"v".to_vec(), None, 100);
+        store.reset_info_stats();
+
+        assert_eq!(store.key_type(b"k", 200), Some("string"));
+        assert_eq!(store.stat_keyspace_hits, 1);
+        assert_eq!(store.stat_keyspace_misses, 0);
+        assert_eq!(
+            store
+                .entries
+                .get(b"k".as_ref())
+                .expect("type entry")
+                .last_access_ms,
+            200
+        );
+
+        assert_eq!(store.object_encoding(b"k", 250), Some("embstr"));
+        assert_eq!(store.stat_keyspace_hits, 2);
+        assert_eq!(
+            store
+                .entries
+                .get(b"k".as_ref())
+                .expect("encoding entry")
+                .last_access_ms,
+            250
+        );
+
+        assert_eq!(store.key_type(b"missing", 300), None);
+        assert_eq!(store.stat_keyspace_misses, 1);
     }
 
     #[test]
