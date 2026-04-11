@@ -95,3 +95,44 @@ storage.sqlite3-wal.corrupt-*
 # Bug scanner / audit tool output
 critical_bugs.jsonl
 ubs_full_report.txt
+
+# NTM session state
+.ntm/
+
+# Python caches anywhere
+__pycache__/
+**/__pycache__/
+
+# Root-level agent scratch source files and scratch binaries
+/test_*.rs
+/test_*.py
+/test_*.sh
+/test_*.c
+/test_[a-z]*
+
+# Root-level one-off agent scripts
+/fix_*.py
+/refactor_*.py
+/extract.py
+/extract_*.py
+/extracted_funcs.txt
+/count_panics.py
+/apply_fixes.py
+/reproduce_*.py
+/reproduce_*.rs
+
+# Root-level scratch output (shell redirects, stray single-char files)
+/blmove_out.txt
+/blpop_out*.txt
+/panics.txt
+/=
+/lua_test
+/lua_test[0-9]*
+
+# Bug scanner output (SARIF / extra reports not covered above)
+ubs.sarif
+ubs_*.txt
+ubs_*.jsonl
+
+# Persisted Redis RDB dumps from scratch sessions
+/dump.rdb
