@@ -5201,6 +5201,10 @@ impl Runtime {
         if let Some(backlog_size) = next_repl_backlog_size {
             self.server.repl_backlog_size = backlog_size;
             self.server.store.server_repl_backlog_size = backlog_size;
+            self.server.replication_runtime_state.update_backlog_window(
+                self.server.replication_ack_state.primary_offset,
+                backlog_size,
+            );
         }
         if let Some(repl_timeout) = next_repl_timeout {
             self.server.repl_timeout_sec = repl_timeout;
@@ -10151,6 +10155,39 @@ mod tests {
         assert!(info.contains("repl_backlog_size:1\r\n"), "{info}");
 
         let primary_offset = rt.server.replication_ack_state.primary_offset.0;
+        assert!(
+            info.contains(&format!(
+                "repl_backlog_first_byte_offset:{primary_offset}\r\n"
+            )),
+            "{info}"
+        );
+    }
+
+    #[test]
+    fn config_set_repl_backlog_size_recomputes_window_without_new_writes() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"key1", b"value1"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"key2", b"value2"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let primary_offset = rt.replication_primary_offset().0;
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"repl-backlog-size", b"1"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let info = rt.execute_frame(command(&[b"INFO", b"replication"]), 3);
+        let RespFrame::BulkString(Some(info_bytes)) = info else {
+            unreachable!("expected bulk INFO response");
+        };
+        let info = String::from_utf8(info_bytes).expect("utf8 info");
+        assert!(info.contains("repl_backlog_size:1\r\n"), "{info}");
         assert!(
             info.contains(&format!(
                 "repl_backlog_first_byte_offset:{primary_offset}\r\n"
