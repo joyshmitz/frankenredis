@@ -6398,10 +6398,7 @@ impl Runtime {
         if argv.len() < 2 {
             return Err(CommandError::WrongArity("SCAN"));
         }
-        let cursor = std::str::from_utf8(&argv[1])
-            .map_err(|_| CommandError::InvalidInteger)?
-            .parse::<usize>()
-            .map_err(|_| CommandError::InvalidInteger)?;
+        let cursor = parse_u64_full_arg(&argv[1])?;
 
         let mut pattern: Option<&[u8]> = None;
         let mut count: usize = 10;
@@ -6465,13 +6462,14 @@ impl Runtime {
         }
         filtered.sort();
 
-        if cursor >= filtered.len() {
+        if cursor >= filtered.len() as u64 {
             return Ok(RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"0".to_vec())),
                 RespFrame::Array(Some(Vec::new())),
             ])));
         }
 
+        let cursor = cursor as usize;
         let end = cursor.saturating_add(count.max(1)).min(filtered.len());
         let next_cursor = if end >= filtered.len() { 0 } else { end };
         let batch = filtered[cursor..end]
@@ -7589,6 +7587,37 @@ fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
     }
 
     Err(CommandError::InvalidInteger)
+}
+
+fn parse_u64_full_arg(arg: &[u8]) -> Result<u64, CommandError> {
+    let slen = arg.len();
+    if slen == 0 || slen > 20 {
+        return Err(CommandError::InvalidInteger);
+    }
+    if slen == 1 && arg[0] == b'0' {
+        return Ok(0);
+    }
+    if arg[0] < b'1' || arg[0] > b'9' {
+        return Err(CommandError::InvalidInteger);
+    }
+
+    let mut v: u64 = (arg[0] - b'0') as u64;
+    for &b in &arg[1..] {
+        if !b.is_ascii_digit() {
+            return Err(CommandError::InvalidInteger);
+        }
+        if v > (u64::MAX / 10) {
+            return Err(CommandError::InvalidInteger);
+        }
+        v *= 10;
+        let digit = (b - b'0') as u64;
+        if v > (u64::MAX - digit) {
+            return Err(CommandError::InvalidInteger);
+        }
+        v += digit;
+    }
+
+    Ok(v)
 }
 
 fn hello_bulk(value: &str) -> RespFrame {

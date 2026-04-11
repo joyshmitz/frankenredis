@@ -182,6 +182,23 @@ fn zscan_all(rt: &mut Runtime, key: &[u8], now_ms: u64) -> BTreeSet<(Vec<u8>, Ve
 }
 
 #[test]
+fn scan_rejects_noncanonical_cursor() {
+    let mut rt = Runtime::default_strict();
+
+    let resp = rt.execute_frame(command(&[b"SCAN", b"+1"]), 0);
+    assert!(
+        matches!(resp, RespFrame::Error(ref msg) if msg.contains("integer")),
+        "expected integer error, got: {resp:?}"
+    );
+
+    let resp = rt.execute_frame(command(&[b"SCAN", b"01"]), 0);
+    assert!(
+        matches!(resp, RespFrame::Error(ref msg) if msg.contains("integer")),
+        "expected integer error, got: {resp:?}"
+    );
+}
+
+#[test]
 fn scan_full_iteration_returns_all_keys() {
     let mut rt = Runtime::default_strict();
 
