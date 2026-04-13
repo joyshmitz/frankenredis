@@ -290,7 +290,7 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
         rdb_encode_string(&mut buf, value.as_bytes());
     }
 
-    let mut sorted_entries = entries.to_vec();
+    let mut sorted_entries: Vec<&RdbEntry> = entries.iter().collect();
     sorted_entries.sort_by(|left, right| {
         left.db
             .cmp(&right.db)
@@ -811,101 +811,96 @@ pub fn decode_rdb(data: &[u8]) -> Result<(Vec<RdbEntry>, BTreeMap<String, String
                             }
                             stream_entries.push((ms, seq, fields));
                         }
-                        // Decode consumer groups (if present — backwards compat).
-                        let groups =
-                            if let Some((group_count, gc)) = rdb_decode_length(&data[cursor..]) {
-                                cursor += gc;
-                                let mut groups = Vec::with_capacity(group_count.min(256));
-                                for _ in 0..group_count {
-                                    let (name, nc) = rdb_decode_string(&data[cursor..])
-                                        .ok_or(PersistError::InvalidFrame)?;
-                                    cursor += nc;
-                                    if cursor + 16 > data.len() {
-                                        return Err(PersistError::InvalidFrame);
-                                    }
-                                    let ld_ms = u64::from_le_bytes(
-                                        data[cursor..cursor + 8]
-                                            .try_into()
-                                            .map_err(|_| PersistError::InvalidFrame)?,
-                                    );
-                                    cursor += 8;
-                                    let ld_seq = u64::from_le_bytes(
-                                        data[cursor..cursor + 8]
-                                            .try_into()
-                                            .map_err(|_| PersistError::InvalidFrame)?,
-                                    );
-                                    cursor += 8;
-                                    // Consumers list
-                                    let (consumer_count, cc) = rdb_decode_length(&data[cursor..])
-                                        .ok_or(PersistError::InvalidFrame)?;
-                                    cursor += cc;
-                                    let mut consumers = Vec::with_capacity(consumer_count.min(256));
-                                    for _ in 0..consumer_count {
-                                        let (cname, cnc) = rdb_decode_string(&data[cursor..])
-                                            .ok_or(PersistError::InvalidFrame)?;
-                                        cursor += cnc;
-                                        consumers.push(cname);
-                                    }
-                                    // Pending entries
-                                    let (pel_count, pc) = rdb_decode_length(&data[cursor..])
-                                        .ok_or(PersistError::InvalidFrame)?;
-                                    cursor += pc;
-                                    let mut pending = Vec::with_capacity(pel_count.min(4096));
-                                    for _ in 0..pel_count {
-                                        if cursor + 40 > data.len() {
-                                            return Err(PersistError::InvalidFrame);
-                                        }
-                                        let eid_ms = u64::from_le_bytes(
-                                            data[cursor..cursor + 8]
-                                                .try_into()
-                                                .map_err(|_| PersistError::InvalidFrame)?,
-                                        );
-                                        cursor += 8;
-                                        let eid_seq = u64::from_le_bytes(
-                                            data[cursor..cursor + 8]
-                                                .try_into()
-                                                .map_err(|_| PersistError::InvalidFrame)?,
-                                        );
-                                        cursor += 8;
-                                        let (pe_consumer, pec) = rdb_decode_string(&data[cursor..])
-                                            .ok_or(PersistError::InvalidFrame)?;
-                                        cursor += pec;
-                                        if cursor + 16 > data.len() {
-                                            return Err(PersistError::InvalidFrame);
-                                        }
-                                        let deliveries = u64::from_le_bytes(
-                                            data[cursor..cursor + 8]
-                                                .try_into()
-                                                .map_err(|_| PersistError::InvalidFrame)?,
-                                        );
-                                        cursor += 8;
-                                        let last_del_ms = u64::from_le_bytes(
-                                            data[cursor..cursor + 8]
-                                                .try_into()
-                                                .map_err(|_| PersistError::InvalidFrame)?,
-                                        );
-                                        cursor += 8;
-                                        pending.push(RdbStreamPendingEntry {
-                                            entry_id_ms: eid_ms,
-                                            entry_id_seq: eid_seq,
-                                            consumer: pe_consumer,
-                                            deliveries,
-                                            last_delivered_ms: last_del_ms,
-                                        });
-                                    }
-                                    groups.push(RdbStreamConsumerGroup {
-                                        name,
-                                        last_delivered_id_ms: ld_ms,
-                                        last_delivered_id_seq: ld_seq,
-                                        consumers,
-                                        pending,
-                                    });
+                        // Decode consumer groups (always present in stream encoding).
+                        let (group_count, gc) =
+                            rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
+                        cursor += gc;
+                        let mut groups = Vec::with_capacity(group_count.min(256));
+                        for _ in 0..group_count {
+                            let (name, nc) = rdb_decode_string(&data[cursor..])
+                                .ok_or(PersistError::InvalidFrame)?;
+                            cursor += nc;
+                            if cursor + 16 > data.len() {
+                                return Err(PersistError::InvalidFrame);
+                            }
+                            let ld_ms = u64::from_le_bytes(
+                                data[cursor..cursor + 8]
+                                    .try_into()
+                                    .map_err(|_| PersistError::InvalidFrame)?,
+                            );
+                            cursor += 8;
+                            let ld_seq = u64::from_le_bytes(
+                                data[cursor..cursor + 8]
+                                    .try_into()
+                                    .map_err(|_| PersistError::InvalidFrame)?,
+                            );
+                            cursor += 8;
+                            // Consumers list
+                            let (consumer_count, cc) = rdb_decode_length(&data[cursor..])
+                                .ok_or(PersistError::InvalidFrame)?;
+                            cursor += cc;
+                            let mut consumers = Vec::with_capacity(consumer_count.min(256));
+                            for _ in 0..consumer_count {
+                                let (cname, cnc) = rdb_decode_string(&data[cursor..])
+                                    .ok_or(PersistError::InvalidFrame)?;
+                                cursor += cnc;
+                                consumers.push(cname);
+                            }
+                            // Pending entries
+                            let (pel_count, pc) = rdb_decode_length(&data[cursor..])
+                                .ok_or(PersistError::InvalidFrame)?;
+                            cursor += pc;
+                            let mut pending = Vec::with_capacity(pel_count.min(4096));
+                            for _ in 0..pel_count {
+                                if cursor + 16 > data.len() {
+                                    return Err(PersistError::InvalidFrame);
                                 }
-                                groups
-                            } else {
-                                // Old format without consumer groups.
-                                Vec::new()
-                            };
+                                let eid_ms = u64::from_le_bytes(
+                                    data[cursor..cursor + 8]
+                                        .try_into()
+                                        .map_err(|_| PersistError::InvalidFrame)?,
+                                );
+                                cursor += 8;
+                                let eid_seq = u64::from_le_bytes(
+                                    data[cursor..cursor + 8]
+                                        .try_into()
+                                        .map_err(|_| PersistError::InvalidFrame)?,
+                                );
+                                cursor += 8;
+                                let (pe_consumer, pec) = rdb_decode_string(&data[cursor..])
+                                    .ok_or(PersistError::InvalidFrame)?;
+                                cursor += pec;
+                                if cursor + 16 > data.len() {
+                                    return Err(PersistError::InvalidFrame);
+                                }
+                                let deliveries = u64::from_le_bytes(
+                                    data[cursor..cursor + 8]
+                                        .try_into()
+                                        .map_err(|_| PersistError::InvalidFrame)?,
+                                );
+                                cursor += 8;
+                                let last_del_ms = u64::from_le_bytes(
+                                    data[cursor..cursor + 8]
+                                        .try_into()
+                                        .map_err(|_| PersistError::InvalidFrame)?,
+                                );
+                                cursor += 8;
+                                pending.push(RdbStreamPendingEntry {
+                                    entry_id_ms: eid_ms,
+                                    entry_id_seq: eid_seq,
+                                    consumer: pe_consumer,
+                                    deliveries,
+                                    last_delivered_ms: last_del_ms,
+                                });
+                            }
+                            groups.push(RdbStreamConsumerGroup {
+                                name,
+                                last_delivered_id_ms: ld_ms,
+                                last_delivered_id_seq: ld_seq,
+                                consumers,
+                                pending,
+                            });
+                        }
                         RdbValue::Stream(stream_entries, watermark, groups)
                     }
                     _ => return Err(PersistError::InvalidFrame),
@@ -1427,6 +1422,25 @@ mod tests {
         let encoded = encode_rdb(&entries, &[]);
         let (decoded, _) = decode_rdb(&encoded).expect("decode");
         assert_eq!(decoded, entries);
+    }
+
+    #[test]
+    fn rdb_stream_decode_rejects_missing_group_count() {
+        let entries = vec![RdbEntry {
+            db: 0,
+            key: b"cg_stream".to_vec(),
+            value: RdbValue::Stream(
+                vec![(1000, 0, vec![(b"msg".to_vec(), b"hello".to_vec())])],
+                Some((1000, 0)),
+                Vec::new(),
+            ),
+            expire_ms: None,
+        }];
+        let mut encoded = encode_rdb(&entries, &[]);
+        // Remove the final consumer group length byte (single 0x00 for empty groups)
+        // to simulate a truncated stream payload.
+        encoded.pop();
+        assert!(decode_rdb(&encoded).is_err());
     }
 
     #[test]
