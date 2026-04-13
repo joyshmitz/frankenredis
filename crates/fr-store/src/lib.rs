@@ -1582,12 +1582,12 @@ impl Store {
             return false;
         }
 
+        let (db, logical_key) = match decode_db_key(key) {
+            Some((db, lk)) => (db, lk.to_vec()),
+            None => (0, key.to_vec()),
+        };
         if i128::from(when_ms) <= i128::from(now_ms) {
-            let (db, logical_key) = match decode_db_key(key) {
-                Some((db, lk)) => (db, lk.to_vec()),
-                None => (0, key.to_vec()),
-            };
-            self.notify_keyspace_event(NOTIFY_GENERIC, "del", &logical_key, db);
+            self.notify_keyspace_event(NOTIFY_EXPIRED, "expired", &logical_key, db);
             self.internal_entries_remove(key);
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
@@ -1606,6 +1606,7 @@ impl Store {
             }
             entry.expires_at_ms = Some(expires_at_ms);
             self.dirty = self.dirty.saturating_add(1);
+            self.notify_keyspace_event(NOTIFY_GENERIC, "expire", &logical_key, db);
         }
         true
     }
@@ -9926,7 +9927,7 @@ mod tests {
     use super::{
         EvictionLoopFailure, EvictionLoopStatus, EvictionSafetyGateState, ExpireTimeValue,
         LatencySample, MaxmemoryPolicy, MaxmemoryPressureLevel, NOTIFY_EVICTED, NOTIFY_EXPIRED,
-        NOTIFY_KEYEVENT, PttlValue, ScoreBound, ScoreMember, Store, StoreError,
+        NOTIFY_GENERIC, NOTIFY_KEYEVENT, PttlValue, ScoreBound, ScoreMember, Store, StoreError,
         StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply,
         StreamGroupReadCursor, StreamGroupReadOptions, StreamPendingEntry, Value, ValueType,
         encode_db_key,
@@ -10321,6 +10322,19 @@ mod tests {
         assert!(store.expire_at_milliseconds(b"k", 5_000, 1_000));
         assert_eq!(store.pttl(b"k", 1_000), PttlValue::Remaining(4_000));
         assert_eq!(store.pttl(b"k", 5_001), PttlValue::KeyMissing);
+    }
+
+    #[test]
+    fn expire_at_milliseconds_emits_keyevent_notification() {
+        let mut store = Store::new();
+        store.notify_keyspace_events = NOTIFY_KEYEVENT | NOTIFY_GENERIC;
+        store.set(b"k".to_vec(), b"v".to_vec(), None, 1_000);
+
+        assert!(store.expire_at_milliseconds(b"k", 5_000, 1_000));
+        assert_eq!(
+            store.drain_keyspace_notifications(),
+            vec![(b"__keyevent@0__:expire".to_vec(), b"k".to_vec())]
+        );
     }
 
     #[test]
