@@ -8241,7 +8241,7 @@ fn zunionstore(
         ));
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
-    if argv.len() < 3 + numkeys {
+    if argv.len() < 3_usize.saturating_add(numkeys) {
         return Err(CommandError::SyntaxError);
     }
     let keys: Vec<&[u8]> = argv[3..3 + numkeys].iter().map(|v| v.as_slice()).collect();
@@ -8271,7 +8271,7 @@ fn zinterstore(
         ));
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
-    if argv.len() < 3 + numkeys {
+    if argv.len() < 3_usize.saturating_add(numkeys) {
         return Err(CommandError::SyntaxError);
     }
     let keys: Vec<&[u8]> = argv[3..3 + numkeys].iter().map(|v| v.as_slice()).collect();
@@ -11354,12 +11354,12 @@ fn zdiff(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         return Err(CommandError::InvalidInteger);
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
-    if argv.len() < 2 + numkeys {
+    if argv.len() < 2_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
     let withscores =
         argv.len() > 2 + numkeys && argv[2 + numkeys].eq_ignore_ascii_case(b"WITHSCORES");
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2 + i].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2_usize.saturating_add(i)].as_slice()).collect();
     // Compute difference: members in first set not in any other
     let first_members = store.zget_members_with_scores(keys[0], now_ms)?;
     let mut result: Vec<(Vec<u8>, f64)> = Vec::new();
@@ -11399,7 +11399,7 @@ fn zdiffstore(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         return Err(CommandError::InvalidInteger);
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
-    if argv.len() < 3 + numkeys {
+    if argv.len() < 3_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
     let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[3 + i].as_slice()).collect();
@@ -11435,10 +11435,10 @@ fn zinter(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         return Err(CommandError::InvalidInteger);
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
-    if argv.len() < 2 + numkeys {
+    if argv.len() < 2_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2 + i].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2_usize.saturating_add(i)].as_slice()).collect();
     // Find WITHSCORES before parse_zstore_args
     let withscores_pos = argv[2 + numkeys..]
         .iter()
@@ -11496,10 +11496,10 @@ fn zunion_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         return Err(CommandError::InvalidInteger);
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
-    if argv.len() < 2 + numkeys {
+    if argv.len() < 2_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2 + i].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2_usize.saturating_add(i)].as_slice()).collect();
     let withscores_pos = argv[2 + numkeys..]
         .iter()
         .position(|a| a.eq_ignore_ascii_case(b"WITHSCORES"));
@@ -11553,7 +11553,7 @@ fn zintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         ));
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
-    if argv.len() < 2 + numkeys {
+    if argv.len() < 2_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
     let mut limit: u64 = 0;
@@ -11571,7 +11571,7 @@ fn zintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         }
         idx += 1;
     }
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2 + i].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2_usize.saturating_add(i)].as_slice()).collect();
     // Compute intersection count
     if keys.is_empty() {
         return Ok(RespFrame::Integer(0));
@@ -12351,13 +12351,8 @@ fn bitfield_clamp_with_overflow(
                 if bits >= 64 {
                     (value, true)
                 } else {
-                    let range = 1i64 << bits;
-                    let mut wrapped = value % range;
-                    if wrapped > max {
-                        wrapped -= range;
-                    } else if wrapped < min {
-                        wrapped += range;
-                    }
+                    let shift = 64 - bits as u32;
+                    let wrapped = (value as u64).wrapping_shl(shift) as i64 >> shift;
                     (wrapped, true)
                 }
             }

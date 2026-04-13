@@ -912,7 +912,30 @@ fn load_replication_handshake_fixture(
         .map_err(|err| format!("invalid fixture JSON {}: {err}", path.display()))
 }
 
-fn connect_live_redis(oracle: &LiveOracleConfig) -> Result<TcpStream, String> {
+struct LiveOracleConnection {
+    stream: TcpStream,
+}
+
+impl Drop for LiveOracleConnection {
+    fn drop(&mut self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+impl std::ops::Deref for LiveOracleConnection {
+    type Target = TcpStream;
+    fn deref(&self) -> &Self::Target {
+        &self.stream
+    }
+}
+
+impl std::ops::DerefMut for LiveOracleConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stream
+    }
+}
+
+fn connect_live_redis(oracle: &LiveOracleConfig) -> Result<LiveOracleConnection, String> {
     let addr = format!("{}:{}", oracle.host, oracle.port);
     let stream = TcpStream::connect(&addr)
         .map_err(|err| format!("failed to connect to redis {}: {err}", addr))?;
@@ -923,7 +946,7 @@ fn connect_live_redis(oracle: &LiveOracleConfig) -> Result<TcpStream, String> {
     stream
         .set_write_timeout(Some(timeout))
         .map_err(|err| format!("failed to set write timeout: {err}"))?;
-    Ok(stream)
+    Ok(LiveOracleConnection { stream })
 }
 
 fn flushall(stream: &mut TcpStream) -> Result<(), String> {

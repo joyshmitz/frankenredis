@@ -4784,7 +4784,17 @@ impl Store {
             };
             let mut added = 0_usize;
             let mut changed = 0_usize;
-            for (score, member) in members {
+
+            let mut deduplicated = Vec::with_capacity(members.len());
+            let mut seen = std::collections::HashSet::new();
+            for (score, member) in members.iter().rev() {
+                if seen.insert(member.as_slice()) {
+                    deduplicated.push((score, member));
+                }
+            }
+            deduplicated.reverse();
+
+            for (score, member) in deduplicated {
                 match zs.get_score(member) {
                     Some(old_score) => {
                         // Existing member
