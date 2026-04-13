@@ -3348,8 +3348,145 @@
       }
     },
     {
+      "name": "getdel_setup",
+      "now_ms": 200,
+      "argv": [
+        "SET",
+        "getdel_key",
+        "getdel_value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "getdel_returns_value",
+      "now_ms": 201,
+      "argv": [
+        "GETDEL",
+        "getdel_key"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "getdel_value"
+      }
+    },
+    {
+      "name": "getdel_key_gone",
+      "now_ms": 202,
+      "argv": [
+        "EXISTS",
+        "getdel_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "getdel_nonexistent",
+      "now_ms": 203,
+      "argv": [
+        "GETDEL",
+        "no_such_key_for_getdel"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
+    },
+    {
+      "name": "getex_setup",
+      "now_ms": 300,
+      "argv": [
+        "SET",
+        "getex_key",
+        "getex_value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "getex_plain_returns_value",
+      "now_ms": 301,
+      "argv": [
+        "GETEX",
+        "getex_key"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "getex_value"
+      }
+    },
+    {
+      "name": "getex_set_ex",
+      "now_ms": 302,
+      "argv": [
+        "GETEX",
+        "getex_key",
+        "EX",
+        "60"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "getex_value"
+      }
+    },
+    {
+      "name": "getex_verify_ttl_set",
+      "now_ms": 302,
+      "argv": [
+        "TTL",
+        "getex_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 60
+      }
+    },
+    {
+      "name": "getex_persist",
+      "now_ms": 303,
+      "argv": [
+        "GETEX",
+        "getex_key",
+        "PERSIST"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "getex_value"
+      }
+    },
+    {
+      "name": "getex_verify_ttl_removed",
+      "now_ms": 303,
+      "argv": [
+        "TTL",
+        "getex_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": -1
+      }
+    },
+    {
+      "name": "getex_nonexistent",
+      "now_ms": 304,
+      "argv": [
+        "GETEX",
+        "no_such_key_for_getex"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": null
+      }
+    },
+    {
       "name": "mget_cleanup",
-      "now_ms": 100,
+      "now_ms": 400,
       "argv": [
         "FLUSHDB"
       ],
