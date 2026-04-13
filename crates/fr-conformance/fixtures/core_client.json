@@ -1184,6 +1184,130 @@
         "kind": "simple",
         "value": "OK"
       }
+    },
+    {
+      "name": "client_getredir_returns_minus_one",
+      "now_ms": 260,
+      "argv": [
+        "CLIENT",
+        "GETREDIR"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": -1
+      }
+    },
+    {
+      "name": "client_getredir_wrong_arity",
+      "now_ms": 261,
+      "argv": [
+        "CLIENT",
+        "GETREDIR",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'client' command"
+      }
+    },
+    {
+      "name": "client_trackinginfo_returns_off",
+      "now_ms": 270,
+      "argv": [
+        "CLIENT",
+        "TRACKINGINFO"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind": "bulk", "value": "flags"},
+          {"kind": "array", "value": [{"kind": "bulk", "value": "off"}]},
+          {"kind": "bulk", "value": "redirect"},
+          {"kind": "integer", "value": -1},
+          {"kind": "bulk", "value": "prefixes"},
+          {"kind": "array", "value": []}
+        ]
+      }
+    },
+    {
+      "name": "client_trackinginfo_wrong_arity",
+      "now_ms": 271,
+      "argv": [
+        "CLIENT",
+        "TRACKINGINFO",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'client' command"
+      }
+    },
+    {
+      "name": "client_unblock_wrong_arity",
+      "now_ms": 280,
+      "argv": [
+        "CLIENT",
+        "UNBLOCK"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'client' command"
+      }
+    },
+    {
+      "name": "client_unblock_nonexistent",
+      "now_ms": 281,
+      "argv": [
+        "CLIENT",
+        "UNBLOCK",
+        "99999"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "client_unblock_with_timeout",
+      "now_ms": 282,
+      "argv": [
+        "CLIENT",
+        "UNBLOCK",
+        "99999",
+        "TIMEOUT"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "client_unblock_with_error",
+      "now_ms": 283,
+      "argv": [
+        "CLIENT",
+        "UNBLOCK",
+        "99999",
+        "ERROR"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "client_unblock_invalid_mode",
+      "now_ms": 284,
+      "argv": [
+        "CLIENT",
+        "UNBLOCK",
+        "99999",
+        "BADMODE"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
     }
   ]
 }
