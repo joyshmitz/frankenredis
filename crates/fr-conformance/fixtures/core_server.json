@@ -1461,6 +1461,10 @@
           },
           {
             "kind": "bulk",
+            "value": "HISTOGRAM [command ...] - Return latency histograms for commands."
+          },
+          {
+            "kind": "bulk",
             "value": "RESET [<event> ...] - Reset latency data."
           },
           {
@@ -1625,6 +1629,32 @@
       "expect": {
         "kind": "error",
         "value": "ERR Unknown subcommand or wrong number of arguments for 'nosuch'. Try LATENCY HELP."
+      }
+    },
+    {
+      "name": "latency_histogram_empty",
+      "now_ms": 24001,
+      "argv": [
+        "LATENCY",
+        "HISTOGRAM"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "latency_histogram_with_commands",
+      "now_ms": 24002,
+      "argv": [
+        "LATENCY",
+        "HISTOGRAM",
+        "GET",
+        "SET"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
       }
     },
     {
