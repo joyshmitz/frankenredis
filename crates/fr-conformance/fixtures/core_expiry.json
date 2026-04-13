@@ -2123,6 +2123,188 @@
       }
     },
     {
+      "name": "expireat_invalid_int_setup",
+      "now_ms": 2000000,
+      "argv": [
+        "SET",
+        "eatinv",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "expireat_rejects_leading_plus",
+      "now_ms": 2000000,
+      "argv": [
+        "EXPIREAT",
+        "eatinv",
+        "+100"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "expireat_rejects_leading_zero",
+      "now_ms": 2000000,
+      "argv": [
+        "EXPIREAT",
+        "eatinv",
+        "0100"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "expireat_rejects_non_numeric",
+      "now_ms": 2000000,
+      "argv": [
+        "EXPIREAT",
+        "eatinv",
+        "abc"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "expireat_rejects_float",
+      "now_ms": 2000000,
+      "argv": [
+        "EXPIREAT",
+        "eatinv",
+        "100.5"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "expireat_rejects_empty_string",
+      "now_ms": 2000000,
+      "argv": [
+        "EXPIREAT",
+        "eatinv",
+        ""
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "pexpireat_rejects_leading_plus",
+      "now_ms": 2000000,
+      "argv": [
+        "PEXPIREAT",
+        "eatinv",
+        "+100000"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "pexpireat_rejects_leading_zero",
+      "now_ms": 2000000,
+      "argv": [
+        "PEXPIREAT",
+        "eatinv",
+        "0100000"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "pexpireat_rejects_non_numeric",
+      "now_ms": 2000000,
+      "argv": [
+        "PEXPIREAT",
+        "eatinv",
+        "notanumber"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "pexpireat_rejects_float",
+      "now_ms": 2000000,
+      "argv": [
+        "PEXPIREAT",
+        "eatinv",
+        "100000.5"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "expire_rejects_leading_plus",
+      "now_ms": 2000000,
+      "argv": [
+        "EXPIRE",
+        "eatinv",
+        "+100"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "expire_rejects_leading_zero",
+      "now_ms": 2000000,
+      "argv": [
+        "EXPIRE",
+        "eatinv",
+        "0100"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "pexpire_rejects_leading_plus",
+      "now_ms": 2000000,
+      "argv": [
+        "PEXPIRE",
+        "eatinv",
+        "+100000"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "pexpire_rejects_leading_zero",
+      "now_ms": 2000000,
+      "argv": [
+        "PEXPIRE",
+        "eatinv",
+        "0100000"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
       "name": "expire_edge_cleanup",
       "now_ms": 1000,
       "argv": [
