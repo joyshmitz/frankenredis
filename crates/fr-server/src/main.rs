@@ -3509,7 +3509,7 @@ mod tests {
         );
         drive_replica_sync(&mut runtime, &mut replica_sync, 1);
         assert!(replica_sync.connection.is_none());
-        assert!(replica_sync.retry_after_ms >= 1 + REPLICA_RECONNECT_BACKOFF_MS);
+        assert!(replica_sync.retry_after_ms > REPLICA_RECONNECT_BACKOFF_MS);
     }
 
     #[test]
