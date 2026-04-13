@@ -2174,6 +2174,31 @@
       }
     },
     {
+      "name": "strlen_wrongtype_setup",
+      "now_ms": 8000,
+      "argv": [
+        "LPUSH",
+        "strlen_list_key",
+        "a"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "strlen_wrongtype",
+      "now_ms": 8000,
+      "argv": [
+        "STRLEN",
+        "strlen_list_key"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
       "name": "setrange_setup",
       "now_ms": 8000,
       "argv": [
@@ -2301,6 +2326,34 @@
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'setrange' command"
+      }
+    },
+    {
+      "name": "setrange_negative_offset",
+      "now_ms": 8002,
+      "argv": [
+        "SETRANGE",
+        "srk1",
+        "-1",
+        "test"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "setrange_huge_offset",
+      "now_ms": 8003,
+      "argv": [
+        "SETRANGE",
+        "srk1",
+        "536870912",
+        "x"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR string exceeds maximum allowed size (512MB)"
       }
     },
     {

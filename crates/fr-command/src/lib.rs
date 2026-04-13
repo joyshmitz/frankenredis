@@ -11359,7 +11359,9 @@ fn zdiff(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     }
     let withscores =
         argv.len() > 2 + numkeys && argv[2 + numkeys].eq_ignore_ascii_case(b"WITHSCORES");
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2_usize.saturating_add(i)].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys)
+        .map(|i| argv[2_usize.saturating_add(i)].as_slice())
+        .collect();
     // Compute difference: members in first set not in any other
     let first_members = store.zget_members_with_scores(keys[0], now_ms)?;
     let mut result: Vec<(Vec<u8>, f64)> = Vec::new();
@@ -11402,7 +11404,7 @@ fn zdiffstore(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     if argv.len() < 3_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[3 + i].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[3_usize.saturating_add(i)].as_slice()).collect();
     let first_members = store.zget_members_with_scores(keys[0], now_ms)?;
     let mut result: std::collections::HashMap<Vec<u8>, f64> = std::collections::HashMap::new();
     for (member, score) in first_members {
@@ -11438,7 +11440,9 @@ fn zinter(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     if argv.len() < 2_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2_usize.saturating_add(i)].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys)
+        .map(|i| argv[2_usize.saturating_add(i)].as_slice())
+        .collect();
     // Find WITHSCORES before parse_zstore_args
     let withscores_pos = argv[2 + numkeys..]
         .iter()
@@ -11499,7 +11503,9 @@ fn zunion_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     if argv.len() < 2_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2_usize.saturating_add(i)].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys)
+        .map(|i| argv[2_usize.saturating_add(i)].as_slice())
+        .collect();
     let withscores_pos = argv[2 + numkeys..]
         .iter()
         .position(|a| a.eq_ignore_ascii_case(b"WITHSCORES"));
@@ -11571,7 +11577,9 @@ fn zintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         }
         idx += 1;
     }
-    let keys: Vec<&[u8]> = (0..numkeys).map(|i| argv[2_usize.saturating_add(i)].as_slice()).collect();
+    let keys: Vec<&[u8]> = (0..numkeys)
+        .map(|i| argv[2_usize.saturating_add(i)].as_slice())
+        .collect();
     // Compute intersection count
     if keys.is_empty() {
         return Ok(RespFrame::Integer(0));
@@ -13662,7 +13670,7 @@ mod tests {
                 assert_eq!(command, "NOPE");
                 assert_eq!(args_preview.as_deref(), Some("'a' 'b' "));
             }
-            other => panic!("unexpected error: {other:?}"),
+            other => panic!("unexpected error: {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -13684,7 +13692,7 @@ mod tests {
                 assert!(!preview.contains('\n'));
                 assert!(preview.starts_with("'line1  line2' "));
             }
-            other => panic!("unexpected error: {other:?}"),
+            other => panic!("unexpected error: {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -16742,19 +16750,19 @@ mod tests {
         )
         .expect("geopos");
         let RespFrame::Array(Some(items)) = pos else {
-            panic!("geopos should return array");
+            panic!("geopos should return array"); // ubs:ignore — AI triage
         };
         assert_eq!(items.len(), 2);
         for item in items {
             let RespFrame::Array(Some(coords)) = item else {
-                panic!("geopos entry should be coord array");
+                panic!("geopos entry should be coord array"); // ubs:ignore — AI triage
             };
             assert_eq!(coords.len(), 2);
             let RespFrame::BulkString(Some(longitude_raw)) = &coords[0] else {
-                panic!("geopos longitude should be bulk");
+                panic!("geopos longitude should be bulk"); // ubs:ignore — AI triage
             };
             let RespFrame::BulkString(Some(latitude_raw)) = &coords[1] else {
-                panic!("geopos latitude should be bulk");
+                panic!("geopos latitude should be bulk"); // ubs:ignore — AI triage
             };
             let longitude = std::str::from_utf8(longitude_raw)
                 .expect("longitude utf8")
@@ -16913,7 +16921,7 @@ mod tests {
         )
         .expect("geodist meters");
         let RespFrame::BulkString(Some(distance_raw)) = meters else {
-            panic!("geodist should return bulk distance");
+            panic!("geodist should return bulk distance"); // ubs:ignore — AI triage
         };
         let meters_value = std::str::from_utf8(&distance_raw)
             .expect("distance utf8")
@@ -19821,7 +19829,7 @@ mod tests {
         )
         .expect("xinfo stream");
         let RespFrame::Array(Some(items)) = stream_info else {
-            panic!("expected array");
+            panic!("expected array"); // ubs:ignore — AI triage
         };
         let mut groups_count = None;
         let mut idx = 0usize;
@@ -20710,7 +20718,7 @@ mod tests {
             let val: f64 = std::str::from_utf8(v).unwrap().parse().unwrap();
             assert!((val - 10.6).abs() < 1e-10);
         } else {
-            panic!("expected bulk string, got {:?}", out);
+            panic!("expected bulk string, got {:?}", out); // ubs:ignore — AI triage
         }
     }
 
@@ -21335,7 +21343,7 @@ mod tests {
             let val: f64 = std::str::from_utf8(v).unwrap().parse().unwrap();
             assert!((val - 10.6).abs() < 1e-10);
         } else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         }
     }
 
@@ -21534,7 +21542,7 @@ mod tests {
         let out =
             dispatch_argv(&[b"PFCOUNT".to_vec(), b"hll".to_vec()], &mut store, 0).expect("pfcount");
         let RespFrame::Integer(count) = out else {
-            panic!("expected integer, got {out:?}");
+            panic!("expected integer, got {out:?}"); // ubs:ignore — AI triage
         };
         assert!((90..=110).contains(&count), "count={count}, expected ~100");
     }
@@ -21589,7 +21597,7 @@ mod tests {
         let count_out = dispatch_argv(&[b"PFCOUNT".to_vec(), b"merged".to_vec()], &mut store, 0)
             .expect("pfcount merged");
         let RespFrame::Integer(count) = count_out else {
-            panic!("expected integer");
+            panic!("expected integer"); // ubs:ignore — AI triage
         };
         assert!((3..=5).contains(&count), "count={count}, expected ~4");
     }
@@ -21627,7 +21635,7 @@ mod tests {
         )
         .expect("pfcount multi");
         let RespFrame::Integer(count) = out else {
-            panic!("expected integer");
+            panic!("expected integer"); // ubs:ignore — AI triage
         };
         assert!((2..=4).contains(&count), "count={count}, expected ~3");
     }
@@ -21662,7 +21670,7 @@ mod tests {
         )
         .expect("pfdebug getreg");
         let RespFrame::Array(Some(registers)) = getreg else {
-            panic!("expected register array");
+            panic!("expected register array"); // ubs:ignore — AI triage
         };
         assert_eq!(registers.len(), 16_384);
         assert!(
@@ -21751,7 +21759,7 @@ mod tests {
         let out = dispatch_argv(&[b"MODULE".to_vec(), b"HELP".to_vec()], &mut store, 0)
             .expect("module help");
         let RespFrame::Array(Some(items)) = out else {
-            panic!("expected help array");
+            panic!("expected help array"); // ubs:ignore — AI triage
         };
         assert_eq!(
             items.first(),
@@ -22275,7 +22283,7 @@ mod tests {
         if let RespFrame::Integer(n) = out {
             assert!(n > 0, "memory usage should be positive");
         } else {
-            panic!("expected Integer, got {out:?}");
+            panic!("expected Integer, got {out:?}"); // ubs:ignore — AI triage
         }
     }
 
@@ -22310,7 +22318,7 @@ mod tests {
         if let RespFrame::Integer(n) = out {
             assert!(n > 0);
         } else {
-            panic!("expected Integer, got {out:?}");
+            panic!("expected Integer, got {out:?}"); // ubs:ignore — AI triage
         }
     }
 
@@ -22393,7 +22401,7 @@ mod tests {
         )
         .expect("info");
         let RespFrame::BulkString(Some(bytes)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         let info = String::from_utf8(bytes).expect("utf8 info");
         assert!(info.contains("# Server\r\n"));
@@ -22498,7 +22506,7 @@ mod tests {
         let out = dispatch_argv(&[b"INFO".to_vec(), b"persistence".to_vec()], &mut store, 0)
             .expect("info persistence");
         let RespFrame::BulkString(Some(bytes)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         let info = String::from_utf8(bytes).expect("utf8 info");
         assert!(info.contains("rdb_last_save_time:1700000007\r\n"), "{info}");
@@ -22521,7 +22529,7 @@ mod tests {
         let out = dispatch_argv(&[b"INFO".to_vec(), b"persistence".to_vec()], &mut store, 0)
             .expect("info persistence");
         let RespFrame::BulkString(Some(bytes)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         let info = String::from_utf8(bytes).expect("utf8 info");
         assert!(info.contains("aof_enabled:1\r\n"), "{info}");
@@ -22861,10 +22869,10 @@ mod tests {
                     RespFrame::Array(Some(elements)) => {
                         assert_eq!(elements.len(), 4); // 2 members * 2 (member + score)
                     }
-                    other => panic!("expected array, got {other:?}"),
+                    other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
                 }
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -23059,11 +23067,11 @@ mod tests {
                             assert_eq!(sub.len(), 3);
                             assert_eq!(sub[2], RespFrame::Integer((i + 1) as i64));
                         }
-                        other => panic!("expected array, got {other:?}"),
+                        other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
                     }
                 }
             }
-            other => panic!("expected RESP sequence, got {other:?}"),
+            other => panic!("expected RESP sequence, got {other:?}"), // ubs:ignore — AI triage
         }
         assert_eq!(
             out.to_bytes(),
@@ -23243,7 +23251,7 @@ mod tests {
             RespFrame::Array(Some(arr)) => {
                 assert_eq!(arr.len(), 2);
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -23279,7 +23287,7 @@ mod tests {
         let help = dispatch_argv(&[b"PUBSUB".to_vec(), b"HELP".to_vec()], &mut store, 0)
             .expect("pubsub help");
         let RespFrame::Array(Some(lines)) = help else {
-            panic!("expected pubsub help array");
+            panic!("expected pubsub help array"); // ubs:ignore — AI triage
         };
         assert!(lines.len() >= 6);
 
@@ -23339,7 +23347,7 @@ mod tests {
             RespFrame::Sequence(arr) => {
                 assert_eq!(arr.len(), 2);
             }
-            other => panic!("expected RESP sequence, got {other:?}"),
+            other => panic!("expected RESP sequence, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -23546,7 +23554,7 @@ mod tests {
         if let RespFrame::Array(Some(frames)) = out {
             assert_eq!(frames.len(), 2); // two members
         } else {
-            panic!("expected array");
+            panic!("expected array"); // ubs:ignore — AI triage
         }
     }
 
@@ -23653,7 +23661,7 @@ mod tests {
         if let RespFrame::Array(Some(items)) = out {
             assert_eq!(items[0], RespFrame::BulkString(Some(b"master".to_vec())));
         } else {
-            panic!("expected array");
+            panic!("expected array"); // ubs:ignore — AI triage
         }
     }
 
@@ -23726,7 +23734,7 @@ mod tests {
         )
         .expect("debug object");
         let RespFrame::BulkString(Some(info)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         let info = String::from_utf8(info).expect("utf8");
         assert!(info.contains("refcount:1"), "{info}");
@@ -23890,7 +23898,7 @@ mod tests {
                 assert!(text.contains("command - high 7 ms, low 3 ms"));
                 assert!(text.contains("latest sample @ 12 (7) ms"));
             }
-            other => panic!("expected bulk string, got {other:?}"),
+            other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
         }
 
         let doctor = dispatch_argv(&[b"LATENCY".to_vec(), b"DOCTOR".to_vec()], &mut store, 0)
@@ -23901,7 +23909,7 @@ mod tests {
                 assert!(text.contains("I have reports for the following latency events:"));
                 assert!(text.contains("- command: 2 samples, latest 7 ms, max 7 ms"));
             }
-            other => panic!("expected bulk string, got {other:?}"),
+            other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -23965,7 +23973,7 @@ mod tests {
         if let RespFrame::Array(Some(frames)) = &out {
             assert_eq!(frames.len(), 2);
         } else {
-            panic!("expected array, got {out:?}");
+            panic!("expected array, got {out:?}"); // ubs:ignore — AI triage
         }
     }
 
@@ -23989,7 +23997,7 @@ mod tests {
         if let RespFrame::Array(Some(frames)) = &out {
             assert!(!frames.is_empty(), "should find at least Palermo itself");
         } else {
-            panic!("expected array, got {out:?}");
+            panic!("expected array, got {out:?}"); // ubs:ignore — AI triage
         }
     }
 
@@ -24016,7 +24024,7 @@ mod tests {
         if let RespFrame::Array(Some(frames)) = &out {
             assert_eq!(frames.len(), 2);
         } else {
-            panic!("expected array, got {out:?}");
+            panic!("expected array, got {out:?}"); // ubs:ignore — AI triage
         }
     }
 
@@ -24042,7 +24050,7 @@ mod tests {
         if let RespFrame::Array(Some(frames)) = &out {
             assert!(!frames.is_empty());
         } else {
-            panic!("expected array, got {out:?}");
+            panic!("expected array, got {out:?}"); // ubs:ignore — AI triage
         }
     }
 
@@ -24073,10 +24081,10 @@ mod tests {
             if let RespFrame::Array(Some(inner)) = &frames[0] {
                 assert_eq!(inner.len(), 2);
             } else {
-                panic!("expected inner array");
+                panic!("expected inner array"); // ubs:ignore — AI triage
             }
         } else {
-            panic!("expected array, got {out:?}");
+            panic!("expected array, got {out:?}"); // ubs:ignore — AI triage
         }
     }
 
@@ -24129,7 +24137,7 @@ mod tests {
         if let RespFrame::Array(Some(frames)) = &out {
             assert_eq!(frames.len(), 1);
         } else {
-            panic!("expected array, got {out:?}");
+            panic!("expected array, got {out:?}"); // ubs:ignore — AI triage
         }
     }
 
@@ -24546,7 +24554,7 @@ mod tests {
             RespFrame::Error(msg) => {
                 assert!(msg.contains("scores can't be converted into double"));
             }
-            _ => panic!("expected error for non-numeric sort"),
+            _ => panic!("expected error for non-numeric sort"), // ubs:ignore — AI triage
         }
     }
 
@@ -24579,7 +24587,7 @@ mod tests {
         let out = dispatch_argv(&[b"SORT".to_vec(), b"mystr".to_vec()], &mut store, 0);
         match out {
             Err(CommandError::Store(StoreError::WrongType)) => {}
-            _ => panic!("expected WrongType error, got {out:?}"),
+            _ => panic!("expected WrongType error, got {out:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -24998,7 +25006,7 @@ mod tests {
             RespFrame::Error(msg) => {
                 assert!(msg.contains("BITFIELD_RO only supports the GET subcommand"));
             }
-            _ => panic!("Expected error for SET in BITFIELD_RO"),
+            _ => panic!("Expected error for SET in BITFIELD_RO"), // ubs:ignore — AI triage
         }
     }
 
@@ -25022,7 +25030,7 @@ mod tests {
             RespFrame::Error(msg) => {
                 assert!(msg.contains("BITFIELD_RO only supports the GET subcommand"));
             }
-            _ => panic!("Expected error for INCRBY in BITFIELD_RO"),
+            _ => panic!("Expected error for INCRBY in BITFIELD_RO"), // ubs:ignore — AI triage
         }
     }
 
@@ -25245,7 +25253,7 @@ mod tests {
         // Returns error when key doesn't exist
         match out {
             RespFrame::Error(_) => {}
-            other => panic!("expected error, got {other:?}"),
+            other => panic!("expected error, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -25260,7 +25268,7 @@ mod tests {
                 let text = String::from_utf8_lossy(&data);
                 assert!(text.contains("FrankenRedis"));
             }
-            other => panic!("expected bulk string, got {other:?}"),
+            other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -25348,7 +25356,7 @@ mod tests {
                 let text = String::from_utf8_lossy(&data);
                 assert!(text.contains("cluster_enabled:0"));
             }
-            other => panic!("expected bulk string, got {other:?}"),
+            other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -25358,7 +25366,7 @@ mod tests {
         let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"MYID".to_vec()], &mut store, 0).unwrap();
         match out {
             RespFrame::BulkString(Some(_)) => {}
-            other => panic!("expected bulk string, got {other:?}"),
+            other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -25404,7 +25412,7 @@ mod tests {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
         let RespFrame::Array(Some(items)) = out else {
-            panic!("expected array");
+            panic!("expected array"); // ubs:ignore — AI triage
         };
         assert!(items.contains(&RespFrame::BulkString(Some(
             b"CLUSTER GETKEYSINSLOT <slot> <count>".to_vec()
@@ -25651,7 +25659,7 @@ mod tests {
 
         let get = dispatch_argv(&[b"SLOWLOG".to_vec(), b"GET".to_vec()], &mut store, 0).unwrap();
         let RespFrame::Array(Some(entries)) = get else {
-            panic!("expected SLOWLOG GET to return an array");
+            panic!("expected SLOWLOG GET to return an array"); // ubs:ignore — AI triage
         };
         assert_eq!(entries.len(), 1);
         assert_eq!(
@@ -25742,7 +25750,7 @@ mod tests {
         let out = dispatch_argv(&[b"INFO".to_vec(), b"stats".to_vec()], &mut store, 0)
             .expect("info stats");
         let RespFrame::BulkString(Some(bytes)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         let info = String::from_utf8(bytes).expect("utf8");
         assert!(info.contains("expired_keys:3\r\n"));
@@ -25771,7 +25779,7 @@ mod tests {
         let out = dispatch_argv(&[b"INFO".to_vec(), b"stats".to_vec()], &mut store, 0)
             .expect("info stats");
         let RespFrame::BulkString(Some(bytes)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         let info = String::from_utf8(bytes).expect("utf8");
         assert!(info.contains("total_net_input_bytes:12345\r\n"), "{info}");
@@ -25796,7 +25804,7 @@ mod tests {
         )
         .expect("info clients memory");
         let RespFrame::BulkString(Some(bytes)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         let info = String::from_utf8(bytes).expect("utf8");
         assert!(info.contains("connected_clients:4\r\n"));
@@ -25840,12 +25848,12 @@ mod tests {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"COMMAND".to_vec(), b"DOCS".to_vec()], &mut store, 0).unwrap();
         let RespFrame::Array(Some(entries)) = out else {
-            panic!("expected docs array");
+            panic!("expected docs array"); // ubs:ignore — AI triage
         };
         assert!(!entries.is_empty());
         assert_eq!(entries[0], RespFrame::BulkString(Some(b"ping".to_vec())));
         let RespFrame::Array(Some(doc_fields)) = &entries[1] else {
-            panic!("expected doc fields array");
+            panic!("expected doc fields array"); // ubs:ignore — AI triage
         };
         assert!(doc_fields.len() >= 6);
     }
@@ -25865,12 +25873,12 @@ mod tests {
         )
         .unwrap();
         let RespFrame::Array(Some(entries)) = out else {
-            panic!("expected docs array");
+            panic!("expected docs array"); // ubs:ignore — AI triage
         };
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0], RespFrame::BulkString(Some(b"get".to_vec())));
         let RespFrame::Array(Some(doc_fields)) = &entries[1] else {
-            panic!("expected doc fields array");
+            panic!("expected doc fields array"); // ubs:ignore — AI triage
         };
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"group".to_vec()))));
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"string".to_vec()))));
@@ -25924,7 +25932,7 @@ mod tests {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"COMMAND".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
         let RespFrame::Array(Some(items)) = out else {
-            panic!("expected help array");
+            panic!("expected help array"); // ubs:ignore — AI triage
         };
         assert!(items.contains(&RespFrame::BulkString(Some(
             b"GETKEYSANDFLAGS <full-command>".to_vec()
@@ -25944,7 +25952,7 @@ mod tests {
         .unwrap();
         match out {
             RespFrame::SimpleString(s) => assert!(s.contains("OK")),
-            other => panic!("expected simple string, got {other:?}"),
+            other => panic!("expected simple string, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -25959,7 +25967,7 @@ mod tests {
         .unwrap();
         match out {
             RespFrame::SimpleString(s) => assert!(s.contains("OK")),
-            other => panic!("expected simple string, got {other:?}"),
+            other => panic!("expected simple string, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -26031,7 +26039,7 @@ mod tests {
             RespFrame::Array(Some(arr)) => {
                 assert_eq!(arr.len(), 3);
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -26249,7 +26257,7 @@ mod tests {
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"2".to_vec())));
                 assert_eq!(arr[2], RespFrame::BulkString(Some(b"3".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -26434,7 +26442,7 @@ mod tests {
 
         let out = dispatch_argv(&[b"CLIENT".to_vec(), b"INFO".to_vec()], &mut store, 0).unwrap();
         let RespFrame::BulkString(Some(payload)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         let info = String::from_utf8(payload).expect("utf8");
         assert!(info.contains("id=42 "), "{info}");
@@ -26532,7 +26540,7 @@ mod tests {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"CLIENT".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
         let RespFrame::Array(Some(items)) = out else {
-            panic!("expected array");
+            panic!("expected array"); // ubs:ignore — AI triage
         };
         assert!(items.contains(&RespFrame::BulkString(Some(
             b"SETINFO <option> <value>".to_vec()
@@ -26605,7 +26613,7 @@ mod tests {
         )
         .unwrap();
         let RespFrame::BulkString(Some(payload)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         assert!(String::from_utf8_lossy(&payload).contains("id=77 "));
 
@@ -26635,7 +26643,7 @@ mod tests {
         )
         .unwrap();
         let RespFrame::BulkString(Some(payload)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         assert!(String::from_utf8_lossy(&payload).contains("id=77 "));
 
@@ -26651,7 +26659,7 @@ mod tests {
         )
         .unwrap();
         let RespFrame::BulkString(Some(payload)) = out else {
-            panic!("expected bulk string");
+            panic!("expected bulk string"); // ubs:ignore — AI triage
         };
         assert!(String::from_utf8_lossy(&payload).contains("id=77 "));
 
@@ -26713,7 +26721,7 @@ mod tests {
             RespFrame::Array(Some(arr)) => {
                 assert_eq!(arr.len(), 2);
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -26740,7 +26748,7 @@ mod tests {
                     assert_eq!(*elem, RespFrame::BulkString(Some(b"x".to_vec())));
                 }
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -26845,7 +26853,7 @@ mod tests {
             RespFrame::Array(Some(arr)) => {
                 assert_eq!(arr.len(), 2);
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -26887,7 +26895,7 @@ mod tests {
                 assert_eq!(arr[0], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"c".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -26930,7 +26938,7 @@ mod tests {
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[2], RespFrame::BulkString(Some(b"a".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -26976,7 +26984,7 @@ mod tests {
                 assert_eq!(arr[0], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"c".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27017,7 +27025,7 @@ mod tests {
                 assert_eq!(arr[2], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[3], RespFrame::BulkString(Some(b"2.5".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27059,7 +27067,7 @@ mod tests {
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[2], RespFrame::BulkString(Some(b"a".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27108,7 +27116,7 @@ mod tests {
                 assert_eq!(arr[2], RespFrame::BulkString(Some(b"c".to_vec())));
                 assert_eq!(arr[3], RespFrame::BulkString(Some(b"3".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27151,7 +27159,7 @@ mod tests {
                 assert_eq!(arr[4], RespFrame::BulkString(Some(b"a".to_vec())));
                 assert_eq!(arr[5], RespFrame::BulkString(Some(b"1".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27199,7 +27207,7 @@ mod tests {
                 assert_eq!(arr[0], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"c".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27230,7 +27238,7 @@ mod tests {
                 assert_eq!(arr[0], RespFrame::BulkString(Some(b"a".to_vec())));
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"b".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27261,7 +27269,7 @@ mod tests {
                 assert_eq!(arr[0], RespFrame::BulkString(Some(b"c".to_vec())));
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"b".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27290,7 +27298,7 @@ mod tests {
             RespFrame::Array(Some(arr)) => {
                 assert_eq!(arr.len(), 2);
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
         // Only 1 member left
         let card = dispatch_argv(&[b"SCARD".to_vec(), b"s".to_vec()], &mut store, 0).unwrap();
@@ -27329,7 +27337,7 @@ mod tests {
                 assert_eq!(arr[2], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[3], RespFrame::BulkString(Some(b"2".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27365,7 +27373,7 @@ mod tests {
                 assert_eq!(arr[2], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[3], RespFrame::BulkString(Some(b"2".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27407,7 +27415,7 @@ mod tests {
                 assert_eq!(arr[0], RespFrame::BulkString(Some(b"b".to_vec())));
                 assert_eq!(arr[1], RespFrame::BulkString(Some(b"c".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27493,7 +27501,7 @@ mod tests {
                 assert_eq!(arr.len(), 1);
                 assert_eq!(arr[0], RespFrame::BulkString(Some(b"b".to_vec())));
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27598,10 +27606,10 @@ mod tests {
                     assert_eq!(keys.len(), 1);
                     assert_eq!(keys[0], RespFrame::BulkString(Some(b"str1".to_vec())));
                 } else {
-                    panic!("expected keys array");
+                    panic!("expected keys array"); // ubs:ignore — AI triage
                 }
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27632,7 +27640,7 @@ mod tests {
         .unwrap();
         match out {
             RespFrame::Array(Some(arr)) => assert_eq!(arr.len(), 2),
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27661,7 +27669,7 @@ mod tests {
         .unwrap();
         match out {
             RespFrame::Array(Some(arr)) => assert_eq!(arr.len(), 5),
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27698,7 +27706,7 @@ mod tests {
                 // 2 members * 2 (member + score) = 4 elements
                 assert_eq!(arr.len(), 4);
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27737,7 +27745,7 @@ mod tests {
         .unwrap();
         match out {
             RespFrame::Array(Some(arr)) => assert_eq!(arr.len(), 1),
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27768,7 +27776,7 @@ mod tests {
         .unwrap();
         match out {
             RespFrame::Array(Some(arr)) => assert_eq!(arr.len(), 2),
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27797,7 +27805,7 @@ mod tests {
         .unwrap();
         match out {
             RespFrame::Array(Some(arr)) => assert_eq!(arr.len(), 5),
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27834,7 +27842,7 @@ mod tests {
                 // 2 fields * 2 (field + value) = 4 elements
                 assert_eq!(arr.len(), 4);
             }
-            other => panic!("expected array, got {other:?}"),
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27972,7 +27980,7 @@ mod tests {
                 assert_eq!(parts[1].len(), 40); // replid is 40 chars
                 assert_eq!(parts[2], "0");
             }
-            other => panic!("expected SimpleString, got {other:?}"),
+            other => panic!("expected SimpleString, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
@@ -27992,7 +28000,7 @@ mod tests {
                     return parsed.frame;
                 }
                 Err(fr_protocol::RespParseError::Incomplete) => {}
-                Err(err) => panic!("failed to parse test frame: {err:?}"),
+                Err(err) => panic!("failed to parse test frame: {err:?}"), // ubs:ignore — AI triage
             }
 
             let mut chunk = [0u8; 4096];
@@ -28008,10 +28016,10 @@ mod tests {
                 .into_iter()
                 .map(|item| match item {
                     RespFrame::BulkString(Some(bytes)) => bytes,
-                    other => panic!("expected bulk string, got {other:?}"),
+                    other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
                 })
                 .collect(),
-            other => panic!("expected array frame, got {other:?}"),
+            other => panic!("expected array frame, got {other:?}"), // ubs:ignore — AI triage
         }
     }
 
