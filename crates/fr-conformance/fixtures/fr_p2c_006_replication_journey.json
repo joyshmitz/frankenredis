@@ -165,7 +165,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is negative"
       }
     },
     {

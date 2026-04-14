@@ -232,7 +232,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is negative"
       }
     },
     {
@@ -643,6 +643,155 @@
         "",
         "0",
         "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "wait_numreplicas_leading_plus",
+      "now_ms": 0,
+      "argv": [
+        "WAIT",
+        "+1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "wait_numreplicas_leading_zeros",
+      "now_ms": 0,
+      "argv": [
+        "WAIT",
+        "01",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "wait_timeout_leading_plus",
+      "now_ms": 0,
+      "argv": [
+        "WAIT",
+        "0",
+        "+100"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "wait_timeout_leading_zeros",
+      "now_ms": 0,
+      "argv": [
+        "WAIT",
+        "0",
+        "0100"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "wait_timeout_negative",
+      "now_ms": 0,
+      "argv": [
+        "WAIT",
+        "0",
+        "-1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR timeout is negative"
+      }
+    },
+    {
+      "name": "waitaof_numlocal_leading_plus",
+      "now_ms": 0,
+      "argv": [
+        "WAITAOF",
+        "+1",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "waitaof_numlocal_leading_zeros",
+      "now_ms": 0,
+      "argv": [
+        "WAITAOF",
+        "01",
+        "0",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "waitaof_numreplicas_leading_plus",
+      "now_ms": 0,
+      "argv": [
+        "WAITAOF",
+        "0",
+        "+1",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "waitaof_numreplicas_leading_zeros",
+      "now_ms": 0,
+      "argv": [
+        "WAITAOF",
+        "0",
+        "01",
+        "0"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "waitaof_timeout_leading_plus",
+      "now_ms": 0,
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "+100"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "waitaof_timeout_leading_zeros",
+      "now_ms": 0,
+      "argv": [
+        "WAITAOF",
+        "0",
+        "0",
+        "0100"
       ],
       "expect": {
         "kind": "error",

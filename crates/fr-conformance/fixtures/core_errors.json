@@ -123,7 +123,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is negative"
       }
     },
     {
@@ -1725,6 +1725,78 @@
       "expect": {
         "kind": "error",
         "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "incrby_leading_plus",
+      "now_ms": 200,
+      "argv": ["INCRBY", "key", "+10"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "incrby_leading_zeros",
+      "now_ms": 200,
+      "argv": ["INCRBY", "key", "010"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "incrby_float",
+      "now_ms": 200,
+      "argv": ["INCRBY", "key", "10.5"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "incrby_empty",
+      "now_ms": 200,
+      "argv": ["INCRBY", "key", ""],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "decrby_leading_plus",
+      "now_ms": 200,
+      "argv": ["DECRBY", "key", "+10"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "decrby_leading_zeros",
+      "now_ms": 200,
+      "argv": ["DECRBY", "key", "010"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "decrby_float",
+      "now_ms": 200,
+      "argv": ["DECRBY", "key", "10.5"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "decrby_empty",
+      "now_ms": 200,
+      "argv": ["DECRBY", "key", ""],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
       }
     }
   ]

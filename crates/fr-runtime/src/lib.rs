@@ -6876,8 +6876,12 @@ slave_repl_offset:{primary_offset}\r\n"
             Ok(value) if value >= 0 => usize::try_from(value).unwrap_or(usize::MAX),
             _ => return CommandError::InvalidInteger.to_resp(),
         };
-        if !matches!(parse_i64_arg(&argv[2]), Ok(value) if value >= 0) {
-            return CommandError::InvalidInteger.to_resp();
+        match parse_i64_arg(&argv[2]) {
+            Ok(value) if value < 0 => {
+                return RespFrame::Error("ERR timeout is negative".to_string());
+            }
+            Err(_) => return CommandError::InvalidInteger.to_resp(),
+            _ => {}
         }
 
         let outcome = evaluate_wait(
@@ -9542,7 +9546,7 @@ mod tests {
         let invalid_timeout = rt.execute_frame(command(&[b"WAIT", b"1", b"-1"]), 2);
         assert_eq!(
             invalid_timeout,
-            RespFrame::Error("ERR value is not an integer or out of range".to_string())
+            RespFrame::Error("ERR timeout is negative".to_string())
         );
     }
 
