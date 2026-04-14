@@ -3761,6 +3761,152 @@
         "kind": "integer",
         "value": 1
       }
+    },
+    {
+      "name": "debug_sleep_accepts_negative",
+      "now_ms": 62002,
+      "argv": [
+        "DEBUG",
+        "SLEEP",
+        "-1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "debug_sleep_float_accepted",
+      "now_ms": 62003,
+      "argv": [
+        "DEBUG",
+        "SLEEP",
+        "1.5"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "debug_set_active_expire_invalid_value_syntax_error",
+      "now_ms": 62004,
+      "argv": [
+        "DEBUG",
+        "SET-ACTIVE-EXPIRE",
+        "99"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
+    },
+    {
+      "name": "debug_set_active_expire_missing_arg",
+      "now_ms": 62005,
+      "argv": [
+        "DEBUG",
+        "SET-ACTIVE-EXPIRE"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'debug' command"
+      }
+    },
+    {
+      "name": "command_returns_array",
+      "now_ms": 63000,
+      "argv": [
+        "COMMAND"
+      ],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "command_count_returns_integer",
+      "now_ms": 63001,
+      "argv": [
+        "COMMAND",
+        "COUNT"
+      ],
+      "expect": {
+        "kind": "any_integer"
+      }
+    },
+    {
+      "name": "command_docs_get",
+      "now_ms": 63002,
+      "argv": [
+        "COMMAND",
+        "DOCS",
+        "GET"
+      ],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "command_getkeys_set",
+      "now_ms": 63003,
+      "argv": [
+        "COMMAND",
+        "GETKEYS",
+        "SET",
+        "foo",
+        "bar"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "foo"
+          }
+        ]
+      }
+    },
+    {
+      "name": "command_info_get",
+      "now_ms": 63004,
+      "argv": [
+        "COMMAND",
+        "INFO",
+        "GET"
+      ],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "time_returns_array_of_two",
+      "now_ms": 64000,
+      "argv": [
+        "TIME"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "any_bulk"
+          },
+          {
+            "kind": "any_bulk"
+          }
+        ]
+      }
+    },
+    {
+      "name": "time_wrong_arity",
+      "now_ms": 64001,
+      "argv": [
+        "TIME",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'time' command"
+      }
     }
   ]
 }
