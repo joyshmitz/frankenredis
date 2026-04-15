@@ -5731,5 +5731,6 @@ mod tests {
     );
     core_fixture_test!(conformance_core_migrate, "core_migrate.json");
     core_fixture_test!(conformance_core_pfdebug, "core_pfdebug.json");
+    core_fixture_test!(conformance_core_debug, "core_debug.json");
     core_fixture_test!(conformance_core_wait, "core_wait.json");
 }

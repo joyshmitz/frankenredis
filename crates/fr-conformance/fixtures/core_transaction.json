@@ -901,6 +901,442 @@
         "kind": "error",
         "value": "EXECABORT Transaction discarded because of previous errors."
       }
+    },
+
+    {
+      "name": "multi_extra_args_ignored",
+      "now_ms": 260,
+      "argv": ["MULTI", "extra"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "multi_extra_args_exec_with_extra",
+      "now_ms": 261,
+      "argv": ["EXEC", "extra"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "discard_extra_args_multi",
+      "now_ms": 262,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "discard_extra_args_ignored",
+      "now_ms": 263,
+      "argv": ["DISCARD", "extra"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "multi_case_insensitive_lowercase",
+      "now_ms": 270,
+      "argv": ["multi"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "multi_case_insensitive_exec_lowercase",
+      "now_ms": 271,
+      "argv": ["exec"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "multi_case_insensitive_mixed",
+      "now_ms": 272,
+      "argv": ["MuLtI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "multi_case_insensitive_discard_mixed",
+      "now_ms": 273,
+      "argv": ["DiScArD"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "watch_deleted_key_setup",
+      "now_ms": 280,
+      "argv": ["SET", "wdel", "exists"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "watch_deleted_key_watch",
+      "now_ms": 281,
+      "argv": ["WATCH", "wdel"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "watch_deleted_key_delete",
+      "now_ms": 282,
+      "argv": ["DEL", "wdel"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "watch_deleted_key_multi",
+      "now_ms": 283,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "watch_deleted_key_set_queued",
+      "now_ms": 284,
+      "argv": ["SET", "wdel", "new"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "watch_deleted_key_exec_aborts",
+      "now_ms": 285,
+      "argv": ["EXEC"],
+      "expect": { "kind": "null_array" }
+    },
+
+    {
+      "name": "watch_case_insensitive",
+      "now_ms": 290,
+      "argv": ["watch", "casekey"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "watch_case_insensitive_unwatch",
+      "now_ms": 291,
+      "argv": ["unwatch"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+
+    {
+      "name": "multi_with_unknown_cmd_multi",
+      "now_ms": 300,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "multi_with_unknown_cmd_unknown",
+      "now_ms": 301,
+      "argv": ["NOTAREALCMD", "arg"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown command 'NOTAREALCMD'"
+      }
+    },
+    {
+      "name": "multi_with_unknown_cmd_exec_aborts",
+      "now_ms": 302,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "error",
+        "value": "EXECABORT Transaction discarded because of previous errors."
+      }
+    },
+
+    {
+      "name": "watch_same_key_twice_setup",
+      "now_ms": 310,
+      "argv": ["SET", "wdup", "val"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "watch_same_key_twice_first",
+      "now_ms": 311,
+      "argv": ["WATCH", "wdup"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "watch_same_key_twice_second",
+      "now_ms": 312,
+      "argv": ["WATCH", "wdup"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "watch_same_key_twice_multi",
+      "now_ms": 313,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "watch_same_key_twice_exec",
+      "now_ms": 314,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+
+    {
+      "name": "exec_clears_watch_state_setup",
+      "now_ms": 320,
+      "argv": ["SET", "eclr", "val1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "exec_clears_watch_state_watch",
+      "now_ms": 321,
+      "argv": ["WATCH", "eclr"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "exec_clears_watch_state_multi",
+      "now_ms": 322,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "exec_clears_watch_state_exec",
+      "now_ms": 323,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "exec_clears_watch_state_modify_after",
+      "now_ms": 324,
+      "argv": ["SET", "eclr", "val2"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "exec_clears_watch_state_multi_again",
+      "now_ms": 325,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "exec_clears_watch_state_get_queued",
+      "now_ms": 326,
+      "argv": ["GET", "eclr"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "exec_clears_watch_state_exec_succeeds",
+      "now_ms": 327,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "val2" }
+        ]
+      }
+    },
+
+    {
+      "name": "discard_clears_watch_state_setup",
+      "now_ms": 330,
+      "argv": ["SET", "dclr", "val1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "discard_clears_watch_state_watch",
+      "now_ms": 331,
+      "argv": ["WATCH", "dclr"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "discard_clears_watch_state_multi",
+      "now_ms": 332,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "discard_clears_watch_state_discard",
+      "now_ms": 333,
+      "argv": ["DISCARD"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "discard_clears_watch_state_modify_after",
+      "now_ms": 334,
+      "argv": ["SET", "dclr", "val2"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "discard_clears_watch_state_multi_again",
+      "now_ms": 335,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "discard_clears_watch_state_get_queued",
+      "now_ms": 336,
+      "argv": ["GET", "dclr"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "discard_clears_watch_state_exec_succeeds",
+      "now_ms": 337,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "val2" }
+        ]
+      }
+    },
+
+    {
+      "name": "multi_with_lpush_rpush_setup",
+      "now_ms": 340,
+      "argv": ["DEL", "txlist"],
+      "expect": { "kind": "any_integer" }
+    },
+    {
+      "name": "multi_with_lpush_rpush_multi",
+      "now_ms": 341,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "multi_with_lpush_rpush_lpush",
+      "now_ms": 342,
+      "argv": ["LPUSH", "txlist", "a", "b"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_lpush_rpush_rpush",
+      "now_ms": 343,
+      "argv": ["RPUSH", "txlist", "c", "d"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_lpush_rpush_lrange",
+      "now_ms": 344,
+      "argv": ["LRANGE", "txlist", "0", "-1"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_lpush_rpush_exec",
+      "now_ms": 345,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 2 },
+          { "kind": "integer", "value": 4 },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "b" },
+              { "kind": "bulk", "value": "a" },
+              { "kind": "bulk", "value": "c" },
+              { "kind": "bulk", "value": "d" }
+            ]
+          }
+        ]
+      }
+    },
+
+    {
+      "name": "multi_with_hset_hget_multi",
+      "now_ms": 350,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "multi_with_hset_hget_hset",
+      "now_ms": 351,
+      "argv": ["HSET", "txhash", "f1", "v1", "f2", "v2"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_hset_hget_hget",
+      "now_ms": 352,
+      "argv": ["HGET", "txhash", "f1"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_hset_hget_hgetall",
+      "now_ms": 353,
+      "argv": ["HGETALL", "txhash"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_hset_hget_exec",
+      "now_ms": 354,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 2 },
+          { "kind": "bulk", "value": "v1" },
+          {
+            "kind": "array",
+            "value": [
+              { "kind": "bulk", "value": "f1" },
+              { "kind": "bulk", "value": "v1" },
+              { "kind": "bulk", "value": "f2" },
+              { "kind": "bulk", "value": "v2" }
+            ]
+          }
+        ]
+      }
+    },
+
+    {
+      "name": "multi_with_sadd_smembers_multi",
+      "now_ms": 360,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "multi_with_sadd_smembers_sadd",
+      "now_ms": 361,
+      "argv": ["SADD", "txset", "a", "b", "c"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_sadd_smembers_scard",
+      "now_ms": 362,
+      "argv": ["SCARD", "txset"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_sadd_smembers_exec",
+      "now_ms": 363,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 3 },
+          { "kind": "integer", "value": 3 }
+        ]
+      }
+    },
+
+    {
+      "name": "multi_with_zadd_zrange_multi",
+      "now_ms": 370,
+      "argv": ["MULTI"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "multi_with_zadd_zrange_zadd",
+      "now_ms": 371,
+      "argv": ["ZADD", "txzset", "1", "one", "2", "two", "3", "three"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_zadd_zrange_zcard",
+      "now_ms": 372,
+      "argv": ["ZCARD", "txzset"],
+      "expect": { "kind": "simple", "value": "QUEUED" }
+    },
+    {
+      "name": "multi_with_zadd_zrange_exec",
+      "now_ms": 373,
+      "argv": ["EXEC"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 3 },
+          { "kind": "integer", "value": 3 }
+        ]
+      }
     }
   ]
 }

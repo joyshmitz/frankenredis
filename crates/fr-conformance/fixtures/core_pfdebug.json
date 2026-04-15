@@ -241,6 +241,175 @@
       "expect": {
         "kind": "any_array"
       }
+    },
+    {
+      "name": "pfdebug_setup_set_wrongtype",
+      "now_ms": 50,
+      "argv": ["SADD", "setkey", "a", "b", "c"],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
+    },
+    {
+      "name": "pfdebug_encoding_wrongtype_set",
+      "now_ms": 51,
+      "argv": ["PFDEBUG", "ENCODING", "setkey"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "pfdebug_setup_zset_wrongtype",
+      "now_ms": 52,
+      "argv": ["ZADD", "zsetkey", "1", "a", "2", "b"],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "pfdebug_encoding_wrongtype_zset",
+      "now_ms": 53,
+      "argv": ["PFDEBUG", "ENCODING", "zsetkey"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "pfdebug_setup_hash_wrongtype",
+      "now_ms": 54,
+      "argv": ["HSET", "hashkey", "field", "value"],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "pfdebug_encoding_wrongtype_hash",
+      "now_ms": 55,
+      "argv": ["PFDEBUG", "ENCODING", "hashkey"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "pfdebug_case_insensitive_getreg",
+      "now_ms": 56,
+      "argv": ["PFDEBUG", "getreg", "hll1"],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "pfdebug_case_insensitive_todense",
+      "now_ms": 57,
+      "argv": ["PFDEBUG", "todense", "hll1"],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "pfdebug_case_insensitive_decode",
+      "now_ms": 58,
+      "argv": ["PFDEBUG", "decode", "hll1"],
+      "expect": {
+        "kind": "error",
+        "value": "HLL encoding is not sparse"
+      }
+    },
+    {
+      "name": "pfdebug_setup_hll_multiple_values",
+      "now_ms": 60,
+      "argv": ["PFADD", "hll2", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "pfdebug_encoding_multiple_values_dense",
+      "now_ms": 61,
+      "argv": ["PFDEBUG", "ENCODING", "hll2"],
+      "expect": {
+        "kind": "simple",
+        "value": "dense"
+      }
+    },
+    {
+      "name": "pfdebug_getreg_multiple_values",
+      "now_ms": 62,
+      "argv": ["PFDEBUG", "GETREG", "hll2"],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "pfdebug_todense_already_dense_multiple",
+      "now_ms": 63,
+      "argv": ["PFDEBUG", "TODENSE", "hll2"],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "pfdebug_missing_key_arg",
+      "now_ms": 70,
+      "argv": ["PFDEBUG", "ENCODING"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'pfdebug' command"
+      }
+    },
+    {
+      "name": "pfdebug_getreg_wrongtype_zset",
+      "now_ms": 71,
+      "argv": ["PFDEBUG", "GETREG", "zsetkey"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "pfdebug_todense_wrongtype_set",
+      "now_ms": 72,
+      "argv": ["PFDEBUG", "TODENSE", "setkey"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "pfdebug_decode_wrongtype_hash",
+      "now_ms": 73,
+      "argv": ["PFDEBUG", "DECODE", "hashkey"],
+      "expect": {
+        "kind": "error",
+        "value": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      }
+    },
+    {
+      "name": "pfselftest_mixed_case",
+      "now_ms": 80,
+      "argv": ["pfselftest"],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "pfdebug_mixed_case_command",
+      "now_ms": 81,
+      "argv": ["pfdebug", "ENCODING", "hll1"],
+      "expect": {
+        "kind": "simple",
+        "value": "dense"
+      }
     }
   ]
 }

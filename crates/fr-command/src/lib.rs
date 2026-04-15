@@ -10736,7 +10736,7 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         let encoding = store.object_encoding(&argv[2], now_ms);
         match encoding {
             Some(enc) => Ok(RespFrame::BulkString(Some(enc.as_bytes().to_vec()))),
-            None => Ok(RespFrame::Error("ERR no such key".to_string())),
+            None => Ok(RespFrame::BulkString(None)), // Redis returns null for nonexistent keys
         }
     } else if sub.eq_ignore_ascii_case("REFCOUNT") {
         if argv.len() < 3 {
@@ -10811,7 +10811,12 @@ fn wait_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     if argv.len() < 3 {
         return Err(CommandError::WrongArity("WAIT"));
     }
-    parse_i64_arg(&argv[1])?;
+    let numreplicas = parse_i64_arg(&argv[1])?;
+    if numreplicas < 0 {
+        return Err(CommandError::Custom(
+            "ERR numreplicas is negative".to_string(),
+        ));
+    }
     let timeout_ms = parse_i64_arg(&argv[2])?;
     if timeout_ms < 0 {
         return Err(CommandError::Custom("ERR timeout is negative".to_string()));
@@ -11891,12 +11896,59 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             "Value at:0x0 refcount:1 encoding:{encoding} serializedlength:{serialized_len} lru:{idle_secs} lru_seconds_idle:{idle_secs}"
         );
         Ok(RespFrame::BulkString(Some(debug_info.into_bytes())))
+    } else if sub.eq_ignore_ascii_case("DIGEST") {
+        // DEBUG DIGEST - compute a hash digest of the entire database
+        if argv.len() != 2 {
+            return Err(CommandError::WrongArity("DEBUG"));
+        }
+        let digest = compute_debug_digest(store, now_ms, None);
+        Ok(RespFrame::BulkString(Some(digest.into_bytes())))
+    } else if sub.eq_ignore_ascii_case("DIGEST-VALUE") {
+        // DEBUG DIGEST-VALUE key [key ...] - compute digest of specific keys
+        if argv.len() < 3 {
+            return Err(CommandError::WrongArity("DEBUG"));
+        }
+        let keys: Vec<&[u8]> = argv[2..].iter().map(|v| v.as_slice()).collect();
+        let digest = compute_debug_digest(store, now_ms, Some(&keys));
+        Ok(RespFrame::BulkString(Some(digest.into_bytes())))
     } else {
         Err(CommandError::UnknownSubcommand {
             command: "DEBUG",
             subcommand: sub.to_string(),
         })
     }
+}
+
+/// Compute a hex digest of database contents for DEBUG DIGEST.
+/// If keys is None, compute over all keys in sorted order.
+/// If keys is Some, compute only over the specified keys.
+fn compute_debug_digest(store: &mut Store, now_ms: u64, keys: Option<&[&[u8]]>) -> String {
+    use std::hash::{DefaultHasher, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+
+    // Get keys to process
+    let keys_to_process: Vec<Vec<u8>> = match keys {
+        Some(key_list) => key_list.iter().map(|k| k.to_vec()).collect(),
+        None => {
+            // Use all_keys() to get sorted keys across all databases
+            // This matches Redis behavior where DEBUG DIGEST covers entire dataset
+            store.all_keys()
+        }
+    };
+
+    // Hash each key and its serialized value
+    for key in &keys_to_process {
+        // Drop expired keys before hashing
+        store.expire_key_if_stale(key, now_ms);
+        // Only include keys that exist (have a dump)
+        if let Some(dump) = store.dump_key(key, now_ms) {
+            hasher.write(key);
+            hasher.write(&dump);
+        }
+    }
+
+    format!("{:016x}", hasher.finish())
 }
 
 fn role_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
@@ -21823,6 +21875,123 @@ mod tests {
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
     }
 
+    // ── DEBUG DIGEST tests ─────────────────────────────────────────────
+
+    #[test]
+    fn debug_digest_returns_hex_string() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"key1".to_vec(), b"value1".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set");
+        dispatch_argv(
+            &[b"SET".to_vec(), b"key2".to_vec(), b"value2".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set");
+
+        let digest = dispatch_argv(&[b"DEBUG".to_vec(), b"DIGEST".to_vec()], &mut store, 0)
+            .expect("debug digest");
+        let RespFrame::BulkString(Some(digest_bytes)) = digest else {
+            panic!("expected bulk string");
+        };
+        let digest_str = String::from_utf8(digest_bytes).expect("valid utf8");
+        assert_eq!(digest_str.len(), 16, "digest should be 16 hex chars");
+        assert!(
+            digest_str.chars().all(|c| c.is_ascii_hexdigit()),
+            "digest should be hex"
+        );
+    }
+
+    #[test]
+    fn debug_digest_is_deterministic() {
+        let mut store1 = Store::new();
+        let mut store2 = Store::new();
+
+        // Same data, same order
+        for store in [&mut store1, &mut store2] {
+            dispatch_argv(
+                &[b"SET".to_vec(), b"a".to_vec(), b"1".to_vec()],
+                store,
+                0,
+            )
+            .expect("set");
+            dispatch_argv(
+                &[b"SET".to_vec(), b"b".to_vec(), b"2".to_vec()],
+                store,
+                0,
+            )
+            .expect("set");
+        }
+
+        let d1 = dispatch_argv(&[b"DEBUG".to_vec(), b"DIGEST".to_vec()], &mut store1, 0)
+            .expect("digest1");
+        let d2 = dispatch_argv(&[b"DEBUG".to_vec(), b"DIGEST".to_vec()], &mut store2, 0)
+            .expect("digest2");
+        assert_eq!(d1, d2, "same data should produce same digest");
+    }
+
+    #[test]
+    fn debug_digest_value_specific_keys() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"foo".to_vec(), b"bar".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set");
+        dispatch_argv(
+            &[b"SET".to_vec(), b"baz".to_vec(), b"qux".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set");
+
+        let digest = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"DIGEST-VALUE".to_vec(),
+                b"foo".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug digest-value");
+        let RespFrame::BulkString(Some(digest_bytes)) = digest else {
+            panic!("expected bulk string");
+        };
+        let digest_str = String::from_utf8(digest_bytes).expect("valid utf8");
+        assert_eq!(digest_str.len(), 16);
+
+        // Digest of nonexistent key should still work (just no value hashed)
+        let digest_nokey = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"DIGEST-VALUE".to_vec(),
+                b"nonexistent".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug digest-value nonexistent");
+        assert!(matches!(digest_nokey, RespFrame::BulkString(Some(_))));
+    }
+
+    #[test]
+    fn debug_digest_empty_db() {
+        let mut store = Store::new();
+        let digest = dispatch_argv(&[b"DEBUG".to_vec(), b"DIGEST".to_vec()], &mut store, 0)
+            .expect("debug digest empty");
+        let RespFrame::BulkString(Some(digest_bytes)) = digest else {
+            panic!("expected bulk string");
+        };
+        let digest_str = String::from_utf8(digest_bytes).expect("valid utf8");
+        assert_eq!(digest_str.len(), 16);
+    }
+
     #[test]
     fn module_list_returns_empty_array() {
         let mut store = Store::new();
@@ -28568,7 +28737,8 @@ mod tests {
             0,
         )
         .unwrap();
-        assert!(matches!(r, RespFrame::Error(_)));
+        // Redis returns null bulk for nonexistent keys, not an error
+        assert!(matches!(r, RespFrame::BulkString(None)));
     }
 }
 #[cfg(test)]

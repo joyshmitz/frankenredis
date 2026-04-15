@@ -1318,3 +1318,143 @@ fn tcp_frankenredis_to_frankenredis_fullresync_and_live_streaming() {
     send_shutdown_nosave(replica_port);
     send_shutdown_nosave(primary_port);
 }
+
+/// Test replica-of-replica chain: Primary → Replica1 → Replica2.
+/// Verifies data propagates through the entire chain, including live streaming.
+#[test]
+fn tcp_replica_of_replica_chain_replication() {
+    let primary_port = reserve_port();
+    let replica1_port = reserve_port();
+    let replica2_port = reserve_port();
+
+    // Start primary.
+    let _primary = spawn_frankenredis(primary_port, None);
+
+    // Write initial data to primary before any replicas connect.
+    let mut client = connect_client(primary_port);
+    for i in 0..10 {
+        let key = format!("chain-initial-{i}");
+        let val = format!("initial-val-{i}");
+        send_command(&mut client, &[b"SET", key.as_bytes(), val.as_bytes()]);
+    }
+
+    // Start replica1 pointing to primary.
+    let _replica1 = spawn_frankenredis(replica1_port, Some(primary_port));
+    wait_for_replica_sync(replica1_port, Duration::from_secs(10));
+
+    // Verify replica1 has initial data.
+    let mut replica1_client = connect_client(replica1_port);
+    for i in 0..10 {
+        let key = format!("chain-initial-{i}");
+        let expected = format!("initial-val-{i}");
+        let val = send_command(&mut replica1_client, &[b"GET", key.as_bytes()]);
+        assert_eq!(
+            val,
+            RespFrame::BulkString(Some(expected.into_bytes())),
+            "replica1 missing key {key}"
+        );
+    }
+
+    // Start replica2 pointing to replica1 (chained replication).
+    let _replica2 = spawn_frankenredis(replica2_port, Some(replica1_port));
+    wait_for_replica_sync(replica2_port, Duration::from_secs(10));
+
+    // Verify replica2 has initial data through the chain.
+    let mut replica2_client = connect_client(replica2_port);
+    for i in 0..10 {
+        let key = format!("chain-initial-{i}");
+        let expected = format!("initial-val-{i}");
+        let val = send_command(&mut replica2_client, &[b"GET", key.as_bytes()]);
+        assert_eq!(
+            val,
+            RespFrame::BulkString(Some(expected.into_bytes())),
+            "replica2 (chained) missing key {key}"
+        );
+    }
+
+    // Verify ROLE on each node.
+    let primary_role = send_command(&mut client, &[b"ROLE"]);
+    if let RespFrame::Array(Some(items)) = &primary_role
+        && let Some(RespFrame::BulkString(Some(role))) = items.first()
+    {
+        assert_eq!(role.as_slice(), b"master", "primary should report master");
+    }
+
+    let replica1_role = send_command(&mut replica1_client, &[b"ROLE"]);
+    if let RespFrame::Array(Some(items)) = &replica1_role
+        && let Some(RespFrame::BulkString(Some(role))) = items.first()
+    {
+        assert_eq!(role.as_slice(), b"slave", "replica1 should report slave");
+    }
+
+    let replica2_role = send_command(&mut replica2_client, &[b"ROLE"]);
+    if let RespFrame::Array(Some(items)) = &replica2_role
+        && let Some(RespFrame::BulkString(Some(role))) = items.first()
+    {
+        assert_eq!(role.as_slice(), b"slave", "replica2 should report slave");
+    }
+
+    // Live streaming test: write more data to primary and verify propagation through chain.
+    for i in 0..5 {
+        let key = format!("chain-live-{i}");
+        let val = format!("live-val-{i}");
+        send_command(&mut client, &[b"SET", key.as_bytes(), val.as_bytes()]);
+    }
+
+    // Wait for live data to propagate to replica2 through the chain.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut chain_propagated = false;
+    while Instant::now() < deadline {
+        if let Some(bytes) = fetch_string_value(replica2_port, b"chain-live-4")
+            && bytes == b"live-val-4"
+        {
+            chain_propagated = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        chain_propagated,
+        "live data did not propagate through replica chain"
+    );
+
+    // Verify all live keys on replica2.
+    for i in 0..5 {
+        let key = format!("chain-live-{i}");
+        let expected = format!("live-val-{i}");
+        let val = send_command(&mut replica2_client, &[b"GET", key.as_bytes()]);
+        assert_eq!(
+            val,
+            RespFrame::BulkString(Some(expected.into_bytes())),
+            "chain-live key {key} not propagated to replica2"
+        );
+    }
+
+    // INCR propagation test through chain.
+    send_command(&mut client, &[b"SET", b"chain-counter", b"0"]);
+    for _ in 0..25 {
+        send_command(&mut client, &[b"INCR", b"chain-counter"]);
+    }
+
+    // Wait for counter to reach 25 on replica2.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut counter_propagated = false;
+    while Instant::now() < deadline {
+        if let Some(bytes) = fetch_string_value(replica2_port, b"chain-counter")
+            && bytes == b"25"
+        {
+            counter_propagated = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        counter_propagated,
+        "INCR counter did not propagate through chain; got {:?}",
+        fetch_string_value(replica2_port, b"chain-counter")
+    );
+
+    send_shutdown_nosave(replica2_port);
+    send_shutdown_nosave(replica1_port);
+    send_shutdown_nosave(primary_port);
+}

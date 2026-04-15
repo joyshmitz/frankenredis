@@ -671,8 +671,8 @@
         "nokey"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {
@@ -3906,6 +3906,448 @@
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'time' command"
+      }
+    },
+    {
+      "name": "info_default_section",
+      "now_ms": 65000,
+      "argv": [
+        "INFO",
+        "default"
+      ],
+      "expect": {
+        "kind": "any_bulk"
+      }
+    },
+    {
+      "name": "info_all_section",
+      "now_ms": 65001,
+      "argv": [
+        "INFO",
+        "all"
+      ],
+      "expect": {
+        "kind": "any_bulk"
+      }
+    },
+    {
+      "name": "info_no_args_returns_default",
+      "now_ms": 65002,
+      "argv": [
+        "INFO"
+      ],
+      "expect": {
+        "kind": "any_bulk"
+      }
+    },
+    {
+      "name": "info_case_insensitive",
+      "now_ms": 65003,
+      "argv": [
+        "info",
+        "SERVER"
+      ],
+      "expect": {
+        "kind": "any_bulk"
+      }
+    },
+    {
+      "name": "dbsize_empty_db",
+      "now_ms": 66000,
+      "argv": [
+        "FLUSHDB"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "dbsize_returns_zero",
+      "now_ms": 66001,
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "dbsize_setup_keys",
+      "now_ms": 66002,
+      "argv": [
+        "MSET",
+        "dbsize_k1",
+        "v1",
+        "dbsize_k2",
+        "v2",
+        "dbsize_k3",
+        "v3"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "dbsize_returns_three",
+      "now_ms": 66003,
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 3
+      }
+    },
+    {
+      "name": "dbsize_wrong_arity",
+      "now_ms": 66004,
+      "argv": [
+        "DBSIZE",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'dbsize' command"
+      }
+    },
+    {
+      "name": "lastsave_returns_integer",
+      "now_ms": 67000,
+      "argv": [
+        "LASTSAVE"
+      ],
+      "expect": {
+        "kind": "any_integer"
+      }
+    },
+    {
+      "name": "lastsave_wrong_arity",
+      "now_ms": 67001,
+      "argv": [
+        "LASTSAVE",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'lastsave' command"
+      }
+    },
+    {
+      "name": "lastsave_case_insensitive",
+      "now_ms": 67002,
+      "argv": [
+        "lastsave"
+      ],
+      "expect": {
+        "kind": "any_integer"
+      }
+    },
+    {
+      "name": "touch_setup",
+      "now_ms": 68000,
+      "argv": [
+        "SET",
+        "touch_key",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "touch_single_existing",
+      "now_ms": 68001,
+      "argv": [
+        "TOUCH",
+        "touch_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "touch_single_missing",
+      "now_ms": 68002,
+      "argv": [
+        "TOUCH",
+        "touch_nonexistent"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "touch_multiple_mixed",
+      "now_ms": 68003,
+      "argv": [
+        "TOUCH",
+        "touch_key",
+        "touch_nonexistent",
+        "touch_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "touch_wrong_arity",
+      "now_ms": 68004,
+      "argv": [
+        "TOUCH"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'touch' command"
+      }
+    },
+    {
+      "name": "unlink_setup",
+      "now_ms": 69000,
+      "argv": [
+        "MSET",
+        "unlink_k1",
+        "v1",
+        "unlink_k2",
+        "v2"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "unlink_multiple",
+      "now_ms": 69001,
+      "argv": [
+        "UNLINK",
+        "unlink_k1",
+        "unlink_k2",
+        "unlink_nonexistent"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "unlink_verify_gone",
+      "now_ms": 69002,
+      "argv": [
+        "EXISTS",
+        "unlink_k1",
+        "unlink_k2"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "unlink_wrong_arity",
+      "now_ms": 69003,
+      "argv": [
+        "UNLINK"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'del' command"
+      }
+    },
+    {
+      "name": "slowlog_len_returns_integer",
+      "now_ms": 70000,
+      "argv": [
+        "SLOWLOG",
+        "LEN"
+      ],
+      "expect": {
+        "kind": "any_integer"
+      }
+    },
+    {
+      "name": "slowlog_reset_ok",
+      "now_ms": 70001,
+      "argv": [
+        "SLOWLOG",
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "slowlog_len_after_reset",
+      "now_ms": 70002,
+      "argv": [
+        "SLOWLOG",
+        "LEN"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "slowlog_get_empty",
+      "now_ms": 70003,
+      "argv": [
+        "SLOWLOG",
+        "GET"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "slowlog_get_with_count",
+      "now_ms": 70004,
+      "argv": [
+        "SLOWLOG",
+        "GET",
+        "10"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "slowlog_unknown_subcommand",
+      "now_ms": 70005,
+      "argv": [
+        "SLOWLOG",
+        "INVALID"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'invalid'. Try SLOWLOG HELP."
+      }
+    },
+    {
+      "name": "slowlog_wrong_arity",
+      "now_ms": 70006,
+      "argv": [
+        "SLOWLOG"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'slowlog' command"
+      }
+    },
+    {
+      "name": "slowlog_case_insensitive",
+      "now_ms": 70007,
+      "argv": [
+        "slowlog",
+        "len"
+      ],
+      "expect": {
+        "kind": "any_integer"
+      }
+    },
+    {
+      "name": "flushall_ok",
+      "now_ms": 71000,
+      "argv": [
+        "FLUSHALL"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "flushall_async",
+      "now_ms": 71001,
+      "argv": [
+        "FLUSHALL",
+        "ASYNC"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "flushall_sync",
+      "now_ms": 71002,
+      "argv": [
+        "FLUSHALL",
+        "SYNC"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "flushall_wrong_arity",
+      "now_ms": 71003,
+      "argv": [
+        "FLUSHALL",
+        "ASYNC",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'flushall' command"
+      }
+    },
+    {
+      "name": "flushdb_async",
+      "now_ms": 72000,
+      "argv": [
+        "FLUSHDB",
+        "ASYNC"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "flushdb_sync",
+      "now_ms": 72001,
+      "argv": [
+        "FLUSHDB",
+        "SYNC"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "flushdb_wrong_arity",
+      "now_ms": 72002,
+      "argv": [
+        "FLUSHDB",
+        "ASYNC",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'flushdb' command"
+      }
+    },
+    {
+      "name": "debug_wrong_arity_no_subcommand",
+      "now_ms": 73000,
+      "argv": [
+        "DEBUG"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'debug' command"
       }
     }
   ]

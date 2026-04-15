@@ -2573,6 +2573,97 @@
       }
     },
     {
+      "name": "touch_expired_setup",
+      "now_ms": 3000000,
+      "argv": [
+        "SET",
+        "touch_expire_key",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "touch_before_expire",
+      "now_ms": 3000001,
+      "argv": [
+        "TOUCH",
+        "touch_expire_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "touch_set_expiry",
+      "now_ms": 3000002,
+      "argv": [
+        "PEXPIRE",
+        "touch_expire_key",
+        "100"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "touch_after_expired",
+      "now_ms": 3000200,
+      "argv": [
+        "TOUCH",
+        "touch_expire_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "touch_mixed_expired_and_existing_setup",
+      "now_ms": 3100000,
+      "argv": [
+        "MSET",
+        "touch_live",
+        "alive",
+        "touch_will_die",
+        "dying"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "touch_mixed_set_expiry",
+      "now_ms": 3100001,
+      "argv": [
+        "PEXPIRE",
+        "touch_will_die",
+        "50"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "touch_mixed_one_expired",
+      "now_ms": 3100100,
+      "argv": [
+        "TOUCH",
+        "touch_live",
+        "touch_will_die"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
       "name": "expire_edge_cleanup",
       "now_ms": 1000,
       "argv": [
@@ -2582,6 +2673,101 @@
         "kind": "simple",
         "value": "OK"
       }
+    },
+
+    {
+      "name": "rename_expired_src_setup",
+      "now_ms": 4000000,
+      "argv": ["SET", "rename_exp_src", "value"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "rename_expired_src_set_expiry",
+      "now_ms": 4000001,
+      "argv": ["PEXPIRE", "rename_exp_src", "50"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "rename_expired_src_fails",
+      "now_ms": 4000100,
+      "argv": ["RENAME", "rename_exp_src", "rename_exp_dst"],
+      "expect": { "kind": "error", "value": "ERR no such key" }
+    },
+
+    {
+      "name": "copy_expired_src_setup",
+      "now_ms": 5000000,
+      "argv": ["SET", "copy_exp_src", "value"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "copy_expired_src_set_expiry",
+      "now_ms": 5000001,
+      "argv": ["PEXPIRE", "copy_exp_src", "50"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "copy_expired_src_returns_zero",
+      "now_ms": 5000100,
+      "argv": ["COPY", "copy_exp_src", "copy_exp_dst"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "exists_expired_setup",
+      "now_ms": 6000000,
+      "argv": ["SET", "exists_exp_key", "value"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "exists_expired_set_expiry",
+      "now_ms": 6000001,
+      "argv": ["PEXPIRE", "exists_exp_key", "50"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "exists_expired_returns_zero",
+      "now_ms": 6000100,
+      "argv": ["EXISTS", "exists_exp_key"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+
+    {
+      "name": "type_expired_setup",
+      "now_ms": 7000000,
+      "argv": ["SET", "type_exp_key", "value"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "type_expired_set_expiry",
+      "now_ms": 7000001,
+      "argv": ["PEXPIRE", "type_exp_key", "50"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "type_expired_returns_none",
+      "now_ms": 7000100,
+      "argv": ["TYPE", "type_exp_key"],
+      "expect": { "kind": "simple", "value": "none" }
+    },
+
+    {
+      "name": "dump_expired_setup",
+      "now_ms": 8000000,
+      "argv": ["SET", "dump_exp_key", "value"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "dump_expired_set_expiry",
+      "now_ms": 8000001,
+      "argv": ["PEXPIRE", "dump_exp_key", "50"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "dump_expired_returns_nil",
+      "now_ms": 8000100,
+      "argv": ["DUMP", "dump_exp_key"],
+      "expect": { "kind": "bulk", "value": null }
     }
   ]
 }

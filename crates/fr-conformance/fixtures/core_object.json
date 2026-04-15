@@ -120,8 +120,8 @@
       "now_ms": 60,
       "argv": ["OBJECT", "ENCODING", "no_such_key_obj"],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
 
@@ -402,8 +402,8 @@
       "now_ms": 38000,
       "argv": ["OBJECT", "ENCODING", "obj_exp_key"],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {
@@ -522,6 +522,102 @@
       "now_ms": 65002,
       "argv": ["OBJECT", "REFCOUNT", "obj_geo"],
       "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "object_encoding_hash_large_config",
+      "now_ms": 70000,
+      "argv": ["CONFIG", "SET", "hash-max-listpack-entries", "2"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_hash_large_setup",
+      "now_ms": 70001,
+      "argv": ["HSET", "obj_hash_large", "f1", "v1", "f2", "v2", "f3", "v3"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "object_encoding_hash_hashtable",
+      "now_ms": 70002,
+      "argv": ["OBJECT", "ENCODING", "obj_hash_large"],
+      "expect": { "kind": "bulk", "value": "hashtable" }
+    },
+    {
+      "name": "object_encoding_hash_config_restore",
+      "now_ms": 70003,
+      "argv": ["CONFIG", "SET", "hash-max-listpack-entries", "512"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_set_large_config",
+      "now_ms": 71000,
+      "argv": ["CONFIG", "SET", "set-max-listpack-entries", "2"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_set_large_setup",
+      "now_ms": 71001,
+      "argv": ["SADD", "obj_set_large", "apple", "banana", "cherry"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "object_encoding_set_hashtable",
+      "now_ms": 71002,
+      "argv": ["OBJECT", "ENCODING", "obj_set_large"],
+      "expect": { "kind": "bulk", "value": "hashtable" }
+    },
+    {
+      "name": "object_encoding_set_config_restore",
+      "now_ms": 71003,
+      "argv": ["CONFIG", "SET", "set-max-listpack-entries", "128"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_zset_skiplist_config",
+      "now_ms": 72000,
+      "argv": ["CONFIG", "SET", "zset-max-listpack-entries", "2"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_zset_skiplist_setup",
+      "now_ms": 72001,
+      "argv": ["ZADD", "obj_zset_skiplist", "1", "a", "2", "b", "3", "c"],
+      "expect": { "kind": "integer", "value": 3 }
+    },
+    {
+      "name": "object_encoding_zset_skiplist",
+      "now_ms": 72002,
+      "argv": ["OBJECT", "ENCODING", "obj_zset_skiplist"],
+      "expect": { "kind": "bulk", "value": "skiplist" }
+    },
+    {
+      "name": "object_encoding_zset_config_restore",
+      "now_ms": 72003,
+      "argv": ["CONFIG", "SET", "zset-max-listpack-entries", "128"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_list_quicklist_config",
+      "now_ms": 73000,
+      "argv": ["CONFIG", "SET", "list-max-listpack-size", "1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_encoding_list_quicklist_setup",
+      "now_ms": 73001,
+      "argv": ["RPUSH", "obj_list_quick", "a", "b"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "object_encoding_list_quicklist",
+      "now_ms": 73002,
+      "argv": ["OBJECT", "ENCODING", "obj_list_quick"],
+      "expect": { "kind": "bulk", "value": "quicklist" }
+    },
+    {
+      "name": "object_encoding_list_config_restore",
+      "now_ms": 73003,
+      "argv": ["CONFIG", "SET", "list-max-listpack-size", "-2"],
+      "expect": { "kind": "simple", "value": "OK" }
     }
   ]
 }

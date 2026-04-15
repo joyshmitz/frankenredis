@@ -2284,13 +2284,18 @@ fn propagate_writes_to_replicas(
     write_tokens: &mut HashSet<Token>,
 ) {
     let primary_offset = runtime.replication_primary_offset();
+    let aof_base = runtime.aof_base_offset();
     let mut encoded_stream: Option<Vec<u8>> = None;
     for (&token, conn) in clients.iter_mut() {
         if let Some(sent_offset) = conn.replication_sent_offset
             && sent_offset < primary_offset
         {
             let stream = encoded_stream.get_or_insert_with(|| runtime.encoded_aof_stream());
-            let start = usize::try_from(sent_offset.0).unwrap_or(usize::MAX);
+            // Convert absolute replication offset to local stream index by subtracting
+            // the AOF base offset. The encoded stream starts at index 0, which
+            // corresponds to absolute offset aof_base.
+            let relative_offset = sent_offset.0.saturating_sub(aof_base);
+            let start = usize::try_from(relative_offset).unwrap_or(usize::MAX);
             let bytes = stream.get(start..).unwrap_or(&[]);
             if !bytes.is_empty() {
                 conn.write_buf.extend_from_slice(bytes);

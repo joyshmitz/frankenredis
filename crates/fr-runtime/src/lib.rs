@@ -1155,6 +1155,10 @@ impl EvidenceLedger {
 pub struct ServerState {
     store: Store,
     aof_records: Vec<AofRecord>,
+    /// The absolute replication offset where the local aof_records buffer starts.
+    /// For a primary this is 0. For a replica after FULLRESYNC, this is the
+    /// primary's offset at sync time.
+    aof_base_offset: u64,
     aof_selected_db: usize,
     replication_runtime_state: ReplicationRuntimeState,
     evidence: EvidenceLedger,
@@ -1249,6 +1253,7 @@ impl Default for ServerState {
             ),
             store,
             aof_records: Vec::new(),
+            aof_base_offset: 0,
             aof_selected_db: 0,
             evidence: EvidenceLedger::default(),
             auth_state: AuthState::default(),
@@ -1973,7 +1978,11 @@ impl Runtime {
     #[must_use]
     pub fn encoded_aof_stream_from_offset(&self, offset: u64) -> Vec<u8> {
         let stream = self.encoded_aof_stream();
-        let start = usize::try_from(offset).unwrap_or(usize::MAX);
+        // Convert absolute replication offset to local stream index by subtracting
+        // the AOF base offset. The encoded stream starts at aof_base_offset.
+        let base_offset = self.server.aof_base_offset;
+        let relative_offset = offset.saturating_sub(base_offset);
+        let start = usize::try_from(relative_offset).unwrap_or(usize::MAX);
         stream.get(start..).unwrap_or(&[]).to_vec()
     }
 
@@ -2041,6 +2050,10 @@ impl Runtime {
                 apply_rdb_entries_to_store(&mut store, &entries, now_ms)?;
                 self.server.store = store;
                 self.server.aof_records.clear();
+                // Track the base offset where the local AOF buffer starts.
+                // New records will be indexed from 0, but they correspond to
+                // absolute offset starting at this value.
+                self.server.aof_base_offset = offset.0;
                 self.server.aof_selected_db = 0;
                 self.session.selected_db = 0;
                 self.server
@@ -2106,6 +2119,21 @@ impl Runtime {
     #[must_use]
     pub fn replication_primary_offset(&self) -> ReplOffset {
         self.server.replication_ack_state.primary_offset
+    }
+
+    /// Returns the start offset of the replication backlog.
+    /// This is the earliest offset still available in the AOF stream.
+    #[must_use]
+    pub fn replication_backlog_start_offset(&self) -> ReplOffset {
+        self.server.replication_runtime_state.backlog.start_offset
+    }
+
+    /// Returns the base offset of the local AOF buffer.
+    /// For a primary, this is 0. For a replica after FULLRESYNC, this is
+    /// the primary's offset at sync time.
+    #[must_use]
+    pub fn aof_base_offset(&self) -> u64 {
+        self.server.aof_base_offset
     }
 
     #[must_use]
@@ -6884,6 +6912,9 @@ slave_repl_offset:{primary_offset}\r\n"
             _ => {}
         }
 
+        // Refresh replica ACK snapshots to get current state
+        self.server.refresh_replica_ack_snapshots();
+
         let outcome = evaluate_wait(
             &self.server.replication_ack_state.replica_ack_offsets,
             WaitThreshold {
@@ -6924,6 +6955,9 @@ slave_repl_offset:{primary_offset}\r\n"
                     .to_string(),
             );
         }
+
+        // Refresh replica ACK snapshots to get current state
+        self.server.refresh_replica_ack_snapshots();
 
         let required_local_offset = if required_local == 0 {
             ReplOffset(0)

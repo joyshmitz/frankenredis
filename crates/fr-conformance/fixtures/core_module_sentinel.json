@@ -241,6 +241,266 @@
         "kind": "error",
         "value": "ERR No such master with that name"
       }
+    },
+    {
+      "name": "sentinel_sentinels_no_such_master",
+      "now_ms": 41,
+      "argv": ["SENTINEL", "SENTINELS", "mymaster"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR No such master with that name"
+      }
+    },
+    {
+      "name": "sentinel_slaves_no_such_master",
+      "now_ms": 42,
+      "argv": ["SENTINEL", "SLAVES", "mymaster"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR No such master with that name"
+      }
+    },
+    {
+      "name": "sentinel_flushconfig_returns_ok",
+      "now_ms": 43,
+      "argv": ["SENTINEL", "FLUSHCONFIG"],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "sentinel_flushconfig_wrong_arity",
+      "now_ms": 44,
+      "argv": ["SENTINEL", "FLUSHCONFIG", "extra"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sentinel' command"
+      }
+    },
+    {
+      "name": "sentinel_pending_scripts_returns_empty",
+      "now_ms": 45,
+      "argv": ["SENTINEL", "PENDING-SCRIPTS"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "sentinel_pending_scripts_wrong_arity",
+      "now_ms": 46,
+      "argv": ["SENTINEL", "PENDING-SCRIPTS", "extra"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sentinel' command"
+      }
+    },
+    {
+      "name": "sentinel_unknown_subcommand",
+      "now_ms": 47,
+      "argv": ["SENTINEL", "BOGUS"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Unknown subcommand or wrong number of arguments for 'bogus'. Try SENTINEL HELP."
+      }
+    },
+    {
+      "name": "sentinel_case_insensitive_myid",
+      "now_ms": 48,
+      "argv": ["SENTINEL", "myid"],
+      "expect": {
+        "kind": "bulk",
+        "value": ""
+      }
+    },
+    {
+      "name": "sentinel_case_insensitive_masters",
+      "now_ms": 49,
+      "argv": ["SENTINEL", "masters"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "sentinel_replicas_wrong_arity_no_name",
+      "now_ms": 50,
+      "argv": ["SENTINEL", "REPLICAS"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sentinel' command"
+      }
+    },
+    {
+      "name": "sentinel_get_master_addr_wrong_arity",
+      "now_ms": 51,
+      "argv": ["SENTINEL", "GET-MASTER-ADDR-BY-NAME"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sentinel' command"
+      }
+    },
+    {
+      "name": "sentinel_ckquorum_wrong_arity_no_name",
+      "now_ms": 52,
+      "argv": ["SENTINEL", "CKQUORUM"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sentinel' command"
+      }
+    },
+    {
+      "name": "sentinel_failover_wrong_arity_no_name",
+      "now_ms": 53,
+      "argv": ["SENTINEL", "FAILOVER"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sentinel' command"
+      }
+    },
+    {
+      "name": "sentinel_reset_wrong_arity_no_pattern",
+      "now_ms": 54,
+      "argv": ["SENTINEL", "RESET"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sentinel' command"
+      }
+    },
+    {
+      "name": "sentinel_remove_wrong_arity_no_name",
+      "now_ms": 55,
+      "argv": ["SENTINEL", "REMOVE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'sentinel' command"
+      }
+    },
+    {
+      "name": "failover_timeout_negative",
+      "now_ms": 60,
+      "argv": ["FAILOVER", "TIMEOUT", "-1"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR FAILOVER timeout must be greater than 0"
+      }
+    },
+    {
+      "name": "failover_to_valid_but_no_replicas",
+      "now_ms": 61,
+      "argv": ["FAILOVER", "TO", "127.0.0.1", "6380"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR FAILOVER requires connected replicas."
+      }
+    },
+    {
+      "name": "failover_to_with_force_no_replicas",
+      "now_ms": 62,
+      "argv": ["FAILOVER", "TO", "127.0.0.1", "6380", "FORCE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR FAILOVER requires connected replicas."
+      }
+    },
+    {
+      "name": "failover_to_invalid_port",
+      "now_ms": 63,
+      "argv": ["FAILOVER", "TO", "127.0.0.1", "notaport"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "failover_to_missing_port",
+      "now_ms": 64,
+      "argv": ["FAILOVER", "TO", "127.0.0.1"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
+    },
+    {
+      "name": "failover_timeout_non_integer",
+      "now_ms": 65,
+      "argv": ["FAILOVER", "TIMEOUT", "abc"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "failover_case_insensitive_abort",
+      "now_ms": 66,
+      "argv": ["FAILOVER", "abort"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR No failover in progress."
+      }
+    },
+    {
+      "name": "failover_case_insensitive_timeout",
+      "now_ms": 67,
+      "argv": ["FAILOVER", "timeout", "1000"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR FAILOVER requires connected replicas."
+      }
+    },
+    {
+      "name": "failover_combined_timeout_and_abort",
+      "now_ms": 68,
+      "argv": ["FAILOVER", "TIMEOUT", "1000", "ABORT"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR No failover in progress."
+      }
+    },
+    {
+      "name": "module_loadex_missing_path",
+      "now_ms": 70,
+      "argv": ["MODULE", "LOADEX"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'module|loadex' subcommand"
+      }
+    },
+    {
+      "name": "module_unload_missing_name",
+      "now_ms": 71,
+      "argv": ["MODULE", "UNLOAD"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'module|unload' subcommand"
+      }
+    },
+    {
+      "name": "module_list_wrong_arity",
+      "now_ms": 72,
+      "argv": ["MODULE", "LIST", "extra"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR wrong number of arguments for 'module|list' subcommand"
+      }
+    },
+    {
+      "name": "module_case_insensitive_list",
+      "now_ms": 73,
+      "argv": ["MODULE", "list"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "module_case_insensitive_help",
+      "now_ms": 74,
+      "argv": ["MODULE", "help"],
+      "expect": {
+        "kind": "any_array"
+      }
     }
   ]
 }

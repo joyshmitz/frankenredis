@@ -1918,8 +1918,8 @@
         "nosuchkey"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {

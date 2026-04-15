@@ -754,7 +754,7 @@
       }
     },
     {
-      "name": "cluster_keyslot_empty_string",
+      "name": "cluster_keyslot_empty_string_alt",
       "now_ms": 200,
       "argv": [
         "CLUSTER",
@@ -809,7 +809,7 @@
       }
     },
     {
-      "name": "cluster_unknown_subcommand",
+      "name": "cluster_unknown_subcommand_nosuchsub",
       "now_ms": 200,
       "argv": [
         "CLUSTER",
@@ -871,7 +871,7 @@
       }
     },
     {
-      "name": "cluster_countkeysinslot_empty",
+      "name": "cluster_countkeysinslot_empty_string",
       "now_ms": 300,
       "argv": [
         "CLUSTER",
@@ -980,6 +980,67 @@
         "kind": "error",
         "value": "ERR Invalid slot or number of keys"
       }
+    },
+
+    {
+      "name": "cluster_keyslot_hash_tag_colon",
+      "now_ms": 400,
+      "argv": ["CLUSTER", "KEYSLOT", "{user}:1"],
+      "expect": { "kind": "integer", "value": 5474 }
+    },
+    {
+      "name": "cluster_keyslot_hash_tag_colon_999",
+      "now_ms": 401,
+      "argv": ["CLUSTER", "KEYSLOT", "{user}:999"],
+      "expect": { "kind": "integer", "value": 5474 }
+    },
+    {
+      "name": "cluster_keyslot_empty_hash_tag_prefix",
+      "now_ms": 402,
+      "argv": ["CLUSTER", "KEYSLOT", "{}key"],
+      "expect": { "kind": "integer", "value": 14961 }
+    },
+    {
+      "name": "cluster_keyslot_nested_double_braces",
+      "now_ms": 403,
+      "argv": ["CLUSTER", "KEYSLOT", "{{foo}}"],
+      "expect": { "kind": "integer", "value": 13308 }
+    },
+    {
+      "name": "cluster_keyslot_unclosed_brace_alt",
+      "now_ms": 404,
+      "argv": ["CLUSTER", "KEYSLOT", "{foo"],
+      "expect": { "kind": "integer", "value": 13308 }
+    },
+    {
+      "name": "cluster_keyslot_empty_key_alt",
+      "now_ms": 405,
+      "argv": ["CLUSTER", "KEYSLOT", ""],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "cluster_countkeysinslot_slot_zero",
+      "now_ms": 410,
+      "argv": ["CLUSTER", "COUNTKEYSINSLOT", "0"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "cluster_countkeysinslot_invalid_16384",
+      "now_ms": 411,
+      "argv": ["CLUSTER", "COUNTKEYSINSLOT", "16384"],
+      "expect": { "kind": "error", "value": "ERR Invalid slot" }
+    },
+    {
+      "name": "cluster_countkeysinslot_negative_alt",
+      "now_ms": 412,
+      "argv": ["CLUSTER", "COUNTKEYSINSLOT", "-1"],
+      "expect": { "kind": "error", "value": "ERR Invalid slot" }
+    },
+    {
+      "name": "cluster_help_any_array",
+      "now_ms": 430,
+      "argv": ["CLUSTER", "HELP"],
+      "expect": { "kind": "any_array" }
     }
   ]
 }

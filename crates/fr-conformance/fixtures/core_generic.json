@@ -1306,8 +1306,8 @@
         "nokey"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {
@@ -2117,8 +2117,8 @@
         "nosuch_obj"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {

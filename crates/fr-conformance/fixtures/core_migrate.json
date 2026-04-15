@@ -297,6 +297,168 @@
         "kind": "simple",
         "value": "NOKEY"
       }
+    },
+    {
+      "name": "migrate_port_zero",
+      "now_ms": 33,
+      "argv": ["MIGRATE", "127.0.0.1", "0", "key", "0", "1000"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_port_65535_max_valid",
+      "now_ms": 34,
+      "argv": ["MIGRATE", "127.0.0.1", "65535", "key", "0", "1000"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_port_65536_out_of_range",
+      "now_ms": 35,
+      "argv": ["MIGRATE", "127.0.0.1", "65536", "key", "0", "1000"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "migrate_db_very_large",
+      "now_ms": 36,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "key", "999999999999", "1000"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_timeout_zero",
+      "now_ms": 37,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "key", "0", "0"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_timeout_very_large",
+      "now_ms": 38,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "key", "0", "9999999999999"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_empty_host",
+      "now_ms": 39,
+      "argv": ["MIGRATE", "", "6379", "key", "0", "1000"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_auth_empty_password",
+      "now_ms": 40,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "nokey", "0", "1000", "AUTH", ""],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_auth2_empty_credentials",
+      "now_ms": 41,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "nokey", "0", "1000", "AUTH2", "", ""],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_options_case_insensitive_copy",
+      "now_ms": 42,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "nokey", "0", "1000", "copy"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_options_case_insensitive_replace",
+      "now_ms": 43,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "nokey", "0", "1000", "replace"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_options_case_insensitive_auth",
+      "now_ms": 44,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "nokey", "0", "1000", "auth", "secret"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_options_case_insensitive_keys",
+      "now_ms": 45,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "", "0", "1000", "keys", "k1"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_all_options_different_order",
+      "now_ms": 46,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "", "0", "1000", "AUTH", "pw", "REPLACE", "COPY", "KEYS", "a"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_auth2_then_replace_copy",
+      "now_ms": 47,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "", "0", "1000", "AUTH2", "user", "pass", "REPLACE", "COPY", "KEYS", "k"],
+      "expect": {
+        "kind": "simple",
+        "value": "NOKEY"
+      }
+    },
+    {
+      "name": "migrate_port_whitespace_invalid",
+      "now_ms": 48,
+      "argv": ["MIGRATE", "127.0.0.1", " 6379", "key", "0", "1000"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "migrate_db_whitespace_invalid",
+      "now_ms": 49,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "key", " 0", "1000"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
+    },
+    {
+      "name": "migrate_timeout_whitespace_invalid",
+      "now_ms": 50,
+      "argv": ["MIGRATE", "127.0.0.1", "6379", "key", "0", " 1000"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR value is not an integer or out of range"
+      }
     }
   ]
 }
