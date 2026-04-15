@@ -1708,32 +1708,6 @@
       }
     },
     {
-      "name": "latency_histogram_empty",
-      "now_ms": 24001,
-      "argv": [
-        "LATENCY",
-        "HISTOGRAM"
-      ],
-      "expect": {
-        "kind": "array",
-        "value": []
-      }
-    },
-    {
-      "name": "latency_histogram_with_commands",
-      "now_ms": 24002,
-      "argv": [
-        "LATENCY",
-        "HISTOGRAM",
-        "GET",
-        "SET"
-      ],
-      "expect": {
-        "kind": "array",
-        "value": []
-      }
-    },
-    {
       "name": "command_docs",
       "now_ms": 24000,
       "argv": [

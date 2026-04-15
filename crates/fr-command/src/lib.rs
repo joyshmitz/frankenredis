@@ -12151,11 +12151,47 @@ fn latency_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Command
         )))
     } else if sub.eq_ignore_ascii_case("HISTOGRAM") {
         // LATENCY HISTOGRAM [command ...]
-        // Returns cumulative distribution of latencies for commands.
-        // Currently returns an empty array as per-command latency histograms
-        // are not yet tracked. Full implementation would return map-like data.
-        // TODO: Implement full histogram tracking per-command.
-        Ok(RespFrame::Array(Some(vec![])))
+        // Returns histogram data for each command's latency distribution.
+        // Format: array of [command_name, histogram_map] pairs.
+        let commands_filter: Vec<_> = argv.iter().skip(2).collect();
+        let histograms = if commands_filter.is_empty() {
+            // Return all histograms
+            store.all_command_histograms()
+        } else {
+            // Filter to requested commands
+            commands_filter
+                .iter()
+                .filter_map(|cmd| {
+                    let cmd_str = std::str::from_utf8(cmd).ok()?;
+                    store.get_command_histogram(cmd_str).map(|h| (cmd_str, h))
+                })
+                .collect()
+        };
+
+        let result: Vec<RespFrame> = histograms
+            .into_iter()
+            .map(|(cmd, hist)| {
+                // Build histogram map: calls -> count, then bucket_start_us -> bucket_count
+                let mut map_items = vec![
+                    RespFrame::BulkString(Some(b"calls".to_vec())),
+                    RespFrame::Integer(i64::try_from(hist.calls).unwrap_or(i64::MAX)),
+                ];
+                for (bucket_start_us, count) in hist.to_buckets() {
+                    map_items.push(RespFrame::Integer(
+                        i64::try_from(bucket_start_us).unwrap_or(i64::MAX),
+                    ));
+                    map_items.push(RespFrame::Integer(
+                        i64::try_from(count).unwrap_or(i64::MAX),
+                    ));
+                }
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(cmd.as_bytes().to_vec())),
+                    RespFrame::Array(Some(map_items)),
+                ]))
+            })
+            .collect();
+
+        Ok(RespFrame::Array(Some(result)))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
             return Err(CommandError::WrongSubcommandArity {
@@ -24161,24 +24197,65 @@ mod tests {
     }
 
     #[test]
-    fn latency_histogram_returns_empty_array() {
+    fn latency_histogram_returns_recorded_data() {
         let mut store = Store::new();
+
+        // Initially empty when no commands have been recorded
         let out = dispatch_argv(&[b"LATENCY".to_vec(), b"HISTOGRAM".to_vec()], &mut store, 0)
             .expect("latency histogram");
         assert_eq!(out, RespFrame::Array(Some(vec![])));
 
-        // With command arguments (should still return empty)
+        // Record some command latencies
+        store.record_command_histogram("GET", 100); // 100us -> bucket 7 [64, 128)
+        store.record_command_histogram("GET", 50); // 50us -> bucket 6 [32, 64)
+        store.record_command_histogram("SET", 200); // 200us -> bucket 8 [128, 256)
+
+        // LATENCY HISTOGRAM (all commands) should return GET and SET
+        let out = dispatch_argv(&[b"LATENCY".to_vec(), b"HISTOGRAM".to_vec()], &mut store, 0)
+            .expect("latency histogram");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected array");
+        };
+        assert_eq!(items.len(), 2); // GET and SET
+
+        // LATENCY HISTOGRAM GET should return only GET
+        let out = dispatch_argv(
+            &[b"LATENCY".to_vec(), b"HISTOGRAM".to_vec(), b"GET".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("latency histogram GET");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected array");
+        };
+        assert_eq!(items.len(), 1);
+
+        // Check GET histogram structure
+        let RespFrame::Array(Some(ref get_entry)) = items[0] else {
+            panic!("expected array entry");
+        };
+        assert_eq!(get_entry.len(), 2);
+        assert_eq!(get_entry[0], RespFrame::BulkString(Some(b"GET".to_vec())));
+
+        let RespFrame::Array(Some(ref histogram)) = get_entry[1] else {
+            panic!("expected histogram array");
+        };
+        // Should have "calls" followed by bucket data
+        assert!(histogram.len() >= 2);
+        assert_eq!(histogram[0], RespFrame::BulkString(Some(b"calls".to_vec())));
+        assert_eq!(histogram[1], RespFrame::Integer(2)); // 2 GET calls
+
+        // LATENCY HISTOGRAM for non-existent command returns empty
         let out = dispatch_argv(
             &[
                 b"LATENCY".to_vec(),
                 b"HISTOGRAM".to_vec(),
-                b"GET".to_vec(),
-                b"SET".to_vec(),
+                b"NONEXISTENT".to_vec(),
             ],
             &mut store,
             0,
         )
-        .expect("latency histogram with commands");
+        .expect("latency histogram nonexistent");
         assert_eq!(out, RespFrame::Array(Some(vec![])));
     }
 

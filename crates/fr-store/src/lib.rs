@@ -745,6 +745,108 @@ impl LatencyTracker {
     }
 }
 
+/// Per-command latency histogram using power-of-2 microsecond buckets.
+/// Buckets: [0, 1), [1, 2), [2, 4), [4, 8), ..., [2^22, 2^23), [2^23, ∞)
+/// This gives ~8 second max tracked latency with 24 buckets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommandHistogram {
+    /// Bucket counts: bucket[i] covers [2^(i-1), 2^i) microseconds, except bucket[0] is [0, 1).
+    buckets: [u64; 24],
+    /// Total number of calls recorded.
+    pub calls: u64,
+}
+
+impl CommandHistogram {
+    /// Record a latency sample in microseconds.
+    pub fn record(&mut self, latency_us: u64) {
+        self.calls += 1;
+        let bucket_idx = if latency_us == 0 {
+            0
+        } else {
+            // Find the bucket: bucket i covers [2^(i-1), 2^i) for i > 0
+            // Use leading zeros to find log2
+            let log2 = 63_u32.saturating_sub(latency_us.leading_zeros());
+            // Bucket 0 is [0,1), bucket 1 is [1,2), bucket 2 is [2,4), etc.
+            // So bucket index = log2 + 1, clamped to 23 max
+            (log2 + 1).min(23) as usize
+        };
+        self.buckets[bucket_idx] += 1;
+    }
+
+    /// Get histogram data as (bucket_start_us, count) pairs for non-zero buckets.
+    #[must_use]
+    pub fn to_buckets(&self) -> Vec<(u64, u64)> {
+        self.buckets
+            .iter()
+            .enumerate()
+            .filter(|&(_, count)| *count > 0)
+            .map(|(i, count)| {
+                let start_us = if i == 0 { 0 } else { 1_u64 << (i - 1) };
+                (start_us, *count)
+            })
+            .collect()
+    }
+
+    /// Reset the histogram.
+    pub fn reset(&mut self) {
+        self.buckets = [0; 24];
+        self.calls = 0;
+    }
+}
+
+/// Tracks per-command latency histograms.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommandHistogramTracker {
+    histograms: HashMap<String, CommandHistogram>,
+}
+
+impl CommandHistogramTracker {
+    /// Record a command latency in microseconds.
+    pub fn record(&mut self, command: &str, latency_us: u64) {
+        self.histograms
+            .entry(command.to_ascii_uppercase())
+            .or_default()
+            .record(latency_us);
+    }
+
+    /// Get histogram for a specific command.
+    #[must_use]
+    pub fn get(&self, command: &str) -> Option<&CommandHistogram> {
+        self.histograms.get(&command.to_ascii_uppercase())
+    }
+
+    /// Get all histograms, sorted by command name.
+    #[must_use]
+    pub fn all(&self) -> Vec<(&str, &CommandHistogram)> {
+        let mut result: Vec<_> = self
+            .histograms
+            .iter()
+            .map(|(k, v)| (k.as_str(), v))
+            .collect();
+        result.sort_by(|a, b| a.0.cmp(b.0));
+        result
+    }
+
+    /// Reset histograms for specified commands, or all if empty.
+    pub fn reset(&mut self, commands: &[&str]) -> usize {
+        if commands.is_empty() {
+            let count = self.histograms.len();
+            self.histograms.clear();
+            return count;
+        }
+        commands
+            .iter()
+            .filter_map(|cmd| {
+                let key = cmd.to_ascii_uppercase();
+                self.histograms.get_mut(&key).map(|h| {
+                    h.reset();
+                    1
+                })
+            })
+            .sum()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvictionLoopResult {
     pub status: EvictionLoopStatus,
@@ -940,6 +1042,8 @@ pub struct Store {
     pub slowlog_max_len: usize,
     /// Store-owned latency monitor state shared between runtime recording and command reads.
     pub latency_tracker: LatencyTracker,
+    /// Per-command latency histograms for LATENCY HISTOGRAM command.
+    pub command_histograms: CommandHistogramTracker,
     /// Server hz (event loop frequency), synced from runtime.
     pub server_hz: u64,
     /// Replication backlog size, synced from runtime.
@@ -1101,6 +1205,7 @@ impl Default for Store {
             slowlog_log_slower_than_us: 10_000,
             slowlog_max_len: 128,
             latency_tracker: LatencyTracker::default(),
+            command_histograms: CommandHistogramTracker::default(),
             server_hz: 10,
             server_repl_backlog_size: 1_048_576,
             server_maxclients: 10000,
@@ -1355,6 +1460,28 @@ impl Store {
 
     pub fn latency_reset(&mut self, events: &[&str]) -> usize {
         self.latency_tracker.reset(events)
+    }
+
+    /// Record a command execution latency for LATENCY HISTOGRAM.
+    pub fn record_command_histogram(&mut self, command: &str, latency_us: u64) {
+        self.command_histograms.record(command, latency_us);
+    }
+
+    /// Get histogram data for a specific command.
+    #[must_use]
+    pub fn get_command_histogram(&self, command: &str) -> Option<&CommandHistogram> {
+        self.command_histograms.get(command)
+    }
+
+    /// Get all command histograms, sorted by command name.
+    #[must_use]
+    pub fn all_command_histograms(&self) -> Vec<(&str, &CommandHistogram)> {
+        self.command_histograms.all()
+    }
+
+    /// Reset command histograms for specified commands, or all if empty.
+    pub fn reset_command_histograms(&mut self, commands: &[&str]) -> usize {
+        self.command_histograms.reset(commands)
     }
 
     fn update_stream_max_deleted_id(&mut self, key: &[u8], deleted_id: StreamId) {

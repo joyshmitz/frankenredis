@@ -1490,6 +1490,13 @@ impl ServerState {
             .record_latency_sample(event, duration_ms, now_ms / 1000);
     }
 
+    /// Record command execution latency for LATENCY HISTOGRAM.
+    fn record_command_histogram(&mut self, argv: &[Vec<u8>], duration_us: u64) {
+        let Some(cmd) = argv.first() else { return };
+        let Ok(cmd_str) = std::str::from_utf8(cmd) else { return };
+        self.store.record_command_histogram(cmd_str, duration_us);
+    }
+
     fn capture_aof_record(&mut self, argv: &[Vec<u8>]) {
         if !Runtime::command_advances_replication_offset(argv) {
             return;
@@ -2815,6 +2822,7 @@ impl Runtime {
                 let elapsed_us = start.elapsed().as_micros() as u64;
                 self.record_slowlog(&argv, elapsed_us, now_ms);
                 self.server.record_latency_sample(&argv, elapsed_us, now_ms);
+                self.server.record_command_histogram(&argv, elapsed_us);
                 return reply;
             }
             Some(RuntimeSpecialCommand::Hello) => {
@@ -2823,6 +2831,7 @@ impl Runtime {
                 let elapsed_us = start.elapsed().as_micros() as u64;
                 self.record_slowlog(&argv, elapsed_us, now_ms);
                 self.server.record_latency_sample(&argv, elapsed_us, now_ms);
+                self.server.record_command_histogram(&argv, elapsed_us);
                 return reply;
             }
             _ => {}
@@ -3011,6 +3020,7 @@ impl Runtime {
                 let elapsed_us = special_start.elapsed().as_micros() as u64;
                 self.record_slowlog(&argv, elapsed_us, now_ms);
                 self.server.record_latency_sample(&argv, elapsed_us, now_ms);
+                self.server.record_command_histogram(&argv, elapsed_us);
                 return reply;
             }
         }
@@ -3036,6 +3046,7 @@ impl Runtime {
         let dirty_after = self.server.store.dirty;
         self.record_slowlog(&argv, elapsed_us, now_ms);
         self.server.record_latency_sample(&argv, elapsed_us, now_ms);
+        self.server.record_command_histogram(&argv, elapsed_us);
 
         if elapsed_us > (self.server.command_time_budget_ms * 1000) {
             self.record_threat_event(ThreatEventInput {
@@ -7322,6 +7333,7 @@ slave_repl_offset:{primary_offset}\r\n"
             let dirty_after = self.server.store.dirty;
             self.record_slowlog(argv, elapsed_us, now_ms);
             self.server.record_latency_sample(argv, elapsed_us, now_ms);
+            self.server.record_command_histogram(argv, elapsed_us);
 
             match result {
                 Ok(mut reply) => {
