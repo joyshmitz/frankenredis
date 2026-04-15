@@ -3924,6 +3924,136 @@ mod tests {
     }
 
     #[test]
+    fn replica_of_replica_chains_propagate_writes() {
+        use crate::{ClientConnection, propagate_writes_to_replicas, replication_follow_up_bytes};
+        use fr_persist::{AofRecord, encode_aof_stream};
+        use fr_protocol::RespFrame;
+        use fr_runtime::Runtime;
+        use mio::Token;
+        use std::collections::{HashMap, HashSet};
+        use std::net::{TcpListener, TcpStream};
+
+        let mut primary = Runtime::default_strict();
+        let ts = 1000;
+
+        // 1. Setup a "replica" client connection to primary.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+        let (_server_stream, _server_addr) = listener.accept().unwrap();
+
+        let replica_session = primary.new_session();
+        let replica_id = replica_session.client_id;
+        let mut replica_conn =
+            ClientConnection::new(mio::net::TcpStream::from_std(stream), replica_session);
+
+        // 2. Perform PSYNC to mark as replica on the primary.
+        let psync_frame = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"PSYNC".to_vec())),
+            RespFrame::BulkString(Some(b"?".to_vec())),
+            RespFrame::BulkString(Some(b"-1".to_vec())),
+        ]));
+
+        let prev = primary.swap_session(std::mem::take(&mut replica_conn.session));
+        let response = primary.execute_frame(psync_frame.clone(), ts);
+
+        if let Some(follow_up) =
+            replication_follow_up_bytes(&mut primary, &psync_frame, &response, ts)
+        {
+            replica_conn.write_buf.extend_from_slice(&follow_up);
+            if primary.is_replica(replica_id) {
+                replica_conn.replication_sent_offset = Some(primary.replication_primary_offset());
+            }
+        }
+        replica_conn.session = primary.swap_session(prev);
+
+        assert!(replica_conn.replication_sent_offset.is_some());
+
+        // Simulate reading the FULLRESYNC reply and payload on the replica side
+        let mut replica_rt = Runtime::default_strict();
+        
+        let reply_str = match &response {
+            RespFrame::SimpleString(s) => s.clone(),
+            _ => panic!("Expected simple string response"),
+        };
+        
+        let payload_rdb = primary.encoded_rdb_snapshot(ts);
+
+        replica_rt.apply_replication_sync_payload(&reply_str, &payload_rdb, ts).unwrap();
+
+        // 3. Now setup a "sub-replica" client connection to replica_rt.
+        let listener_sub = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr_sub = listener_sub.local_addr().unwrap();
+        let stream_sub = TcpStream::connect(addr_sub).unwrap();
+        let (_server_stream_sub, _server_addr_sub) = listener_sub.accept().unwrap();
+
+        let sub_replica_session = replica_rt.new_session();
+        let sub_replica_id = sub_replica_session.client_id;
+        let mut sub_replica_conn =
+            ClientConnection::new(mio::net::TcpStream::from_std(stream_sub), sub_replica_session);
+
+        let prev = replica_rt.swap_session(std::mem::take(&mut sub_replica_conn.session));
+        let response_sub = replica_rt.execute_frame(psync_frame.clone(), ts);
+
+        if let Some(follow_up) =
+            replication_follow_up_bytes(&mut replica_rt, &psync_frame, &response_sub, ts)
+        {
+            sub_replica_conn.write_buf.extend_from_slice(&follow_up);
+            if replica_rt.is_replica(sub_replica_id) {
+                sub_replica_conn.replication_sent_offset = Some(replica_rt.replication_primary_offset());
+            }
+        }
+        sub_replica_conn.session = replica_rt.swap_session(prev);
+
+        assert!(sub_replica_conn.replication_sent_offset.is_some());
+
+        // 4. Primary gets a write command.
+        let other_session = primary.new_session();
+        let prev = primary.swap_session(other_session);
+        let _ = primary.execute_frame(
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"SET".to_vec())),
+                RespFrame::BulkString(Some(b"foo".to_vec())),
+                RespFrame::BulkString(Some(b"bar".to_vec())),
+            ])),
+            ts + 1,
+        );
+        let _ = primary.swap_session(prev);
+
+        // 5. Propagate write to replica
+        replica_conn.write_buf.clear();
+        let mut clients = HashMap::new();
+        let token = Token(1);
+        clients.insert(token, replica_conn);
+        let mut write_tokens = HashSet::new();
+        let mut poll = mio::Poll::new().unwrap();
+
+        propagate_writes_to_replicas(&mut clients, &mut primary, &mut poll, &mut write_tokens);
+
+        let conn = clients.get(&token).unwrap();
+        let replica_received_bytes = conn.write_buf.clone();
+
+        // 6. Replica applies the replication stream
+        replica_rt.apply_replication_sync_payload("CONTINUE", &replica_received_bytes, ts + 2).unwrap();
+
+        // 7. Replica propagates write to sub-replica
+        sub_replica_conn.write_buf.clear();
+        let mut sub_clients = HashMap::new();
+        let sub_token = Token(2);
+        sub_clients.insert(sub_token, sub_replica_conn);
+        let mut sub_write_tokens = HashSet::new();
+
+        propagate_writes_to_replicas(&mut sub_clients, &mut replica_rt, &mut poll, &mut sub_write_tokens);
+
+        let sub_conn = sub_clients.get(&sub_token).unwrap();
+        let expected_bytes = encode_aof_stream(&[AofRecord {
+            argv: vec![b"SET".to_vec(), b"foo".to_vec(), b"bar".to_vec()],
+        }]);
+
+        assert_eq!(sub_conn.write_buf, expected_bytes);
+    }
+
+    #[test]
     fn client_unpause_bypasses_pause_gate() {
         use crate::ClientConnection;
         use fr_runtime::Runtime;

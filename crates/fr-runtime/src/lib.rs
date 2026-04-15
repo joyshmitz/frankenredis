@@ -1184,6 +1184,8 @@ pub struct ServerState {
     pub repl_backlog_size: u64,
     /// Replication timeout in seconds (CONFIG SET repl-timeout). Default 60.
     pub repl_timeout_sec: u64,
+    pub repl_diskless_sync: bool,
+    pub repl_diskless_sync_delay_sec: u64,
     /// Client output buffer hard limit (CONFIG SET client-output-buffer-limit). Default 256 MiB.
     pub output_buffer_limit: usize,
     /// Client query buffer limit (CONFIG SET client-query-buffer-limit). Default 1 GiB.
@@ -1274,6 +1276,8 @@ impl Default for ServerState {
             max_clients: 10_000,
             repl_backlog_size: DEFAULT_REPL_BACKLOG_SIZE,
             repl_timeout_sec: 60,
+            repl_diskless_sync: true,
+            repl_diskless_sync_delay_sec: 5,
             output_buffer_limit: 256 * 1024 * 1024, // 256 MiB (reasonable default)
             query_buffer_limit: 1024 * 1024 * 1024, // 1 GiB (Redis default)
             proto_max_bulk_len: 512_000_000,        // Redis default (512 MB, not 512 MiB)
@@ -4791,6 +4795,8 @@ impl Runtime {
         let mut next_maxclients: Option<usize> = None;
         let mut next_repl_backlog_size: Option<u64> = None;
         let mut next_repl_timeout: Option<u64> = None;
+        let mut next_repl_diskless_sync: Option<bool> = None;
+        let mut next_repl_diskless_sync_delay: Option<u64> = None;
         let mut next_query_buffer_limit: Option<usize> = None;
         let mut next_proto_max_bulk_len: Option<usize> = None;
         let mut next_output_buffer_limit: Option<usize> = None;
@@ -4958,6 +4964,34 @@ impl Runtime {
                 };
                 next_repl_timeout = Some(parsed);
                 static_override_updates.push(("repl-timeout".to_string(), parsed.to_string()));
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("repl-diskless-sync") {
+                let parsed = match std::str::from_utf8(&pair[1]) {
+                    Ok(s) if s.eq_ignore_ascii_case("yes") => true,
+                    Ok(s) if s.eq_ignore_ascii_case("no") => false,
+                    _ => {
+                        return RespFrame::Error(
+                            "ERR Invalid argument for CONFIG SET 'repl-diskless-sync'".to_string(),
+                        );
+                    }
+                };
+                next_repl_diskless_sync = Some(parsed);
+                static_override_updates.push(("repl-diskless-sync".to_string(), if parsed { "yes".to_string() } else { "no".to_string() }));
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("repl-diskless-sync-delay") {
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(value) if value >= 0 => value as u64,
+                    Ok(_) => {
+                        return RespFrame::Error(
+                            "ERR Invalid argument for CONFIG SET 'repl-diskless-sync-delay'".to_string(),
+                        );
+                    }
+                    Err(err) => return err.to_resp(),
+                };
+                next_repl_diskless_sync_delay = Some(parsed);
+                static_override_updates.push(("repl-diskless-sync-delay".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("client-query-buffer-limit") {
@@ -5268,6 +5302,12 @@ impl Runtime {
         }
         if let Some(repl_timeout) = next_repl_timeout {
             self.server.repl_timeout_sec = repl_timeout;
+        }
+        if let Some(diskless) = next_repl_diskless_sync {
+            self.server.repl_diskless_sync = diskless;
+        }
+        if let Some(delay) = next_repl_diskless_sync_delay {
+            self.server.repl_diskless_sync_delay_sec = delay;
         }
         if let Some(query_buffer_limit) = next_query_buffer_limit {
             self.server.query_buffer_limit = query_buffer_limit;
