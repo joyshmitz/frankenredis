@@ -919,6 +919,9 @@ impl Default for DispatchClientContext {
 pub struct Store {
     entries: HashMap<Vec<u8>, Entry>,
     ordered_keys: BTreeSet<Vec<u8>>,
+    running_digest: u64,
+    digest_mutations: u64,
+    digest_stale: bool,
     db_key_counts: Vec<usize>,
     db_expires_counts: Vec<usize>,
     /// Number of databases (configurable at startup, default 16).
@@ -1144,6 +1147,9 @@ impl Default for Store {
         Self {
             entries: HashMap::new(),
             ordered_keys: BTreeSet::new(),
+            running_digest: 0,
+            digest_mutations: 0,
+            digest_stale: false,
             db_key_counts: vec![0; DEFAULT_NUM_DATABASES],
             db_expires_counts: vec![0; DEFAULT_NUM_DATABASES],
             database_count: DEFAULT_NUM_DATABASES,
@@ -1688,15 +1694,21 @@ impl Store {
 
         let ttl_ms = u64::try_from(milliseconds).unwrap_or(u64::MAX);
         let expires_at_ms = now_ms.saturating_add(ttl_ms);
-        if let Some(entry) = self.entries.get_mut(key) {
-            if entry.expires_at_ms.is_none() {
+        let mut added_expiry = false;
+        if self
+            .with_mutated_entry(key, |entry| {
+                added_expiry = entry.expires_at_ms.is_none();
+                entry.expires_at_ms = Some(expires_at_ms);
+            })
+            .is_some()
+        {
+            if added_expiry {
                 self.expires_count = self.expires_count.saturating_add(1);
                 let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
                 if db < self.database_count {
                     self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
                 }
             }
-            entry.expires_at_ms = Some(expires_at_ms);
             self.dirty = self.dirty.saturating_add(1);
             self.notify_keyspace_event(NOTIFY_GENERIC, "expire", &logical_key, db);
         }
@@ -1723,15 +1735,21 @@ impl Store {
         }
 
         let expires_at_ms = u64::try_from(when_ms).unwrap_or(u64::MAX);
-        if let Some(entry) = self.entries.get_mut(key) {
-            if entry.expires_at_ms.is_none() {
+        let mut added_expiry = false;
+        if self
+            .with_mutated_entry(key, |entry| {
+                added_expiry = entry.expires_at_ms.is_none();
+                entry.expires_at_ms = Some(expires_at_ms);
+            })
+            .is_some()
+        {
+            if added_expiry {
                 self.expires_count = self.expires_count.saturating_add(1);
                 let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
                 if db < self.database_count {
                     self.db_expires_counts[db] = self.db_expires_counts[db].saturating_add(1);
                 }
             }
-            entry.expires_at_ms = Some(expires_at_ms);
             self.dirty = self.dirty.saturating_add(1);
             self.notify_keyspace_event(NOTIFY_GENERIC, "expire", &logical_key, db);
         }
@@ -1757,17 +1775,19 @@ impl Store {
 
     pub fn append(&mut self, key: &[u8], value: &[u8], now_ms: u64) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
-        if let Some(entry) = self.entries.get_mut(key) {
-            match &mut entry.value {
-                Value::String(v) => {
-                    v.extend_from_slice(value);
-                    let len = v.len();
-                    entry.touch_write(now_ms);
-                    self.dirty = self.dirty.saturating_add(1);
-                    Ok(len)
-                }
-                _ => Err(StoreError::WrongType),
+        if let Some(result) = self.with_mutated_entry(key, |entry| match &mut entry.value {
+            Value::String(v) => {
+                v.extend_from_slice(value);
+                let len = v.len();
+                entry.touch_write(now_ms);
+                Ok(len)
             }
+            _ => Err(StoreError::WrongType),
+        }) {
+            if result.is_ok() {
+                self.dirty = self.dirty.saturating_add(1);
+            }
+            result
         } else {
             let len = value.len();
             self.internal_entries_insert(
@@ -1972,21 +1992,25 @@ impl Store {
             };
         }
         let needed = offset + value.len();
-        match self.entries.get_mut(key) {
-            Some(entry) => {
-                let len = match &mut entry.value {
-                    Value::String(v) => {
-                        if v.len() < needed {
-                            v.resize(needed, 0);
-                        }
-                        v[offset..offset + value.len()].copy_from_slice(value);
-                        v.len()
+        match self.with_mutated_entry(key, |entry| {
+            let len = match &mut entry.value {
+                Value::String(v) => {
+                    if v.len() < needed {
+                        v.resize(needed, 0);
                     }
-                    _ => return Err(StoreError::WrongType),
-                };
-                entry.touch_write(now_ms);
-                self.dirty = self.dirty.saturating_add(1);
-                Ok(len)
+                    v[offset..offset + value.len()].copy_from_slice(value);
+                    v.len()
+                }
+                _ => return Err(StoreError::WrongType),
+            };
+            entry.touch_write(now_ms);
+            Ok(len)
+        }) {
+            Some(result) => {
+                if result.is_ok() {
+                    self.dirty = self.dirty.saturating_add(1);
+                }
+                result
             }
             None => {
                 let mut current = vec![0; needed];
@@ -2014,27 +2038,31 @@ impl Store {
         self.drop_if_expired(key, now_ms);
         let byte_idx = offset / 8;
         let bit_idx = 7 - (offset % 8); // MSB-first within each byte
-        match self.entries.get_mut(key) {
-            Some(entry) => match &mut entry.value {
-                Value::String(v) => {
-                    let old_len = v.len();
-                    if v.len() <= byte_idx {
-                        v.resize(byte_idx + 1, 0);
-                    }
-                    let old_bit = (v[byte_idx] >> bit_idx) & 1 == 1;
-                    if value {
-                        v[byte_idx] |= 1 << bit_idx;
-                    } else {
-                        v[byte_idx] &= !(1 << bit_idx);
-                    }
-                    if old_len != v.len() || old_bit != value {
-                        self.dirty = self.dirty.saturating_add(1);
-                    }
-                    entry.touch_write(now_ms);
-                    Ok(old_bit)
+        match self.with_mutated_entry(key, |entry| match &mut entry.value {
+            Value::String(v) => {
+                let old_len = v.len();
+                if v.len() <= byte_idx {
+                    v.resize(byte_idx + 1, 0);
                 }
-                _ => Err(StoreError::WrongType),
-            },
+                let old_bit = (v[byte_idx] >> bit_idx) & 1 == 1;
+                if value {
+                    v[byte_idx] |= 1 << bit_idx;
+                } else {
+                    v[byte_idx] &= !(1 << bit_idx);
+                }
+                let changed = old_len != v.len() || old_bit != value;
+                entry.touch_write(now_ms);
+                Ok((old_bit, changed))
+            }
+            _ => Err(StoreError::WrongType),
+        }) {
+            Some(result) => {
+                let (old_bit, changed) = result?;
+                if changed {
+                    self.dirty = self.dirty.saturating_add(1);
+                }
+                Ok(old_bit)
+            }
             None => {
                 let mut v = vec![0; byte_idx + 1];
                 let old_bit = false;
@@ -2276,19 +2304,26 @@ impl Store {
 
     pub fn persist(&mut self, key: &[u8], now_ms: u64) -> bool {
         self.drop_if_expired(key, now_ms);
-        if let Some(entry) = self.entries.get_mut(key)
-            && entry.expires_at_ms.is_some()
-        {
-            entry.expires_at_ms = None;
-            self.expires_count = self.expires_count.saturating_sub(1);
-            let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
-            if db < self.database_count {
-                self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
-            }
-            self.dirty = self.dirty.saturating_add(1);
-            return true;
+        let Some(had_expiry) = self
+            .entries
+            .get(key)
+            .map(|entry| entry.expires_at_ms.is_some())
+        else {
+            return false;
+        };
+        if !had_expiry {
+            return false;
         }
-        false
+        self.with_mutated_entry(key, |entry| {
+            entry.expires_at_ms = None;
+        });
+        self.expires_count = self.expires_count.saturating_sub(1);
+        let db = decode_db_key(key).map(|(db, _)| db).unwrap_or(0);
+        if db < self.database_count {
+            self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
+        }
+        self.dirty = self.dirty.saturating_add(1);
+        true
     }
 
     #[must_use]
@@ -2550,22 +2585,79 @@ impl Store {
     }
 
     fn internal_entry(&mut self, key: Vec<u8>, default_value: Value, now_ms: u64) -> &mut Entry {
-        let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
-        match self.entries.entry(key) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                if db < self.database_count {
-                    self.db_key_counts[db] = self.db_key_counts[db].saturating_add(1);
-                }
-                self.ordered_keys.insert(entry.key().clone());
-                entry.insert(Entry::new(default_value, None, now_ms))
-            }
+        if !self.entries.contains_key(&key) {
+            self.internal_entries_insert(key.clone(), Entry::new(default_value, None, now_ms));
         }
+        self.entries
+            .get_mut(&key)
+            .expect("entry must exist after internal insertion")
+    }
+
+    fn bump_digest_mutations(&mut self) {
+        self.digest_mutations = self.digest_mutations.wrapping_add(1);
+    }
+
+    fn mark_digest_stale_fields(digest_stale: &mut bool, digest_mutations: &mut u64) {
+        *digest_stale = true;
+        *digest_mutations = digest_mutations.wrapping_add(1);
+    }
+
+    fn update_digest_hashes(&mut self, old_hash: Option<u64>, new_hash: Option<u64>) {
+        if let Some(old_hash) = old_hash {
+            self.running_digest ^= old_hash;
+        }
+        if let Some(new_hash) = new_hash {
+            self.running_digest ^= new_hash;
+        }
+        self.digest_stale = false;
+        if old_hash.is_some() || new_hash.is_some() {
+            self.bump_digest_mutations();
+        }
+    }
+
+    fn refresh_entry_digest(&mut self, key: &[u8], old_hash: u64) {
+        let Some(entry) = self.entries.get(key) else {
+            return;
+        };
+        self.update_digest_hashes(Some(old_hash), Some(Self::entry_state_digest(key, entry)));
+    }
+
+    fn current_entry_digest(&self, key: &[u8]) -> Option<u64> {
+        self.entries
+            .get(key)
+            .map(|entry| Self::entry_state_digest(key, entry))
+    }
+
+    fn with_mutated_entry<R>(
+        &mut self,
+        key: &[u8],
+        mutate: impl FnOnce(&mut Entry) -> R,
+    ) -> Option<R> {
+        let old_hash = self.current_entry_digest(key)?;
+        let result = {
+            let entry = self
+                .entries
+                .get_mut(key)
+                .expect("entry hash captured above");
+            mutate(entry)
+        };
+        self.refresh_entry_digest(key, old_hash);
+        Some(result)
+    }
+
+    fn state_digest_full_scan(&self) -> u64 {
+        self.entries.iter().fold(0_u64, |digest, (key, entry)| {
+            digest ^ Self::entry_state_digest(key, entry)
+        })
     }
 
     fn internal_entries_insert(&mut self, key: Vec<u8>, mut entry: Entry) -> Option<Entry> {
         let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
         let is_new_key = !self.entries.contains_key(&key);
+        let old_digest = self
+            .entries
+            .get(&key)
+            .map(|existing| Self::entry_state_digest(&key, existing));
 
         if let Some(old_entry) = self.entries.get(&key) {
             entry.modification_count = old_entry.modification_count.wrapping_add(1);
@@ -2580,18 +2672,28 @@ impl Store {
         if is_new_key {
             self.ordered_keys.insert(key.clone());
         }
-        if let Some(old) = self.entries.insert(key, entry) {
+        if let Some(old) = self.entries.insert(key.clone(), entry) {
             if old.expires_at_ms.is_some() {
                 self.expires_count = self.expires_count.saturating_sub(1);
                 if db < self.database_count {
                     self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
                 }
             }
+            let new_digest = self
+                .entries
+                .get(&key)
+                .map(|inserted| Self::entry_state_digest(&key, inserted));
+            self.update_digest_hashes(old_digest, new_digest);
             Some(old)
         } else {
             if db < self.database_count {
                 self.db_key_counts[db] = self.db_key_counts[db].saturating_add(1);
             }
+            let new_digest = self
+                .entries
+                .get(&key)
+                .map(|inserted| Self::entry_state_digest(&key, inserted));
+            self.update_digest_hashes(None, new_digest);
             None
         }
     }
@@ -2609,6 +2711,7 @@ impl Store {
                     self.db_expires_counts[db] = self.db_expires_counts[db].saturating_sub(1);
                 }
             }
+            self.update_digest_hashes(Some(Self::entry_state_digest(key, &entry)), None);
             Some(entry)
         } else {
             None
@@ -2835,6 +2938,8 @@ impl Store {
         self.entries.clear();
         self.stream_groups.clear();
         self.stream_last_ids.clear();
+        self.running_digest = 0;
+        self.digest_stale = false;
         self.expires_count = 0;
         self.db_key_counts.fill(0);
         self.db_expires_counts.fill(0);
@@ -3049,15 +3154,20 @@ impl Store {
         now_ms: u64,
     ) -> Result<bool, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
-        let Value::Hash(m) = &mut entry.value else {
-            return Err(StoreError::WrongType);
-        };
-        let is_new = !m.contains_key(&field);
-        m.insert(field, value);
-        entry.touch_write(now_ms);
+        self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
+        let result = self
+            .with_mutated_entry(key, |entry| {
+                let Value::Hash(m) = &mut entry.value else {
+                    return Err(StoreError::WrongType);
+                };
+                let is_new = !m.contains_key(&field);
+                m.insert(field, value);
+                entry.touch_write(now_ms);
+                Ok(is_new)
+            })
+            .expect("hash entry was ensured");
         self.dirty = self.dirty.saturating_add(1);
-        Ok(is_new)
+        result
     }
 
     pub fn hget(
@@ -3084,31 +3194,34 @@ impl Store {
 
     pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]], now_ms: u64) -> Result<u64, StoreError> {
         self.drop_if_expired(key, now_ms);
-        match self.entries.get_mut(key) {
-            Some(entry) => {
-                let Value::Hash(m) = &mut entry.value else {
-                    return Err(StoreError::WrongType);
-                };
-                let mut removed = 0_u64;
-                for field in fields {
-                    if m.remove(*field).is_some() {
-                        removed += 1;
-                    }
+        let Some(result) = self.with_mutated_entry(key, |entry| {
+            let Value::Hash(m) = &mut entry.value else {
+                return Err(StoreError::WrongType);
+            };
+            let mut removed = 0_u64;
+            for field in fields {
+                if m.remove(*field).is_some() {
+                    removed += 1;
                 }
-                let is_empty = m.is_empty();
-                if removed > 0 {
-                    entry.touch_write(now_ms);
-                    self.dirty = self.dirty.saturating_add(removed);
-                }
-                if is_empty {
-                    self.internal_entries_remove(key);
-                    self.stream_groups.remove(key);
-                    self.stream_last_ids.remove(key);
-                }
-                Ok(removed)
             }
-            None => Ok(0),
+            let is_empty = m.is_empty();
+            if removed > 0 {
+                entry.touch_write(now_ms);
+            }
+            Ok((removed, is_empty))
+        }) else {
+            return Ok(0);
+        };
+        let (removed, is_empty) = result?;
+        if removed > 0 {
+            self.dirty = self.dirty.saturating_add(removed);
         }
+        if is_empty {
+            self.internal_entries_remove(key);
+            self.stream_groups.remove(key);
+            self.stream_last_ids.remove(key);
+        }
+        Ok(removed)
     }
 
     pub fn hexists(&mut self, key: &[u8], field: &[u8], now_ms: u64) -> Result<bool, StoreError> {
@@ -3233,30 +3346,36 @@ impl Store {
         now_ms: u64,
     ) -> Result<i64, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
-        let (res, is_empty) = {
-            let Value::Hash(m) = &mut entry.value else {
-                return Err(StoreError::WrongType);
-            };
-            let current_res = match m.get(field) {
-                Some(v) => parse_i64(v).map_err(|_| StoreError::HashValueNotInteger),
-                None => Ok(0),
-            };
-            let res = match current_res {
-                Ok(current) => match current.checked_add(delta) {
-                    Some(next) => {
-                        m.insert(field.to_vec(), next.to_string().into_bytes());
-                        Ok(next)
-                    }
-                    None => Err(StoreError::IntegerOverflow),
-                },
-                Err(e) => Err(e),
-            };
-            (res, m.is_empty())
-        };
-
+        self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
+        let (res, is_empty) = self
+            .with_mutated_entry(key, |entry| {
+                let Value::Hash(m) = &mut entry.value else {
+                    return (Err(StoreError::WrongType), false);
+                };
+                let mut touched = false;
+                let current_res = match m.get(field) {
+                    Some(v) => parse_i64(v).map_err(|_| StoreError::HashValueNotInteger),
+                    None => Ok(0),
+                };
+                let res = match current_res {
+                    Ok(current) => match current.checked_add(delta) {
+                        Some(next) => {
+                            m.insert(field.to_vec(), next.to_string().into_bytes());
+                            touched = true;
+                            Ok(next)
+                        }
+                        None => Err(StoreError::IntegerOverflow),
+                    },
+                    Err(e) => Err(e),
+                };
+                let is_empty = m.is_empty();
+                if touched {
+                    entry.touch_write(now_ms);
+                }
+                (res, is_empty)
+            })
+            .expect("hash entry was ensured");
         if res.is_ok() {
-            entry.touch_write(now_ms);
             self.dirty = self.dirty.saturating_add(1);
         }
         if is_empty {
@@ -3273,18 +3392,25 @@ impl Store {
         now_ms: u64,
     ) -> Result<bool, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
-        let Value::Hash(m) = &mut entry.value else {
-            return Err(StoreError::WrongType);
-        };
-        if let std::collections::btree_map::Entry::Vacant(slot) = m.entry(field) {
-            slot.insert(value);
-            entry.touch_write(now_ms);
+        self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
+        let result = self
+            .with_mutated_entry(key, |entry| {
+                let Value::Hash(m) = &mut entry.value else {
+                    return Err(StoreError::WrongType);
+                };
+                if let std::collections::btree_map::Entry::Vacant(slot) = m.entry(field) {
+                    slot.insert(value);
+                    entry.touch_write(now_ms);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            })
+            .expect("hash entry was ensured");
+        if matches!(result, Ok(true)) {
             self.dirty = self.dirty.saturating_add(1);
-            Ok(true)
-        } else {
-            Ok(false)
         }
+        result
     }
 
     pub fn hstrlen(&mut self, key: &[u8], field: &[u8], now_ms: u64) -> Result<usize, StoreError> {
@@ -3312,33 +3438,39 @@ impl Store {
         now_ms: u64,
     ) -> Result<f64, StoreError> {
         self.drop_if_expired(key, now_ms);
-        let entry = self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
-        let (res, is_empty) = {
-            let Value::Hash(m) = &mut entry.value else {
-                return Err(StoreError::WrongType);
-            };
-            let current_res = match m.get(field) {
-                Some(v) => parse_f64(v),
-                None => Ok(0.0),
-            };
+        self.internal_entry(key.to_vec(), Value::Hash(BTreeMap::new()), now_ms);
+        let (res, is_empty) = self
+            .with_mutated_entry(key, |entry| {
+                let Value::Hash(m) = &mut entry.value else {
+                    return (Err(StoreError::WrongType), false);
+                };
+                let mut touched = false;
+                let current_res = match m.get(field) {
+                    Some(v) => parse_f64(v),
+                    None => Ok(0.0),
+                };
 
-            let res = match current_res {
-                Ok(current) => {
-                    let next = current + delta;
-                    if next.is_nan() || next.is_infinite() {
-                        Err(StoreError::IncrFloatNaN)
-                    } else {
-                        m.insert(field.to_vec(), next.to_string().into_bytes());
-                        Ok(next)
+                let res = match current_res {
+                    Ok(current) => {
+                        let next = current + delta;
+                        if next.is_nan() || next.is_infinite() {
+                            Err(StoreError::IncrFloatNaN)
+                        } else {
+                            m.insert(field.to_vec(), next.to_string().into_bytes());
+                            touched = true;
+                            Ok(next)
+                        }
                     }
+                    Err(e) => Err(e),
+                };
+                let is_empty = m.is_empty();
+                if touched {
+                    entry.touch_write(now_ms);
                 }
-                Err(e) => Err(e),
-            };
-            (res, m.is_empty())
-        };
-
+                (res, is_empty)
+            })
+            .expect("hash entry was ensured");
         if res.is_ok() {
-            entry.touch_write(now_ms);
             self.dirty = self.dirty.saturating_add(1);
         }
         if is_empty {
@@ -3457,6 +3589,10 @@ impl Store {
                         l.push_front(v.clone());
                     }
                     let len = l.len();
+                    Self::mark_digest_stale_fields(
+                        &mut self.digest_stale,
+                        &mut self.digest_mutations,
+                    );
                     entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(values.len() as u64);
                     Ok(len)
@@ -3493,6 +3629,10 @@ impl Store {
                         l.push_back(v.clone());
                     }
                     let len = l.len();
+                    Self::mark_digest_stale_fields(
+                        &mut self.digest_stale,
+                        &mut self.digest_mutations,
+                    );
                     entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(values.len() as u64);
                     Ok(len)
@@ -3529,6 +3669,10 @@ impl Store {
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if val.is_some() {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                     }
                     Ok(val)
@@ -3564,6 +3708,10 @@ impl Store {
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if !result.is_empty() {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                     }
                     Ok(Some(result))
@@ -3588,6 +3736,10 @@ impl Store {
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if val.is_some() {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                     }
                     Ok(val)
@@ -3623,6 +3775,10 @@ impl Store {
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if !result.is_empty() {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                     }
                     Ok(Some(result))
@@ -3725,6 +3881,10 @@ impl Store {
                     }
                     let idx = normalize_index(index, len) as usize;
                     l[idx] = value;
+                    Self::mark_digest_stale_fields(
+                        &mut self.digest_stale,
+                        &mut self.digest_mutations,
+                    );
                     entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(1);
                     Ok(())
@@ -3842,6 +4002,10 @@ impl Store {
                     if let Some(pos) = l.iter().position(|v| v.as_slice() == pivot) {
                         l.insert(pos, value);
                         let len = l.len();
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                         self.dirty = self.dirty.saturating_add(1);
                         Ok(len as i64)
@@ -3869,6 +4033,10 @@ impl Store {
                     if let Some(pos) = l.iter().position(|v| v.as_slice() == pivot) {
                         l.insert(pos + 1, value);
                         let len = l.len();
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                         self.dirty = self.dirty.saturating_add(1);
                         Ok(len as i64)
@@ -3931,6 +4099,10 @@ impl Store {
                             self.stream_groups.remove(key);
                             self.stream_last_ids.remove(key);
                         } else {
+                            Self::mark_digest_stale_fields(
+                                &mut self.digest_stale,
+                                &mut self.digest_mutations,
+                            );
                             entry.touch_write(now_ms);
                         }
                     }
@@ -3972,6 +4144,10 @@ impl Store {
                 Value::List(l) => {
                     let val = l.pop_back();
                     if val.is_some() && !l.is_empty() {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                     }
                     val
@@ -4006,6 +4182,10 @@ impl Store {
             Some(entry) => match &mut entry.value {
                 Value::List(l) => {
                     l.push_front(val.clone());
+                    Self::mark_digest_stale_fields(
+                        &mut self.digest_stale,
+                        &mut self.digest_mutations,
+                    );
                     entry.touch_write(now_ms);
                 }
                 _ => return Err(StoreError::WrongType),
@@ -4056,6 +4236,10 @@ impl Store {
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if removed > 0 {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                     }
                     if removed > 0 {
@@ -4082,6 +4266,12 @@ impl Store {
                     for v in values {
                         l.push_front(v.clone());
                     }
+                    if !values.is_empty() {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
+                    }
                     Ok(l.len())
                 }
                 _ => Err(StoreError::WrongType),
@@ -4102,6 +4292,12 @@ impl Store {
                 Value::List(l) => {
                     for v in values {
                         l.push_back(v.clone());
+                    }
+                    if !values.is_empty() {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                     }
                     Ok(l.len())
                 }
@@ -4147,6 +4343,10 @@ impl Store {
                         l.pop_back()
                     };
                     if val.is_some() && !l.is_empty() {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                     }
                     val
@@ -4184,6 +4384,10 @@ impl Store {
                     } else {
                         l.push_back(val.clone());
                     }
+                    Self::mark_digest_stale_fields(
+                        &mut self.digest_stale,
+                        &mut self.digest_mutations,
+                    );
                     entry.touch_write(now_ms);
                 }
                 _ => return Err(StoreError::WrongType),
@@ -4223,6 +4427,12 @@ impl Store {
                             added += 1;
                         }
                     }
+                    if added > 0 {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
+                    }
                     entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(added);
                     Ok(added)
@@ -4260,6 +4470,10 @@ impl Store {
                         self.stream_groups.remove(key);
                         self.stream_last_ids.remove(key);
                     } else if removed > 0 {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                     }
                     self.dirty = self.dirty.saturating_add(removed);
@@ -4620,6 +4834,12 @@ impl Store {
                     }
                     _ => Err(StoreError::WrongType),
                 };
+                if matches!(result, Ok(Some(_))) && !should_remove_key {
+                    Self::mark_digest_stale_fields(
+                        &mut self.digest_stale,
+                        &mut self.digest_mutations,
+                    );
+                }
                 if result.is_ok() {
                     entry.touch_write(now_ms);
                 }
@@ -4778,6 +4998,12 @@ impl Store {
                 _ => return Err(StoreError::WrongType),
             };
             if r {
+                if !source_empty {
+                    Self::mark_digest_stale_fields(
+                        &mut self.digest_stale,
+                        &mut self.digest_mutations,
+                    );
+                }
                 entry.touch_write(now_ms);
                 self.dirty = self.dirty.saturating_add(1);
             }
@@ -4905,8 +5131,9 @@ impl Store {
             return Ok((0, 0));
         }
 
-        let entry = self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
-        let (added, changed, is_empty) = {
+        let (added, changed, is_empty, touched) = {
+            let entry =
+                self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
             let Value::SortedSet(zs) = &mut entry.value else {
                 return Err(StoreError::WrongType);
             };
@@ -4956,10 +5183,15 @@ impl Store {
                     }
                 }
             }
-            (added, changed, zs.is_empty())
+            let is_empty = zs.is_empty();
+            let touched = added > 0 || changed > 0;
+            if touched {
+                entry.touch_write(now_ms);
+            }
+            (added, changed, is_empty, touched)
         };
-        if added > 0 || changed > 0 {
-            entry.touch_write(now_ms);
+        if touched {
+            Self::mark_digest_stale_fields(&mut self.digest_stale, &mut self.digest_mutations);
             self.dirty = self.dirty.saturating_add((added + changed) as u64);
         }
         if is_empty {
@@ -4991,7 +5223,10 @@ impl Store {
         };
 
         if removed > 0 {
-            entry.touch_write(now_ms);
+            if !is_empty {
+                Self::mark_digest_stale_fields(&mut self.digest_stale, &mut self.digest_mutations);
+                entry.touch_write(now_ms);
+            }
             self.dirty = self.dirty.saturating_add(removed);
         }
         if is_empty {
@@ -5318,8 +5553,7 @@ impl Store {
         }
         self.stream_groups.remove(key.as_slice());
         self.stream_last_ids.remove(key.as_slice());
-        self.entries
-            .insert(key, Entry::new(Value::SortedSet(zs), None, now_ms));
+        self.internal_entries_insert(key, Entry::new(Value::SortedSet(zs), None, now_ms));
     }
 
     /// Count members with scores within the given bounds.
@@ -5386,8 +5620,9 @@ impl Store {
             return Ok(None);
         }
 
-        let entry = self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
-        let (res, is_empty) = {
+        let (res, is_empty, touched) = {
+            let entry =
+                self.internal_entry(key.to_vec(), Value::SortedSet(SortedSet::new()), now_ms);
             let Value::SortedSet(zs) = &mut entry.value else {
                 return Err(StoreError::WrongType);
             };
@@ -5413,11 +5648,16 @@ impl Store {
                     Ok(Some(new_score))
                 }
             };
-            (res, zs.is_empty())
+            let is_empty = zs.is_empty();
+            let touched = matches!(&res, Ok(Some(_)));
+            if touched {
+                entry.touch_write(now_ms);
+            }
+            (res, is_empty, touched)
         };
 
-        if let Ok(Some(_)) = res {
-            entry.touch_write(now_ms);
+        if touched {
+            Self::mark_digest_stale_fields(&mut self.digest_stale, &mut self.digest_mutations);
             self.dirty = self.dirty.saturating_add(1);
         }
         if is_empty {
@@ -5448,6 +5688,7 @@ impl Store {
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
             } else {
+                Self::mark_digest_stale_fields(&mut self.digest_stale, &mut self.digest_mutations);
                 entry.touch_write(now_ms);
             }
         }
@@ -5476,6 +5717,7 @@ impl Store {
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
             } else {
+                Self::mark_digest_stale_fields(&mut self.digest_stale, &mut self.digest_mutations);
                 entry.touch_write(now_ms);
             }
         }
@@ -5505,11 +5747,13 @@ impl Store {
         }
         let is_empty = zs.is_empty();
         if !result.is_empty() {
-            entry.touch_write(now_ms);
             if is_empty {
                 self.internal_entries_remove(key);
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
+            } else {
+                Self::mark_digest_stale_fields(&mut self.digest_stale, &mut self.digest_mutations);
+                entry.touch_write(now_ms);
             }
         }
         Ok(result)
@@ -5538,11 +5782,13 @@ impl Store {
         }
         let is_empty = zs.is_empty();
         if !result.is_empty() {
-            entry.touch_write(now_ms);
             if is_empty {
                 self.internal_entries_remove(key);
                 self.stream_groups.remove(key);
                 self.stream_last_ids.remove(key);
+            } else {
+                Self::mark_digest_stale_fields(&mut self.digest_stale, &mut self.digest_mutations);
+                entry.touch_write(now_ms);
             }
         }
         Ok(result)
@@ -5788,11 +6034,16 @@ impl Store {
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
                         self.dirty = self.dirty.saturating_add(removed_count as u64);
-                        entry.touch_write(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
                             self.stream_last_ids.remove(key);
+                        } else {
+                            Self::mark_digest_stale_fields(
+                                &mut self.digest_stale,
+                                &mut self.digest_mutations,
+                            );
+                            entry.touch_write(now_ms);
                         }
                     }
                     Ok(removed_count)
@@ -5842,11 +6093,16 @@ impl Store {
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
                         self.dirty = self.dirty.saturating_add(removed_count as u64);
-                        entry.touch_write(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
                             self.stream_last_ids.remove(key);
+                        } else {
+                            Self::mark_digest_stale_fields(
+                                &mut self.digest_stale,
+                                &mut self.digest_mutations,
+                            );
+                            entry.touch_write(now_ms);
                         }
                     }
                     Ok(removed_count)
@@ -5880,11 +6136,16 @@ impl Store {
                     let is_empty = zs.is_empty();
                     if removed_count > 0 {
                         self.dirty = self.dirty.saturating_add(removed_count as u64);
-                        entry.touch_write(now_ms);
                         if is_empty {
                             self.internal_entries_remove(key);
                             self.stream_groups.remove(key);
                             self.stream_last_ids.remove(key);
+                        } else {
+                            Self::mark_digest_stale_fields(
+                                &mut self.digest_stale,
+                                &mut self.digest_mutations,
+                            );
+                            entry.touch_write(now_ms);
                         }
                     }
                     Ok(removed_count)
@@ -6092,6 +6353,10 @@ impl Store {
             Some(entry) => match &mut entry.value {
                 Value::Stream(entries) => {
                     entries.insert(id, fields.to_vec());
+                    Self::mark_digest_stale_fields(
+                        &mut self.digest_stale,
+                        &mut self.digest_mutations,
+                    );
                     entry.touch_write(now_ms);
                     // Track high watermark so IDs stay monotonic after XDEL
                     let wm = self.stream_last_ids.entry(key.to_vec()).or_insert((0, 0));
@@ -6229,6 +6494,10 @@ impl Store {
                         }
                     }
                     if removed > 0 {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                         self.dirty = self.dirty.saturating_add(removed as u64);
                     }
@@ -6268,6 +6537,10 @@ impl Store {
                         }
                     }
                     if to_remove > 0 {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                         self.dirty = self.dirty.saturating_add(to_remove as u64);
                     }
@@ -6313,6 +6586,10 @@ impl Store {
                         }
                     }
                     if removed > 0 {
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         entry.touch_write(now_ms);
                         self.dirty = self.dirty.saturating_add(removed as u64);
                     }
@@ -7404,6 +7681,10 @@ impl Store {
                             }
                         }
                         entry.expires_at_ms = exp;
+                        Self::mark_digest_stale_fields(
+                            &mut self.digest_stale,
+                            &mut self.digest_mutations,
+                        );
                         self.dirty = self.dirty.saturating_add(1);
                     }
                     Ok(Some(result))
@@ -8145,6 +8426,10 @@ impl Store {
         {
             return 0;
         }
+        Self::entry_state_digest(key, entry)
+    }
+
+    fn entry_state_digest(key: &[u8], entry: &Entry) -> u64 {
         let mut hash = 0xcbf2_9ce4_8422_2325_u64;
         hash = fnv1a_update(hash, key);
         match &entry.value {
@@ -8213,62 +8498,18 @@ impl Store {
     }
 
     #[must_use]
-    pub fn state_digest(&self) -> String {
-        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-        for key in &self.ordered_keys {
-            let Some(entry) = self.entries.get(key) else {
-                continue;
-            };
-            hash = fnv1a_update(hash, key);
-            match &entry.value {
-                Value::String(v) => {
-                    hash = fnv1a_update(hash, b"S");
-                    hash = fnv1a_update(hash, v);
-                }
-                Value::Hash(m) => {
-                    hash = fnv1a_update(hash, b"H");
-                    for (k, v) in m {
-                        hash = fnv1a_update(hash, k);
-                        hash = fnv1a_update(hash, v);
-                    }
-                }
-                Value::List(l) => {
-                    hash = fnv1a_update(hash, b"L");
-                    for item in l {
-                        hash = fnv1a_update(hash, item);
-                    }
-                }
-                Value::Set(s) => {
-                    hash = fnv1a_update(hash, b"E");
-                    let mut members: Vec<_> = s.iter().collect();
-                    members.sort();
-                    for m in members {
-                        hash = fnv1a_update(hash, m);
-                    }
-                }
-                Value::SortedSet(zs) => {
-                    hash = fnv1a_update(hash, b"Z");
-                    for (member, score) in zs.iter_asc() {
-                        hash = fnv1a_update(hash, member);
-                        hash = fnv1a_update(hash, &score.to_bits().to_le_bytes());
-                    }
-                }
-                Value::Stream(entries) => {
-                    hash = fnv1a_update(hash, b"X");
-                    for ((ms, seq), fields) in entries {
-                        hash = fnv1a_update(hash, &ms.to_le_bytes());
-                        hash = fnv1a_update(hash, &seq.to_le_bytes());
-                        for (field, value) in fields {
-                            hash = fnv1a_update(hash, field);
-                            hash = fnv1a_update(hash, value);
-                        }
-                    }
-                }
-            }
-            let expiry_bytes = entry.expires_at_ms.unwrap_or(0).to_le_bytes();
-            hash = fnv1a_update(hash, &expiry_bytes);
+    pub fn state_digest(&mut self) -> String {
+        if self.digest_stale {
+            self.running_digest = self.state_digest_full_scan();
+            self.digest_stale = false;
         }
-        format!("{hash:016x}")
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            self.running_digest,
+            self.state_digest_full_scan(),
+            "running digest drifted from full scan"
+        );
+        format!("{:016x}", self.running_digest)
     }
 
     pub fn store_sorted_set(&mut self, dest: &[u8], members: HashMap<Vec<u8>, f64>, now_ms: u64) {
@@ -10684,6 +10925,59 @@ mod tests {
         store.del(&[b"k".to_vec()], 0);
         let digest_c = store.state_digest();
         assert_ne!(digest_b, digest_c);
+    }
+
+    #[test]
+    fn state_digest_matches_full_scan_after_direct_mutation_paths() {
+        fn assert_digest_matches(store: &mut Store) {
+            let expected = format!("{:016x}", store.state_digest_full_scan());
+            assert_eq!(store.state_digest(), expected);
+        }
+
+        let mut store = Store::new();
+
+        store.set(b"ttl".to_vec(), b"value".to_vec(), None, 0);
+        store
+            .getex(b"ttl", Some(Some(5_000)), 100)
+            .expect("getex should set expiry");
+        assert_digest_matches(&mut store);
+
+        store
+            .rpush(b"list", &[b"a".to_vec(), b"b".to_vec()], 0)
+            .expect("rpush");
+        store.lpushx(b"list", &[b"c".to_vec()], 0).expect("lpushx");
+        store.rpoplpush(b"list", b"list2", 0).expect("rpoplpush");
+        store
+            .lmove(b"list2", b"list", b"LEFT", b"RIGHT", 0)
+            .expect("lmove");
+        assert_digest_matches(&mut store);
+
+        store
+            .sadd(b"set", &[b"a".to_vec(), b"b".to_vec()], 0)
+            .expect("sadd");
+        store.spop(b"set", 0).expect("spop");
+        store
+            .sadd(b"dst", &[b"z".to_vec()], 0)
+            .expect("seed destination set");
+        store.smove(b"set", b"dst", b"b", 0).expect("smove");
+        assert_digest_matches(&mut store);
+
+        store
+            .zadd(b"z", &[(1.0, b"one".to_vec()), (2.0, b"two".to_vec())], 0)
+            .expect("zadd");
+        store
+            .zpopmax_count(b"z", 1, 0)
+            .expect("zpopmax_count should succeed");
+        assert_digest_matches(&mut store);
+
+        store
+            .xadd(b"stream", (1, 0), &[(b"f".to_vec(), b"v".to_vec())], 0)
+            .expect("xadd 1");
+        store
+            .xadd(b"stream", (2, 0), &[(b"f".to_vec(), b"v2".to_vec())], 0)
+            .expect("xadd 2");
+        store.xtrim(b"stream", 1, 0).expect("xtrim");
+        assert_digest_matches(&mut store);
     }
 
     #[test]
