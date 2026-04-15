@@ -1184,6 +1184,12 @@ pub struct ServerState {
     pub repl_backlog_size: u64,
     /// Replication timeout in seconds (CONFIG SET repl-timeout). Default 60.
     pub repl_timeout_sec: u64,
+    /// Replica promotion priority reported in INFO replication / CONFIG.
+    pub replica_priority: usize,
+    /// Optional username used when this server authenticates to its primary.
+    pub masteruser: Option<Vec<u8>>,
+    /// Optional password used when this server authenticates to its primary.
+    pub masterauth: Option<Vec<u8>>,
     pub repl_diskless_sync: bool,
     pub repl_diskless_sync_delay_sec: u64,
     /// Client output buffer hard limit (CONFIG SET client-output-buffer-limit). Default 256 MiB.
@@ -1276,6 +1282,9 @@ impl Default for ServerState {
             max_clients: 10_000,
             repl_backlog_size: DEFAULT_REPL_BACKLOG_SIZE,
             repl_timeout_sec: 60,
+            masteruser: None,
+            masterauth: None,
+            replica_priority: 100,
             repl_diskless_sync: true,
             repl_diskless_sync_delay_sec: 5,
             output_buffer_limit: 256 * 1024 * 1024, // 256 MiB (reasonable default)
@@ -1497,7 +1506,9 @@ impl ServerState {
     /// Record command execution latency for LATENCY HISTOGRAM.
     fn record_command_histogram(&mut self, argv: &[Vec<u8>], duration_us: u64) {
         let Some(cmd) = argv.first() else { return };
-        let Ok(cmd_str) = std::str::from_utf8(cmd) else { return };
+        let Ok(cmd_str) = std::str::from_utf8(cmd) else {
+            return;
+        };
         self.store.record_command_histogram(cmd_str, duration_us);
     }
 
@@ -2112,6 +2123,14 @@ impl Runtime {
     }
 
     #[must_use]
+    pub fn replica_primary_auth(&self) -> Option<(Option<Vec<u8>>, Vec<u8>)> {
+        self.server
+            .masterauth
+            .as_ref()
+            .map(|password| (self.server.masteruser.clone(), password.clone()))
+    }
+
+    #[must_use]
     pub fn take_replica_reconfigure_request(&mut self) -> bool {
         let requested = self.server.replica_reconfigure_requested;
         self.server.replica_reconfigure_requested = false;
@@ -2663,6 +2682,38 @@ impl Runtime {
             &self.server.auth_state,
             preserve_authenticated_user,
         );
+    }
+
+    fn apply_masteruser_update(&mut self, masteruser: Option<Vec<u8>>) {
+        let changed = self.server.masteruser != masteruser;
+        self.server.masteruser = masteruser;
+        if changed
+            && let ReplicationRoleState::Replica { state, .. } =
+                &mut self.server.replication_runtime_state.role
+        {
+            *state = "connect";
+            self.server.replica_reconfigure_requested = true;
+        }
+    }
+
+    fn apply_masterauth_update(&mut self, masterauth: Option<Vec<u8>>) {
+        let changed = self.server.masterauth != masterauth;
+        self.server.masterauth = masterauth;
+        if changed
+            && let ReplicationRoleState::Replica { state, .. } =
+                &mut self.server.replication_runtime_state.role
+        {
+            *state = "connect";
+            self.server.replica_reconfigure_requested = true;
+        }
+    }
+
+    pub fn set_masteruser(&mut self, masteruser: Option<Vec<u8>>) {
+        self.apply_masteruser_update(masteruser);
+    }
+
+    pub fn set_masterauth(&mut self, masterauth: Option<Vec<u8>>) {
+        self.apply_masterauth_update(masterauth);
     }
 
     pub fn apply_tls_config(
@@ -4444,6 +4495,18 @@ impl Runtime {
                     .to_vec(),
             )));
         }
+        if Self::config_pattern_matches(pattern, "masterauth") {
+            entries.push(RespFrame::BulkString(Some(b"masterauth".to_vec())));
+            entries.push(RespFrame::BulkString(Some(
+                self.server.masterauth.clone().unwrap_or_default(),
+            )));
+        }
+        if Self::config_pattern_matches(pattern, "masteruser") {
+            entries.push(RespFrame::BulkString(Some(b"masteruser".to_vec())));
+            entries.push(RespFrame::BulkString(Some(
+                self.server.masteruser.clone().unwrap_or_default(),
+            )));
+        }
         if Self::config_pattern_matches(pattern, "acllog-max-len") {
             entries.push(RespFrame::BulkString(Some(b"acllog-max-len".to_vec())));
             entries.push(RespFrame::BulkString(Some(
@@ -4492,6 +4555,40 @@ impl Runtime {
             entries.push(RespFrame::BulkString(Some(b"repl-timeout".to_vec())));
             entries.push(RespFrame::BulkString(Some(
                 self.server.repl_timeout_sec.to_string().into_bytes(),
+            )));
+        }
+        if Self::config_pattern_matches(pattern, "replica-priority")
+            || Self::config_pattern_matches(pattern, "slave-priority")
+        {
+            let key = if Self::config_pattern_matches(pattern, "slave-priority") {
+                b"slave-priority".as_slice()
+            } else {
+                b"replica-priority".as_slice()
+            };
+            entries.push(RespFrame::BulkString(Some(key.to_vec())));
+            entries.push(RespFrame::BulkString(Some(
+                self.server.replica_priority.to_string().into_bytes(),
+            )));
+        }
+        if Self::config_pattern_matches(pattern, "repl-diskless-sync") {
+            entries.push(RespFrame::BulkString(Some(b"repl-diskless-sync".to_vec())));
+            entries.push(RespFrame::BulkString(Some(
+                if self.server.repl_diskless_sync {
+                    b"yes".to_vec()
+                } else {
+                    b"no".to_vec()
+                },
+            )));
+        }
+        if Self::config_pattern_matches(pattern, "repl-diskless-sync-delay") {
+            entries.push(RespFrame::BulkString(Some(
+                b"repl-diskless-sync-delay".to_vec(),
+            )));
+            entries.push(RespFrame::BulkString(Some(
+                self.server
+                    .repl_diskless_sync_delay_sec
+                    .to_string()
+                    .into_bytes(),
             )));
         }
         if Self::config_pattern_matches(pattern, "maxmemory-samples") {
@@ -4725,7 +4822,9 @@ impl Runtime {
         // If a parameter has been overridden via CONFIG SET, use the override.
         for &(name, default_value) in CONFIG_STATIC_PARAMS {
             // Skip dynamically-managed params — we already emitted live values above
-            if name == "maxmemory"
+            if name == "masterauth"
+                || name == "masteruser"
+                || name == "maxmemory"
                 || name == "maxmemory-policy"
                 || name == "slowlog-log-slower-than"
                 || name == "slowlog-max-len"
@@ -4756,6 +4855,10 @@ impl Runtime {
                 || name == "maxmemory-samples"
                 || name == "repl-backlog-size"
                 || name == "repl-timeout"
+                || name == "replica-priority"
+                || name == "slave-priority"
+                || name == "repl-diskless-sync"
+                || name == "repl-diskless-sync-delay"
                 || name == "client-query-buffer-limit"
                 || name == "proto-max-bulk-len"
                 || name == "client-output-buffer-limit"
@@ -4785,6 +4888,8 @@ impl Runtime {
         }
 
         let mut next_requirepass: Option<Option<Vec<u8>>> = None;
+        let mut next_masterauth: Option<Option<Vec<u8>>> = None;
+        let mut next_masteruser: Option<Option<Vec<u8>>> = None;
         let mut next_acllog_max_len = self.server.acllog_max_len;
         let mut next_maxmemory: Option<usize> = None;
         let mut next_maxmemory_policy: Option<MaxmemoryPolicy> = None;
@@ -4795,6 +4900,7 @@ impl Runtime {
         let mut next_maxclients: Option<usize> = None;
         let mut next_repl_backlog_size: Option<u64> = None;
         let mut next_repl_timeout: Option<u64> = None;
+        let mut next_replica_priority: Option<usize> = None;
         let mut next_repl_diskless_sync: Option<bool> = None;
         let mut next_repl_diskless_sync_delay: Option<u64> = None;
         let mut next_query_buffer_limit: Option<usize> = None;
@@ -4822,6 +4928,22 @@ impl Runtime {
             };
             if parameter.eq_ignore_ascii_case("requirepass") {
                 next_requirepass = Some(if pair[1].is_empty() {
+                    None
+                } else {
+                    Some(pair[1].clone())
+                });
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("masterauth") {
+                next_masterauth = Some(if pair[1].is_empty() {
+                    None
+                } else {
+                    Some(pair[1].clone())
+                });
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("masteruser") {
+                next_masteruser = Some(if pair[1].is_empty() {
                     None
                 } else {
                     Some(pair[1].clone())
@@ -4966,6 +5088,21 @@ impl Runtime {
                 static_override_updates.push(("repl-timeout".to_string(), parsed.to_string()));
                 continue;
             }
+            if parameter.eq_ignore_ascii_case("replica-priority")
+                || parameter.eq_ignore_ascii_case("slave-priority")
+            {
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(value) if value >= 0 => value as usize,
+                    Ok(_) => {
+                        return RespFrame::Error(format!(
+                            "ERR Invalid argument for CONFIG SET '{parameter}'"
+                        ));
+                    }
+                    Err(err) => return err.to_resp(),
+                };
+                next_replica_priority = Some(parsed);
+                continue;
+            }
             if parameter.eq_ignore_ascii_case("repl-diskless-sync") {
                 let parsed = match std::str::from_utf8(&pair[1]) {
                     Ok(s) if s.eq_ignore_ascii_case("yes") => true,
@@ -4977,7 +5114,14 @@ impl Runtime {
                     }
                 };
                 next_repl_diskless_sync = Some(parsed);
-                static_override_updates.push(("repl-diskless-sync".to_string(), if parsed { "yes".to_string() } else { "no".to_string() }));
+                static_override_updates.push((
+                    "repl-diskless-sync".to_string(),
+                    if parsed {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    },
+                ));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("repl-diskless-sync-delay") {
@@ -4985,13 +5129,15 @@ impl Runtime {
                     Ok(value) if value >= 0 => value as u64,
                     Ok(_) => {
                         return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'repl-diskless-sync-delay'".to_string(),
+                            "ERR Invalid argument for CONFIG SET 'repl-diskless-sync-delay'"
+                                .to_string(),
                         );
                     }
                     Err(err) => return err.to_resp(),
                 };
                 next_repl_diskless_sync_delay = Some(parsed);
-                static_override_updates.push(("repl-diskless-sync-delay".to_string(), parsed.to_string()));
+                static_override_updates
+                    .push(("repl-diskless-sync-delay".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("client-query-buffer-limit") {
@@ -5264,6 +5410,12 @@ impl Runtime {
             // CONFIG SET requirepass should bridge ACL defaults without dropping this session.
             self.apply_requirepass_update(requirepass, true);
         }
+        if let Some(masteruser) = next_masteruser {
+            self.apply_masteruser_update(masteruser);
+        }
+        if let Some(masterauth) = next_masterauth {
+            self.apply_masterauth_update(masterauth);
+        }
         self.server.acllog_max_len = next_acllog_max_len;
         if let Some(maxmemory) = next_maxmemory {
             self.server.maxmemory_bytes = maxmemory;
@@ -5302,6 +5454,9 @@ impl Runtime {
         }
         if let Some(repl_timeout) = next_repl_timeout {
             self.server.repl_timeout_sec = repl_timeout;
+        }
+        if let Some(priority) = next_replica_priority {
+            self.server.replica_priority = priority;
         }
         if let Some(diskless) = next_repl_diskless_sync {
             self.server.repl_diskless_sync = diskless;
@@ -6864,7 +7019,9 @@ master_link_status:{master_link_status}\r\n\
 master_last_io_seconds_ago:{master_last_io_seconds_ago}\r\n\
 master_sync_in_progress:{master_sync_in_progress}\r\n\
 slave_read_repl_offset:{primary_offset}\r\n\
-slave_repl_offset:{primary_offset}\r\n"
+slave_repl_offset:{primary_offset}\r\n\
+slave_priority:{}\r\n",
+                    self.server.replica_priority
                 ));
             }
         }
@@ -11537,6 +11694,53 @@ mod tests {
                 RespFrame::BulkString(Some(b"warning".to_vec())),
             ]))
         );
+    }
+
+    #[test]
+    fn config_set_master_credentials_reconfigures_replica_link() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"6380"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let _ = rt.take_replica_reconfigure_request();
+        rt.set_replica_connection_state("connected");
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"CONFIG",
+                    b"SET",
+                    b"masteruser",
+                    b"replica",
+                    b"masterauth",
+                    b"secret",
+                ]),
+                1,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"GET", b"masteruser", b"masterauth"]),
+                2
+            ),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"masteruser".to_vec())),
+                RespFrame::BulkString(Some(b"replica".to_vec())),
+                RespFrame::BulkString(Some(b"masterauth".to_vec())),
+                RespFrame::BulkString(Some(b"secret".to_vec())),
+            ]))
+        );
+        assert_eq!(
+            rt.replica_primary_auth(),
+            Some((Some(b"replica".to_vec()), b"secret".to_vec()))
+        );
+        assert_eq!(
+            rt.replica_sync_target(),
+            Some(("127.0.0.1".to_string(), 6380))
+        );
+        assert!(rt.take_replica_reconfigure_request());
     }
 
     #[test]

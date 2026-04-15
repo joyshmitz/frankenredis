@@ -581,6 +581,68 @@
       }
     },
     {
+      "name": "config_set_masterauth",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "masterauth", "secret123"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_masterauth_after_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "masterauth"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "masterauth" },
+          { "kind": "bulk", "value": "secret123" }
+        ]
+      }
+    },
+    {
+      "name": "config_set_masteruser",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "masteruser", "replica-user"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_masteruser_after_set",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "masteruser"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "masteruser" },
+          { "kind": "bulk", "value": "replica-user" }
+        ]
+      }
+    },
+    {
+      "name": "config_clear_masterauth",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "masterauth", ""],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_clear_masteruser",
+      "now_ms": 0,
+      "argv": ["CONFIG", "SET", "masteruser", ""],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "config_get_master_credentials_after_clear",
+      "now_ms": 0,
+      "argv": ["CONFIG", "GET", "masteruser", "masterauth"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "bulk", "value": "masteruser" },
+          { "kind": "bulk", "value": "" },
+          { "kind": "bulk", "value": "masterauth" },
+          { "kind": "bulk", "value": "" }
+        ]
+      }
+    },
+    {
       "name": "config_set_multiple_params",
       "now_ms": 0,
       "argv": [

@@ -221,6 +221,10 @@ impl Drop for ManagedChild {
 }
 
 fn spawn_legacy_redis(port: u16) -> ManagedChild {
+    spawn_legacy_redis_with_requirepass(port, None)
+}
+
+fn spawn_legacy_redis_with_requirepass(port: u16, requirepass: Option<&str>) -> ManagedChild {
     let dir = unique_temp_dir("frankenredis-legacy");
     let mut command = Command::new(legacy_redis_server_path());
     command
@@ -239,9 +243,11 @@ fn spawn_legacy_redis(port: u16) -> ManagedChild {
         .arg("--protected-mode")
         .arg("no")
         .arg("--dir")
-        .arg(dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .arg(dir);
+    if let Some(requirepass) = requirepass {
+        command.arg("--requirepass").arg(requirepass);
+    }
+    command.stdout(Stdio::null()).stderr(Stdio::null());
     let child = ManagedChild::spawn(command, None);
     wait_for_port(port);
     child
@@ -673,6 +679,88 @@ fn tcp_replicaof_command_connects_to_legacy_primary_and_replicates_writes() {
     assert!(
         replicated,
         "replica never observed the primary write; latest INFO: {last_info_after_write:?}; replica log: {:?}",
+        replica.log_contents()
+    );
+
+    send_shutdown_nosave(replica_port);
+    send_shutdown_nosave(primary_port);
+}
+
+#[test]
+fn tcp_replicaof_command_uses_masterauth_for_protected_legacy_primary() {
+    let primary_port = reserve_port();
+    let replica_port = reserve_port();
+    let _primary = spawn_legacy_redis_with_requirepass(primary_port, Some("secret"));
+    let replica = spawn_frankenredis(replica_port, None);
+
+    let mut replica_client = connect_client(replica_port);
+    assert_eq!(
+        send_command(
+            &mut replica_client,
+            &[b"CONFIG", b"SET", b"masterauth", b"secret"],
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    let primary_port_text = primary_port.to_string();
+    assert_eq!(
+        send_command(
+            &mut replica_client,
+            &[b"REPLICAOF", b"127.0.0.1", primary_port_text.as_bytes()],
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_info = None;
+    let mut link_up = false;
+    while Instant::now() < deadline {
+        last_info = fetch_info_replication(replica_port);
+        if last_info.as_ref().is_some_and(|info| {
+            info.contains("role:slave\r\n")
+                && info.contains("master_host:127.0.0.1\r\n")
+                && info.contains(&format!("master_port:{primary_port}\r\n"))
+                && info.contains("master_link_status:up\r\n")
+        }) {
+            link_up = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        link_up,
+        "replica never authenticated to the protected primary; latest INFO: {last_info:?}; replica log: {:?}",
+        replica.log_contents()
+    );
+
+    let mut primary_client = connect_client(primary_port);
+    assert_eq!(
+        send_command(&mut primary_client, &[b"AUTH", b"secret"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        send_command(
+            &mut primary_client,
+            &[b"SET", b"protected-repl-key", b"replicated"]
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut replicated = false;
+    let mut last_info_after_write = None;
+    while Instant::now() < deadline {
+        if fetch_string_value(replica_port, b"protected-repl-key")
+            .is_some_and(|value| value == b"replicated")
+        {
+            replicated = true;
+            break;
+        }
+        last_info_after_write = fetch_info_replication(replica_port);
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        replicated,
+        "replica never observed the protected primary write; latest INFO: {last_info_after_write:?}; replica log: {:?}",
         replica.log_contents()
     );
 

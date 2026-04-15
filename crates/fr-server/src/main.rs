@@ -228,6 +228,8 @@ OPTIONS:\n\
   --aof <PATH>               AOF persistence file path (enables persistence)\n\
   --rdb <PATH>               RDB snapshot file path (enables SAVE/BGSAVE snapshots)\n\
   --replicaof <HOST> <PORT>  Configure this server as a replica of the given primary\n\
+  --masteruser <USERNAME>    Authenticate to the configured primary as this ACL user\n\
+  --masterauth <PASSWORD>    Authenticate to the configured primary with this password\n\
   --help                     Show this help\n"
     )
 }
@@ -241,6 +243,8 @@ fn main() -> ExitCode {
     let mut aof_path: Option<String> = None;
     let mut rdb_path: Option<String> = None;
     let mut replicaof: Option<(String, u16)> = None;
+    let mut masteruser: Option<String> = None;
+    let mut masterauth: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -317,6 +321,22 @@ fn main() -> ExitCode {
                 };
                 replicaof = Some((host, replica_port));
             }
+            "--masteruser" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("error: --masteruser requires a username");
+                    return ExitCode::from(1);
+                }
+                masteruser = Some(args[i].clone());
+            }
+            "--masterauth" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("error: --masterauth requires a password");
+                    return ExitCode::from(1);
+                }
+                masterauth = Some(args[i].clone());
+            }
             "--help" | "-h" => {
                 print!("{}", server_help_text());
                 return ExitCode::SUCCESS;
@@ -336,6 +356,8 @@ fn main() -> ExitCode {
     };
     let mut runtime = Runtime::new(policy);
     runtime.set_server_port(port);
+    runtime.set_masteruser(masteruser.map(String::into_bytes));
+    runtime.set_masterauth(masterauth.map(String::into_bytes));
     if let Some((host, primary_port)) = replicaof {
         let response = runtime.execute_frame(
             RespFrame::Array(Some(vec![
@@ -1384,6 +1406,24 @@ fn sync_replica_with_primary(
 
     let parser_config = runtime.parser_config();
     let mut read_buf = Vec::new();
+
+    if let Some((masteruser, masterauth)) = runtime.replica_primary_auth() {
+        let mut auth_argv = vec![b"AUTH".as_slice()];
+        if let Some(masteruser) = masteruser.as_ref() {
+            auth_argv.push(masteruser.as_slice());
+        }
+        auth_argv.push(masterauth.as_slice());
+        stream.write_all(&replica_handshake_frame(&auth_argv).to_bytes())?;
+        expect_simple_string(
+            read_frame_from_stream(
+                &mut stream,
+                &mut read_buf,
+                &parser_config,
+                runtime.server.query_buffer_limit,
+            )?,
+            "OK",
+        )?;
+    }
 
     stream.write_all(&replica_handshake_frame(&[b"PING"]).to_bytes())?;
     expect_simple_string(
@@ -2541,6 +2581,8 @@ mod tests {
         assert!(help.contains("--aof <PATH>"));
         assert!(help.contains("--rdb <PATH>"));
         assert!(help.contains("--replicaof <HOST> <PORT>"));
+        assert!(help.contains("--masteruser <USERNAME>"));
+        assert!(help.contains("--masterauth <PASSWORD>"));
         assert!(help.contains("--help"));
     }
 
@@ -2837,6 +2879,81 @@ mod tests {
                 RespFrame::Integer(0),
             ]))
         );
+
+        server.join().expect("primary thread");
+    }
+
+    #[test]
+    fn replica_sync_helper_authenticates_with_masteruser_and_masterauth() {
+        let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind primary socket");
+        let addr = listener.local_addr().expect("local addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept replica");
+            let parser = ParserConfig::default();
+            let mut read_buf = Vec::new();
+
+            let auth = read_frame_from_stream(&mut stream, &mut read_buf, &parser, usize::MAX)
+                .expect("read auth");
+            assert_eq!(
+                auth,
+                replica_handshake_frame(&[b"AUTH", b"replica", b"secret"])
+            );
+            stream
+                .write_all(&RespFrame::SimpleString("OK".to_string()).to_bytes())
+                .expect("write auth ok");
+
+            let ping = read_frame_from_stream(&mut stream, &mut read_buf, &parser, usize::MAX)
+                .expect("read ping");
+            assert_eq!(ping, replica_handshake_frame(&[b"PING"]));
+            stream
+                .write_all(&RespFrame::SimpleString("PONG".to_string()).to_bytes())
+                .expect("write pong");
+
+            let replconf_port =
+                read_frame_from_stream(&mut stream, &mut read_buf, &parser, usize::MAX)
+                    .expect("replconf");
+            let RespFrame::Array(Some(items)) = replconf_port else {
+                panic!("unexpected replconf frame");
+            };
+            assert_eq!(items[0], RespFrame::BulkString(Some(b"REPLCONF".to_vec())));
+            assert_eq!(
+                items[1],
+                RespFrame::BulkString(Some(b"listening-port".to_vec()))
+            );
+            stream
+                .write_all(&RespFrame::SimpleString("OK".to_string()).to_bytes())
+                .expect("write replconf ok");
+
+            let replconf_capa =
+                read_frame_from_stream(&mut stream, &mut read_buf, &parser, usize::MAX)
+                    .expect("capa");
+            assert_eq!(
+                replconf_capa,
+                replica_handshake_frame(&[b"REPLCONF", b"capa", b"psync2"])
+            );
+            stream
+                .write_all(&RespFrame::SimpleString("OK".to_string()).to_bytes())
+                .expect("write capa ok");
+
+            let psync = read_frame_from_stream(&mut stream, &mut read_buf, &parser, usize::MAX)
+                .expect("psync");
+            assert_eq!(psync, replica_handshake_frame(&[b"PSYNC", b"?", b"-1"]));
+            stream
+                .write_all(&RespFrame::SimpleString("CONTINUE".to_string()).to_bytes())
+                .expect("write continue");
+            stream
+                .write_all(&replica_handshake_frame(&[b"PING"]).to_bytes())
+                .expect("write trailing ping");
+        });
+
+        let mut replica = Runtime::default_strict();
+        replica.set_server_port(6381);
+        replica.set_masteruser(Some(b"replica".to_vec()));
+        replica.set_masterauth(Some(b"secret".to_vec()));
+        let host = addr.ip().to_string();
+        let connection = sync_replica_with_primary(&mut replica, &host, addr.port(), "?", -1, 1)
+            .expect("sync with auth");
+        drop(connection);
 
         server.join().expect("primary thread");
     }
@@ -3971,15 +4088,17 @@ mod tests {
 
         // Simulate reading the FULLRESYNC reply and payload on the replica side
         let mut replica_rt = Runtime::default_strict();
-        
+
         let reply_str = match &response {
             RespFrame::SimpleString(s) => s.clone(),
             _ => panic!("Expected simple string response"),
         };
-        
+
         let payload_rdb = primary.encoded_rdb_snapshot(ts);
 
-        replica_rt.apply_replication_sync_payload(&reply_str, &payload_rdb, ts).unwrap();
+        replica_rt
+            .apply_replication_sync_payload(&reply_str, &payload_rdb, ts)
+            .unwrap();
 
         // 3. Now setup a "sub-replica" client connection to replica_rt.
         let listener_sub = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3989,8 +4108,10 @@ mod tests {
 
         let sub_replica_session = replica_rt.new_session();
         let sub_replica_id = sub_replica_session.client_id;
-        let mut sub_replica_conn =
-            ClientConnection::new(mio::net::TcpStream::from_std(stream_sub), sub_replica_session);
+        let mut sub_replica_conn = ClientConnection::new(
+            mio::net::TcpStream::from_std(stream_sub),
+            sub_replica_session,
+        );
 
         let prev = replica_rt.swap_session(std::mem::take(&mut sub_replica_conn.session));
         let response_sub = replica_rt.execute_frame(psync_frame.clone(), ts);
@@ -4000,7 +4121,8 @@ mod tests {
         {
             sub_replica_conn.write_buf.extend_from_slice(&follow_up);
             if replica_rt.is_replica(sub_replica_id) {
-                sub_replica_conn.replication_sent_offset = Some(replica_rt.replication_primary_offset());
+                sub_replica_conn.replication_sent_offset =
+                    Some(replica_rt.replication_primary_offset());
             }
         }
         sub_replica_conn.session = replica_rt.swap_session(prev);
@@ -4034,7 +4156,9 @@ mod tests {
         let replica_received_bytes = conn.write_buf.clone();
 
         // 6. Replica applies the replication stream
-        replica_rt.apply_replication_sync_payload("CONTINUE", &replica_received_bytes, ts + 2).unwrap();
+        replica_rt
+            .apply_replication_sync_payload("CONTINUE", &replica_received_bytes, ts + 2)
+            .unwrap();
 
         // 7. Replica propagates write to sub-replica
         sub_replica_conn.write_buf.clear();
@@ -4043,7 +4167,12 @@ mod tests {
         sub_clients.insert(sub_token, sub_replica_conn);
         let mut sub_write_tokens = HashSet::new();
 
-        propagate_writes_to_replicas(&mut sub_clients, &mut replica_rt, &mut poll, &mut sub_write_tokens);
+        propagate_writes_to_replicas(
+            &mut sub_clients,
+            &mut replica_rt,
+            &mut poll,
+            &mut sub_write_tokens,
+        );
 
         let sub_conn = sub_clients.get(&sub_token).unwrap();
         let expected_bytes = encode_aof_stream(&[AofRecord {
