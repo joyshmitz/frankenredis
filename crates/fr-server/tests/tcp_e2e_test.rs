@@ -1588,3 +1588,114 @@ fn tcp_replica_of_replica_chain_replication() {
     send_shutdown_nosave(replica1_port);
     send_shutdown_nosave(primary_port);
 }
+
+#[test]
+fn tcp_sentinel_failover_integration() {
+    // Proves the failover sequence orchestrated by Sentinel works correctly on FrankenRedis nodes
+    let original_master_port = reserve_port();
+    let replica1_port = reserve_port();
+    let replica2_port = reserve_port();
+
+    let _original_master = spawn_frankenredis(original_master_port, None);
+    let _replica1 = spawn_frankenredis(replica1_port, Some(original_master_port));
+    let _replica2 = spawn_frankenredis(replica2_port, Some(original_master_port));
+
+    // Wait for replicas to connect and sync
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut link_up = false;
+    while Instant::now() < deadline {
+        let info1 = fetch_info_replication(replica1_port);
+        let info2 = fetch_info_replication(replica2_port);
+        if info1
+            .as_ref()
+            .is_some_and(|info| info.contains("master_link_status:up\r\n"))
+            && info2
+                .as_ref()
+                .is_some_and(|info| info.contains("master_link_status:up\r\n"))
+        {
+            link_up = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(link_up, "replicas never synced to master");
+
+    // Write some data to original master
+    let mut client = connect_client(original_master_port);
+    assert_eq!(
+        send_command(&mut client, &[b"SET", b"sentinel_key", b"original"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    drop(client);
+
+    // Wait for propagation
+    thread::sleep(Duration::from_millis(200));
+
+    // Sentinel decides to failover to replica1
+    let mut sentinel_client1 = connect_client(replica1_port);
+    assert_eq!(
+        send_command(&mut sentinel_client1, &[b"REPLICAOF", b"NO", b"ONE"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        send_command(&mut sentinel_client1, &[b"CONFIG", b"REWRITE"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    drop(sentinel_client1);
+
+    // Check replica1 is now master
+    let info1 = fetch_info_replication(replica1_port).unwrap();
+    assert!(info1.contains("role:master\r\n"));
+
+    // Sentinel reconfigures replica2 to point to replica1
+    let mut sentinel_client2 = connect_client(replica2_port);
+    let replica1_port_str = replica1_port.to_string();
+    assert_eq!(
+        send_command(
+            &mut sentinel_client2,
+            &[b"REPLICAOF", b"127.0.0.1", replica1_port_str.as_bytes()]
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        send_command(&mut sentinel_client2, &[b"CONFIG", b"REWRITE"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    drop(sentinel_client2);
+
+    // Wait for replica2 to sync with new master
+    let deadline = Instant::now() + Duration::from_secs(5);
+    link_up = false;
+    while Instant::now() < deadline {
+        let info2 = fetch_info_replication(replica2_port);
+        if info2
+            .as_ref()
+            .is_some_and(|info| info.contains("master_link_status:up\r\n"))
+        {
+            link_up = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(link_up, "replica2 never synced to new master");
+
+    // Write to new master and check propagation
+    let mut client = connect_client(replica1_port);
+    assert_eq!(
+        send_command(&mut client, &[b"SET", b"sentinel_key", b"failed_over"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    drop(client);
+
+    thread::sleep(Duration::from_millis(200));
+
+    let mut client2 = connect_client(replica2_port);
+    assert_eq!(
+        send_command(&mut client2, &[b"GET", b"sentinel_key"]),
+        RespFrame::BulkString(Some(b"failed_over".to_vec()))
+    );
+
+    send_shutdown_nosave(original_master_port);
+    send_shutdown_nosave(replica1_port);
+    send_shutdown_nosave(replica2_port);
+}

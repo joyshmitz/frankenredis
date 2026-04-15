@@ -12101,9 +12101,7 @@ fn latency_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Command
                     map_items.push(RespFrame::Integer(
                         i64::try_from(bucket_start_us).unwrap_or(i64::MAX),
                     ));
-                    map_items.push(RespFrame::Integer(
-                        i64::try_from(count).unwrap_or(i64::MAX),
-                    ));
+                    map_items.push(RespFrame::Integer(i64::try_from(count).unwrap_or(i64::MAX)));
                 }
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(cmd.as_bytes().to_vec())),
@@ -21870,18 +21868,8 @@ mod tests {
 
         // Same data, same order
         for store in [&mut store1, &mut store2] {
-            dispatch_argv(
-                &[b"SET".to_vec(), b"a".to_vec(), b"1".to_vec()],
-                store,
-                0,
-            )
-            .expect("set");
-            dispatch_argv(
-                &[b"SET".to_vec(), b"b".to_vec(), b"2".to_vec()],
-                store,
-                0,
-            )
-            .expect("set");
+            dispatch_argv(&[b"SET".to_vec(), b"a".to_vec(), b"1".to_vec()], store, 0).expect("set");
+            dispatch_argv(&[b"SET".to_vec(), b"b".to_vec(), b"2".to_vec()], store, 0).expect("set");
         }
 
         let d1 = dispatch_argv(&[b"DEBUG".to_vec(), b"DIGEST".to_vec()], &mut store1, 0)
@@ -21908,11 +21896,7 @@ mod tests {
         .expect("set");
 
         let digest = dispatch_argv(
-            &[
-                b"DEBUG".to_vec(),
-                b"DIGEST-VALUE".to_vec(),
-                b"foo".to_vec(),
-            ],
+            &[b"DEBUG".to_vec(), b"DIGEST-VALUE".to_vec(), b"foo".to_vec()],
             &mut store,
             0,
         )
