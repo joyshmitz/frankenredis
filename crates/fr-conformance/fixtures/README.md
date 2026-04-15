@@ -30,13 +30,48 @@ with replay/forensics artifacts:
 By default it uses local `cargo run` so the binary can reach your local Redis endpoint.
 Set `FR_E2E_RUNNER=rch` only when the target Redis host is reachable from remote RCH workers.
 
-self-contained bundle. It runs a fixed scenario matrix in deterministic order:
+The orchestrator is manifest-driven via:
+
+```text
+crates/fr-conformance/fixtures/live_oracle_matrix.json
+```
+
+It supports three matrix profiles:
+
+- `baseline` (default): the original 5-suite reliability gate used by CI
+- `parity`: a much broader Redis-vs-FrankenRedis coverage sweep across command families and packet journeys
+- `all`: every suite in the manifest
+
+Examples:
+
+```bash
+# Existing CI-sized baseline gate
+./scripts/run_live_oracle_diff.sh --matrix baseline
+
+# Broader parity sweep against a local Redis oracle
+./scripts/run_live_oracle_diff.sh --matrix parity
+
+# Target a specific suite while still using the manifest
+./scripts/run_live_oracle_diff.sh --matrix parity --suite core_hash --suite core_set
+```
+
+The `baseline` matrix runs the fixed reliability gate in deterministic order:
 
 - `core_strings` (golden)
 - `fr_p2c_001_eventloop_journey` (golden)
 - `fr_p2c_003_dispatch_journey` (golden)
 - `core_errors` (regression)
 - `fr_p2c_002_protocol_negative` (failure_injection, FR-P2C-002)
+
+The `parity` matrix expands that baseline with broader single-node request/response coverage
+such as `core_hash`, `core_list`, `core_set`, `core_zset`, `core_scan`, `core_sort`,
+`core_acl`, `core_config`, `core_cluster`, `core_scripting`, `core_function`,
+`core_object`, `core_pfdebug`, and packet journeys `FR-P2C-004/007/008/009`.
+
+Multi-client or topology-heavy suites remain outside the parity matrix for now because the
+current live-oracle transport is still single-node and single-connection oriented. Those
+surfaces include `core_pubsub`, `core_blocking`, `core_replication`, `core_wait`,
+`core_migrate`, `core_module_sentinel`, and the packet-006 replication fixtures.
 
 It writes a
 self-contained bundle under:

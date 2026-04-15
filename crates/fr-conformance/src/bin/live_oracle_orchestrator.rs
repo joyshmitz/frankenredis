@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,14 +17,24 @@ struct CliArgs {
     run_id: String,
     runner: String,
     run_seed: u64,
+    matrix: String,
+    suite_manifest: PathBuf,
+    suites: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 struct SuiteSpec {
-    name: &'static str,
-    mode: &'static str,
-    fixture: &'static str,
-    scenario_class: &'static str,
+    name: String,
+    mode: String,
+    fixture: String,
+    scenario_class: String,
+    profiles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct SuiteMatrixManifest {
+    schema_version: String,
+    suites: Vec<SuiteSpec>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,39 +48,6 @@ struct SummaryCommandInputs<'a> {
     failure_envelope: &'a Path,
     run_fingerprint: &'a str,
 }
-
-const SUITES: [SuiteSpec; 5] = [
-    SuiteSpec {
-        name: "core_strings",
-        mode: "command",
-        fixture: "core_strings.json",
-        scenario_class: "golden",
-    },
-    SuiteSpec {
-        name: "fr_p2c_001_eventloop_journey",
-        mode: "command",
-        fixture: "fr_p2c_001_eventloop_journey.json",
-        scenario_class: "golden",
-    },
-    SuiteSpec {
-        name: "fr_p2c_003_dispatch_journey",
-        mode: "command",
-        fixture: "fr_p2c_003_dispatch_journey.json",
-        scenario_class: "golden",
-    },
-    SuiteSpec {
-        name: "core_errors",
-        mode: "command",
-        fixture: "core_errors.json",
-        scenario_class: "regression",
-    },
-    SuiteSpec {
-        name: "fr_p2c_002_protocol_negative",
-        mode: "protocol",
-        fixture: "protocol_negative.json",
-        scenario_class: "failure_injection",
-    },
-];
 
 fn main() -> ExitCode {
     match run() {
@@ -90,6 +68,8 @@ fn run() -> Result<ExitCode, String> {
         }
     };
     let run_fingerprint = compute_run_fingerprint(&cli);
+    let manifest = load_suite_manifest(&cli.suite_manifest)?;
+    let selected_suites = select_suites(&manifest, &cli.matrix, &cli.suites)?;
 
     let run_root = cli.output_root.join(&cli.run_id);
     let suites_root = run_root.join("suites");
@@ -119,13 +99,19 @@ fn run() -> Result<ExitCode, String> {
 
     println!("Verifying live Redis endpoint {}:{}", cli.host, cli.port);
     verify_redis_endpoint(&cli.host, cli.port)?;
+    println!(
+        "Using live-oracle matrix '{}' from {} ({} suites)",
+        cli.matrix,
+        cli.suite_manifest.display(),
+        selected_suites.len()
+    );
 
     let mut failed_count = 0usize;
     let mut total_count = 0usize;
-    for suite in SUITES {
+    for suite in &selected_suites {
         total_count += 1;
 
-        let suite_dir = suites_root.join(suite.name);
+        let suite_dir = suites_root.join(&suite.name);
         let suite_log = suite_dir.join("stdout.log");
         let suite_report = suite_dir.join("report.json");
         fs::create_dir_all(&suite_dir)
@@ -166,6 +152,7 @@ fn run() -> Result<ExitCode, String> {
         &run_fingerprint,
         total_count,
         failed_count,
+        &selected_suites,
     )?;
 
     let summary_cmd = summary_command_tokens(
@@ -212,6 +199,8 @@ fn parse_args(raw_args: Vec<String>) -> Result<Option<CliArgs>, String> {
     );
     let mut run_id = env::var("FR_E2E_RUN_ID").unwrap_or_else(|_| compact_utc_timestamp());
     let runner = env::var("FR_E2E_RUNNER").unwrap_or_else(|_| "local".to_string());
+    let mut matrix = env::var("FR_E2E_MATRIX").unwrap_or_else(|_| "baseline".to_string());
+    let mut suite_manifest = default_suite_manifest_path();
     let run_seed = env::var("FR_E2E_SEED")
         .map(|value| {
             value
@@ -219,6 +208,7 @@ fn parse_args(raw_args: Vec<String>) -> Result<Option<CliArgs>, String> {
                 .map_err(|err| format!("invalid FR_E2E_SEED value {value}: {err}"))
         })
         .unwrap_or(Ok(424242_u64))?;
+    let mut suites = Vec::new();
 
     let mut positional = Vec::new();
     let mut idx = 0usize;
@@ -255,6 +245,27 @@ fn parse_args(raw_args: Vec<String>) -> Result<Option<CliArgs>, String> {
                 run_id = value.clone();
                 idx += 2;
             }
+            "--matrix" => {
+                let value = raw_args
+                    .get(idx + 1)
+                    .ok_or_else(|| "missing value after --matrix".to_string())?;
+                matrix = value.clone();
+                idx += 2;
+            }
+            "--suite-manifest" => {
+                let value = raw_args
+                    .get(idx + 1)
+                    .ok_or_else(|| "missing value after --suite-manifest".to_string())?;
+                suite_manifest = PathBuf::from(value);
+                idx += 2;
+            }
+            "--suite" => {
+                let value = raw_args
+                    .get(idx + 1)
+                    .ok_or_else(|| "missing value after --suite".to_string())?;
+                suites.push(value.clone());
+                idx += 2;
+            }
             other => {
                 positional.push(other.to_string());
                 idx += 1;
@@ -278,22 +289,126 @@ fn parse_args(raw_args: Vec<String>) -> Result<Option<CliArgs>, String> {
         run_id,
         runner,
         run_seed,
+        matrix,
+        suite_manifest,
+        suites,
     }))
 }
 
 fn usage() -> String {
-    "Usage:\n  ./scripts/run_live_oracle_diff.sh [--host <host>] [--port <port>] [--output-root <dir>] [--run-id <id>]\n  ./scripts/run_live_oracle_diff.sh [host] [port]\n\nDescription:\n  Deterministic local/CI orchestrator for live Redis differential E2E suites.\n  It creates a self-contained failure bundle with per-suite logs, JSON reports,\n  replay commands, and command trace artifacts."
+    "Usage:\n  ./scripts/run_live_oracle_diff.sh [--host <host>] [--port <port>] [--output-root <dir>] [--run-id <id>] [--matrix <baseline|parity|all>] [--suite-manifest <path>] [--suite <name> ...]\n  ./scripts/run_live_oracle_diff.sh [host] [port]\n\nDescription:\n  Deterministic local/CI orchestrator for live Redis differential E2E suites.\n  It creates a self-contained failure bundle with per-suite logs, JSON reports,\n  replay commands, and command trace artifacts. The default matrix is 'baseline';\n  use '--matrix parity' for broader Redis-vs-FrankenRedis coverage."
         .to_string()
 }
 
 fn compute_run_fingerprint(cli: &CliArgs) -> String {
     let joined = format!(
-        "{}|{}|{}|{}|{}",
-        cli.run_id, cli.host, cli.port, cli.runner, cli.run_seed
+        "{}|{}|{}|{}|{}|{}|{}|{}",
+        cli.run_id,
+        cli.host,
+        cli.port,
+        cli.runner,
+        cli.run_seed,
+        cli.matrix,
+        cli.suite_manifest.display(),
+        cli.suites.join(",")
     );
     let mut hasher = Sha256::new();
     hasher.update(joined.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
+}
+
+fn default_suite_manifest_path() -> PathBuf {
+    fixture_root().join("live_oracle_matrix.json")
+}
+
+fn load_suite_manifest(path: &Path) -> Result<SuiteMatrixManifest, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read suite manifest {}: {err}", path.display()))?;
+    let manifest: SuiteMatrixManifest = serde_json::from_str(&raw)
+        .map_err(|err| format!("invalid suite manifest JSON {}: {err}", path.display()))?;
+    if manifest.schema_version != "live_oracle_matrix/v1" {
+        return Err(format!(
+            "unsupported suite manifest schema '{}' in {}",
+            manifest.schema_version,
+            path.display()
+        ));
+    }
+
+    let mut seen_names = std::collections::BTreeSet::new();
+    for suite in &manifest.suites {
+        if suite.name.trim().is_empty() {
+            return Err(format!(
+                "suite manifest {} contains empty suite name",
+                path.display()
+            ));
+        }
+        if !seen_names.insert(suite.name.clone()) {
+            return Err(format!(
+                "suite manifest {} contains duplicate suite '{}'",
+                path.display(),
+                suite.name
+            ));
+        }
+        if !matches!(suite.mode.as_str(), "command" | "protocol") {
+            return Err(format!(
+                "suite '{}' uses unsupported mode '{}'",
+                suite.name, suite.mode
+            ));
+        }
+        if suite.fixture.trim().is_empty() {
+            return Err(format!("suite '{}' is missing a fixture name", suite.name));
+        }
+        let fixture_path = fixture_root().join(&suite.fixture);
+        if !fixture_path.exists() {
+            return Err(format!(
+                "suite '{}' references missing fixture {}",
+                suite.name,
+                fixture_path.display()
+            ));
+        }
+        if suite.profiles.is_empty() {
+            return Err(format!(
+                "suite '{}' must belong to at least one profile",
+                suite.name
+            ));
+        }
+    }
+
+    Ok(manifest)
+}
+
+fn select_suites(
+    manifest: &SuiteMatrixManifest,
+    matrix: &str,
+    filters: &[String],
+) -> Result<Vec<SuiteSpec>, String> {
+    let filter_set: std::collections::BTreeSet<&str> = filters.iter().map(String::as_str).collect();
+    for filter in &filter_set {
+        if !manifest.suites.iter().any(|suite| suite.name == *filter) {
+            return Err(format!("unknown suite filter '{}'", filter));
+        }
+    }
+
+    let selected: Vec<SuiteSpec> = manifest
+        .suites
+        .iter()
+        .filter(|suite| matrix == "all" || suite.profiles.iter().any(|profile| profile == matrix))
+        .filter(|suite| filter_set.is_empty() || filter_set.contains(suite.name.as_str()))
+        .cloned()
+        .collect();
+
+    if selected.is_empty() {
+        return Err(format!(
+            "suite selection is empty for matrix '{}' and filters {:?}",
+            matrix, filters
+        ));
+    }
+
+    Ok(selected)
 }
 
 fn compact_utc_timestamp() -> String {
@@ -358,7 +473,7 @@ fn verify_redis_endpoint(host: &str, port: u16) -> Result<(), String> {
 
 fn append_trace(
     trace_log: &Path,
-    suite: SuiteSpec,
+    suite: &SuiteSpec,
     runner: &str,
     run_seed: u64,
     run_fingerprint: &str,
@@ -386,7 +501,7 @@ fn append_trace(
 
 fn append_status_row(
     status_tsv: &Path,
-    suite: SuiteSpec,
+    suite: &SuiteSpec,
     exit_code: i32,
     suite_report: &Path,
     suite_log: &Path,
@@ -427,7 +542,7 @@ fn suite_command_tokens(
     cli: &CliArgs,
     live_log_root: &Path,
     suite_report: &Path,
-    suite: SuiteSpec,
+    suite: &SuiteSpec,
 ) -> Vec<String> {
     let inner = vec![
         "env".to_string(),
@@ -557,21 +672,31 @@ fn write_readme(
     run_fingerprint: &str,
     total_count: usize,
     failed_count: usize,
+    suites: &[SuiteSpec],
 ) -> Result<(), String> {
+    let scenario_matrix = suites
+        .iter()
+        .map(|suite| format!("- `{}` ({})", suite.name, suite.scenario_class))
+        .collect::<Vec<_>>()
+        .join("\n");
     let body = format!(
-        "# Live Oracle Diff Bundle\n\n- run_id: `{}`\n- host: `{}`\n- port: `{}`\n- runner: `{}`\n- run_seed: `{}`\n- run_fingerprint: `{}`\n- total_suites: `{}`\n- failed_suites: `{}`\n\n## Artifact Layout\n\n- `suite_status.tsv`: machine-readable suite execution status.\n- `command_trace.log`: exact command trace with timestamps.\n- `live_logs/`: structured JSONL logs emitted by harness (`live_log_root`).\n- `suites/<suite>/stdout.log`: captured command output.\n- `suites/<suite>/report.json`: machine-readable diff report from `live_oracle_diff --json-out`.\n- `coverage_summary.json`: aggregated pass-rate and reason-code budget input.\n- `failure_envelope.json`: per-failure envelope with replay pointers + deterministic artifact index.\n- `replay_all.sh`: deterministic replay commands for the full suite matrix.\n- `replay_failed.sh`: deterministic replay commands for failed suites.\n\n## Scenario Matrix\n\n- `core_strings` (golden)\n- `fr_p2c_001_eventloop_journey` (golden)\n- `fr_p2c_003_dispatch_journey` (golden)\n- `core_errors` (regression)\n- `fr_p2c_002_protocol_negative` (failure_injection, FR-P2C-002)\n\n## Re-run\n\n```bash\nFR_E2E_SEED={} ./scripts/run_live_oracle_diff.sh --host {} --port {} --run-id {}\n```\n",
+        "# Live Oracle Diff Bundle\n\n- run_id: `{}`\n- host: `{}`\n- port: `{}`\n- runner: `{}`\n- run_seed: `{}`\n- run_fingerprint: `{}`\n- suite_matrix: `{}`\n- suite_manifest: `{}`\n- total_suites: `{}`\n- failed_suites: `{}`\n\n## Artifact Layout\n\n- `suite_status.tsv`: machine-readable suite execution status.\n- `command_trace.log`: exact command trace with timestamps.\n- `live_logs/`: structured JSONL logs emitted by harness (`live_log_root`).\n- `suites/<suite>/stdout.log`: captured command output.\n- `suites/<suite>/report.json`: machine-readable diff report from `live_oracle_diff --json-out`.\n- `coverage_summary.json`: aggregated pass-rate and reason-code budget input.\n- `failure_envelope.json`: per-failure envelope with replay pointers + deterministic artifact index.\n- `replay_all.sh`: deterministic replay commands for the full suite matrix.\n- `replay_failed.sh`: deterministic replay commands for failed suites.\n\n## Scenario Matrix\n\n{}\n\n## Re-run\n\n```bash\nFR_E2E_SEED={} ./scripts/run_live_oracle_diff.sh --host {} --port {} --run-id {} --matrix {}\n```\n",
         cli.run_id,
         cli.host,
         cli.port,
         cli.runner,
         cli.run_seed,
         run_fingerprint,
+        cli.matrix,
+        cli.suite_manifest.display(),
         total_count,
         failed_count,
+        scenario_matrix,
         cli.run_seed,
         cli.host,
         cli.port,
-        cli.run_id
+        cli.run_id,
+        cli.matrix
     );
     fs::write(readme_path, body)
         .map_err(|err| format!("failed to write {}: {err}", readme_path.display()))
@@ -615,7 +740,10 @@ fn shell_escape(token: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CliArgs, compute_run_fingerprint, parse_args, shell_escape};
+    use super::{
+        CliArgs, compute_run_fingerprint, default_suite_manifest_path, load_suite_manifest,
+        parse_args, select_suites, shell_escape,
+    };
 
     #[test]
     fn parse_args_supports_flags_and_positionals() {
@@ -636,6 +764,14 @@ mod tests {
         assert_eq!(parsed.port, 6380);
         assert_eq!(parsed.output_root.to_string_lossy(), "artifacts/custom");
         assert_eq!(parsed.run_id, "run-123");
+        assert_eq!(parsed.matrix, "baseline");
+        assert_eq!(parsed.suites, Vec::<String>::new());
+        assert!(
+            parsed
+                .suite_manifest
+                .to_string_lossy()
+                .ends_with("crates/fr-conformance/fixtures/live_oracle_matrix.json")
+        );
     }
 
     #[test]
@@ -645,6 +781,32 @@ mod tests {
             .expect("help not requested");
         assert_eq!(parsed.host, "host-from-pos");
         assert_eq!(parsed.port, 6389);
+    }
+
+    #[test]
+    fn parse_args_supports_matrix_manifest_and_suite_filters() {
+        let parsed = parse_args(vec![
+            "--matrix".to_string(),
+            "parity".to_string(),
+            "--suite-manifest".to_string(),
+            "fixtures/custom.json".to_string(),
+            "--suite".to_string(),
+            "core_hash".to_string(),
+            "--suite".to_string(),
+            "core_set".to_string(),
+        ])
+        .expect("arguments parse")
+        .expect("help not requested");
+
+        assert_eq!(parsed.matrix, "parity");
+        assert_eq!(
+            parsed.suite_manifest,
+            std::path::PathBuf::from("fixtures/custom.json")
+        );
+        assert_eq!(
+            parsed.suites,
+            vec!["core_hash".to_string(), "core_set".to_string()]
+        );
     }
 
     #[test]
@@ -663,10 +825,55 @@ mod tests {
             run_id: "run-abc".to_string(),
             runner: "local".to_string(),
             run_seed: 424242,
+            matrix: "baseline".to_string(),
+            suite_manifest: default_suite_manifest_path(),
+            suites: Vec::new(),
         };
         assert_eq!(
             compute_run_fingerprint(&cli),
-            "d7a8b2e4a3c7dbadc34f9e809defbcb12fb07d2bd6ef878df1959903bcfebff5".to_string()
+            "09cbc41f84fc318f41bfa9562d041ff36953689225d1afbb5dc6fd1433364ad4".to_string()
+        );
+    }
+
+    #[test]
+    fn baseline_matrix_matches_legacy_suite_order() {
+        let manifest = load_suite_manifest(&default_suite_manifest_path()).expect("load manifest");
+        let suites = select_suites(&manifest, "baseline", &[]).expect("baseline matrix");
+        let names = suites
+            .iter()
+            .map(|suite| suite.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "core_strings",
+                "fr_p2c_001_eventloop_journey",
+                "fr_p2c_003_dispatch_journey",
+                "core_errors",
+                "fr_p2c_002_protocol_negative",
+            ]
+        );
+    }
+
+    #[test]
+    fn parity_matrix_is_a_strict_superset_of_baseline() {
+        let manifest = load_suite_manifest(&default_suite_manifest_path()).expect("load manifest");
+        let baseline = select_suites(&manifest, "baseline", &[]).expect("baseline matrix");
+        let parity = select_suites(&manifest, "parity", &[]).expect("parity matrix");
+        assert!(parity.len() > baseline.len());
+        for suite in &baseline {
+            assert!(
+                parity.iter().any(|candidate| candidate.name == suite.name),
+                "parity matrix must include baseline suite {}",
+                suite.name
+            );
+        }
+        assert!(parity.iter().any(|suite| suite.name == "core_hash"));
+        assert!(parity.iter().any(|suite| suite.name == "core_scan"));
+        assert!(
+            parity
+                .iter()
+                .any(|suite| suite.name == "fr_p2c_008_expire_evict_journey")
         );
     }
 }
