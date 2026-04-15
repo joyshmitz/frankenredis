@@ -2386,6 +2386,158 @@
       }
     },
     {
+      "name": "keys_setup_prefix_a",
+      "now_ms": 801,
+      "argv": ["SET", "prefix_alpha", "1"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_setup_prefix_b",
+      "now_ms": 801,
+      "argv": ["SET", "prefix_beta", "2"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_setup_suffix",
+      "now_ms": 801,
+      "argv": ["SET", "gamma_suffix", "3"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_prefix_wildcard",
+      "now_ms": 802,
+      "argv": ["KEYS", "prefix_*"],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "keys_suffix_wildcard",
+      "now_ms": 802,
+      "argv": ["KEYS", "*_suffix"],
+      "expect": {
+        "kind": "array",
+        "value": [{"kind": "bulk", "value": "gamma_suffix"}]
+      }
+    },
+    {
+      "name": "keys_char_class_setup_a",
+      "now_ms": 803,
+      "argv": ["SET", "cc_a", "1"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_char_class_setup_b",
+      "now_ms": 803,
+      "argv": ["SET", "cc_b", "2"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_char_class_setup_x",
+      "now_ms": 803,
+      "argv": ["SET", "cc_x", "3"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_char_class_match",
+      "now_ms": 804,
+      "argv": ["KEYS", "cc_[ab]"],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "keys_negated_char_class",
+      "now_ms": 804,
+      "argv": ["KEYS", "cc_[^ab]"],
+      "expect": {
+        "kind": "array",
+        "value": [{"kind": "bulk", "value": "cc_x"}]
+      }
+    },
+    {
+      "name": "keys_question_mark_middle",
+      "now_ms": 805,
+      "argv": ["KEYS", "cc_?"],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "keys_escaped_star_setup",
+      "now_ms": 806,
+      "argv": ["SET", "key*star", "special"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_escaped_star_match",
+      "now_ms": 807,
+      "argv": ["KEYS", "key\\*star"],
+      "expect": {
+        "kind": "array",
+        "value": [{"kind": "bulk", "value": "key*star"}]
+      }
+    },
+    {
+      "name": "keys_escaped_question_setup",
+      "now_ms": 808,
+      "argv": ["SET", "key?question", "special"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_escaped_question_match",
+      "now_ms": 809,
+      "argv": ["KEYS", "key\\?question"],
+      "expect": {
+        "kind": "array",
+        "value": [{"kind": "bulk", "value": "key?question"}]
+      }
+    },
+    {
+      "name": "keys_range_char_class",
+      "now_ms": 810,
+      "argv": ["KEYS", "cc_[a-b]"],
+      "expect": {
+        "kind": "any_array"
+      }
+    },
+    {
+      "name": "keys_expired_setup",
+      "now_ms": 900,
+      "argv": ["SET", "keys_will_expire", "temp"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_expired_set_ttl",
+      "now_ms": 900,
+      "argv": ["PEXPIRE", "keys_will_expire", "50"],
+      "expect": {"kind": "integer", "value": 1}
+    },
+    {
+      "name": "keys_expired_not_found",
+      "now_ms": 1000,
+      "argv": ["KEYS", "keys_will_expire"],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "keys_literal_brackets_setup",
+      "now_ms": 1001,
+      "argv": ["SET", "key[1]", "bracketed"],
+      "expect": {"kind": "simple", "value": "OK"}
+    },
+    {
+      "name": "keys_literal_brackets_match",
+      "now_ms": 1002,
+      "argv": ["KEYS", "key\\[1\\]"],
+      "expect": {
+        "kind": "array",
+        "value": [{"kind": "bulk", "value": "key[1]"}]
+      }
+    },
+    {
       "name": "dump_missing_key",
       "now_ms": 900,
       "argv": [
