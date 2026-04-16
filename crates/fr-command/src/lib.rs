@@ -11876,6 +11876,32 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         let keys: Vec<&[u8]> = argv[2..].iter().map(|v| v.as_slice()).collect();
         let digest = compute_debug_digest(store, now_ms, Some(&keys));
         Ok(RespFrame::BulkString(Some(digest.into_bytes())))
+    } else if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "DEBUG",
+                subcommand: "HELP".to_string(),
+            });
+        }
+        Ok(RespFrame::Array(Some(vec![
+            hello_bulk("DEBUG <subcommand> [<arg> ...]. Subcommands are:"),
+            hello_bulk("OBJECT <key> - Return low-level info about <key>."),
+            hello_bulk("DIGEST - Return a hex digest of the entire database."),
+            hello_bulk("DIGEST-VALUE <key> [<key> ...] - Return hex digest of specific keys."),
+            hello_bulk("SLEEP <seconds> - Sleep for <seconds>."),
+            hello_bulk("RELOAD - Save and reload the database."),
+            hello_bulk("SET-ACTIVE-EXPIRE 0|1 - Disable/enable active expiry."),
+            hello_bulk("PANIC - Abort the server process immediately."),
+            hello_bulk("SEGFAULT - Abort the server process immediately."),
+            hello_bulk("OOM - Abort via the allocation failure handler."),
+            hello_bulk("HELP - Return this help."),
+        ])))
+    } else if sub.eq_ignore_ascii_case("PANIC") {
+        std::process::abort();
+    } else if sub.eq_ignore_ascii_case("SEGFAULT") {
+        std::process::abort();
+    } else if sub.eq_ignore_ascii_case("OOM") {
+        std::alloc::handle_alloc_error(std::alloc::Layout::new::<u8>());
     } else {
         Err(CommandError::UnknownSubcommand {
             command: "DEBUG",
@@ -23956,6 +23982,40 @@ mod tests {
         )
         .expect("debug sleep");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn debug_help_lists_crash_and_digest_subcommands() {
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"DEBUG".to_vec(), b"HELP".to_vec()], &mut store, 0)
+            .expect("debug help");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected array"); // ubs:ignore — AI triage
+        };
+        assert!(
+            items.contains(&RespFrame::BulkString(Some(
+                b"DIGEST - Return a hex digest of the entire database.".to_vec(),
+            ))),
+            "{items:?}"
+        );
+        assert!(
+            items.contains(&RespFrame::BulkString(Some(
+                b"PANIC - Abort the server process immediately.".to_vec(),
+            ))),
+            "{items:?}"
+        );
+        assert!(
+            items.contains(&RespFrame::BulkString(Some(
+                b"SEGFAULT - Abort the server process immediately.".to_vec(),
+            ))),
+            "{items:?}"
+        );
+        assert!(
+            items.contains(&RespFrame::BulkString(Some(
+                b"OOM - Abort via the allocation failure handler.".to_vec(),
+            ))),
+            "{items:?}"
+        );
     }
 
     #[test]
