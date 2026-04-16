@@ -136,3 +136,33 @@ ubs_*.jsonl
 
 # Persisted Redis RDB dumps from scratch sessions
 /dump.rdb
+
+# Root-level agent scratch output (covers chk, diff, status, cargo output, etc.)
+/*.txt
+/*.json
+!package.json
+/*.sh
+/*.py
+/*.md
+!README.md
+!FEATURE_PARITY.md
+!CHANGELOG.md
+!AGENTS.md
+!CONTRIBUTING.md
+!LICENSE*
+
+# Beads recovery artifacts
+.beads_recovery/
+
+# Extensionless scratch output files
+/check_result_*
+
+# Empty test stubs (agent-generated, never completed)
+crates/fr-server/tests/replica_of_replica.rs
+crates/fr-server/tests/test_replica_of_replica.rs
+
+# ACFS MCP config files
+codex.mcp.json
+cursor.mcp.json
+gemini.mcp.json
+.opencode.json.*.bak
