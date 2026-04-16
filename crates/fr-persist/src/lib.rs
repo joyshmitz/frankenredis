@@ -964,7 +964,7 @@ pub fn read_rdb_file(
 mod tests {
     use fr_protocol::{RespFrame, RespParseError};
 
-    use super::{AofRecord, PersistError, decode_aof_stream, encode_aof_stream};
+    use super::{decode_aof_stream, encode_aof_stream, AofRecord, PersistError};
 
     #[test]
     fn round_trip_aof_record() {
@@ -1083,9 +1083,9 @@ mod tests {
     // ── RDB tests ────────────────────────────────────────────────────
 
     use super::{
-        RDB_CHECKSUM_LEN, RDB_OPCODE_EOF, RDB_TYPE_STRING, RdbEntry, RdbStreamConsumerGroup,
-        RdbStreamPendingEntry, RdbValue, crc64_redis, decode_rdb, encode_rdb, lzf_decompress,
-        rdb_encode_length, rdb_encode_string,
+        crc64_redis, decode_rdb, encode_rdb, lzf_decompress, rdb_encode_length, rdb_encode_string,
+        RdbEntry, RdbStreamConsumerGroup, RdbStreamPendingEntry, RdbValue, RDB_CHECKSUM_LEN,
+        RDB_OPCODE_EOF, RDB_TYPE_STRING,
     };
 
     #[test]
@@ -1528,6 +1528,129 @@ mod tests {
     mod fuzz {
         use super::*;
         use proptest::prelude::*;
+        use proptest::string::string_regex;
+        use std::collections::BTreeMap;
+
+        fn byte_vec_strategy(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
+            prop::collection::vec(any::<u8>(), 0..=max_len)
+        }
+
+        fn non_empty_byte_vec_strategy(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
+            prop::collection::vec(any::<u8>(), 1..=max_len)
+        }
+
+        fn finite_score_strategy() -> impl Strategy<Value = f64> {
+            prop_oneof![
+                (-1_000_000_i32..=1_000_000_i32).prop_map(|value| f64::from(value) / 1000.0),
+                Just(0.0),
+                Just(-0.0),
+            ]
+        }
+
+        fn aof_record_strategy() -> impl Strategy<Value = AofRecord> {
+            prop::collection::vec(byte_vec_strategy(16), 1..=6).prop_map(|argv| AofRecord { argv })
+        }
+
+        fn stream_entry_strategy() -> impl Strategy<Value = crate::StreamEntry> {
+            (
+                0_u64..=10_000,
+                0_u64..=64,
+                prop::collection::vec(
+                    (non_empty_byte_vec_strategy(8), byte_vec_strategy(16)),
+                    0..=4,
+                ),
+            )
+        }
+
+        fn stream_pending_entry_strategy() -> impl Strategy<Value = RdbStreamPendingEntry> {
+            (
+                0_u64..=10_000,
+                0_u64..=64,
+                non_empty_byte_vec_strategy(8),
+                0_u64..=32,
+                0_u64..=10_000,
+            )
+                .prop_map(
+                    |(entry_id_ms, entry_id_seq, consumer, deliveries, last_delivered_ms)| {
+                        RdbStreamPendingEntry {
+                            entry_id_ms,
+                            entry_id_seq,
+                            consumer,
+                            deliveries,
+                            last_delivered_ms,
+                        }
+                    },
+                )
+        }
+
+        fn stream_consumer_group_strategy() -> impl Strategy<Value = RdbStreamConsumerGroup> {
+            (
+                non_empty_byte_vec_strategy(8),
+                0_u64..=10_000,
+                0_u64..=64,
+                prop::collection::vec(non_empty_byte_vec_strategy(8), 0..=3),
+                prop::collection::vec(stream_pending_entry_strategy(), 0..=3),
+            )
+                .prop_map(
+                    |(name, last_delivered_id_ms, last_delivered_id_seq, consumers, pending)| {
+                        RdbStreamConsumerGroup {
+                            name,
+                            last_delivered_id_ms,
+                            last_delivered_id_seq,
+                            consumers,
+                            pending,
+                        }
+                    },
+                )
+        }
+
+        fn rdb_value_strategy() -> impl Strategy<Value = RdbValue> {
+            prop_oneof![
+                byte_vec_strategy(24).prop_map(RdbValue::String),
+                prop::collection::vec(byte_vec_strategy(12), 0..=4).prop_map(RdbValue::List),
+                prop::collection::vec(byte_vec_strategy(12), 0..=4).prop_map(RdbValue::Set),
+                prop::collection::vec((byte_vec_strategy(8), byte_vec_strategy(12)), 0..=4,)
+                    .prop_map(RdbValue::Hash),
+                prop::collection::vec((byte_vec_strategy(8), finite_score_strategy()), 0..=4,)
+                    .prop_map(RdbValue::SortedSet),
+                (
+                    prop::collection::vec(stream_entry_strategy(), 0..=3),
+                    prop::option::of((0_u64..=10_000, 0_u64..=64)),
+                    prop::collection::vec(stream_consumer_group_strategy(), 0..=2),
+                )
+                    .prop_map(|(entries, watermark, groups)| {
+                        RdbValue::Stream(entries, watermark, groups)
+                    }),
+            ]
+        }
+
+        fn rdb_entry_strategy() -> impl Strategy<Value = Vec<RdbEntry>> {
+            prop::collection::btree_map(
+                (0_usize..=3, non_empty_byte_vec_strategy(8)),
+                (rdb_value_strategy(), prop::option::of(0_u64..=1_000_000)),
+                0..=8,
+            )
+            .prop_map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|((db, key), (value, expire_ms))| RdbEntry {
+                        db,
+                        key,
+                        value,
+                        expire_ms,
+                    })
+                    .collect()
+            })
+        }
+
+        fn aux_fields_strategy() -> impl Strategy<Value = Vec<(String, String)>> {
+            prop::collection::btree_map(
+                string_regex("[a-z][a-z0-9_-]{0,7}").expect("valid aux key regex"),
+                string_regex("[A-Za-z0-9._:-]{0,12}").expect("valid aux value regex"),
+                0..=4,
+            )
+            .prop_map(|fields| fields.into_iter().collect())
+        }
 
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(10_000))]
@@ -1548,6 +1671,34 @@ mod tests {
                 let mut data = b"REDIS0011".to_vec();
                 data.extend_from_slice(&payload);
                 let _ = decode_rdb(&data);
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            #[test]
+            fn encode_decode_aof_stream_round_trips(records in prop::collection::vec(aof_record_strategy(), 0..=8)) {
+                let encoded = encode_aof_stream(&records);
+                let decoded = decode_aof_stream(&encoded).expect("generated AOF stream should decode");
+                prop_assert_eq!(decoded, records);
+            }
+
+            #[test]
+            fn encode_decode_rdb_round_trips(
+                entries in rdb_entry_strategy(),
+                aux_fields in aux_fields_strategy(),
+            ) {
+                let aux_refs: Vec<(&str, &str)> = aux_fields
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str()))
+                    .collect();
+                let encoded = encode_rdb(&entries, &aux_refs);
+                let (decoded_entries, decoded_aux) =
+                    decode_rdb(&encoded).expect("generated RDB payload should decode");
+                let expected_aux: BTreeMap<String, String> = aux_fields.into_iter().collect();
+                prop_assert_eq!(decoded_entries, entries);
+                prop_assert_eq!(decoded_aux, expected_aux);
             }
         }
     }
