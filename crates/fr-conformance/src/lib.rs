@@ -277,15 +277,62 @@ pub fn run_live_redis_diff(
         let frame = case_to_frame(&case);
         let runtime_actual = runtime.execute_frame(frame.clone(), case.now_ms);
         let new_events = &runtime.evidence().events()[evidence_before..];
-        let redis_actual = if live_oracle_case_uses_dedicated_connection(&case) {
+        let redis_actual;
+        let frame_ok;
+        let mut oracle_detail = None;
+        if live_oracle_case_uses_dedicated_connection(&case) {
             let mut dedicated_stream = connect_live_redis(oracle)?;
             send_frame(&mut dedicated_stream, &frame)?;
-            read_resp_frame_from_stream(&mut dedicated_stream)?
+            if live_oracle_case_uses_legacy_sync_snapshot(&case) {
+                read_live_replication_snapshot_preamble(&mut dedicated_stream)
+                    .map_err(|err| format!("{}: {err}", case.name))?;
+                redis_actual = live_oracle_sync_snapshot_sentinel();
+                frame_ok = runtime_matches_live_sync_snapshot_case(&runtime_actual);
+            } else if live_oracle_case_expects_no_reply(&case) {
+                match read_optional_resp_frame_from_stream(&mut dedicated_stream)
+                    .map_err(|err| format!("{}: {err}", case.name))?
+                {
+                    Some(reply) => {
+                        oracle_detail = Some(format!(
+                            "live redis unexpectedly replied to internal REPLCONF control frame: {reply:?}"
+                        ));
+                        redis_actual = reply;
+                        frame_ok = false;
+                    }
+                    None => {
+                        redis_actual = live_oracle_no_reply_sentinel();
+                        frame_ok = runtime_matches_live_no_reply_case(&case, &runtime_actual);
+                    }
+                }
+            } else {
+                redis_actual = read_resp_frame_from_stream(&mut dedicated_stream)
+                    .map_err(|err| format!("{}: {err}", case.name))?;
+                frame_ok = runtime_actual == redis_actual;
+            }
         } else {
             send_frame(&mut stream, &frame)?;
-            read_resp_frame_from_stream(&mut stream)?
-        };
-        let frame_ok = runtime_actual == redis_actual;
+            if live_oracle_case_expects_no_reply(&case) {
+                match read_optional_resp_frame_from_stream(&mut stream)
+                    .map_err(|err| format!("{}: {err}", case.name))?
+                {
+                    Some(reply) => {
+                        oracle_detail = Some(format!(
+                            "live redis unexpectedly replied to internal REPLCONF control frame: {reply:?}"
+                        ));
+                        redis_actual = reply;
+                        frame_ok = false;
+                    }
+                    None => {
+                        redis_actual = live_oracle_no_reply_sentinel();
+                        frame_ok = runtime_matches_live_no_reply_case(&case, &runtime_actual);
+                    }
+                }
+            } else {
+                redis_actual = read_resp_frame_from_stream(&mut stream)
+                    .map_err(|err| format!("{}: {err}", case.name))?;
+                frame_ok = runtime_actual == redis_actual;
+            }
+        }
         let outcome = if frame_ok {
             LogOutcome::Pass
         } else {
@@ -313,7 +360,7 @@ pub fn run_live_redis_diff(
                 passed,
                 expected: redis_actual,
                 actual: runtime_actual,
-                detail: build_case_detail(frame_ok, None, log_result.err()),
+                detail: build_case_detail(frame_ok, None, log_result.err()).or(oracle_detail),
                 reason_code,
                 replay_cmd,
                 artifact_refs,
@@ -978,18 +1025,40 @@ fn send_frame(stream: &mut TcpStream, frame: &RespFrame) -> Result<(), String> {
 }
 
 fn read_resp_frame_from_stream(stream: &mut TcpStream) -> Result<RespFrame, String> {
+    match read_optional_resp_frame_from_stream(stream)? {
+        Some(frame) => Ok(frame),
+        None => Err("redis did not reply before timeout".to_string()),
+    }
+}
+
+fn read_optional_resp_frame_from_stream(
+    stream: &mut TcpStream,
+) -> Result<Option<RespFrame>, String> {
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 4096];
     loop {
-        let n = stream
-            .read(&mut chunk)
-            .map_err(|err| format!("failed to read response: {err}"))?;
+        let n = match stream.read(&mut chunk) {
+            Ok(n) => n,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(err) => return Err(format!("failed to read response: {err}")),
+        };
         if n == 0 {
             return Err("redis closed connection before reply was complete".to_string());
         }
         buf.extend_from_slice(&chunk[..n]);
+        strip_leading_live_replication_keepalives(&mut buf);
+        if buf.is_empty() {
+            continue;
+        }
         match parse_frame(&buf) {
-            Ok(parsed) => return Ok(parsed.frame),
+            Ok(parsed) => return Ok(Some(parsed.frame)),
             Err(fr_protocol::RespParseError::Incomplete) => {}
             Err(err) => {
                 return Err(format!("invalid RESP from redis: {err}"));
@@ -1010,10 +1079,126 @@ fn case_to_frame(case: &ConformanceCase) -> RespFrame {
     RespFrame::Array(Some(args))
 }
 
+fn strip_leading_live_replication_keepalives(buf: &mut Vec<u8>) {
+    loop {
+        if buf.starts_with(b"\r\n") {
+            buf.drain(..2);
+        } else if buf.starts_with(b"\n") {
+            buf.drain(..1);
+        } else {
+            break;
+        }
+    }
+}
+
 fn live_oracle_case_uses_dedicated_connection(case: &ConformanceCase) -> bool {
     case.argv.first().is_some_and(|command| {
         command.eq_ignore_ascii_case("PSYNC") || command.eq_ignore_ascii_case("SYNC")
     })
+}
+
+fn live_oracle_case_uses_legacy_sync_snapshot(case: &ConformanceCase) -> bool {
+    matches!(case.argv.as_slice(), [command] if command.eq_ignore_ascii_case("SYNC"))
+}
+
+fn live_oracle_case_expects_no_reply(case: &ConformanceCase) -> bool {
+    match case.argv.as_slice() {
+        [command, subcommand, _]
+            if command.eq_ignore_ascii_case("REPLCONF")
+                && subcommand.eq_ignore_ascii_case("ACK") =>
+        {
+            true
+        }
+        [command, subcommand, argument]
+            if command.eq_ignore_ascii_case("REPLCONF")
+                && subcommand.eq_ignore_ascii_case("GETACK")
+                && argument == "*" =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn runtime_matches_live_no_reply_case(case: &ConformanceCase, actual: &RespFrame) -> bool {
+    match case.argv.as_slice() {
+        [command, subcommand, _]
+            if command.eq_ignore_ascii_case("REPLCONF")
+                && subcommand.eq_ignore_ascii_case("ACK") =>
+        {
+            matches!(actual, RespFrame::SimpleString(value) if value == "OK")
+        }
+        [command, subcommand, argument]
+            if command.eq_ignore_ascii_case("REPLCONF")
+                && subcommand.eq_ignore_ascii_case("GETACK")
+                && argument == "*" =>
+        {
+            matches!(
+                actual,
+                RespFrame::Array(Some(items))
+                    if items.len() == 3
+                        && matches!(
+                            items.as_slice(),
+                            [
+                                RespFrame::BulkString(Some(command)),
+                                RespFrame::BulkString(Some(subcommand)),
+                                RespFrame::BulkString(Some(_offset))
+                            ] if command == b"REPLCONF" && subcommand == b"ACK"
+                        )
+            )
+        }
+        _ => false,
+    }
+}
+
+fn live_oracle_no_reply_sentinel() -> RespFrame {
+    RespFrame::Error("NOREPLY live redis produced no direct client response".to_string())
+}
+
+fn runtime_matches_live_sync_snapshot_case(actual: &RespFrame) -> bool {
+    matches!(actual, RespFrame::SimpleString(line) if line.starts_with("FULLRESYNC "))
+}
+
+fn live_oracle_sync_snapshot_sentinel() -> RespFrame {
+    RespFrame::Error("SYNC legacy redis entered snapshot streaming path".to_string())
+}
+
+fn read_live_replication_snapshot_preamble(stream: &mut TcpStream) -> Result<(), String> {
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let n = match stream.read(&mut chunk) {
+            Ok(n) => n,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err("redis did not start snapshot streaming before timeout".to_string());
+            }
+            Err(err) => return Err(format!("failed to read snapshot preamble: {err}")),
+        };
+        if n == 0 {
+            return Err("redis closed connection before snapshot preamble".to_string());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        strip_leading_live_replication_keepalives(&mut buf);
+        if let Some(preamble_end) = find_crlf(buf.as_slice()) {
+            let preamble = &buf[..preamble_end];
+            if preamble.starts_with(b"$") || preamble.starts_with(b"$EOF:") {
+                return Ok(());
+            }
+            return Err(format!(
+                "redis did not send a replication snapshot preamble: {:?}",
+                String::from_utf8_lossy(preamble)
+            ));
+        }
+    }
+}
+
+fn find_crlf(input: &[u8]) -> Option<usize> {
+    input.windows(2).position(|window| window == b"\r\n")
 }
 
 fn expected_to_frame(expected: &ExpectedFrame) -> RespFrame {
@@ -1434,9 +1619,11 @@ mod tests {
         CaseOutcome, ConformanceCase, DIFFERENTIAL_REPORT_SCHEMA_VERSION, EvidenceEvent,
         ExpectedFrame, ExpectedThreat, HarnessConfig, LiveOracleConfig, ReplayFixture,
         StructuredLogEmissionContext, build_differential_report, expected_to_frame,
-        live_oracle_case_uses_dedicated_connection, run_fixture, run_live_redis_diff,
+        live_oracle_case_expects_no_reply, live_oracle_case_uses_dedicated_connection,
+        live_oracle_case_uses_legacy_sync_snapshot, run_fixture, run_live_redis_diff,
         run_live_redis_protocol_diff, run_protocol_fixture, run_replay_fixture,
         run_replication_handshake_fixture, run_smoke, runtime_for_harness_config,
+        runtime_matches_live_no_reply_case, runtime_matches_live_sync_snapshot_case,
         validate_structured_log_emission, validate_threat_expectation,
     };
     use crate::log_contract::{
@@ -1498,6 +1685,88 @@ mod tests {
         assert!(live_oracle_case_uses_dedicated_connection(&psync));
         assert!(live_oracle_case_uses_dedicated_connection(&sync));
         assert!(!live_oracle_case_uses_dedicated_connection(&replconf));
+    }
+
+    #[test]
+    fn live_oracle_no_reply_classifier_matches_internal_replconf_frames() {
+        let ack = ConformanceCase {
+            name: "ack".to_string(),
+            now_ms: 0,
+            argv: vec!["REPLCONF".to_string(), "ACK".to_string(), "10".to_string()],
+            expect: ExpectedFrame::Simple {
+                value: "OK".to_string(),
+            },
+            expect_threat: None,
+        };
+        let getack = ConformanceCase {
+            name: "getack".to_string(),
+            now_ms: 0,
+            argv: vec![
+                "REPLCONF".to_string(),
+                "GETACK".to_string(),
+                "*".to_string(),
+            ],
+            expect: ExpectedFrame::Array {
+                value: vec![
+                    ExpectedFrame::Bulk {
+                        value: Some("REPLCONF".to_string()),
+                    },
+                    ExpectedFrame::Bulk {
+                        value: Some("ACK".to_string()),
+                    },
+                    ExpectedFrame::Bulk {
+                        value: Some("0".to_string()),
+                    },
+                ],
+            },
+            expect_threat: None,
+        };
+        let listening_port = ConformanceCase {
+            name: "listening-port".to_string(),
+            now_ms: 0,
+            argv: vec![
+                "REPLCONF".to_string(),
+                "listening-port".to_string(),
+                "6380".to_string(),
+            ],
+            expect: ExpectedFrame::Simple {
+                value: "OK".to_string(),
+            },
+            expect_threat: None,
+        };
+        let sync = ConformanceCase {
+            name: "sync".to_string(),
+            now_ms: 0,
+            argv: vec!["SYNC".to_string()],
+            expect: ExpectedFrame::Simple {
+                value: "FULLRESYNC".to_string(),
+            },
+            expect_threat: None,
+        };
+
+        assert!(live_oracle_case_expects_no_reply(&ack));
+        assert!(live_oracle_case_expects_no_reply(&getack));
+        assert!(live_oracle_case_uses_legacy_sync_snapshot(&sync));
+        assert!(!live_oracle_case_expects_no_reply(&listening_port));
+        assert!(runtime_matches_live_no_reply_case(
+            &ack,
+            &RespFrame::SimpleString("OK".to_string())
+        ));
+        assert!(runtime_matches_live_no_reply_case(
+            &getack,
+            &RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"REPLCONF".to_vec())),
+                RespFrame::BulkString(Some(b"ACK".to_vec())),
+                RespFrame::BulkString(Some(b"0".to_vec())),
+            ]))
+        ));
+        assert!(!runtime_matches_live_no_reply_case(
+            &listening_port,
+            &RespFrame::SimpleString("OK".to_string())
+        ));
+        assert!(runtime_matches_live_sync_snapshot_case(
+            &RespFrame::SimpleString("FULLRESYNC abc 0".to_string())
+        ));
     }
 
     fn invalid_tls_without_listener_ports() -> TlsConfig {

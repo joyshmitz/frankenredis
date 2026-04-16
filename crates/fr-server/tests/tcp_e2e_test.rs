@@ -66,6 +66,75 @@ fn send_command(stream: &mut TcpStream, parts: &[&[u8]]) -> RespFrame {
     read_response(stream)
 }
 
+fn send_command_expect_no_response(stream: &mut TcpStream, parts: &[&[u8]]) {
+    stream
+        .write_all(&encode_command(parts))
+        .expect("write command to server");
+    let mut buf = [0u8; 1024];
+    match stream.read(&mut buf) {
+        Ok(0) => panic!("server closed connection unexpectedly"),
+        Ok(n) => panic!(
+            "expected no direct response, got {} bytes: {:?}",
+            n,
+            &buf[..n]
+        ),
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) => {}
+        Err(err) => panic!("read from server: {err}"),
+    }
+}
+
+fn strip_leading_replication_keepalives(buf: &mut Vec<u8>) {
+    loop {
+        if buf.starts_with(b"\r\n") {
+            buf.drain(..2);
+        } else if buf.starts_with(b"\n") {
+            buf.drain(..1);
+        } else {
+            break;
+        }
+    }
+}
+
+fn find_crlf(buf: &[u8]) -> Option<usize> {
+    buf.windows(2).position(|window| window == b"\r\n")
+}
+
+fn read_replication_snapshot_preamble(stream: &mut TcpStream) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => panic!("server closed connection before snapshot preamble"),
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                strip_leading_replication_keepalives(&mut buf);
+                if let Some(end) = find_crlf(&buf) {
+                    return buf[..end].to_vec();
+                }
+            }
+            Err(ref err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for replication snapshot preamble"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => panic!("read from server: {err}"),
+        }
+    }
+}
+
 fn connect_client(port: u16) -> TcpStream {
     let mut retries = 0_u8;
     loop {
@@ -1008,6 +1077,88 @@ fn tcp_client_list_includes_all_connected_named_clients_matches_legacy_redis_ref
             "name mismatch for {name}: franken={franken_fields:?} legacy={legacy_fields:?}"
         );
     }
+}
+
+#[test]
+fn tcp_replconf_internal_control_frames_match_legacy_redis_no_reply_behavior() {
+    let franken_port = reserve_port();
+    let legacy_port = reserve_port();
+    let _franken = spawn_frankenredis(franken_port, None);
+    let _legacy = spawn_legacy_redis(legacy_port);
+
+    for command in [
+        [&b"REPLCONF"[..], &b"ACK"[..], &b"100"[..]],
+        [&b"REPLCONF"[..], &b"GETACK"[..], &b"*"[..]],
+    ] {
+        let mut franken = connect_client(franken_port);
+        franken
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("set franken read timeout");
+        send_command_expect_no_response(&mut franken, &command);
+        assert_eq!(
+            send_command(&mut franken, &[b"PING"]),
+            RespFrame::SimpleString("PONG".to_string())
+        );
+
+        let mut legacy = connect_client(legacy_port);
+        legacy
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("set legacy read timeout");
+        send_command_expect_no_response(&mut legacy, &command);
+        assert_eq!(
+            send_command(&mut legacy, &[b"PING"]),
+            RespFrame::SimpleString("PONG".to_string())
+        );
+    }
+
+    send_shutdown_nosave(franken_port);
+}
+
+#[test]
+fn tcp_sync_matches_legacy_redis_snapshot_streaming_shape() {
+    let franken_port = reserve_port();
+    let legacy_port = reserve_port();
+    let _franken = spawn_frankenredis(franken_port, None);
+    let _legacy = spawn_legacy_redis(legacy_port);
+
+    let mut franken = connect_client(franken_port);
+    franken
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set franken sync timeout");
+    franken
+        .write_all(&encode_command(&[b"SYNC"]))
+        .expect("write sync to frankenredis");
+    let franken_preamble = read_replication_snapshot_preamble(&mut franken);
+
+    let mut legacy = connect_client(legacy_port);
+    legacy
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set legacy sync timeout");
+    legacy
+        .write_all(&encode_command(&[b"SYNC"]))
+        .expect("write sync to legacy redis");
+    let legacy_preamble = read_replication_snapshot_preamble(&mut legacy);
+
+    assert!(
+        franken_preamble.starts_with(b"$"),
+        "frankenredis SYNC should start snapshot streaming, got {:?}",
+        String::from_utf8_lossy(&franken_preamble)
+    );
+    assert!(
+        legacy_preamble.starts_with(b"$"),
+        "legacy redis SYNC should start snapshot streaming, got {:?}",
+        String::from_utf8_lossy(&legacy_preamble)
+    );
+    assert!(
+        !franken_preamble.starts_with(b"+FULLRESYNC"),
+        "frankenredis SYNC should not send FULLRESYNC line first: {:?}",
+        String::from_utf8_lossy(&franken_preamble)
+    );
+    assert!(
+        !legacy_preamble.starts_with(b"+FULLRESYNC"),
+        "legacy redis SYNC should not send FULLRESYNC line first: {:?}",
+        String::from_utf8_lossy(&legacy_preamble)
+    );
 }
 
 #[test]

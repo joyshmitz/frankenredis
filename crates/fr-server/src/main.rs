@@ -954,6 +954,9 @@ fn process_buffered_frames(
                         consumed_total += consumed;
                         break; // Stop processing — client is now blocked.
                     }
+                } else if suppress_client_network_reply(&parsed_frame, &response) {
+                    // Redis treats REPLCONF ACK/GETACK as internal control
+                    // frames and does not send a direct reply on client links.
                 } else {
                     response.encode_into(&mut conn.write_buf);
                 }
@@ -1207,6 +1210,18 @@ fn find_crlf(input: &[u8]) -> Option<usize> {
     input.windows(2).position(|window| window == b"\r\n")
 }
 
+fn drain_leading_replication_keepalive_bytes(read_buf: &mut Vec<u8>) {
+    loop {
+        if read_buf.starts_with(b"\r\n") {
+            read_buf.drain(..2);
+        } else if read_buf.starts_with(b"\n") {
+            read_buf.drain(..1);
+        } else {
+            break;
+        }
+    }
+}
+
 fn read_more_replication_bytes(
     stream: &mut StdTcpStream,
     read_buf: &mut Vec<u8>,
@@ -1255,6 +1270,7 @@ fn read_frame_from_stream(
     query_buffer_limit: usize,
 ) -> io::Result<RespFrame> {
     loop {
+        drain_leading_replication_keepalive_bytes(read_buf);
         match fr_protocol::parse_frame_with_config(read_buf, parser_config) {
             Ok(parsed) => {
                 read_buf.drain(..parsed.consumed);
@@ -1278,6 +1294,7 @@ fn read_replication_snapshot_from_stream(
     query_buffer_limit: usize,
 ) -> io::Result<Vec<u8>> {
     loop {
+        drain_leading_replication_keepalive_bytes(read_buf);
         if let Some(preamble_end) = find_crlf(read_buf) {
             let preamble = read_buf[..preamble_end].to_vec();
             if !preamble.starts_with(b"$") {
@@ -1782,7 +1799,7 @@ pub(crate) fn replication_follow_up_bytes(
     response: &RespFrame,
     now_ms: u64,
 ) -> Option<Vec<u8>> {
-    if !is_psync_frame(frame) {
+    if !is_replication_sync_frame(frame) {
         return None;
     }
     let RespFrame::SimpleString(line) = response else {
@@ -1799,11 +1816,11 @@ pub(crate) fn replication_follow_up_bytes(
     None
 }
 
-pub(crate) fn is_psync_frame(frame: &RespFrame) -> bool {
+pub(crate) fn is_replication_sync_frame(frame: &RespFrame) -> bool {
     if let RespFrame::Array(Some(items)) = frame
         && let Some(RespFrame::BulkString(Some(cmd))) = items.first()
     {
-        return cmd.eq_ignore_ascii_case(b"PSYNC");
+        return cmd.eq_ignore_ascii_case(b"PSYNC") || cmd.eq_ignore_ascii_case(b"SYNC");
     }
     false
 }
@@ -2506,6 +2523,32 @@ fn is_quit_frame(frame: &RespFrame) -> bool {
         .ok()
         .and_then(|argv| argv.first().cloned())
         .is_some_and(|cmd| cmd.eq_ignore_ascii_case(b"QUIT"))
+}
+
+fn suppress_client_network_reply(frame: &RespFrame, response: &RespFrame) -> bool {
+    if matches!(response, RespFrame::Error(_)) {
+        return false;
+    }
+    let Ok(argv) = fr_command::frame_to_argv(frame) else {
+        return false;
+    };
+    match argv.as_slice() {
+        [command, subcommand, _]
+            if command.eq_ignore_ascii_case(b"REPLCONF")
+                && subcommand.eq_ignore_ascii_case(b"ACK") =>
+        {
+            true
+        }
+        [command] if command.eq_ignore_ascii_case(b"SYNC") => true,
+        [command, subcommand, argument]
+            if command.eq_ignore_ascii_case(b"REPLCONF")
+                && subcommand.eq_ignore_ascii_case(b"GETACK")
+                && argument.as_slice() == b"*" =>
+        {
+            true
+        }
+        _ => false,
+    }
 }
 
 fn handle_writable(
@@ -3816,6 +3859,17 @@ mod tests {
             return;
         };
         assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn drain_leading_replication_keepalive_bytes_strips_newline_prefixes_only() {
+        let mut read_buf = b"\n\r\n+PONG\r\n".to_vec();
+        crate::drain_leading_replication_keepalive_bytes(&mut read_buf);
+        assert_eq!(read_buf, b"+PONG\r\n");
+
+        let mut unchanged = b"+OK\r\n\n".to_vec();
+        crate::drain_leading_replication_keepalive_bytes(&mut unchanged);
+        assert_eq!(unchanged, b"+OK\r\n\n");
     }
 
     #[test]
