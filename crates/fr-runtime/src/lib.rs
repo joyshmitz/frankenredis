@@ -1248,6 +1248,8 @@ pub struct ServerState {
     pub masteruser: Option<Vec<u8>>,
     /// Optional password used when this server authenticates to its primary.
     pub masterauth: Option<Vec<u8>>,
+    /// Whether to serve stale data when the link to the primary is down (CONFIG SET replica-serve-stale-data). Default yes.
+    pub replica_serve_stale_data: bool,
     pub repl_diskless_sync: bool,
     pub repl_diskless_sync_delay_sec: u64,
     /// Client output buffer hard limit (CONFIG SET client-output-buffer-limit). Default 256 MiB.
@@ -1344,6 +1346,7 @@ impl Default for ServerState {
             min_replicas_max_lag: 10,
             masteruser: None,
             masterauth: None,
+            replica_serve_stale_data: true,
             replica_priority: 100,
             repl_diskless_sync: true,
             repl_diskless_sync_delay_sec: 5,
@@ -2931,6 +2934,54 @@ impl Runtime {
         ))
     }
 
+    fn reject_stale_replica_read_request(
+        &self,
+        argv: &[Vec<u8>],
+        special_command: Option<RuntimeSpecialCommand>,
+    ) -> Option<RespFrame> {
+        if self.server.replica_serve_stale_data {
+            return None;
+        }
+        let ReplicationRoleState::Replica { state, .. } =
+            &self.server.replication_runtime_state.role
+        else {
+            return None; // Masters do not enforce replica-serve-stale-data
+        };
+        if state == "connected" {
+            return None; // Not stale if connected to primary
+        }
+        // The following commands are permitted during a stale state.
+        let permitted = matches!(
+            special_command,
+            Some(RuntimeSpecialCommand::Info)
+                | Some(RuntimeSpecialCommand::Replicaof)
+                | Some(RuntimeSpecialCommand::Slaveof)
+                | Some(RuntimeSpecialCommand::Auth)
+                | Some(RuntimeSpecialCommand::Ping)
+                | Some(RuntimeSpecialCommand::Shutdown)
+                | Some(RuntimeSpecialCommand::Replconf)
+                | Some(RuntimeSpecialCommand::Role)
+                | Some(RuntimeSpecialCommand::Config)
+                | Some(RuntimeSpecialCommand::Subscribe)
+                | Some(RuntimeSpecialCommand::Unsubscribe)
+                | Some(RuntimeSpecialCommand::Psubscribe)
+                | Some(RuntimeSpecialCommand::Punsubscribe)
+                | Some(RuntimeSpecialCommand::Ssubscribe)
+                | Some(RuntimeSpecialCommand::Sunsubscribe)
+                | Some(RuntimeSpecialCommand::Pubsub)
+        ) || argv.first().is_some_and(|cmd| {
+            eq_ascii_token(cmd, b"COMMAND") || eq_ascii_token(cmd, b"LATENCY")
+        });
+
+        if permitted {
+            return None;
+        }
+
+        Some(RespFrame::Error(
+            "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.".to_string()
+        ))
+    }
+
     fn execute_frame_internal(
         &mut self,
         frame: RespFrame,
@@ -3065,6 +3116,10 @@ impl Runtime {
             && let Some(reply) =
                 self.reject_due_to_replica_write_quorum(&argv, special_command, now_ms)
         {
+            return reply;
+        }
+
+        if let Some(reply) = self.reject_stale_replica_read_request(&argv, special_command) {
             return reply;
         }
 
@@ -5620,6 +5675,9 @@ impl Runtime {
         }
         if let Some(repl_timeout) = next_repl_timeout {
             self.server.repl_timeout_sec = repl_timeout;
+        }
+        if let Some(serve_stale) = next_replica_serve_stale_data {
+            self.server.replica_serve_stale_data = serve_stale;
         }
         if let Some(priority) = next_replica_priority {
             self.server.replica_priority = priority;
