@@ -353,9 +353,7 @@ fn parse_client_list_fields(line: &str) -> HashMap<String, String> {
         .collect()
 }
 
-fn sample_client_list_fields(
-    spawn: impl FnOnce(u16) -> ManagedChild,
-) -> HashMap<String, String> {
+fn sample_client_list_fields(spawn: impl FnOnce(u16) -> ManagedChild) -> HashMap<String, String> {
     let port = reserve_port();
     let _server = spawn(port);
 
@@ -374,9 +372,48 @@ fn sample_client_list_fields(
     };
     let tracked_line = listing
         .lines()
-        .find(|line| line.split_whitespace().any(|field| field == "name=tracked-client"))
+        .find(|line| {
+            line.split_whitespace()
+                .any(|field| field == "name=tracked-client")
+        })
         .unwrap_or_else(|| panic!("tracked client line missing from CLIENT LIST: {listing}"));
     parse_client_list_fields(tracked_line)
+}
+
+fn sample_named_client_list(
+    spawn: impl FnOnce(u16) -> ManagedChild,
+) -> HashMap<String, HashMap<String, String>> {
+    let port = reserve_port();
+    let _server = spawn(port);
+
+    let mut first = connect_client(port);
+    let mut second = connect_client(port);
+    assert_eq!(
+        send_command(&mut first, &[b"CLIENT", b"SETNAME", b"tracked-one"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        send_command(&mut second, &[b"CLIENT", b"SETNAME", b"tracked-two"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    let response = send_command(&mut first, &[b"CLIENT", b"LIST"]);
+    let listing = match response {
+        RespFrame::BulkString(Some(bytes)) => String::from_utf8(bytes).expect("client list utf8"),
+        other => panic!("expected bulk client list, got {other:?}"),
+    };
+    let mut clients = HashMap::new();
+    for name in ["tracked-one", "tracked-two"] {
+        let line = listing
+            .lines()
+            .find(|line| {
+                line.split_whitespace()
+                    .any(|field| field == format!("name={name}"))
+            })
+            .unwrap_or_else(|| panic!("client {name} missing from CLIENT LIST: {listing}"));
+        clients.insert(name.to_string(), parse_client_list_fields(line));
+    }
+    clients
 }
 
 fn send_shutdown_nosave(port: u16) {
@@ -941,6 +978,36 @@ fn tcp_client_list_age_idle_matches_legacy_redis_reference() {
         franken_age >= franken_idle,
         "target age should be >= idle: {franken_fields:?}"
     );
+}
+
+#[test]
+fn tcp_client_list_includes_all_connected_named_clients_matches_legacy_redis_reference() {
+    let franken = sample_named_client_list(|port| spawn_frankenredis(port, None));
+    let legacy = sample_named_client_list(spawn_legacy_redis);
+
+    for name in ["tracked-one", "tracked-two"] {
+        let franken_fields = franken
+            .get(name)
+            .unwrap_or_else(|| panic!("frankenredis missing {name}: {franken:?}"));
+        let legacy_fields = legacy
+            .get(name)
+            .unwrap_or_else(|| panic!("legacy redis missing {name}: {legacy:?}"));
+        for key in ["id", "name"] {
+            assert!(
+                franken_fields.contains_key(key),
+                "frankenredis missing {key} for {name}: {franken_fields:?}"
+            );
+            assert!(
+                legacy_fields.contains_key(key),
+                "legacy redis missing {key} for {name}: {legacy_fields:?}"
+            );
+        }
+        assert_eq!(
+            franken_fields.get("name"),
+            legacy_fields.get("name"),
+            "name mismatch for {name}: franken={franken_fields:?} legacy={legacy_fields:?}"
+        );
+    }
 }
 
 #[test]
@@ -1807,7 +1874,10 @@ fn tcp_failover_command_promotes_target_replica_and_leaves_chain_in_place() {
 
     let mut original_master_client = connect_client(original_master_port);
     assert_eq!(
-        send_command(&mut original_master_client, &[b"SET", b"pre-failover", b"value"]),
+        send_command(
+            &mut original_master_client,
+            &[b"SET", b"pre-failover", b"value"]
+        ),
         RespFrame::SimpleString("OK".to_string())
     );
 
@@ -1873,7 +1943,10 @@ fn tcp_failover_command_promotes_target_replica_and_leaves_chain_in_place() {
 
     let mut target_master_client = connect_client(target_replica_port);
     assert_eq!(
-        send_command(&mut target_master_client, &[b"SET", b"post-failover", b"value"]),
+        send_command(
+            &mut target_master_client,
+            &[b"SET", b"post-failover", b"value"]
+        ),
         RespFrame::SimpleString("OK".to_string())
     );
 
@@ -2021,10 +2094,7 @@ fn idle_client_disconnected_after_timeout() {
     let mut client = connect_client(port);
 
     // Set timeout to 1 second
-    let res = send_command(
-        &mut client,
-        &[b"CONFIG", b"SET", b"timeout", b"1"]
-    );
+    let res = send_command(&mut client, &[b"CONFIG", b"SET", b"timeout", b"1"]);
     assert_eq!(res, RespFrame::SimpleString("OK".to_string()));
 
     // Wait slightly more than 1 second
@@ -2034,10 +2104,13 @@ fn idle_client_disconnected_after_timeout() {
     // Trying to send a PING might succeed in writing to the local socket buffer,
     // but reading the response should fail.
     client.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap_or(());
-    
+
     let mut buf = [0u8; 1024];
     let read_res = client.read(&mut buf);
-    assert!(read_res.unwrap_or(0) == 0, "Server should have closed connection");
+    assert!(
+        read_res.unwrap_or(0) == 0,
+        "Server should have closed connection"
+    );
 
     send_shutdown_nosave(port);
 }

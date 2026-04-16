@@ -72,6 +72,41 @@ fn processed_command_counts(argv: &[Vec<u8>]) -> (u64, u64) {
     (read_count, write_count)
 }
 
+fn client_info_command_name(argv: &[Vec<u8>]) -> String {
+    let Some(command) = argv.first() else {
+        return "NULL".to_string();
+    };
+    let command = String::from_utf8_lossy(command).to_ascii_lowercase();
+    let Some(sub) = argv.get(1) else {
+        return command;
+    };
+    let uses_subcommand = matches!(
+        command.as_str(),
+        "acl"
+            | "client"
+            | "cluster"
+            | "command"
+            | "config"
+            | "debug"
+            | "function"
+            | "latency"
+            | "memory"
+            | "module"
+            | "object"
+            | "pubsub"
+            | "script"
+            | "sentinel"
+            | "slowlog"
+            | "xgroup"
+            | "xinfo"
+    );
+    if !uses_subcommand {
+        return command;
+    }
+    let sub = String::from_utf8_lossy(sub).to_ascii_lowercase();
+    format!("{command}|{sub}")
+}
+
 fn read_failover_frame(
     stream: &mut std::net::TcpStream,
     read_buf: &mut Vec<u8>,
@@ -1309,6 +1344,8 @@ pub struct ServerState {
     pub client_pause_all: bool,
     /// Client IDs currently blocked in the standalone server event loop.
     pub blocked_client_ids: HashSet<u64>,
+    /// Snapshot of active TCP client sessions for multi-client CLIENT LIST output.
+    client_sessions: BTreeMap<u64, ClientSession>,
     /// Pending CLIENT UNBLOCK requests to be applied by the standalone server.
     pending_client_unblocks: Vec<(u64, ClientUnblockMode)>,
     /// Flag set when REPLICAOF/SLAVEOF changes should force the event loop
@@ -1381,6 +1418,7 @@ impl Default for ServerState {
             client_pause_deadline_ms: 0,
             client_pause_all: false,
             blocked_client_ids: HashSet::new(),
+            client_sessions: BTreeMap::new(),
             pending_client_unblocks: Vec::new(),
             replica_reconfigure_requested: false,
         }
@@ -1605,7 +1643,7 @@ impl ServerState {
 }
 
 /// State that is clearly scoped to a single client session.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClientSession {
     cluster_state: ClusterClientState,
     transaction_state: TransactionState,
@@ -1633,6 +1671,8 @@ pub struct ClientSession {
     pub connected_at_ms: u64,
     /// Last command interaction timestamp in ms since epoch.
     pub last_interaction_ms: u64,
+    /// Most recent command recorded for CLIENT LIST/INFO `cmd=`.
+    last_command_name: String,
 }
 
 impl Default for ClientSession {
@@ -1652,6 +1692,7 @@ impl Default for ClientSession {
             peer_addr: None,
             connected_at_ms: 0,
             last_interaction_ms: 0,
+            last_command_name: "NULL".to_string(),
         }
     }
 }
@@ -2310,6 +2351,18 @@ impl Runtime {
         self.session.client_id
     }
 
+    /// Update or insert a session snapshot used by multi-client CLIENT LIST.
+    pub fn record_client_session(&mut self, session: &ClientSession) {
+        self.server
+            .client_sessions
+            .insert(session.client_id, session.clone());
+    }
+
+    /// Remove a disconnected session from the CLIENT LIST registry.
+    pub fn remove_client_session(&mut self, client_id: u64) {
+        self.server.client_sessions.remove(&client_id);
+    }
+
     /// Track a new client connection for INFO stats.
     pub fn track_connection_opened(&mut self) {
         self.server.store.stat_total_connections_received += 1;
@@ -2850,6 +2903,11 @@ impl Runtime {
         self.refresh_store_runtime_info_context();
         // Parse once, reuse for both stats and execution (eliminates double parse).
         let argv_result = frame_to_argv(&frame);
+        if let Ok(argv) = &argv_result {
+            self.session.last_command_name = client_info_command_name(argv);
+        }
+        let current_session = self.session.clone();
+        self.record_client_session(&current_session);
         let processed_counts = argv_result
             .as_ref()
             .ok()
@@ -2970,9 +3028,7 @@ impl Runtime {
         if *state == "connected" {
             return None; // Not stale if connected to primary
         }
-        let Some(command) = argv.first() else {
-            return None;
-        };
+        let command = argv.first()?;
         // The following commands are permitted during a stale state.
         let permitted = matches!(
             special_command,
@@ -2998,6 +3054,8 @@ impl Runtime {
                 | Some(RuntimeSpecialCommand::Publish)
                 | Some(RuntimeSpecialCommand::Spublish)
                 | Some(RuntimeSpecialCommand::Pubsub)
+                | Some(RuntimeSpecialCommand::Wait)
+                | Some(RuntimeSpecialCommand::Waitaof)
                 | Some(RuntimeSpecialCommand::Select)
         ) || eq_ascii_token(command, b"INFO")
             || eq_ascii_token(command, b"COMMAND")
@@ -3008,7 +3066,8 @@ impl Runtime {
         }
 
         Some(RespFrame::Error(
-            "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.".to_string()
+            "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'."
+                .to_string(),
         ))
     }
 
@@ -3888,44 +3947,37 @@ impl Runtime {
     }
 
     fn current_dispatch_client_context(&self, now_ms: u64) -> DispatchClientContext {
-        let client_id = self.session.client_id;
-        let is_pubsub = self
-            .server
-            .pubsub_channel_subs
-            .values()
-            .any(|clients| clients.contains(&client_id))
-            || self
-                .server
-                .pubsub_pattern_subs
-                .values()
-                .any(|clients| clients.contains(&client_id))
-            || self
-                .server
-                .pubsub_shard_subs
-                .values()
-                .any(|clients| clients.contains(&client_id));
-        let age_seconds = now_ms.saturating_sub(self.session.connected_at_ms) / 1000;
-        let idle_seconds = now_ms.saturating_sub(self.session.last_interaction_ms) / 1000;
+        self.dispatch_client_context_for_session(&self.session, now_ms)
+    }
+
+    fn dispatch_client_context_for_session(
+        &self,
+        session: &ClientSession,
+        now_ms: u64,
+    ) -> DispatchClientContext {
+        let client_id = session.client_id;
+        let is_pubsub = self.is_pubsub_client(client_id);
+        let age_seconds = now_ms.saturating_sub(session.connected_at_ms) / 1000;
+        let idle_seconds = now_ms.saturating_sub(session.last_interaction_ms) / 1000;
         DispatchClientContext {
             client_id,
-            client_name: self.session.client_name.clone(),
-            client_lib_name: self.session.client_lib_name.clone(),
-            client_lib_ver: self.session.client_lib_ver.clone(),
+            client_name: session.client_name.clone(),
+            client_lib_name: session.client_lib_name.clone(),
+            client_lib_ver: session.client_lib_ver.clone(),
             age_seconds,
             idle_seconds,
-            db_index: self.session.selected_db,
-            flags: if self.session.transaction_state.in_transaction {
+            db_index: session.selected_db,
+            flags: if session.transaction_state.in_transaction {
                 "x".to_string()
             } else {
                 "N".to_string()
             },
-            peer_addr: self
-                .session
+            peer_addr: session
                 .peer_addr
                 .map(|addr| addr.to_string())
                 .unwrap_or_else(|| "127.0.0.1:0".to_string()),
-            authenticated_user: self.session.current_user_name().to_vec(),
-            resp_protocol_version: self.session.resp_protocol_version,
+            authenticated_user: session.current_user_name().to_vec(),
+            resp_protocol_version: session.resp_protocol_version,
             channel_subscriptions: self
                 .server
                 .pubsub_client_channels
@@ -3941,14 +3993,92 @@ impl Runtime {
                 .pubsub_client_shard_channels
                 .get(&client_id)
                 .map_or(0, HashSet::len),
-            multi_count: if self.session.transaction_state.in_transaction {
-                self.session.transaction_state.command_queue.len() as i64
+            multi_count: if session.transaction_state.in_transaction {
+                session.transaction_state.command_queue.len() as i64
             } else {
                 -1
             },
-            watch_count: self.session.transaction_state.watched_keys.len(),
+            watch_count: session.transaction_state.watched_keys.len(),
             is_pubsub,
         }
+    }
+
+    fn client_list_sessions(&self) -> BTreeMap<u64, ClientSession> {
+        let mut sessions = self.server.client_sessions.clone();
+        sessions.insert(self.session.client_id, self.session.clone());
+        sessions
+    }
+
+    fn client_type_for_session(&self, session: &ClientSession) -> &'static str {
+        if self.is_replica(session.client_id) {
+            "replica"
+        } else if self.is_pubsub_client(session.client_id) {
+            "pubsub"
+        } else {
+            "normal"
+        }
+    }
+
+    fn client_info_line_for_session(&self, session: &ClientSession, now_ms: u64) -> String {
+        let name = session
+            .client_name
+            .as_ref()
+            .map(|n| String::from_utf8_lossy(n).to_string())
+            .unwrap_or_default();
+        let peer = session
+            .peer_addr
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "127.0.0.1:0".to_string());
+        let age_seconds = now_ms.saturating_sub(session.connected_at_ms) / 1000;
+        let idle_seconds = now_ms.saturating_sub(session.last_interaction_ms) / 1000;
+        let channel_subs = self
+            .server
+            .pubsub_client_channels
+            .get(&session.client_id)
+            .map_or(0, HashSet::len);
+        let pattern_subs = self
+            .server
+            .pubsub_client_patterns
+            .get(&session.client_id)
+            .map_or(0, HashSet::len);
+        let shard_subs = self
+            .server
+            .pubsub_client_shard_channels
+            .get(&session.client_id)
+            .map_or(0, HashSet::len);
+        let flags = if session.transaction_state.in_transaction {
+            "x"
+        } else {
+            "N"
+        };
+        let multi_count = if session.transaction_state.in_transaction {
+            session.transaction_state.command_queue.len() as i64
+        } else {
+            -1
+        };
+        let lib_name = session.client_lib_name.as_deref().unwrap_or("");
+        let lib_ver = session.client_lib_ver.as_deref().unwrap_or("");
+        format!(
+            "id={} addr={} laddr=127.0.0.1:{} fd=0 name={} age={} idle={} db={} sub={} psub={} ssub={} multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd={} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
+            session.client_id,
+            peer,
+            self.server.store.server_port,
+            name,
+            age_seconds,
+            idle_seconds,
+            session.selected_db,
+            channel_subs,
+            pattern_subs,
+            shard_subs,
+            multi_count,
+            session.transaction_state.watched_keys.len(),
+            session.last_command_name,
+            String::from_utf8_lossy(session.current_user_name()),
+            lib_name,
+            lib_ver,
+            session.resp_protocol_version,
+            flags,
+        )
     }
 
     fn sync_dispatch_client_context_to_session(&mut self) {
@@ -5429,13 +5559,15 @@ impl Runtime {
                     Ok(value) if value >= 0 => value as usize,
                     Ok(_) => {
                         return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'min-replicas-to-write'".to_string(),
+                            "ERR Invalid argument for CONFIG SET 'min-replicas-to-write'"
+                                .to_string(),
                         );
                     }
                     Err(err) => return err.to_resp(),
                 };
                 next_min_replicas_to_write = Some(parsed);
-                static_override_updates.push(("min-replicas-to-write".to_string(), parsed.to_string()));
+                static_override_updates
+                    .push(("min-replicas-to-write".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("min-replicas-max-lag") {
@@ -5443,13 +5575,15 @@ impl Runtime {
                     Ok(value) if value >= 0 => value as u64,
                     Ok(_) => {
                         return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'min-replicas-max-lag'".to_string(),
+                            "ERR Invalid argument for CONFIG SET 'min-replicas-max-lag'"
+                                .to_string(),
                         );
                     }
                     Err(err) => return err.to_resp(),
                 };
                 next_min_replicas_max_lag = Some(parsed);
-                static_override_updates.push(("min-replicas-max-lag".to_string(), parsed.to_string()));
+                static_override_updates
+                    .push(("min-replicas-max-lag".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("client-query-buffer-limit") {
@@ -5919,127 +6053,58 @@ impl Runtime {
             if sub.eq_ignore_ascii_case("INFO") && argv.len() != 2 {
                 return CommandError::WrongArity("CLIENT").to_resp();
             }
-            let name_str = self
-                .session
-                .client_name
-                .as_ref()
-                .map(|n| String::from_utf8_lossy(n).to_string())
-                .unwrap_or_default();
-            let flags = if self.session.transaction_state.in_transaction {
-                "x"
-            } else {
-                "N"
-            };
-            let multi_count = if self.session.transaction_state.in_transaction {
-                self.session.transaction_state.command_queue.len() as i64
-            } else {
-                -1
-            };
-            let client_id = self.session.client_id;
-            let channel_subs = self
-                .server
-                .pubsub_client_channels
-                .get(&client_id)
-                .map_or(0, HashSet::len);
-            let pattern_subs = self
-                .server
-                .pubsub_client_patterns
-                .get(&client_id)
-                .map_or(0, HashSet::len);
-            let shard_subs = self
-                .server
-                .pubsub_client_shard_channels
-                .get(&client_id)
-                .map_or(0, HashSet::len);
-            let lib_name = self.session.client_lib_name.as_deref().unwrap_or("");
-            let lib_ver = self.session.client_lib_ver.as_deref().unwrap_or("");
-            let peer = self
-                .session
-                .peer_addr
-                .map(|a| a.to_string())
-                .unwrap_or_else(|| "127.0.0.1:0".to_string());
-            let age_seconds = now_ms.saturating_sub(self.session.connected_at_ms) / 1000;
-            let idle_seconds = now_ms.saturating_sub(self.session.last_interaction_ms) / 1000;
-            let info_line = format!(
-                "id={} addr={} laddr=127.0.0.1:{} fd=0 name={} age={} idle={} db={} sub={} psub={} ssub={} multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
-                client_id,
-                peer,
-                self.server.store.server_port,
-                name_str,
-                age_seconds,
-                idle_seconds,
-                self.session.selected_db,
-                channel_subs,
-                pattern_subs,
-                shard_subs,
-                multi_count,
-                self.session.transaction_state.watched_keys.len(),
-                sub.to_ascii_lowercase(),
-                String::from_utf8_lossy(self.session.current_user_name()),
-                lib_name,
-                lib_ver,
-                self.session.resp_protocol_version,
-                flags,
-            );
             if sub.eq_ignore_ascii_case("LIST") {
+                let sessions = self.client_list_sessions();
                 let payload = if argv.len() == 2 {
-                    info_line.into_bytes()
-                } else if argv.len() == 4 && eq_ascii_token(&argv[2], b"TYPE") {
-                    let client_id = self.session.client_id;
-                    let has_subs = self
-                        .server
-                        .pubsub_channel_subs
+                    sessions
                         .values()
-                        .any(|clients| clients.contains(&client_id))
-                        || self
-                            .server
-                            .pubsub_pattern_subs
-                            .values()
-                            .any(|clients| clients.contains(&client_id))
-                        || self
-                            .server
-                            .pubsub_shard_subs
-                            .values()
-                            .any(|clients| clients.contains(&client_id));
-                    let client_type = if has_subs { "pubsub" } else { "normal" };
-                    let include_self = match std::str::from_utf8(&argv[3]) {
-                        Ok(kind) if kind.eq_ignore_ascii_case(client_type) => true,
-                        Ok(kind)
-                            if kind.eq_ignore_ascii_case("NORMAL")
-                                || kind.eq_ignore_ascii_case("MASTER")
-                                || kind.eq_ignore_ascii_case("REPLICA")
-                                || kind.eq_ignore_ascii_case("PUBSUB") =>
-                        {
-                            false
-                        }
-                        Ok(kind) => {
-                            return RespFrame::Error(format!("ERR Unknown client type '{kind}'"));
-                        }
+                        .map(|session| self.client_info_line_for_session(session, now_ms))
+                        .collect::<String>()
+                        .into_bytes()
+                } else if argv.len() == 4 && eq_ascii_token(&argv[2], b"TYPE") {
+                    let kind = match std::str::from_utf8(&argv[3]) {
+                        Ok(kind) => kind,
                         Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
                     };
-                    if include_self {
-                        info_line.into_bytes()
-                    } else {
-                        Vec::new()
+                    if !matches!(
+                        kind.to_ascii_lowercase().as_str(),
+                        "normal" | "master" | "replica" | "pubsub"
+                    ) {
+                        return RespFrame::Error(format!("ERR Unknown client type '{kind}'"));
                     }
+                    sessions
+                        .values()
+                        .filter(|session| {
+                            self.client_type_for_session(session)
+                                .eq_ignore_ascii_case(kind)
+                        })
+                        .map(|session| self.client_info_line_for_session(session, now_ms))
+                        .collect::<String>()
+                        .into_bytes()
                 } else if argv.len() >= 4 && eq_ascii_token(&argv[2], b"ID") {
-                    let mut payload = Vec::new();
+                    let mut requested_ids = HashSet::new();
                     for id_arg in &argv[3..] {
                         let parsed_id = match parse_i64_arg(id_arg) {
                             Ok(id) if id > 0 => id as u64,
                             _ => return RespFrame::Error("ERR Invalid client ID".to_string()),
                         };
-                        if parsed_id == client_id {
-                            payload.extend_from_slice(info_line.as_bytes());
-                        }
+                        requested_ids.insert(parsed_id);
                     }
-                    payload
+                    sessions
+                        .values()
+                        .filter(|session| requested_ids.contains(&session.client_id))
+                        .map(|session| self.client_info_line_for_session(session, now_ms))
+                        .collect::<String>()
+                        .into_bytes()
                 } else {
                     return RespFrame::Error("ERR syntax error".to_string());
                 };
                 return RespFrame::BulkString(Some(payload));
             }
-            RespFrame::BulkString(Some(info_line.into_bytes()))
+            RespFrame::BulkString(Some(
+                self.client_info_line_for_session(&self.session, now_ms)
+                    .into_bytes(),
+            ))
         } else if sub.eq_ignore_ascii_case("NO-EVICT") {
             if argv.len() != 3 {
                 return CommandError::WrongArity("CLIENT").to_resp();
@@ -7568,7 +7633,9 @@ slave_priority:{}\r\n",
             self.server.replication_runtime_state.role,
             ReplicationRoleState::Replica { .. }
         ) {
-            return RespFrame::Error("ERR FAILOVER is not valid when server is a replica.".to_string());
+            return RespFrame::Error(
+                "ERR FAILOVER is not valid when server is a replica.".to_string(),
+            );
         }
 
         let mut abort = false;
@@ -7626,7 +7693,8 @@ slave_priority:{}\r\n",
             }
         }
 
-        if abort && (target_host.is_some() || target_port.is_some() || force || timeout_ms.is_some())
+        if abort
+            && (target_host.is_some() || target_port.is_some() || force || timeout_ms.is_some())
         {
             return CommandError::SyntaxError.to_resp();
         }
@@ -7691,7 +7759,9 @@ slave_priority:{}\r\n",
         timeout: Duration,
     ) -> Result<(), CommandError> {
         let mut stream = std::net::TcpStream::connect((host, port)).map_err(|err| {
-            CommandError::Custom(format!("ERR FAILOVER could not connect to target replica: {err}"))
+            CommandError::Custom(format!(
+                "ERR FAILOVER could not connect to target replica: {err}"
+            ))
         })?;
         let _ = stream.set_nodelay(true);
         let _ = stream.set_read_timeout(Some(timeout));
@@ -10546,6 +10616,64 @@ mod tests {
     }
 
     #[test]
+    fn client_list_includes_registered_peer_sessions() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"SETNAME", b"alpha"]), 1_000),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let mut peer = rt.new_session();
+        peer.client_name = Some(b"beta".to_vec());
+        peer.selected_db = 4;
+        peer.connected_at_ms = 500;
+        peer.last_interaction_ms = 750;
+        peer.last_command_name = "client|setname".to_string();
+        rt.record_client_session(&peer);
+
+        let list_all = rt.execute_frame(command(&[b"CLIENT", b"LIST"]), 4_000);
+        let info = match list_all {
+            RespFrame::BulkString(Some(info)) => String::from_utf8(info).expect("client list utf8"),
+            other => unreachable!("unexpected client list response: {other:?}"),
+        };
+        assert!(
+            info.contains("name=alpha"),
+            "missing current client from {info}"
+        );
+        assert!(
+            info.contains("name=beta"),
+            "missing peer client from {info}"
+        );
+        assert!(
+            info.contains(&format!("id={}", peer.client_id)),
+            "missing peer id from {info}"
+        );
+
+        let peer_id = peer.client_id.to_string();
+        let list_peer_only = rt.execute_frame(
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"CLIENT".to_vec())),
+                RespFrame::BulkString(Some(b"LIST".to_vec())),
+                RespFrame::BulkString(Some(b"ID".to_vec())),
+                RespFrame::BulkString(Some(peer_id.clone().into_bytes())),
+            ])),
+            4_001,
+        );
+        let filtered = match list_peer_only {
+            RespFrame::BulkString(Some(info)) => String::from_utf8(info).expect("client list utf8"),
+            other => unreachable!("unexpected filtered client list response: {other:?}"),
+        };
+        assert!(
+            filtered.contains("name=beta"),
+            "missing peer filter hit from {filtered}"
+        );
+        assert!(
+            !filtered.contains("name=alpha"),
+            "current client should not be in peer-only filter: {filtered}"
+        );
+    }
+
+    #[test]
     fn client_info_rejects_extra_arguments() {
         let mut rt = Runtime::default_strict();
         assert_eq!(
@@ -12340,10 +12468,7 @@ mod tests {
             ),
             RespFrame::SimpleString("OK".to_string())
         );
-        let replica = rt
-            .server
-            .replication_runtime_state
-            .ensure_replica(42);
+        let replica = rt.server.replication_runtime_state.ensure_replica(42);
         replica.last_ack_timestamp_ms = 9_000;
 
         assert_eq!(
@@ -12357,7 +12482,10 @@ mod tests {
         let mut rt = Runtime::default_strict();
 
         assert_eq!(
-            rt.execute_frame(command(&[b"CONFIG", b"GET", b"replica-serve-stale-data"]), 0),
+            rt.execute_frame(
+                command(&[b"CONFIG", b"GET", b"replica-serve-stale-data"]),
+                0
+            ),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"replica-serve-stale-data".to_vec())),
                 RespFrame::BulkString(Some(b"yes".to_vec())),
@@ -12407,8 +12535,10 @@ mod tests {
             RespFrame::SimpleString("OK".to_string())
         );
 
-        let expected =
-            RespFrame::Error("MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.".to_string());
+        let expected = RespFrame::Error(
+            "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'."
+                .to_string(),
+        );
         assert_eq!(
             rt.execute_frame(command(&[b"GET", b"blocked"]), 2),
             expected

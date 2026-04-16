@@ -631,6 +631,7 @@ fn main() -> ExitCode {
                 client_id_to_token.remove(&conn.session.client_id);
                 // Clean up Pub/Sub subscriptions and stats for this client.
                 runtime.pubsub_cleanup_client(conn.session.client_id);
+                runtime.remove_client_session(conn.session.client_id);
                 runtime.cleanup_disconnected_client(conn.session.client_id);
                 runtime.track_connection_closed();
                 let _ = poll.registry().deregister(&mut conn.stream);
@@ -643,7 +644,8 @@ fn main() -> ExitCode {
         if client_timeout_sec > 0 {
             let timeout_ms = client_timeout_sec * 1000;
             for (&token, conn) in clients.iter_mut() {
-                if conn.closing || conn.blocked.is_some() || conn.replication_sent_offset.is_some() {
+                if conn.closing || conn.blocked.is_some() || conn.replication_sent_offset.is_some()
+                {
                     continue; // Skip closing, blocked, and replica clients.
                 }
                 if runtime.is_pubsub_client(conn.session.client_id) {
@@ -728,7 +730,9 @@ fn accept_connections(
                 let mut session = runtime.new_session();
                 session.peer_addr = Some(peer_addr);
                 let client_id = session.client_id;
-                clients.insert(conn_handle, ClientConnection::new(stream, session, now_ms()));
+                let conn = ClientConnection::new(stream, session, now_ms());
+                runtime.record_client_session(&conn.session);
+                clients.insert(conn_handle, conn);
                 client_id_to_token.insert(client_id, conn_handle);
                 runtime.track_connection_opened();
             }
@@ -833,6 +837,7 @@ fn handle_readable(
     // Swap session back.
     let updated_session = runtime.swap_session(prev);
     conn.session = updated_session;
+    runtime.record_client_session(&conn.session);
 
     // If there's data to write, ensure we're registered for WRITABLE so the
     // writable handler can flush once per poll cycle.
@@ -4130,7 +4135,10 @@ mod tests {
         let sub_replica_session = replica_rt.new_session();
         let sub_replica_id = sub_replica_session.client_id;
         let mut sub_replica_conn = ClientConnection::new(
-            mio::net::TcpStream::from_std(stream_sub), sub_replica_session, 0);
+            mio::net::TcpStream::from_std(stream_sub),
+            sub_replica_session,
+            0,
+        );
 
         let prev = replica_rt.swap_session(std::mem::take(&mut sub_replica_conn.session));
         let response_sub = replica_rt.execute_frame(psync_frame.clone(), ts);
@@ -4490,7 +4498,10 @@ mod tests {
         let blocked_session = runtime.new_session();
         let blocked_client_id = blocked_session.client_id;
         let mut blocked_conn = ClientConnection::new(
-            mio::net::TcpStream::from_std(blocked_stream), blocked_session, 0);
+            mio::net::TcpStream::from_std(blocked_stream),
+            blocked_session,
+            0,
+        );
         blocked_conn.blocked = Some(BlockedState {
             op: BlockingOp::BLpop {
                 keys: vec![b"queue".to_vec()],
@@ -4502,7 +4513,10 @@ mod tests {
 
         let requester_session = runtime.new_session();
         let mut requester_conn = ClientConnection::new(
-            mio::net::TcpStream::from_std(requester_stream), requester_session, 0);
+            mio::net::TcpStream::from_std(requester_stream),
+            requester_session,
+            0,
+        );
         requester_conn.read_buf.extend_from_slice(
             &RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"CLIENT".to_vec())),
@@ -4597,7 +4611,10 @@ mod tests {
         let blocked_session = runtime.new_session();
         let blocked_client_id = blocked_session.client_id;
         let mut blocked_conn = ClientConnection::new(
-            mio::net::TcpStream::from_std(blocked_stream), blocked_session, 0);
+            mio::net::TcpStream::from_std(blocked_stream),
+            blocked_session,
+            0,
+        );
         blocked_conn.blocked = Some(BlockedState {
             op: BlockingOp::BLpop {
                 keys: vec![b"queue".to_vec()],
