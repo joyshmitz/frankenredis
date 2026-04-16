@@ -357,6 +357,24 @@ fn spawn_frankenredis(port: u16, primary_port: Option<u16>) -> ManagedChild {
     spawn_frankenredis_opts(port, primary_port, None, None)
 }
 
+fn spawn_frankenredis_with_config(port: u16, config_path: &str) -> ManagedChild {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_frankenredis"));
+    command
+        .arg("--bind")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--mode")
+        .arg("strict")
+        .arg("--config")
+        .arg(config_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = ManagedChild::spawn(command, None);
+    wait_for_port(port);
+    child
+}
+
 fn spawn_frankenredis_opts(
     port: u16,
     primary_port: Option<u16>,
@@ -2261,6 +2279,42 @@ fn idle_client_disconnected_after_timeout() {
     assert!(
         read_res.unwrap_or(0) == 0,
         "Server should have closed connection"
+    );
+
+    send_shutdown_nosave(port);
+}
+
+#[test]
+fn tcp_config_rewrite_updates_file_on_disk() {
+    let port = reserve_port();
+    let temp_dir = unique_temp_dir("frankenredis-config-rewrite");
+    let config_path = temp_dir.join("frankenredis.conf");
+    let config_path_str = config_path.to_str().unwrap();
+
+    // Create initial config file
+    std::fs::write(&config_path, "timeout 0\n").unwrap();
+
+    let _server = spawn_frankenredis_with_config(port, config_path_str);
+
+    let mut client = connect_client(port);
+
+    // Set a parameter
+    let res = send_command(&mut client, &[b"CONFIG", b"SET", b"timeout", b"123"]);
+    assert_eq!(res, RespFrame::SimpleString("OK".to_string()));
+
+    // Run CONFIG REWRITE
+    let res = send_command(&mut client, &[b"CONFIG", b"REWRITE"]);
+    assert_eq!(res, RespFrame::SimpleString("OK".to_string()));
+
+    // Wait for file system
+    thread::sleep(Duration::from_millis(200));
+
+    // Check file content
+    let content = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        content.contains("timeout 123"),
+        "Config file should contain rewritten parameter, got: {}",
+        content
     );
 
     send_shutdown_nosave(port);
