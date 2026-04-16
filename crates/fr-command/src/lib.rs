@@ -11876,6 +11876,33 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         let keys: Vec<&[u8]> = argv[2..].iter().map(|v| v.as_slice()).collect();
         let digest = compute_debug_digest(store, now_ms, Some(&keys));
         Ok(RespFrame::BulkString(Some(digest.into_bytes())))
+    } else if sub.eq_ignore_ascii_case("POPULATE") {
+        // DEBUG POPULATE <count> [<prefix>] [<size>]
+        if argv.len() < 3 || argv.len() > 5 {
+            return Err(CommandError::WrongArity("DEBUG"));
+        }
+        let count = parse_i64_arg(&argv[2])?;
+        let prefix = if argv.len() >= 4 {
+            std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?
+        } else {
+            "key:"
+        };
+        let size = if argv.len() == 5 {
+            parse_i64_arg(&argv[4])? as usize
+        } else {
+            0
+        };
+
+        for i in 0..count {
+            let key = format!("{prefix}{i}");
+            let value = if size > 0 {
+                vec![b'A'; size]
+            } else {
+                format!("value:{i}").into_bytes()
+            };
+            store.set(key.as_bytes(), value, now_ms, fr_store::SetOptions::default())?;
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
             return Err(CommandError::WrongSubcommandArity {
@@ -11888,6 +11915,7 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             hello_bulk("OBJECT <key> - Return low-level info about <key>."),
             hello_bulk("DIGEST - Return a hex digest of the entire database."),
             hello_bulk("DIGEST-VALUE <key> [<key> ...] - Return hex digest of specific keys."),
+            hello_bulk("POPULATE <count> [<prefix>] [<size>] - Create <count> dummy keys."),
             hello_bulk("SLEEP <seconds> - Sleep for <seconds>."),
             hello_bulk("RELOAD - Save and reload the database."),
             hello_bulk("SET-ACTIVE-EXPIRE 0|1 - Disable/enable active expiry."),
