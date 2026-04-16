@@ -1626,6 +1626,10 @@ pub struct ClientSession {
     client_no_touch: bool,
     /// Client peer address (set on connection accept).
     pub peer_addr: Option<std::net::SocketAddr>,
+    /// Connection acceptance timestamp in ms since epoch.
+    pub connected_at_ms: u64,
+    /// Last command interaction timestamp in ms since epoch.
+    pub last_interaction_ms: u64,
 }
 
 impl Default for ClientSession {
@@ -1643,6 +1647,8 @@ impl Default for ClientSession {
             client_no_evict: false,
             client_no_touch: false,
             peer_addr: None,
+            connected_at_ms: 0,
+            last_interaction_ms: 0,
         }
     }
 }
@@ -2830,6 +2836,10 @@ impl Runtime {
 
     pub fn execute_frame(&mut self, frame: RespFrame, now_ms: u64) -> RespFrame {
         self.server.store.stat_total_commands_processed += 1;
+        if self.session.connected_at_ms == 0 {
+            self.session.connected_at_ms = now_ms;
+        }
+        self.session.last_interaction_ms = self.session.last_interaction_ms.max(now_ms);
         self.refresh_store_runtime_info_context();
         // Parse once, reuse for both stats and execution (eliminates double parse).
         let argv_result = frame_to_argv(&frame);
@@ -3870,7 +3880,7 @@ impl Runtime {
         rewritten
     }
 
-    fn current_dispatch_client_context(&self) -> DispatchClientContext {
+    fn current_dispatch_client_context(&self, now_ms: u64) -> DispatchClientContext {
         let client_id = self.session.client_id;
         let is_pubsub = self
             .server
@@ -3887,11 +3897,15 @@ impl Runtime {
                 .pubsub_shard_subs
                 .values()
                 .any(|clients| clients.contains(&client_id));
+        let age_seconds = now_ms.saturating_sub(self.session.connected_at_ms) / 1000;
+        let idle_seconds = now_ms.saturating_sub(self.session.last_interaction_ms) / 1000;
         DispatchClientContext {
             client_id,
             client_name: self.session.client_name.clone(),
             client_lib_name: self.session.client_lib_name.clone(),
             client_lib_ver: self.session.client_lib_ver.clone(),
+            age_seconds,
+            idle_seconds,
             db_index: self.session.selected_db,
             flags: if self.session.transaction_state.in_transaction {
                 "x".to_string()
@@ -3946,7 +3960,7 @@ impl Runtime {
         argv: &[Vec<u8>],
         now_ms: u64,
     ) -> Result<RespFrame, CommandError> {
-        self.server.store.dispatch_client_ctx = self.current_dispatch_client_context();
+        self.server.store.dispatch_client_ctx = self.current_dispatch_client_context(now_ms);
         let mut result = dispatch_argv(argv, &mut self.server.store, now_ms);
         self.sync_dispatch_client_context_to_session();
         if result.is_ok()
@@ -5285,6 +5299,19 @@ impl Runtime {
                 next_maxclients = Some(parsed);
                 continue;
             }
+            if parameter.eq_ignore_ascii_case("timeout") {
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(value) if value >= 0 => value as u64,
+                    Ok(_) => {
+                        return RespFrame::Error(
+                            "ERR Invalid argument for CONFIG SET 'timeout'".to_string(),
+                        );
+                    }
+                    Err(err) => return err.to_resp(),
+                };
+                static_override_updates.push(("timeout".to_string(), parsed.to_string()));
+                continue;
+            }
             if parameter.eq_ignore_ascii_case("repl-backlog-size") {
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) if value >= 0 => value as u64,
@@ -5919,12 +5946,16 @@ impl Runtime {
                 .peer_addr
                 .map(|a| a.to_string())
                 .unwrap_or_else(|| "127.0.0.1:0".to_string());
+            let age_seconds = now_ms.saturating_sub(self.session.connected_at_ms) / 1000;
+            let idle_seconds = now_ms.saturating_sub(self.session.last_interaction_ms) / 1000;
             let info_line = format!(
-                "id={} addr={} laddr=127.0.0.1:{} fd=0 name={} db={} sub={} psub={} ssub={} multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
+                "id={} addr={} laddr=127.0.0.1:{} fd=0 name={} age={} idle={} db={} sub={} psub={} ssub={} multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
                 client_id,
                 peer,
                 self.server.store.server_port,
                 name_str,
+                age_seconds,
+                idle_seconds,
                 self.session.selected_db,
                 channel_subs,
                 pattern_subs,
@@ -9448,6 +9479,26 @@ mod tests {
         assert!(info.contains("db=5"));
         assert!(info.contains("user=default"));
         assert!(info.contains("resp=3"));
+        assert!(info.contains("age=0"));
+        assert!(info.contains("idle=0"));
+    }
+
+    #[test]
+    fn client_list_reports_age_and_resets_idle_for_current_command() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"SETNAME", b"alpha"]), 1_000),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let client_list = rt.execute_frame(command(&[b"CLIENT", b"LIST"]), 3_500);
+        let info = match client_list {
+            RespFrame::BulkString(Some(info)) => String::from_utf8(info).expect("client info utf8"),
+            other => unreachable!("unexpected client list response: {other:?}"),
+        };
+        assert!(info.contains("age=2"), "expected age seconds in {info}");
+        assert!(info.contains("idle=0"), "expected idle reset in {info}");
     }
 
     #[test]
@@ -10477,6 +10528,8 @@ mod tests {
         assert!(info.contains("sub=1"));
         assert!(info.contains("psub=1"));
         assert!(info.contains("ssub=1"));
+        assert!(info.contains("age=0"));
+        assert!(info.contains("idle=0"));
     }
 
     #[test]

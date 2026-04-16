@@ -125,8 +125,6 @@ struct ClientConnection {
     blocked: Option<BlockedState>,
     /// If set, this client is a replica and this is the last offset sent to it.
     replication_sent_offset: Option<ReplOffset>,
-    /// Last observed interaction timestamp for this connection, in ms since epoch.
-    last_interaction_ms: u64,
 }
 
 struct ReplicaPrimaryConnection {
@@ -168,7 +166,9 @@ impl Drop for ClientConnection {
 }
 
 impl ClientConnection {
-    fn new(stream: TcpStream, session: ClientSession, now_ms: u64) -> Self {
+    fn new(stream: TcpStream, mut session: ClientSession, now_ms: u64) -> Self {
+        session.connected_at_ms = now_ms;
+        session.last_interaction_ms = now_ms;
         Self {
             stream,
             session,
@@ -177,12 +177,7 @@ impl ClientConnection {
             closing: false,
             blocked: None,
             replication_sent_offset: None,
-            last_interaction_ms: now_ms,
         }
-    }
-
-    fn record_interaction(&mut self, now_ms: u64) {
-        self.last_interaction_ms = self.last_interaction_ms.max(now_ms);
     }
 
     /// Try to flush the write buffer. Returns true if the buffer is fully
@@ -764,7 +759,6 @@ fn handle_readable(
                 ) {
                     Ok(_) => {
                         conn.read_buf.extend_from_slice(&buf[..n]);
-                        conn.record_interaction(ts);
                         runtime.track_net_input_bytes(n as u64);
                     }
                     Err(e) => {
@@ -887,7 +881,6 @@ fn process_buffered_frames(
 
         match parse_result {
             Ok((frame, consumed)) => {
-                conn.record_interaction(ts);
                 // Subscription mode gate: reject most commands while subscribed.
                 if runtime.is_in_subscription_mode()
                     && let Some(reject) = check_subscription_mode_gate(&frame, true)

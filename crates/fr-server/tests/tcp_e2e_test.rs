@@ -2,6 +2,7 @@
 //! connect via TCP, send RESP commands, and verify responses.
 //! Tests the actual networking stack including RESP framing.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -341,6 +342,41 @@ fn fetch_string_value(port: u16, key: &[u8]) -> Option<Vec<u8>> {
         RespFrame::BulkString(None) => None,
         _ => None,
     }
+}
+
+fn parse_client_list_fields(line: &str) -> HashMap<String, String> {
+    line.split_whitespace()
+        .filter_map(|field| {
+            let (key, value) = field.split_once('=')?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn sample_client_list_fields(
+    spawn: impl FnOnce(u16) -> ManagedChild,
+) -> HashMap<String, String> {
+    let port = reserve_port();
+    let _server = spawn(port);
+
+    let mut client = connect_client(port);
+    assert_eq!(
+        send_command(&mut client, &[b"CLIENT", b"SETNAME", b"tracked-client"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    thread::sleep(Duration::from_millis(2_100));
+
+    let response = send_command(&mut client, &[b"CLIENT", b"LIST"]);
+    let listing = match response {
+        RespFrame::BulkString(Some(bytes)) => String::from_utf8(bytes).expect("client list utf8"),
+        other => panic!("expected bulk client list, got {other:?}"),
+    };
+    let tracked_line = listing
+        .lines()
+        .find(|line| line.split_whitespace().any(|field| field == "name=tracked-client"))
+        .unwrap_or_else(|| panic!("tracked client line missing from CLIENT LIST: {listing}"));
+    parse_client_list_fields(tracked_line)
 }
 
 fn send_shutdown_nosave(port: u16) {
@@ -870,6 +906,41 @@ fn tcp_frankenredis_min_replicas_gate_blocks_then_admits_writes() {
 #[test]
 fn tcp_min_replicas_gate_matches_legacy_redis_reference() {
     exercise_min_replicas_write_gate(spawn_legacy_redis, spawn_legacy_redis_replica);
+}
+
+#[test]
+fn tcp_client_list_age_idle_matches_legacy_redis_reference() {
+    let franken_fields = sample_client_list_fields(|port| spawn_frankenredis(port, None));
+    let legacy_fields = sample_client_list_fields(spawn_legacy_redis);
+
+    for key in ["age", "idle"] {
+        assert!(
+            franken_fields.contains_key(key),
+            "frankenredis missing {key} field: {franken_fields:?}"
+        );
+        assert!(
+            legacy_fields.contains_key(key),
+            "legacy redis missing {key} field: {legacy_fields:?}"
+        );
+    }
+
+    let franken_age = franken_fields["age"].parse::<u64>().expect("franken age");
+    let legacy_age = legacy_fields["age"].parse::<u64>().expect("legacy age");
+    let franken_idle = franken_fields["idle"].parse::<u64>().expect("franken idle");
+    let legacy_idle = legacy_fields["idle"].parse::<u64>().expect("legacy idle");
+
+    assert!(
+        franken_age.abs_diff(legacy_age) <= 1,
+        "age mismatch: frankenredis={franken_age}, legacy={legacy_age}, franken_fields={franken_fields:?}, legacy_fields={legacy_fields:?}"
+    );
+    assert!(
+        franken_idle.abs_diff(legacy_idle) <= 1,
+        "idle mismatch: frankenredis={franken_idle}, legacy={legacy_idle}, franken_fields={franken_fields:?}, legacy_fields={legacy_fields:?}"
+    );
+    assert!(
+        franken_age >= franken_idle,
+        "target age should be >= idle: {franken_fields:?}"
+    );
 }
 
 #[test]

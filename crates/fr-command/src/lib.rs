@@ -10128,11 +10128,13 @@ fn client_info_line(store: &Store, sub: &str) -> Vec<u8> {
     let lib_name = ctx.client_lib_name.as_deref().unwrap_or("");
     let lib_ver = ctx.client_lib_ver.as_deref().unwrap_or("");
     format!(
-        "id={} addr={} laddr=127.0.0.1:{} fd=0 name={} db={} sub={} psub={} ssub={} multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
+        "id={} addr={} laddr=127.0.0.1:{} fd=0 name={} age={} idle={} db={} sub={} psub={} ssub={} multi={} watch={} qbuf=0 qbuf-free=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user={} lib-name={} lib-ver={} resp={} flags={}\r\n",
         ctx.client_id,
         ctx.peer_addr,
         store.server_port,
         name,
+        ctx.age_seconds,
+        ctx.idle_seconds,
         ctx.db_index,
         ctx.channel_subscriptions,
         ctx.pattern_subscriptions,
