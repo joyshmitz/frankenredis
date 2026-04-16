@@ -1292,6 +1292,11 @@ pub struct ServerState {
     pub replica_serve_stale_data: bool,
     pub repl_diskless_sync: bool,
     pub repl_diskless_sync_delay_sec: u64,
+    pub cluster_allow_reads_when_down: bool,
+    pub cluster_allow_pubsubshard_when_down: bool,
+    pub cluster_link_sendbuf_limit: u64,
+    pub cluster_node_timeout: u64,
+    pub cluster_migration_barrier: u64,
     /// Client output buffer hard limit (CONFIG SET client-output-buffer-limit). Default 256 MiB.
     pub output_buffer_limit: usize,
     /// Client query buffer limit (CONFIG SET client-query-buffer-limit). Default 1 GiB.
@@ -1393,6 +1398,11 @@ impl Default for ServerState {
             replica_priority: 100,
             repl_diskless_sync: true,
             repl_diskless_sync_delay_sec: 5,
+            cluster_allow_reads_when_down: false,
+            cluster_allow_pubsubshard_when_down: true,
+            cluster_link_sendbuf_limit: 0,
+            cluster_node_timeout: 15_000,
+            cluster_migration_barrier: 1,
             output_buffer_limit: 256 * 1024 * 1024, // 256 MiB (reasonable default)
             query_buffer_limit: 1024 * 1024 * 1024, // 1 GiB (Redis default)
             proto_max_bulk_len: 512_000_000,        // Redis default (512 MB, not 512 MiB)
@@ -3055,7 +3065,6 @@ impl Runtime {
                 | Some(RuntimeSpecialCommand::Spublish)
                 | Some(RuntimeSpecialCommand::Pubsub)
                 | Some(RuntimeSpecialCommand::Wait)
-                | Some(RuntimeSpecialCommand::Waitaof)
                 | Some(RuntimeSpecialCommand::Select)
         ) || eq_ascii_token(command, b"INFO")
             || eq_ascii_token(command, b"COMMAND")
@@ -5998,17 +6007,14 @@ impl Runtime {
         if argv.len() != 1 {
             return CommandError::WrongArity("READONLY").to_resp();
         }
-        self.session.cluster_state.mode = ClusterClientMode::ReadOnly;
-        RespFrame::SimpleString("OK".to_string())
+        RespFrame::Error("ERR This instance has cluster support disabled".to_string())
     }
 
     fn handle_readwrite_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() != 1 {
             return CommandError::WrongArity("READWRITE").to_resp();
         }
-        self.session.cluster_state.mode = ClusterClientMode::ReadWrite;
-        self.session.cluster_state.asking = false;
-        RespFrame::SimpleString("OK".to_string())
+        RespFrame::Error("ERR This instance has cluster support disabled".to_string())
     }
 
     fn handle_client_command(&mut self, argv: &[Vec<u8>], now_ms: u64) -> RespFrame {
@@ -7615,16 +7621,21 @@ slave_priority:{}\r\n",
                     RespFrame::Array(Some(replicas)),
                 ]))
             }
-            ReplicationRoleState::Replica { host, port, state } => RespFrame::Array(Some(vec![
-                hello_bulk("slave"),
-                hello_bulk(host),
-                RespFrame::Integer(i64::from(*port)),
-                hello_bulk(state),
-                RespFrame::Integer(
+            ReplicationRoleState::Replica { host, port, state } => {
+                let offset = if state.eq_ignore_ascii_case("connected") {
                     i64::try_from(self.server.replication_ack_state.primary_offset.0)
-                        .unwrap_or(i64::MAX),
-                ),
-            ])),
+                        .unwrap_or(i64::MAX)
+                } else {
+                    -1
+                };
+                RespFrame::Array(Some(vec![
+                    hello_bulk("slave"),
+                    hello_bulk(host),
+                    RespFrame::Integer(i64::from(*port)),
+                    hello_bulk(state),
+                    RespFrame::Integer(offset),
+                ]))
+            }
         }
     }
 
