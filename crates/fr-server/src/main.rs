@@ -125,6 +125,8 @@ struct ClientConnection {
     blocked: Option<BlockedState>,
     /// If set, this client is a replica and this is the last offset sent to it.
     replication_sent_offset: Option<ReplOffset>,
+    /// Last observed interaction timestamp for this connection, in ms since epoch.
+    last_interaction_ms: u64,
 }
 
 struct ReplicaPrimaryConnection {
@@ -177,6 +179,10 @@ impl ClientConnection {
             replication_sent_offset: None,
             last_interaction_ms: now_ms,
         }
+    }
+
+    fn record_interaction(&mut self, now_ms: u64) {
+        self.last_interaction_ms = self.last_interaction_ms.max(now_ms);
     }
 
     /// Try to flush the write buffer. Returns true if the buffer is fully
@@ -708,7 +714,7 @@ fn accept_connections(
                 let mut session = runtime.new_session();
                 session.peer_addr = Some(peer_addr);
                 let client_id = session.client_id;
-                clients.insert(conn_handle, ClientConnection::new(stream, session, 0));
+                clients.insert(conn_handle, ClientConnection::new(stream, session, now_ms()));
                 client_id_to_token.insert(client_id, conn_handle);
                 runtime.track_connection_opened();
             }
@@ -758,6 +764,7 @@ fn handle_readable(
                 ) {
                     Ok(_) => {
                         conn.read_buf.extend_from_slice(&buf[..n]);
+                        conn.record_interaction(ts);
                         runtime.track_net_input_bytes(n as u64);
                     }
                     Err(e) => {
@@ -880,6 +887,7 @@ fn process_buffered_frames(
 
         match parse_result {
             Ok((frame, consumed)) => {
+                conn.record_interaction(ts);
                 // Subscription mode gate: reject most commands while subscribed.
                 if runtime.is_in_subscription_mode()
                     && let Some(reject) = check_subscription_mode_gate(&frame, true)
@@ -4110,8 +4118,7 @@ mod tests {
         let sub_replica_session = replica_rt.new_session();
         let sub_replica_id = sub_replica_session.client_id;
         let mut sub_replica_conn = ClientConnection::new(
-            mio::net::TcpStream::from_std(stream_sub), sub_replica_session,
-        , 0);
+            mio::net::TcpStream::from_std(stream_sub), sub_replica_session, 0);
 
         let prev = replica_rt.swap_session(std::mem::take(&mut sub_replica_conn.session));
         let response_sub = replica_rt.execute_frame(psync_frame.clone(), ts);
@@ -4201,7 +4208,7 @@ mod tests {
         server_stream
             .set_read_timeout(Some(std::time::Duration::from_millis(50)))
             .unwrap();
-        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, 0);
+        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, ts);
 
         let pause = RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"CLIENT".to_vec())),
@@ -4263,7 +4270,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
         let (_server_stream, _server_addr) = listener.accept().unwrap();
-        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, 0);
+        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, ts);
 
         let pause = RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"CLIENT".to_vec())),
@@ -4316,7 +4323,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
         let (_server_stream, _server_addr) = listener.accept().unwrap();
-        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, 0);
+        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, ts);
 
         let subscribe = RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"SUBSCRIBE".to_vec())),
@@ -4370,13 +4377,14 @@ mod tests {
         use std::net::{TcpListener, TcpStream};
 
         let mut runtime = Runtime::default_strict();
+        let ts = 0;
         let session = runtime.new_session();
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
         let (_server_stream, _server_addr) = listener.accept().unwrap();
-        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, 0);
+        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, ts);
 
         let quit = RespFrame::Array(Some(vec![RespFrame::SimpleString("QUIT".to_string())]));
         conn.read_buf.extend_from_slice(&quit.to_bytes());
@@ -4394,7 +4402,7 @@ mod tests {
             &mut closing_tokens,
             &mut write_tokens,
             &mut paused_tokens,
-            1,
+            ts,
         );
         conn.session = runtime.swap_session(prev);
 
@@ -4411,6 +4419,7 @@ mod tests {
         use std::net::{TcpListener, TcpStream};
 
         let mut runtime = Runtime::default_strict();
+        let ts = 0;
         runtime.server.output_buffer_limit = 0;
         let session = runtime.new_session();
 
@@ -4418,7 +4427,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
         let (_server_stream, _server_addr) = listener.accept().unwrap();
-        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, 0);
+        let mut conn = ClientConnection::new(mio::net::TcpStream::from_std(stream), session, ts);
         conn.read_buf.extend_from_slice(b"*1\r\n$4\r\nPING\r\n");
 
         let mut blocked_tokens = HashSet::new();
@@ -4433,7 +4442,7 @@ mod tests {
             &mut closing_tokens,
             &mut write_tokens,
             &mut paused_tokens,
-            1,
+            ts,
         );
 
         assert!(conn.closing);
@@ -4469,8 +4478,7 @@ mod tests {
         let blocked_session = runtime.new_session();
         let blocked_client_id = blocked_session.client_id;
         let mut blocked_conn = ClientConnection::new(
-            mio::net::TcpStream::from_std(blocked_stream), blocked_session,
-        , 0);
+            mio::net::TcpStream::from_std(blocked_stream), blocked_session, 0);
         blocked_conn.blocked = Some(BlockedState {
             op: BlockingOp::BLpop {
                 keys: vec![b"queue".to_vec()],
@@ -4482,8 +4490,7 @@ mod tests {
 
         let requester_session = runtime.new_session();
         let mut requester_conn = ClientConnection::new(
-            mio::net::TcpStream::from_std(requester_stream), requester_session,
-        , 0);
+            mio::net::TcpStream::from_std(requester_stream), requester_session, 0);
         requester_conn.read_buf.extend_from_slice(
             &RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"CLIENT".to_vec())),
@@ -4578,8 +4585,7 @@ mod tests {
         let blocked_session = runtime.new_session();
         let blocked_client_id = blocked_session.client_id;
         let mut blocked_conn = ClientConnection::new(
-            mio::net::TcpStream::from_std(blocked_stream), blocked_session,
-        , 0);
+            mio::net::TcpStream::from_std(blocked_stream), blocked_session, 0);
         blocked_conn.blocked = Some(BlockedState {
             op: BlockingOp::BLpop {
                 keys: vec![b"queue".to_vec()],
