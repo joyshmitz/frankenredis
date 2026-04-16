@@ -1085,6 +1085,17 @@ fn increment_run_id_hex(current: &str) -> String {
     format!("{:040x}", parsed.saturating_add(1))
 }
 
+fn replicaof_command_name(argv: &[Vec<u8>]) -> &'static str {
+    if argv
+        .first()
+        .is_some_and(|command| command.eq_ignore_ascii_case(b"SLAVEOF"))
+    {
+        "SLAVEOF"
+    } else {
+        "REPLICAOF"
+    }
+}
+
 #[inline]
 fn parse_db_index_arg(
     arg: &[u8],
@@ -7966,7 +7977,7 @@ slave_priority:{}\r\n",
 
     fn handle_replicaof_command(&mut self, argv: &[Vec<u8>]) -> RespFrame {
         if argv.len() != 3 {
-            return CommandError::WrongArity("REPLICAOF").to_resp();
+            return CommandError::WrongArity(replicaof_command_name(argv)).to_resp();
         }
         let host = String::from_utf8_lossy(&argv[1]).into_owned();
         let port = String::from_utf8_lossy(&argv[2]).into_owned();
@@ -8132,7 +8143,7 @@ slave_priority:{}\r\n",
             if argv.len() != 1 {
                 return CommandError::WrongArity("SYNC").to_resp();
             }
-        } else if argv.len() != 3 {
+        } else if argv.len() < 3 {
             return CommandError::WrongArity("PSYNC").to_resp();
         }
         let (requested_replid, requested_offset) = if is_sync {
@@ -11635,6 +11646,26 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"+6379"]), 0),
             RespFrame::Error("ERR Invalid master port".to_string())
+        );
+    }
+
+    #[test]
+    fn replication_slaveof_wrong_arity_uses_alias_name() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"SLAVEOF"]), 0),
+            RespFrame::Error("ERR wrong number of arguments for 'slaveof' command".to_string())
+        );
+    }
+
+    #[test]
+    fn replication_psync_accepts_trailing_arguments_like_legacy_redis() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"PSYNC", b"?", b"-1", b"extra"]), 0),
+            RespFrame::SimpleString(
+                "FULLRESYNC 0000000000000000000000000000000000000000 0".to_string()
+            )
         );
     }
 

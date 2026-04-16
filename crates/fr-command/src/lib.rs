@@ -49,6 +49,17 @@ fn hello_simple(s: &str) -> RespFrame {
     RespFrame::SimpleString(s.to_string())
 }
 
+fn replicaof_command_name(argv: &[Vec<u8>]) -> &'static str {
+    if argv
+        .first()
+        .is_some_and(|command| command.eq_ignore_ascii_case(b"SLAVEOF"))
+    {
+        "SLAVEOF"
+    } else {
+        "REPLICAOF"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrateRequest {
     pub host: String,
@@ -5647,7 +5658,7 @@ fn replconf_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
 
 fn psync_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     // PSYNC replid offset
-    if argv.len() != 3 {
+    if argv.len() < 3 {
         return Err(CommandError::WrongArity("PSYNC"));
     }
     // In standalone mode, always respond with FULLRESYNC
@@ -5664,7 +5675,7 @@ fn psync_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
 fn replicaof_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     // REPLICAOF host port / REPLICAOF NO ONE
     if argv.len() < 3 {
-        return Err(CommandError::WrongArity("REPLICAOF"));
+        return Err(CommandError::WrongArity(replicaof_command_name(argv)));
     }
     let host = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     let port = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -26339,6 +26350,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn slaveof_wrong_arity_uses_alias_name() {
+        let mut store = Store::new();
+        let err = dispatch_argv(&[b"SLAVEOF".to_vec()], &mut store, 0).unwrap_err();
+        assert_eq!(err, CommandError::WrongArity("SLAVEOF"));
+    }
+
     // ── FUNCTION tests ──────────────────────────────────────────────
 
     #[test]
@@ -28389,6 +28407,26 @@ mod tests {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"PSYNC".to_vec(), b"?".to_vec()], &mut store, 0);
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn psync_accepts_trailing_arguments_like_legacy_redis() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[
+                b"PSYNC".to_vec(),
+                b"?".to_vec(),
+                b"-1".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        match out {
+            RespFrame::SimpleString(s) => assert!(s.starts_with("FULLRESYNC ")),
+            other => panic!("expected SimpleString, got {other:?}"), // ubs:ignore — AI triage
+        }
     }
 
     fn read_test_frame(stream: &mut TcpStream, read_buf: &mut Vec<u8>) -> RespFrame {

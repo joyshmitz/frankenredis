@@ -333,8 +333,8 @@
         "extra"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR wrong number of arguments for 'psync' command"
+        "kind": "simple",
+        "value": "FULLRESYNC 0000000000000000000000000000000000000000 0"
       }
     },
     {
@@ -710,7 +710,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'replicaof' command"
+        "value": "ERR wrong number of arguments for 'slaveof' command"
       }
     },
     {
@@ -721,7 +721,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'replicaof' command"
+        "value": "ERR wrong number of arguments for 'slaveof' command"
       }
     },
     {
