@@ -1440,6 +1440,23 @@ fn pubsub_unsubscribe_frame(channel: &str, count: i64) -> RespFrame {
     ]))
 }
 
+fn pubsub_psubscribe_frame(pattern: &str, count: i64) -> RespFrame {
+    RespFrame::Array(Some(vec![
+        RespFrame::BulkString(Some(b"psubscribe".to_vec())),
+        RespFrame::BulkString(Some(pattern.as_bytes().to_vec())),
+        RespFrame::Integer(count),
+    ]))
+}
+
+fn pubsub_pmessage_frame(pattern: &str, channel: &str, data: &str) -> RespFrame {
+    RespFrame::Array(Some(vec![
+        RespFrame::BulkString(Some(b"pmessage".to_vec())),
+        RespFrame::BulkString(Some(pattern.as_bytes().to_vec())),
+        RespFrame::BulkString(Some(channel.as_bytes().to_vec())),
+        RespFrame::BulkString(Some(data.as_bytes().to_vec())),
+    ]))
+}
+
 fn exercise_basic_pubsub_cross_client_delivery(
     spawn: impl FnOnce(u16) -> ManagedChild,
 ) -> (RespFrame, RespFrame, RespFrame, RespFrame, RespFrame) {
@@ -1475,6 +1492,28 @@ fn exercise_basic_pubsub_cross_client_delivery(
         unsubscribe,
         publish_after_unsub,
     )
+}
+
+fn exercise_pattern_pubsub_cross_client_delivery(
+    spawn: impl FnOnce(u16) -> ManagedChild,
+) -> (RespFrame, RespFrame, RespFrame, RespFrame) {
+    let port = reserve_port();
+    let _server = spawn(port);
+
+    let mut sub_client = BufferedTcpClient::connect(port);
+    sub_client
+        .stream
+        .write_all(&encode_command(&[b"PSUBSCRIBE", b"news.*"]))
+        .unwrap();
+    let subscribe = sub_client.read_responses(1).pop().expect("psubscribe frame");
+
+    let mut pub_client = connect_client(port);
+    let publish_match = send_command(&mut pub_client, &[b"PUBLISH", b"news.sports", b"goal!"]);
+    let message = sub_client.read_responses(1).pop().expect("pmessage frame");
+    let publish_miss = send_command(&mut pub_client, &[b"PUBLISH", b"weather.rain", b"wet"]);
+
+    send_shutdown_nosave(port);
+    (subscribe, publish_match, message, publish_miss)
 }
 
 #[test]
@@ -1540,47 +1579,30 @@ fn tcp_pubsub_multiple_subscribers() {
 
 #[test]
 fn tcp_pubsub_pattern_subscribe() {
-    let port = reserve_port();
-    let _server = spawn_frankenredis(port, None);
-
-    let mut sub_client = BufferedTcpClient::connect(port);
-    sub_client
-        .stream
-        .write_all(&encode_command(&[b"PSUBSCRIBE", b"news.*"]))
-        .unwrap();
-    let confirms = sub_client.read_responses(1);
+    let (subscribe, publish_match, message, publish_miss) =
+        exercise_pattern_pubsub_cross_client_delivery(|port| spawn_frankenredis(port, None));
+    assert_eq!(subscribe, pubsub_psubscribe_frame("news.*", 1));
+    assert_eq!(publish_match, RespFrame::Integer(1));
+    assert_eq!(message, pubsub_pmessage_frame("news.*", "news.sports", "goal!"));
     assert_eq!(
-        confirms[0],
-        RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(b"psubscribe".to_vec())),
-            RespFrame::BulkString(Some(b"news.*".to_vec())),
-            RespFrame::Integer(1),
-        ]))
-    );
-
-    let mut pub_client = connect_client(port);
-    let pub_resp = send_command(&mut pub_client, &[b"PUBLISH", b"news.sports", b"goal!"]);
-    assert_eq!(pub_resp, RespFrame::Integer(1));
-
-    let msgs = sub_client.read_responses(1);
-    assert_eq!(
-        msgs[0],
-        RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(b"pmessage".to_vec())),
-            RespFrame::BulkString(Some(b"news.*".to_vec())),
-            RespFrame::BulkString(Some(b"news.sports".to_vec())),
-            RespFrame::BulkString(Some(b"goal!".to_vec())),
-        ]))
-    );
-
-    let pub_resp2 = send_command(&mut pub_client, &[b"PUBLISH", b"weather.rain", b"wet"]);
-    assert_eq!(
-        pub_resp2,
+        publish_miss,
         RespFrame::Integer(0),
         "non-matching channel should have 0 subscribers"
     );
+}
 
-    send_shutdown_nosave(port);
+#[test]
+fn tcp_pubsub_pattern_subscribe_matches_legacy_redis_reference() {
+    let expected = (
+        pubsub_psubscribe_frame("news.*", 1),
+        RespFrame::Integer(1),
+        pubsub_pmessage_frame("news.*", "news.sports", "goal!"),
+        RespFrame::Integer(0),
+    );
+    let franken = exercise_pattern_pubsub_cross_client_delivery(|port| spawn_frankenredis(port, None));
+    let legacy = exercise_pattern_pubsub_cross_client_delivery(spawn_legacy_redis);
+    assert_eq!(legacy, expected);
+    assert_eq!(franken, legacy);
 }
 
 // ---------- Transaction isolation tests ----------
