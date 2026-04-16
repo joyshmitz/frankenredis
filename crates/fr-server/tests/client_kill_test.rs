@@ -1,35 +1,288 @@
-use fr_protocol::RespFrame;
+use fr_protocol::{RespFrame, parse_frame};
 use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+fn encode_command(parts: &[&[u8]]) -> Vec<u8> {
+    RespFrame::Array(Some(
+        parts
+            .iter()
+            .map(|part| RespFrame::BulkString(Some(part.to_vec())))
+            .collect(),
+    ))
+    .to_bytes()
+}
+
+fn read_response(stream: &mut TcpStream) -> RespFrame {
+    let mut buf = vec![0_u8; 65_536];
+    let mut accumulated = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => panic!("server closed connection unexpectedly"),
+            Ok(n) => {
+                accumulated.extend_from_slice(&buf[..n]);
+                match parse_frame(&accumulated) {
+                    Ok(parsed) => return parsed.frame,
+                    Err(_) => continue,
+                }
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for server response"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => panic!("read from server: {err}"),
+        }
+    }
+}
+
+fn send_command(stream: &mut TcpStream, parts: &[&[u8]]) -> RespFrame {
+    stream
+        .write_all(&encode_command(parts))
+        .expect("write command to server");
+    read_response(stream)
+}
+
+fn reserve_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("bind ephemeral port")
+        .local_addr()
+        .expect("local addr")
+        .port()
+}
+
+fn wait_until(timeout: Duration, mut check: impl FnMut() -> bool, message: &str) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if check() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(check(), "{message}");
+}
+
+fn wait_for_port(port: u16) {
+    wait_until(
+        Duration::from_secs(5),
+        || TcpStream::connect(format!("127.0.0.1:{port}")).is_ok(),
+        &format!("port {port} did not become ready in time"),
+    );
+}
+
+fn connect_client(port: u16) -> TcpStream {
+    let mut retries = 0_u8;
+    loop {
+        match TcpStream::connect(format!("127.0.0.1:{port}")) {
+            Ok(stream) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(250)))
+                    .expect("set read timeout");
+                stream
+                    .set_write_timeout(Some(Duration::from_millis(250)))
+                    .expect("set write timeout");
+                return stream;
+            }
+            Err(err) if retries < 50 => {
+                let _ = err;
+                retries = retries.saturating_add(1);
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(err) => panic!("failed to connect to 127.0.0.1:{port}: {err}"),
+        }
+    }
+}
+
+fn project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("canonical project root")
+}
+
+fn legacy_redis_server_path() -> PathBuf {
+    project_root().join("legacy_redis_code/redis/src/redis-server")
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&path).expect("create temp dir");
+    path
+}
+
+struct ManagedChild {
+    child: Child,
+}
+
+impl ManagedChild {
+    fn spawn(mut command: Command) -> Self {
+        let child = command.spawn().expect("spawn child process");
+        Self { child }
+    }
+}
+
+impl Drop for ManagedChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn spawn_frankenredis(port: u16) -> ManagedChild {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_frankenredis"));
+    command
+        .arg("--bind")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--mode")
+        .arg("strict")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = ManagedChild::spawn(command);
+    wait_for_port(port);
+    child
+}
+
+fn spawn_legacy_redis(port: u16) -> ManagedChild {
+    let dir = unique_temp_dir("frankenredis-legacy-client-kill");
+    let mut command = Command::new(legacy_redis_server_path());
+    command
+        .arg("--bind")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--save")
+        .arg("")
+        .arg("--appendonly")
+        .arg("no")
+        .arg("--repl-diskless-sync")
+        .arg("no")
+        .arg("--repl-diskless-sync-delay")
+        .arg("0")
+        .arg("--protected-mode")
+        .arg("no")
+        .arg("--dir")
+        .arg(dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = ManagedChild::spawn(command);
+    wait_for_port(port);
+    child
+}
+
+fn send_shutdown_nosave(port: u16) {
+    if let Ok(mut client) = TcpStream::connect(format!("127.0.0.1:{port}")) {
+        let _ = client.set_read_timeout(Some(Duration::from_millis(250)));
+        let _ = client.write_all(&encode_command(&[b"SHUTDOWN", b"NOSAVE"]));
+    }
+}
+
+fn disconnect_observed(stream: &mut TcpStream) -> bool {
+    match stream.write_all(&encode_command(&[b"PING"])) {
+        Ok(()) => {}
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::NotConnected
+            ) =>
+        {
+            return true;
+        }
+        Err(err) => panic!("write to target after CLIENT KILL: {err}"),
+    }
+
+    let mut buf = [0_u8; 1024];
+    match stream.read(&mut buf) {
+        Ok(0) => true,
+        Ok(n) => panic!(
+            "expected target disconnect after CLIENT KILL, got {} bytes: {:?}",
+            n,
+            &buf[..n]
+        ),
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            true
+        }
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            false
+        }
+        Err(err) => panic!("read from target after CLIENT KILL: {err}"),
+    }
+}
+
+fn wait_for_disconnect(stream: &mut TcpStream) {
+    wait_until(
+        Duration::from_secs(2),
+        || disconnect_observed(stream),
+        "target client did not disconnect after CLIENT KILL",
+    );
+}
+
+fn exercise_client_kill_by_id(spawn: impl FnOnce(u16) -> ManagedChild) -> i64 {
+    let port = reserve_port();
+    let _server = spawn(port);
+
+    let mut target = connect_client(port);
+    let mut killer = connect_client(port);
+
+    let target_id = match send_command(&mut target, &[b"CLIENT", b"ID"]) {
+        RespFrame::Integer(id) => id,
+        other => panic!("expected integer CLIENT ID reply, got {other:?}"),
+    };
+    let target_id_arg = target_id.to_string();
+    let kill_reply = send_command(
+        &mut killer,
+        &[b"CLIENT", b"KILL", b"ID", target_id_arg.as_bytes()],
+    );
+    let killed = match kill_reply {
+        RespFrame::Integer(count) => count,
+        other => panic!("expected integer CLIENT KILL reply, got {other:?}"),
+    };
+
+    wait_for_disconnect(&mut target);
+    send_shutdown_nosave(port);
+    killed
+}
 
 #[test]
 fn client_kill_by_id_disconnects_target() {
-    let port = crate::tests::reserve_port();
-    let _server = crate::tests::spawn_frankenredis(port, None);
+    assert_eq!(exercise_client_kill_by_id(spawn_frankenredis), 1);
+}
 
-    let mut target = crate::tests::connect_client(port);
-    let mut killer = crate::tests::connect_client(port);
-
-    // Get target's ID
-    let res = crate::tests::send_command(&mut target, &[b"CLIENT", b"ID"]);
-    let target_id = match res {
-        RespFrame::Integer(id) => id,
-        _ => panic!("Expected integer ID, got {:?}", res),
-    };
-
-    // Killer kills target
-    let res = crate::tests::send_command(&mut killer, &[b"CLIENT", b"KILL", b"ID", target_id.to_string().as_bytes()]);
-    assert_eq!(res, RespFrame::Integer(1));
-
-    // Wait for event loop to process kill
-    thread::sleep(Duration::from_millis(200));
-
-    // Target should be disconnected
-    target.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap_or(());
-    let mut buf = [0u8; 1024];
-    let read_res = target.read(&mut buf);
-    assert!(read_res.unwrap_or(0) == 0, "Target should have been disconnected");
-
-    crate::tests::send_shutdown_nosave(port);
+#[test]
+fn client_kill_by_id_matches_legacy_redis_reference() {
+    let legacy = exercise_client_kill_by_id(spawn_legacy_redis);
+    let franken = exercise_client_kill_by_id(spawn_frankenredis);
+    assert_eq!(franken, legacy);
 }
