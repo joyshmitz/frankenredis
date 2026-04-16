@@ -961,7 +961,14 @@ fn process_buffered_frames(
                 // Check for blocking commands that returned nil — block the
                 // client instead of sending the nil response immediately.
                 if (response == RespFrame::Array(None) || response == RespFrame::BulkString(None))
-                    && let Some(blocked) = try_build_blocked_state(&parsed_frame, ts)
+                    && let Some(blocked) = try_build_blocked_state(&parsed_frame, ts).and_then(
+                        |BlockedState { op, deadline_ms }| {
+                            Some(BlockedState {
+                                op: resolve_blocked_op(op, runtime, ts)?,
+                                deadline_ms,
+                            })
+                        },
+                    )
                 {
                     // Redis behavior: if the keys already have data, we shouldn't block.
                     // try_build_blocked_state only returns Some if it's a blocking command.
@@ -1906,6 +1913,42 @@ fn parse_xread_block_deadline_argv(argv: &[Vec<u8>], now_ms: u64) -> Option<u64>
     None // BLOCK keyword not found
 }
 
+fn resolve_xread_block_argv(
+    argv: &[Vec<u8>],
+    runtime: &mut Runtime,
+    now_ms: u64,
+) -> Option<Vec<Vec<u8>>> {
+    let streams_idx = argv
+        .iter()
+        .position(|arg| arg.eq_ignore_ascii_case(b"STREAMS"))?;
+    let ids_start = streams_idx + 1;
+    let remaining = argv.len().checked_sub(ids_start)?;
+    if remaining < 2 || !remaining.is_multiple_of(2) {
+        return None;
+    }
+    let stream_count = remaining / 2;
+    let mut resolved = argv.to_vec();
+    for offset in 0..stream_count {
+        let id_idx = ids_start + stream_count + offset;
+        if resolved.get(id_idx)?.as_slice() != b"$" {
+            continue;
+        }
+        let key = resolved.get(ids_start + offset)?.clone();
+        let resume_id = runtime.xread_block_resume_id(&key, now_ms).unwrap_or((0, 0));
+        resolved[id_idx] = format!("{}-{}", resume_id.0, resume_id.1).into_bytes();
+    }
+    Some(resolved)
+}
+
+fn resolve_blocked_op(op: BlockingOp, runtime: &mut Runtime, now_ms: u64) -> Option<BlockingOp> {
+    match op {
+        BlockingOp::BXread { argv } => Some(BlockingOp::BXread {
+            argv: resolve_xread_block_argv(&argv, runtime, now_ms)?,
+        }),
+        other => Some(other),
+    }
+}
+
 /// Parse a blocking command frame and build `BlockedState` if the command
 /// is a blocking operation with a non-zero timeout.
 fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedState> {
@@ -2613,6 +2656,7 @@ mod tests {
         read_replication_snapshot_from_stream, replica_handshake_frame,
         replica_handshake_read_timeout, replication_follow_up_bytes, server_help_text,
         should_try_inline_parsing, sync_replica_with_primary, try_build_blocked_state,
+        resolve_xread_block_argv,
         try_fulfill_blocked,
     };
     use fr_config::RuntimePolicy;
@@ -3984,6 +4028,73 @@ mod tests {
         assert!(
             matches!(response, Some(RespFrame::Error(_))),
             "expected wrongtype error, got {response:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_xread_block_argv_freezes_dollar_at_block_time() {
+        let mut runtime = Runtime::new(RuntimePolicy::hardened());
+        let now_ms = 1_000;
+        assert_eq!(
+            runtime.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"XADD".to_vec())),
+                    RespFrame::BulkString(Some(b"s".to_vec())),
+                    RespFrame::BulkString(Some(b"1000-0".to_vec())),
+                    RespFrame::BulkString(Some(b"field".to_vec())),
+                    RespFrame::BulkString(Some(b"seed".to_vec())),
+                ])),
+                now_ms,
+            ),
+            RespFrame::BulkString(Some(b"1000-0".to_vec()))
+        );
+
+        let resolved = resolve_xread_block_argv(
+            &[
+                b"XREAD".to_vec(),
+                b"BLOCK".to_vec(),
+                b"0".to_vec(),
+                b"STREAMS".to_vec(),
+                b"s".to_vec(),
+                b"$".to_vec(),
+            ],
+            &mut runtime,
+            now_ms,
+        )
+        .expect("resolve xread argv");
+        assert_eq!(resolved.last(), Some(&b"1000-0".to_vec()));
+
+        assert_eq!(
+            runtime.execute_frame(
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"XADD".to_vec())),
+                    RespFrame::BulkString(Some(b"s".to_vec())),
+                    RespFrame::BulkString(Some(b"1001-0".to_vec())),
+                    RespFrame::BulkString(Some(b"field".to_vec())),
+                    RespFrame::BulkString(Some(b"value".to_vec())),
+                ])),
+                now_ms + 1,
+            ),
+            RespFrame::BulkString(Some(b"1001-0".to_vec()))
+        );
+
+        let response = try_fulfill_blocked(
+            &BlockingOp::BXread { argv: resolved },
+            &mut runtime,
+            now_ms + 2,
+        );
+        assert_eq!(
+            response,
+            Some(RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"s".to_vec())),
+                RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"1001-0".to_vec())),
+                    RespFrame::Array(Some(vec![
+                        RespFrame::BulkString(Some(b"field".to_vec())),
+                        RespFrame::BulkString(Some(b"value".to_vec())),
+                    ])),
+                ]))])),
+            ]))])))
         );
     }
 

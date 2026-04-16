@@ -2319,3 +2319,104 @@ fn tcp_config_rewrite_updates_file_on_disk() {
 
     send_shutdown_nosave(port);
 }
+
+fn expected_single_stream_entry(
+    stream: &[u8],
+    id: &[u8],
+    field: &[u8],
+    value: &[u8],
+) -> RespFrame {
+    RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+        RespFrame::BulkString(Some(stream.to_vec())),
+        RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(id.to_vec())),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(field.to_vec())),
+                RespFrame::BulkString(Some(value.to_vec())),
+            ])),
+        ]))])),
+    ]))]))
+}
+
+fn exercise_xread_block_unblocks_on_new_entry(
+    spawn: impl FnOnce(u16) -> ManagedChild,
+) -> RespFrame {
+    let port = reserve_port();
+    let _server = spawn(port);
+
+    let mut reader = connect_client(port);
+    assert_eq!(
+        send_command(&mut reader, &[b"XADD", b"s", b"1000-0", b"field", b"seed"]),
+        RespFrame::BulkString(Some(b"1000-0".to_vec()))
+    );
+
+    let producer_handle = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        let mut producer = connect_client(port);
+        assert_eq!(
+            send_command(&mut producer, &[b"XADD", b"s", b"1001-0", b"field", b"value"]),
+            RespFrame::BulkString(Some(b"1001-0".to_vec()))
+        );
+    });
+
+    let reply = send_command(
+        &mut reader,
+        &[b"XREAD", b"BLOCK", b"1000", b"STREAMS", b"s", b"$"],
+    );
+    producer_handle.join().expect("xread producer thread");
+    send_shutdown_nosave(port);
+    reply
+}
+
+#[test]
+fn tcp_xread_block_matches_legacy_redis_reference() {
+    let expected = expected_single_stream_entry(b"s", b"1001-0", b"field", b"value");
+    let legacy = exercise_xread_block_unblocks_on_new_entry(spawn_legacy_redis);
+    let franken = exercise_xread_block_unblocks_on_new_entry(|port| spawn_frankenredis(port, None));
+    assert_eq!(legacy, expected);
+    assert_eq!(franken, legacy);
+}
+
+#[test]
+fn tcp_xreadgroup_block_unblocks_on_new_group_entry() {
+    let port = reserve_port();
+    let _server = spawn_frankenredis(port, None);
+
+    let mut reader = connect_client(port);
+    assert_eq!(
+        send_command(&mut reader, &[b"XADD", b"s", b"1000-0", b"field", b"seed"]),
+        RespFrame::BulkString(Some(b"1000-0".to_vec()))
+    );
+    assert_eq!(
+        send_command(&mut reader, &[b"XGROUP", b"CREATE", b"s", b"g1", b"$"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    let producer_handle = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        let mut producer = connect_client(port);
+        assert_eq!(
+            send_command(&mut producer, &[b"XADD", b"s", b"1001-0", b"field", b"value"]),
+            RespFrame::BulkString(Some(b"1001-0".to_vec()))
+        );
+    });
+
+    let reply = send_command(
+        &mut reader,
+        &[
+            b"XREADGROUP",
+            b"GROUP",
+            b"g1",
+            b"c1",
+            b"BLOCK",
+            b"1000",
+            b"STREAMS",
+            b"s",
+            b">",
+        ],
+    );
+    producer_handle.join().expect("xreadgroup producer thread");
+    assert_eq!(reply, expected_single_stream_entry(b"s", b"1001-0", b"field", b"value"));
+
+    send_shutdown_nosave(port);
+}

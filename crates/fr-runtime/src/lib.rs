@@ -2487,6 +2487,12 @@ impl Runtime {
         self.session.client_id
     }
 
+    /// Resolve the current tail ID for a stream key, used by blocking XREAD
+    /// callers that must freeze `$` cursors at block time.
+    pub fn xread_block_resume_id(&mut self, key: &[u8], now_ms: u64) -> Option<(u64, u64)> {
+        self.server.store.xlast_id(key, now_ms).ok().flatten()
+    }
+
     /// Update or insert a session snapshot used by multi-client CLIENT LIST.
     pub fn record_client_session(&mut self, session: &ClientSession) {
         self.server
