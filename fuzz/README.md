@@ -10,6 +10,7 @@ This directory contains fuzz targets for security-critical parser surfaces.
 | `fuzz_resp_roundtrip` | RESP encode/decode | Round-trip invariant |
 | `fuzz_aof_decoder` | AOF file parsing | Crash detector |
 | `fuzz_rdb_decoder` | RDB file parsing | Crash detector |
+| `fuzz_dump_restore` | DUMP/RESTORE payload handling | Structure-aware round-trip + hostile payload invariants |
 
 ## Running Fuzz Tests
 
@@ -25,6 +26,9 @@ cargo +nightly fuzz run fuzz_aof_decoder
 
 # Run RDB decoder fuzzer
 cargo +nightly fuzz run fuzz_rdb_decoder
+
+# Run DUMP/RESTORE fuzzer
+cargo +nightly fuzz run fuzz_dump_restore
 
 # Run round-trip invariant checker
 cargo +nightly fuzz run fuzz_resp_roundtrip

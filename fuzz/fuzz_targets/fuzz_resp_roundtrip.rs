@@ -13,8 +13,7 @@ fuzz_target!(|data: &[u8]| {
     // Round-trip oracle: if we can parse it, encoding and re-parsing must yield same frame
     if let Ok(parsed) = parse_frame(data) {
         let encoded = parsed.frame.to_bytes();
-        let reparsed = parse_frame(&encoded)
-            .expect("re-encoding a parsed frame must be parseable");
+        let reparsed = parse_frame(&encoded).expect("re-encoding a parsed frame must be parseable");
 
         assert_eq!(
             parsed.frame, reparsed.frame,

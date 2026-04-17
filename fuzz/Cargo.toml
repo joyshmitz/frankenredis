@@ -19,6 +19,9 @@ path = "../crates/fr-protocol"
 [dependencies.fr-persist]
 path = "../crates/fr-persist"
 
+[dependencies.fr-store]
+path = "../crates/fr-store"
+
 [[bin]]
 name = "fuzz_resp_parser"
 path = "fuzz_targets/fuzz_resp_parser.rs"
@@ -43,6 +46,13 @@ bench = false
 [[bin]]
 name = "fuzz_resp_roundtrip"
 path = "fuzz_targets/fuzz_resp_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_dump_restore"
+path = "fuzz_targets/fuzz_dump_restore.rs"
 test = false
 doc = false
 bench = false

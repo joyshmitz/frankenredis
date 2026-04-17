@@ -18,7 +18,6 @@ fuzz_target!(|data: &[u8]| {
         max_bulk_len: 512,
         max_array_len: 16,
         max_recursion_depth: 4,
-        ..ParserConfig::default()
     };
     let _ = parse_frame_with_config(data, &restrictive_config);
 
@@ -27,7 +26,6 @@ fuzz_target!(|data: &[u8]| {
         max_bulk_len: 64 * 1024 * 1024,
         max_array_len: 1_000_000,
         max_recursion_depth: 32,
-        ..ParserConfig::default()
     };
     let _ = parse_frame_with_config(data, &permissive_config);
 });
