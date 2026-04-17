@@ -29512,6 +29512,165 @@ mod tests {
         // Redis returns null bulk for nonexistent keys, not an error
         assert!(matches!(r, RespFrame::BulkString(None)));
     }
+
+    mod metamorphic {
+        use crate::{
+            check_command_arity, command_key_indexes, command_keys, frame_to_argv,
+            is_known_command, is_write_command,
+        };
+        use fr_protocol::RespFrame;
+        use proptest::prelude::*;
+
+        fn byte_vec_strategy(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
+            prop::collection::vec(any::<u8>(), 1..=max_len)
+        }
+
+        fn ascii_command_name() -> impl Strategy<Value = Vec<u8>> {
+            prop::string::string_regex("[A-Za-z][A-Za-z0-9_]{0,15}")
+                .expect("valid regex")
+                .prop_map(|s| s.into_bytes())
+        }
+
+        fn argv_strategy() -> impl Strategy<Value = Vec<Vec<u8>>> {
+            (
+                ascii_command_name(),
+                prop::collection::vec(byte_vec_strategy(16), 0..=8),
+            )
+                .prop_map(|(cmd, args)| {
+                    let mut argv = vec![cmd];
+                    argv.extend(args);
+                    argv
+                })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1024))]
+
+            /// MR: Case insensitivity - is_known_command(upper) == is_known_command(lower).
+            #[test]
+            fn mr_is_known_command_case_insensitive(cmd in ascii_command_name()) {
+                let upper: Vec<u8> = cmd.iter().map(|b| b.to_ascii_uppercase()).collect();
+                let lower: Vec<u8> = cmd.iter().map(|b| b.to_ascii_lowercase()).collect();
+                let mixed: Vec<u8> = cmd
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| if i % 2 == 0 { b.to_ascii_uppercase() } else { b.to_ascii_lowercase() })
+                    .collect();
+
+                let known_upper = is_known_command(&upper);
+                let known_lower = is_known_command(&lower);
+                let known_mixed = is_known_command(&mixed);
+
+                prop_assert_eq!(known_upper, known_lower, "upper/lower mismatch for {:?}", cmd);
+                prop_assert_eq!(known_upper, known_mixed, "upper/mixed mismatch for {:?}", cmd);
+            }
+
+            /// MR: Case insensitivity - is_write_command(upper) == is_write_command(lower).
+            #[test]
+            fn mr_is_write_command_case_insensitive(cmd in ascii_command_name()) {
+                let upper: Vec<u8> = cmd.iter().map(|b| b.to_ascii_uppercase()).collect();
+                let lower: Vec<u8> = cmd.iter().map(|b| b.to_ascii_lowercase()).collect();
+
+                let write_upper = is_write_command(&upper);
+                let write_lower = is_write_command(&lower);
+
+                prop_assert_eq!(write_upper, write_lower, "write classification mismatch for {:?}", cmd);
+            }
+
+            /// MR: Classification determinism - repeated calls produce same result.
+            #[test]
+            fn mr_classification_determinism(cmd in ascii_command_name()) {
+                let known1 = is_known_command(&cmd);
+                let known2 = is_known_command(&cmd);
+                let write1 = is_write_command(&cmd);
+                let write2 = is_write_command(&cmd);
+
+                prop_assert_eq!(known1, known2, "is_known_command not deterministic");
+                prop_assert_eq!(write1, write2, "is_write_command not deterministic");
+            }
+
+            /// MR: Key extraction consistency - command_keys matches command_key_indexes.
+            #[test]
+            fn mr_key_extraction_consistency(argv in argv_strategy()) {
+                let keys = command_keys(&argv);
+                let indexes = command_key_indexes(&argv);
+
+                // Indexes should map to keys
+                let keys_from_indexes: Vec<Vec<u8>> = indexes
+                    .iter()
+                    .filter_map(|&i| argv.get(i).cloned())
+                    .collect();
+
+                prop_assert_eq!(keys, keys_from_indexes, "key extraction mismatch");
+            }
+
+            /// MR: Arity check consistency - arity check result is deterministic.
+            #[test]
+            fn mr_arity_check_determinism(argv in argv_strategy()) {
+                let name = &argv[0];
+                let argc = argv.len();
+
+                let result1 = check_command_arity(name, argc);
+                let result2 = check_command_arity(name, argc);
+
+                prop_assert_eq!(result1, result2, "arity check not deterministic");
+            }
+
+            /// MR: Frame roundtrip - argv to frame to argv preserves data.
+            #[test]
+            fn mr_frame_to_argv_roundtrip(argv in argv_strategy()) {
+                let frame = RespFrame::Array(Some(
+                    argv.iter()
+                        .map(|arg| RespFrame::BulkString(Some(arg.clone())))
+                        .collect(),
+                ));
+                let recovered = frame_to_argv(&frame).expect("valid frame should parse");
+                prop_assert_eq!(recovered, argv, "frame roundtrip failed");
+            }
+
+            /// MR: Write implies known - if is_write_command returns true, is_known_command should too.
+            #[test]
+            fn mr_write_implies_known(cmd in ascii_command_name()) {
+                let is_write = is_write_command(&cmd);
+                let is_known = is_known_command(&cmd);
+
+                if is_write {
+                    prop_assert!(is_known, "write command {:?} should be known", cmd);
+                }
+            }
+
+            /// MR: Empty argv produces empty keys.
+            #[test]
+            fn mr_empty_argv_no_keys(dummy in Just(())) {
+                let _ = dummy;
+                let keys = command_keys(&[]);
+                let indexes = command_key_indexes(&[]);
+                prop_assert!(keys.is_empty(), "empty argv should have no keys");
+                prop_assert!(indexes.is_empty(), "empty argv should have no key indexes");
+            }
+
+            /// MR: Key indexes are within bounds.
+            #[test]
+            fn mr_key_indexes_in_bounds(argv in argv_strategy()) {
+                let indexes = command_key_indexes(&argv);
+                for &idx in &indexes {
+                    prop_assert!(idx < argv.len(), "key index {} out of bounds for argv len {}", idx, argv.len());
+                }
+            }
+
+            /// MR: Arity check case insensitivity.
+            #[test]
+            fn mr_arity_check_case_insensitive(argv in argv_strategy()) {
+                let upper: Vec<u8> = argv[0].iter().map(|b| b.to_ascii_uppercase()).collect();
+                let lower: Vec<u8> = argv[0].iter().map(|b| b.to_ascii_lowercase()).collect();
+
+                let result_upper = check_command_arity(&upper, argv.len());
+                let result_lower = check_command_arity(&lower, argv.len());
+
+                prop_assert_eq!(result_upper, result_lower, "arity check case mismatch");
+            }
+        }
+    }
 }
 #[cfg(test)]
 mod zadd_xx_test;
