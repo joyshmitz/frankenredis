@@ -1026,6 +1026,119 @@ const CORE_GENERIC_LIVE_STABLE_CASES: &[&str] = &[
     "sort_stream_wrongtype",
 ];
 
+const CORE_BITMAP_LIVE_STABLE_CASES: &[&str] = &[
+    // SETBIT/GETBIT basic
+    "setbit_creates_key_returns_0",
+    "getbit_returns_set_bit",
+    "getbit_returns_0_for_unset_bit",
+    "setbit_returns_old_value",
+    "getbit_after_clear_returns_0",
+    "getbit_missing_key_returns_0",
+    "setbit_high_offset",
+    "getbit_high_offset",
+    "setbit_returns_previous_on_string",
+    "getbit_on_string_key",
+    // BITCOUNT
+    "setup_bitcount_key",
+    "bitcount_whole_string",
+    "bitcount_byte_range_0_0",
+    "bitcount_byte_range_1_1",
+    "bitcount_missing_key",
+    "bitcount_negative_range",
+    "bitcount_on_string_key",
+    "bitcount_range_entire",
+    "bitcount_range_out_of_bounds",
+    "bitcount_nonexistent_with_range",
+    // BITPOS
+    "bitpos_find_first_set_bit",
+    "bitpos_find_first_clear_bit",
+    "bitpos_missing_key_bit_0",
+    "bitpos_missing_key_bit_1",
+    "bitpos_with_range",
+    "bitpos_with_range_start_end",
+    "bitpos_setup_allzeros",
+    "bitpos_allzeros_find_one",
+    "bitpos_nonexistent_find_zero",
+    "bitpos_nonexistent_find_one",
+    // BITOP
+    "bitop_and_setup_key1",
+    "bitop_and_setup_key2",
+    "bitop_and_same_keys",
+    "bitop_and_result_check",
+    "bitop_not",
+    "bitop_or",
+    "bitop_xor",
+    "bitop_xor_same_key_zeroes",
+    "bitop_and_missing_key",
+    "bitop_and_missing_key_result",
+    "bitop_or_missing_key",
+    "bitop_or_missing_key_result",
+    "bitop_and_self",
+    "bitop_or_self",
+    "bitop_and_missing_sources",
+    "bitop_or_missing_sources",
+    // BITFIELD
+    "bitfield_set_u8",
+    "bitfield_get_u8",
+    "bitfield_set_i8",
+    "bitfield_get_i8",
+    "bitfield_incrby",
+    "bitfield_multiple_ops",
+    "bitfield_get_missing_key",
+    "bitfield_u16_set_and_get",
+    "bitfield_u16_get",
+    "bitfield_at_offset",
+    "bitfield_get_at_offset",
+    "bitfield_incrby_u8",
+    "bitfield_overflow_sat",
+    "bitfield_overflow_fail",
+    "bitfield_overflow_wrap_u8_setup",
+    "bitfield_overflow_wrap_u8_incrby",
+    "bitfield_overflow_wrap_i8_setup",
+    "bitfield_overflow_wrap_i8_positive_to_negative",
+    "bitfield_overflow_wrap_i8_negative_setup",
+    "bitfield_overflow_wrap_i8_negative_to_positive",
+    "bitfield_i16_signed",
+    "bitfield_i16_get",
+    "bitfield_triple_ops",
+    "bitfield_incrby_wrap_underflow",
+    "bitfield_incrby_sat_overflow",
+    "bitfield_incrby_fail_overflow",
+    // BITFIELD_RO
+    "bitfield_ro_setup_field",
+    "bitfield_ro_get_u8",
+    "bitfield_ro_rejects_set",
+    "bitfield_ro_rejects_incrby",
+    "bitfield_ro_multiple_gets",
+    "bitfield_ro_read_two_fields",
+    "bitfield_ro_nonexistent_key",
+    "bitfield_ro_signed_get",
+    "bitfield_ro_read_signed",
+    // Error cases
+    "setbit_wrong_arity_no_args",
+    "getbit_wrong_arity",
+    "bitop_wrong_arity",
+    "setbit_invalid_bit_value",
+    "setbit_wrongtype_on_list",
+    "setbit_on_list_wrongtype",
+    "getbit_on_list_wrongtype",
+    "bitcount_on_list_wrongtype",
+    "bitfield_wrong_arity",
+    "bitpos_wrong_arity",
+    "bitpos_on_list_wrongtype",
+    "bitpos_wrong_arity_no_key",
+    "bitop_wrongtype_list",
+    "bitop_not_multiple_sources_error",
+    "setbit_negative_offset_error",
+    "getbit_negative_offset_error",
+    "setbit_non_integer_offset",
+    "bitop_invalid_operation",
+    "bitfield_wrongtype",
+    "setbit_wrong_arity",
+    "setbit_bad_offset",
+    "setbit_bad_value",
+];
+
 struct VendoredRedisOracle {
     child: Child,
     port: u16,
@@ -2500,6 +2613,30 @@ fn core_generic_live_redis_matches_runtime() {
         &oracle,
     )
     .expect("generic live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_bitmap_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_bitmap.json",
+        CORE_BITMAP_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("bitmap live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",
