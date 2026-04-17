@@ -1959,4 +1959,297 @@ mod tests {
             }
         }
     }
+
+    mod metamorphic {
+        use super::*;
+        use proptest::prelude::*;
+        use proptest::string::string_regex;
+
+        fn byte_vec_strategy(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
+            prop::collection::vec(any::<u8>(), 0..=max_len)
+        }
+
+        fn non_empty_byte_vec_strategy(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
+            prop::collection::vec(any::<u8>(), 1..=max_len)
+        }
+
+        fn finite_score_strategy() -> impl Strategy<Value = f64> {
+            prop_oneof![
+                (-1_000_000_i32..=1_000_000_i32).prop_map(|value| f64::from(value) / 1000.0),
+                Just(0.0),
+            ]
+        }
+
+        fn aof_record_strategy() -> impl Strategy<Value = AofRecord> {
+            prop::collection::vec(byte_vec_strategy(16), 1..=6).prop_map(|argv| AofRecord { argv })
+        }
+
+        fn stream_entry_strategy() -> impl Strategy<Value = crate::StreamEntry> {
+            (
+                0_u64..=10_000,
+                0_u64..=64,
+                prop::collection::vec(
+                    (non_empty_byte_vec_strategy(8), byte_vec_strategy(16)),
+                    0..=4,
+                ),
+            )
+        }
+
+        fn stream_pending_entry_strategy() -> impl Strategy<Value = RdbStreamPendingEntry> {
+            (
+                0_u64..=10_000,
+                0_u64..=64,
+                non_empty_byte_vec_strategy(8),
+                0_u64..=32,
+                0_u64..=10_000,
+            )
+                .prop_map(
+                    |(entry_id_ms, entry_id_seq, consumer, deliveries, last_delivered_ms)| {
+                        RdbStreamPendingEntry {
+                            entry_id_ms,
+                            entry_id_seq,
+                            consumer,
+                            deliveries,
+                            last_delivered_ms,
+                        }
+                    },
+                )
+        }
+
+        fn stream_consumer_group_strategy() -> impl Strategy<Value = RdbStreamConsumerGroup> {
+            (
+                non_empty_byte_vec_strategy(8),
+                0_u64..=10_000,
+                0_u64..=64,
+                prop::collection::vec(non_empty_byte_vec_strategy(8), 0..=3),
+                prop::collection::vec(stream_pending_entry_strategy(), 0..=3),
+            )
+                .prop_map(
+                    |(name, last_delivered_id_ms, last_delivered_id_seq, consumers, pending)| {
+                        RdbStreamConsumerGroup {
+                            name,
+                            last_delivered_id_ms,
+                            last_delivered_id_seq,
+                            consumers,
+                            pending,
+                        }
+                    },
+                )
+        }
+
+        fn rdb_value_strategy() -> impl Strategy<Value = RdbValue> {
+            prop_oneof![
+                byte_vec_strategy(24).prop_map(RdbValue::String),
+                prop::collection::vec(byte_vec_strategy(12), 0..=4).prop_map(RdbValue::List),
+                prop::collection::vec(byte_vec_strategy(12), 0..=4).prop_map(RdbValue::Set),
+                prop::collection::vec((byte_vec_strategy(8), byte_vec_strategy(12)), 0..=4,)
+                    .prop_map(RdbValue::Hash),
+                prop::collection::vec((byte_vec_strategy(8), finite_score_strategy()), 0..=4,)
+                    .prop_map(RdbValue::SortedSet),
+                (
+                    prop::collection::vec(stream_entry_strategy(), 0..=3),
+                    prop::option::of((0_u64..=10_000, 0_u64..=64)),
+                    prop::collection::vec(stream_consumer_group_strategy(), 0..=2),
+                )
+                    .prop_map(|(entries, watermark, groups)| {
+                        RdbValue::Stream(entries, watermark, groups)
+                    }),
+            ]
+        }
+
+        fn rdb_entry_strategy() -> impl Strategy<Value = Vec<RdbEntry>> {
+            prop::collection::btree_map(
+                (0_usize..=3, non_empty_byte_vec_strategy(8)),
+                (rdb_value_strategy(), prop::option::of(0_u64..=1_000_000)),
+                0..=8,
+            )
+            .prop_map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|((db, key), (value, expire_ms))| RdbEntry {
+                        db,
+                        key,
+                        value,
+                        expire_ms,
+                    })
+                    .collect()
+            })
+        }
+
+        fn aux_fields_strategy() -> impl Strategy<Value = Vec<(String, String)>> {
+            prop::collection::btree_map(
+                string_regex("[a-z][a-z0-9_-]{0,7}").expect("valid aux key regex"),
+                string_regex("[A-Za-z0-9._:-]{0,12}").expect("valid aux value regex"),
+                0..=4,
+            )
+            .prop_map(|fields| fields.into_iter().collect())
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            /// MR: Encoding determinism - encoding the same data twice produces identical bytes.
+            #[test]
+            fn mr_aof_encoding_determinism(records in prop::collection::vec(aof_record_strategy(), 0..=8)) {
+                let encoded1 = encode_aof_stream(&records);
+                let encoded2 = encode_aof_stream(&records);
+                prop_assert_eq!(encoded1, encoded2, "AOF encoding must be deterministic");
+            }
+
+            /// MR: Encoding determinism - encoding the same RDB twice produces identical bytes.
+            #[test]
+            fn mr_rdb_encoding_determinism(
+                entries in rdb_entry_strategy(),
+                aux_fields in aux_fields_strategy(),
+            ) {
+                let aux_refs: Vec<(&str, &str)> = aux_fields
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                let encoded1 = encode_rdb(&entries, &aux_refs);
+                let encoded2 = encode_rdb(&entries, &aux_refs);
+                prop_assert_eq!(encoded1, encoded2, "RDB encoding must be deterministic");
+            }
+
+            /// MR: AOF concatenation equivalence - encode(a ++ b) == encode(a) ++ encode(b).
+            #[test]
+            fn mr_aof_concatenation_equivalence(
+                records_a in prop::collection::vec(aof_record_strategy(), 0..=4),
+                records_b in prop::collection::vec(aof_record_strategy(), 0..=4),
+            ) {
+                let mut combined = records_a.clone();
+                combined.extend(records_b.clone());
+
+                let encoded_combined = encode_aof_stream(&combined);
+                let mut encoded_separate = encode_aof_stream(&records_a);
+                encoded_separate.extend(encode_aof_stream(&records_b));
+
+                prop_assert_eq!(
+                    encoded_combined, encoded_separate,
+                    "AOF: encode(a ++ b) must equal encode(a) ++ encode(b)"
+                );
+            }
+
+            /// MR: RDB entry order invariance - shuffling entries produces same encoded output.
+            /// encode_rdb internally sorts by (db, key), so input order shouldn't matter.
+            #[test]
+            fn mr_rdb_entry_order_invariance(
+                entries in rdb_entry_strategy(),
+                seed in any::<u64>(),
+            ) {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+
+                if entries.len() < 2 {
+                    return Ok(());
+                }
+
+                let encoded_original = encode_rdb(&entries, &[]);
+
+                // Shuffle entries using deterministic permutation based on seed
+                let mut shuffled = entries.clone();
+                shuffled.sort_by(|a, b| {
+                    let mut ha = DefaultHasher::new();
+                    let mut hb = DefaultHasher::new();
+                    seed.hash(&mut ha);
+                    a.key.hash(&mut ha);
+                    seed.hash(&mut hb);
+                    b.key.hash(&mut hb);
+                    ha.finish().cmp(&hb.finish())
+                });
+
+                let encoded_shuffled = encode_rdb(&shuffled, &[]);
+                prop_assert_eq!(
+                    encoded_original, encoded_shuffled,
+                    "RDB encoding must be independent of input entry order"
+                );
+            }
+
+            /// MR: RDB checksum consistency - checksum stored in encoded data matches computed.
+            #[test]
+            fn mr_rdb_checksum_consistency(
+                entries in rdb_entry_strategy(),
+                aux_fields in aux_fields_strategy(),
+            ) {
+                let aux_refs: Vec<(&str, &str)> = aux_fields
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                let encoded = encode_rdb(&entries, &aux_refs);
+
+                // Checksum is last 8 bytes
+                let stored_checksum = u64::from_le_bytes(
+                    encoded[encoded.len() - 8..].try_into().unwrap()
+                );
+                // Compute checksum over everything except the checksum itself
+                let computed_checksum = crc64_redis(&encoded[..encoded.len() - 8]);
+
+                prop_assert_eq!(
+                    stored_checksum, computed_checksum,
+                    "RDB stored checksum must match computed checksum"
+                );
+            }
+
+            /// MR: AOF subset preservation - decoding a prefix of encoded records yields that prefix.
+            #[test]
+            fn mr_aof_subset_preservation(
+                records in prop::collection::vec(aof_record_strategy(), 1..=8),
+                prefix_len in 1_usize..=8,
+            ) {
+                let actual_prefix_len = prefix_len.min(records.len());
+                let prefix_records: Vec<AofRecord> = records[..actual_prefix_len].to_vec();
+
+                let encoded_prefix = encode_aof_stream(&prefix_records);
+                let decoded = decode_aof_stream(&encoded_prefix).expect("prefix should decode");
+
+                prop_assert_eq!(decoded, prefix_records, "AOF prefix decode must match prefix");
+            }
+
+            /// MR: RDB aux field independence - aux fields don't affect entry encoding.
+            #[test]
+            fn mr_rdb_aux_independence(
+                entries in rdb_entry_strategy(),
+                aux1 in aux_fields_strategy(),
+                aux2 in aux_fields_strategy(),
+            ) {
+                let aux1_refs: Vec<(&str, &str)> = aux1
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                let aux2_refs: Vec<(&str, &str)> = aux2
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+
+                let (decoded1, _) = decode_rdb(&encode_rdb(&entries, &aux1_refs))
+                    .expect("should decode");
+                let (decoded2, _) = decode_rdb(&encode_rdb(&entries, &aux2_refs))
+                    .expect("should decode");
+
+                prop_assert_eq!(
+                    decoded1, decoded2,
+                    "RDB entries must be independent of aux fields"
+                );
+            }
+
+            /// MR: Empty input identity - encoding empty produces minimal valid output.
+            #[test]
+            fn mr_empty_aof_identity(dummy in Just(())) {
+                let _ = dummy;
+                let encoded = encode_aof_stream(&[]);
+                prop_assert!(encoded.is_empty(), "Empty AOF should encode to empty bytes");
+                let decoded = decode_aof_stream(&encoded).expect("empty should decode");
+                prop_assert!(decoded.is_empty(), "Empty AOF should decode to empty");
+            }
+
+            /// MR: Single record isolation - single record encodes/decodes independently.
+            #[test]
+            fn mr_aof_single_record_isolation(record in aof_record_strategy()) {
+                let encoded = encode_aof_stream(&[record.clone()]);
+                let decoded = decode_aof_stream(&encoded).expect("single record should decode");
+                prop_assert_eq!(decoded.len(), 1);
+                prop_assert_eq!(&decoded[0], &record);
+            }
+        }
+    }
 }
