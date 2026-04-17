@@ -680,6 +680,12 @@ pub fn run_live_redis_multi_client_diff(
     fixture_name: &str,
     oracle: &LiveOracleConfig,
 ) -> Result<DifferentialReport, String> {
+    #[derive(Debug, Clone)]
+    enum PendingRuntimeResponse {
+        Immediate(RespFrame),
+        Deferred(RespFrame),
+    }
+
     let fixture = load_multi_client_fixture(config, fixture_name)?;
     let suite = format!("live_redis_multi_client_diff::{}", fixture.suite);
     let live_log_path = config
@@ -712,7 +718,7 @@ pub fn run_live_redis_multi_client_diff(
     let mut failed = Vec::new();
     let total = fixture.steps.len();
     let default_async_timeout_ms = 1000_u64;
-    let mut pending_runtime_responses: std::collections::HashMap<String, (u64, RespFrame)> =
+    let mut pending_runtime_responses: std::collections::HashMap<String, PendingRuntimeResponse> =
         std::collections::HashMap::new();
 
     for step in fixture.steps {
@@ -741,10 +747,16 @@ pub fn run_live_redis_multi_client_diff(
 
             if step.send_only {
                 // Blocking command: send to Redis but don't wait for response.
-                // Store runtime result for later comparison when read_pending is called.
-                // Runtime returns immediately (no actual blocking in runtime-only mode).
-                pending_runtime_responses
-                    .insert(client_name.clone(), (step.now_ms, runtime_actual));
+                // If the runtime returned a null array, the command would have
+                // blocked on the standalone server path. Re-run that command
+                // when the later `read_pending` step fires so we compare the
+                // eventual wake-up reply instead of the immediate null.
+                let pending = if matches!(runtime_actual, RespFrame::Array(None)) {
+                    PendingRuntimeResponse::Deferred(frame)
+                } else {
+                    PendingRuntimeResponse::Immediate(runtime_actual)
+                };
+                pending_runtime_responses.insert(client_name.clone(), pending);
             } else if let Some(expected) = &step.expect {
                 let redis_actual = read_resp_frame_from_stream(&mut oracle_conn.stream)
                     .map_err(|err| format!("{}: {err}", step.name))?;
@@ -796,11 +808,18 @@ pub fn run_live_redis_multi_client_diff(
             let redis_actual = read_resp_frame_from_stream(&mut oracle_conn.stream)
                 .map_err(|err| format!("{}: blocking read failed: {err}", step.name))?;
 
-            // For runtime, retrieve the stored response from send_only step.
-            // Runtime doesn't actually block, so it returned immediately.
+            // For runtime, retrieve the stored pending state from the send_only
+            // step. Immediate replies are preserved as-is; null-array
+            // "would-block" replies are re-executed now so the harness can
+            // compare the wake-up result after the peer mutation.
             let runtime_actual = pending_runtime_responses
                 .remove(client_name)
-                .map(|(_, frame)| frame)
+                .map(|pending| match pending {
+                    PendingRuntimeResponse::Immediate(frame) => frame,
+                    PendingRuntimeResponse::Deferred(frame) => {
+                        runtime.execute_frame(frame, step.now_ms)
+                    }
+                })
                 .unwrap_or(RespFrame::BulkString(None));
 
             oracle_conn

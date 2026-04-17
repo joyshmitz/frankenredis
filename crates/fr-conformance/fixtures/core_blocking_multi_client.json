@@ -110,14 +110,14 @@
       "name": "blocker_sends_bzpopmax",
       "now_ms": 900,
       "client": "blocker",
-      "argv": ["BZPOPMAX", "zset_key", "5"],
+      "argv": ["BZPOPMAX", "zset_max_key", "5"],
       "send_only": true
     },
     {
       "name": "pusher_triggers_bzpopmax_wakeup",
       "now_ms": 950,
       "client": "pusher",
-      "argv": ["ZADD", "zset_key", "99", "highest"],
+      "argv": ["ZADD", "zset_max_key", "99", "highest"],
       "expect": {
         "kind": "integer",
         "value": 1
@@ -132,7 +132,7 @@
       "expect": {
         "kind": "array",
         "value": [
-          { "kind": "bulk", "value": "zset_key" },
+          { "kind": "bulk", "value": "zset_max_key" },
           { "kind": "bulk", "value": "highest" },
           { "kind": "bulk", "value": "99" }
         ]
