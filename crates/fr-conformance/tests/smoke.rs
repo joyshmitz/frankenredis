@@ -15,6 +15,26 @@ use fr_conformance::{
 use fr_protocol::{RespFrame, parse_frame};
 use fr_runtime::Runtime;
 
+const CORE_SCAN_LIVE_STABLE_CASES: &[&str] = &[
+    "scan_empty_store",
+    "scan_wrong_arity",
+    "scan_count_noncanonical_plus",
+    "scan_count_noncanonical_leading_zero",
+    "hscan_missing_key",
+    "sscan_missing_key",
+    "zscan_missing_key",
+    "hscan_wrongtype",
+    "sscan_wrongtype",
+    "zscan_wrongtype",
+    "hscan_wrong_arity",
+    "sscan_wrong_arity",
+    "zscan_wrong_arity",
+    "hscan_wrong_arity_no_cursor",
+    "sscan_wrong_arity_no_cursor",
+    "zscan_wrong_arity_no_cursor",
+    "scan_invalid_option",
+];
+
 const CORE_OBJECT_LIVE_STABLE_CASES: &[&str] = &[
     "object_encoding_string_int",
     "object_encoding_returns_int",
@@ -1262,6 +1282,30 @@ fn core_stream_live_redis_matches_runtime() {
         &oracle,
     )
     .expect("stream live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_scan_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_scan.json",
+        CORE_SCAN_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("scan live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",
