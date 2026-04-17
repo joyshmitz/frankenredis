@@ -44,7 +44,7 @@ proptest! {
 
         // LPUSH all values (they go to head)
         for v in &values {
-            store.lpush(&key, &[v.clone()], 0).unwrap();
+            store.lpush(&key, std::slice::from_ref(v), 0).unwrap();
         }
 
         // RPOP should return them in original order (FIFO from right)
@@ -112,7 +112,7 @@ proptest! {
         store.set(key.clone(), value, None, 0);
         prop_assert!(store.exists(&key, 0));
 
-        let deleted = store.del(&[key.clone()], 0);
+        let deleted = store.del(std::slice::from_ref(&key), 0);
         prop_assert_eq!(deleted, 1);
 
         prop_assert!(!store.exists(&key, 0), "DEL should remove key");
@@ -204,7 +204,7 @@ proptest! {
                               member in prop::collection::vec(any::<u8>(), 1..32)) {
         let mut store = fresh_store();
 
-        store.sadd(&key, &[member.clone()], 0).unwrap();
+        store.sadd(&key, std::slice::from_ref(&member), 0).unwrap();
         prop_assert!(store.sismember(&key, &member, 0).unwrap());
 
         store.srem(&key, &[member.as_slice()], 0).unwrap();
@@ -318,5 +318,78 @@ proptest! {
     fn mr_exists_false_for_nonexistent(key in prop::collection::vec(any::<u8>(), 1..32)) {
         let mut store = fresh_store();
         prop_assert!(!store.exists_no_touch(&key, 0));
+    }
+
+    // MR21: EXPIRE seconds and milliseconds are equivalent when deadlines match exactly.
+    #[test]
+    fn mr_expire_seconds_matches_expire_milliseconds(
+        key in prop::collection::vec(any::<u8>(), 1..32),
+        value in prop::collection::vec(any::<u8>(), 1..128),
+        ttl_seconds in 1u32..600,
+        set_now in 0u64..10_000,
+        observe_delta_ms in 0u64..1_200_000
+    ) {
+        let ttl_ms = u64::from(ttl_seconds) * 1_000;
+        let observe_now = set_now.saturating_add(observe_delta_ms);
+
+        let mut seconds_store = fresh_store();
+        seconds_store.set(key.clone(), value.clone(), None, set_now);
+        prop_assert!(seconds_store.expire_seconds(&key, i64::from(ttl_seconds), set_now));
+
+        let mut milliseconds_store = fresh_store();
+        milliseconds_store.set(key.clone(), value, None, set_now);
+        prop_assert!(milliseconds_store.expire_milliseconds(&key, ttl_ms as i64, set_now));
+
+        prop_assert_eq!(
+            seconds_store.get(&key, observe_now).unwrap(),
+            milliseconds_store.get(&key, observe_now).unwrap(),
+            "second and millisecond expiry forms should be observationally equivalent"
+        );
+        prop_assert_eq!(
+            seconds_store.pttl(&key, observe_now),
+            milliseconds_store.pttl(&key, observe_now),
+            "matching expiry deadlines should yield matching remaining TTLs"
+        );
+    }
+
+    // MR22: RENAME and COPY preserve the absolute expiry deadline rather than resetting it.
+    #[test]
+    fn mr_rename_and_copy_preserve_absolute_expiry_deadline(
+        src in prop::collection::vec(any::<u8>(), 1..32),
+        dst in prop::collection::vec(any::<u8>(), 1..32),
+        value in prop::collection::vec(any::<u8>(), 1..128),
+        ttl_ms in 1u64..20_000,
+        op_elapsed_ms in 0u64..20_000,
+        observe_extra_ms in 0u64..20_000
+    ) {
+        prop_assume!(src != dst);
+        prop_assume!(op_elapsed_ms < ttl_ms);
+
+        let set_now = 1_000u64;
+        let op_now = set_now.saturating_add(op_elapsed_ms);
+        let observe_now = op_now.saturating_add(observe_extra_ms);
+
+        let mut baseline = fresh_store();
+        baseline.set(src.clone(), value.clone(), Some(ttl_ms), set_now);
+        let baseline_value = baseline.get(&src, observe_now).unwrap();
+        let baseline_pttl = baseline.pttl(&src, observe_now);
+
+        let mut renamed = fresh_store();
+        renamed.set(src.clone(), value.clone(), Some(ttl_ms), set_now);
+        renamed.rename(&src, &dst, op_now).unwrap();
+        prop_assert_eq!(renamed.get(&src, observe_now).unwrap(), None);
+        prop_assert_eq!(renamed.get(&dst, observe_now).unwrap(), baseline_value.clone());
+        prop_assert_eq!(renamed.pttl(&dst, observe_now), baseline_pttl);
+
+        let mut copied = fresh_store();
+        copied.set(src.clone(), value, Some(ttl_ms), set_now);
+        prop_assert!(copied.copy(&src, &dst, false, op_now).unwrap());
+        prop_assert_eq!(copied.get(&src, observe_now).unwrap(), baseline_value.clone());
+        prop_assert_eq!(copied.get(&dst, observe_now).unwrap(), baseline_value);
+
+        let copied_src_pttl = copied.pttl(&src, observe_now);
+        let copied_dst_pttl = copied.pttl(&dst, observe_now);
+        prop_assert_eq!(copied_src_pttl, baseline_pttl);
+        prop_assert_eq!(copied_dst_pttl, baseline_pttl);
     }
 }

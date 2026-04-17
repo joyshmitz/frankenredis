@@ -2234,8 +2234,7 @@ mod tests {
 
             /// MR: Empty input identity - encoding empty produces minimal valid output.
             #[test]
-            fn mr_empty_aof_identity(dummy in Just(())) {
-                let _ = dummy;
+            fn mr_empty_aof_identity(_dummy in Just(())) {
                 let encoded = encode_aof_stream(&[]);
                 prop_assert!(encoded.is_empty(), "Empty AOF should encode to empty bytes");
                 let decoded = decode_aof_stream(&encoded).expect("empty should decode");
@@ -2245,7 +2244,7 @@ mod tests {
             /// MR: Single record isolation - single record encodes/decodes independently.
             #[test]
             fn mr_aof_single_record_isolation(record in aof_record_strategy()) {
-                let encoded = encode_aof_stream(&[record.clone()]);
+                let encoded = encode_aof_stream(std::slice::from_ref(&record));
                 let decoded = decode_aof_stream(&encoded).expect("single record should decode");
                 prop_assert_eq!(decoded.len(), 1);
                 prop_assert_eq!(&decoded[0], &record);
