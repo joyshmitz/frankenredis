@@ -7,7 +7,7 @@ use fr_command::{
     check_command_arity, command_key_indexes, command_keys, frame_to_argv, is_known_command,
     is_write_command,
 };
-use fr_protocol::{parse_frame, RespFrame};
+use fr_protocol::{RespFrame, parse_frame};
 
 /// A structured command representation for structure-aware fuzzing.
 #[derive(Debug, Arbitrary)]

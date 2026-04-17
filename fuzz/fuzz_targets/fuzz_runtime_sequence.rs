@@ -16,55 +16,146 @@ struct FuzzInput {
 #[derive(Debug, Arbitrary)]
 enum FuzzCommand {
     // String commands
-    Set { key: FuzzKey, value: FuzzValue },
-    Get { key: FuzzKey },
-    Del { keys: Vec<FuzzKey> },
-    Incr { key: FuzzKey },
-    IncrBy { key: FuzzKey, delta: i64 },
-    Decr { key: FuzzKey },
-    Append { key: FuzzKey, value: FuzzValue },
-    Strlen { key: FuzzKey },
+    Set {
+        key: FuzzKey,
+        value: FuzzValue,
+    },
+    Get {
+        key: FuzzKey,
+    },
+    Del {
+        keys: Vec<FuzzKey>,
+    },
+    Incr {
+        key: FuzzKey,
+    },
+    IncrBy {
+        key: FuzzKey,
+        delta: i64,
+    },
+    Decr {
+        key: FuzzKey,
+    },
+    Append {
+        key: FuzzKey,
+        value: FuzzValue,
+    },
+    Strlen {
+        key: FuzzKey,
+    },
 
     // List commands
-    LPush { key: FuzzKey, values: Vec<FuzzValue> },
-    RPush { key: FuzzKey, values: Vec<FuzzValue> },
-    LPop { key: FuzzKey },
-    RPop { key: FuzzKey },
-    LLen { key: FuzzKey },
-    LRange { key: FuzzKey, start: i32, stop: i32 },
+    LPush {
+        key: FuzzKey,
+        values: Vec<FuzzValue>,
+    },
+    RPush {
+        key: FuzzKey,
+        values: Vec<FuzzValue>,
+    },
+    LPop {
+        key: FuzzKey,
+    },
+    RPop {
+        key: FuzzKey,
+    },
+    LLen {
+        key: FuzzKey,
+    },
+    LRange {
+        key: FuzzKey,
+        start: i32,
+        stop: i32,
+    },
 
     // Set commands
-    SAdd { key: FuzzKey, members: Vec<FuzzValue> },
-    SRem { key: FuzzKey, members: Vec<FuzzValue> },
-    SMembers { key: FuzzKey },
-    SCard { key: FuzzKey },
-    SIsMember { key: FuzzKey, member: FuzzValue },
+    SAdd {
+        key: FuzzKey,
+        members: Vec<FuzzValue>,
+    },
+    SRem {
+        key: FuzzKey,
+        members: Vec<FuzzValue>,
+    },
+    SMembers {
+        key: FuzzKey,
+    },
+    SCard {
+        key: FuzzKey,
+    },
+    SIsMember {
+        key: FuzzKey,
+        member: FuzzValue,
+    },
 
     // Hash commands
-    HSet { key: FuzzKey, field: FuzzValue, value: FuzzValue },
-    HGet { key: FuzzKey, field: FuzzValue },
-    HDel { key: FuzzKey, fields: Vec<FuzzValue> },
-    HLen { key: FuzzKey },
-    HGetAll { key: FuzzKey },
+    HSet {
+        key: FuzzKey,
+        field: FuzzValue,
+        value: FuzzValue,
+    },
+    HGet {
+        key: FuzzKey,
+        field: FuzzValue,
+    },
+    HDel {
+        key: FuzzKey,
+        fields: Vec<FuzzValue>,
+    },
+    HLen {
+        key: FuzzKey,
+    },
+    HGetAll {
+        key: FuzzKey,
+    },
 
     // Sorted set commands
-    ZAdd { key: FuzzKey, score: f64, member: FuzzValue },
-    ZRem { key: FuzzKey, members: Vec<FuzzValue> },
-    ZScore { key: FuzzKey, member: FuzzValue },
-    ZCard { key: FuzzKey },
-    ZRange { key: FuzzKey, start: i32, stop: i32 },
+    ZAdd {
+        key: FuzzKey,
+        score: f64,
+        member: FuzzValue,
+    },
+    ZRem {
+        key: FuzzKey,
+        members: Vec<FuzzValue>,
+    },
+    ZScore {
+        key: FuzzKey,
+        member: FuzzValue,
+    },
+    ZCard {
+        key: FuzzKey,
+    },
+    ZRange {
+        key: FuzzKey,
+        start: i32,
+        stop: i32,
+    },
 
     // Key commands
-    Exists { keys: Vec<FuzzKey> },
-    Type { key: FuzzKey },
-    Expire { key: FuzzKey, seconds: u32 },
-    Ttl { key: FuzzKey },
-    Persist { key: FuzzKey },
+    Exists {
+        keys: Vec<FuzzKey>,
+    },
+    Type {
+        key: FuzzKey,
+    },
+    Expire {
+        key: FuzzKey,
+        seconds: u32,
+    },
+    Ttl {
+        key: FuzzKey,
+    },
+    Persist {
+        key: FuzzKey,
+    },
 
     // DB commands
     DbSize,
     FlushDb,
-    Keys { pattern: FuzzPattern },
+    Keys {
+        pattern: FuzzPattern,
+    },
 }
 
 #[derive(Debug, Arbitrary, Clone)]
@@ -159,7 +250,11 @@ impl FuzzCommand {
             FuzzCommand::SMembers { key } => vec![cmd(b"SMEMBERS"), bulk(key.as_bytes())],
             FuzzCommand::SCard { key } => vec![cmd(b"SCARD"), bulk(key.as_bytes())],
             FuzzCommand::SIsMember { key, member } => {
-                vec![cmd(b"SISMEMBER"), bulk(key.as_bytes()), bulk(member.as_bytes())]
+                vec![
+                    cmd(b"SISMEMBER"),
+                    bulk(key.as_bytes()),
+                    bulk(member.as_bytes()),
+                ]
             }
 
             FuzzCommand::HSet { key, field, value } => vec![
@@ -191,7 +286,11 @@ impl FuzzCommand {
                 v
             }
             FuzzCommand::ZScore { key, member } => {
-                vec![cmd(b"ZSCORE"), bulk(key.as_bytes()), bulk(member.as_bytes())]
+                vec![
+                    cmd(b"ZSCORE"),
+                    bulk(key.as_bytes()),
+                    bulk(member.as_bytes()),
+                ]
             }
             FuzzCommand::ZCard { key } => vec![cmd(b"ZCARD"), bulk(key.as_bytes())],
             FuzzCommand::ZRange { key, start, stop } => vec![
@@ -238,7 +337,9 @@ fuzz_target!(|input: FuzzInput| {
                 key.0.len() > 1000 || values.iter().any(|v| v.0.len() > 10000) || values.len() > 100
             }
             FuzzCommand::SAdd { key, members } => {
-                key.0.len() > 1000 || members.iter().any(|m| m.0.len() > 10000) || members.len() > 100
+                key.0.len() > 1000
+                    || members.iter().any(|m| m.0.len() > 10000)
+                    || members.len() > 100
             }
             FuzzCommand::Del { keys } | FuzzCommand::Exists { keys } => {
                 keys.iter().any(|k| k.0.len() > 1000) || keys.len() > 100

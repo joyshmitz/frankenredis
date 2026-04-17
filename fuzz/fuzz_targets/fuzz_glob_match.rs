@@ -7,8 +7,14 @@ use fr_store::glob_match;
 
 #[derive(Debug, Arbitrary)]
 enum FuzzInput {
-    Raw { pattern: Vec<u8>, string: Vec<u8> },
-    Structured { pattern: StructuredPattern, string: Vec<u8> },
+    Raw {
+        pattern: Vec<u8>,
+        string: Vec<u8>,
+    },
+    Structured {
+        pattern: StructuredPattern,
+        string: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Arbitrary)]
@@ -54,7 +60,11 @@ impl StructuredPattern {
                     }
                     result.push(b']');
                 }
-                PatternSegment::CharRange { negated, start, end } => {
+                PatternSegment::CharRange {
+                    negated,
+                    start,
+                    end,
+                } => {
                     result.push(b'[');
                     if *negated {
                         result.push(b'^');
@@ -101,14 +111,17 @@ fuzz_target!(|input: FuzzInput| {
                 );
             }
 
-            if pattern.segments.len() == 1 {
-                if let PatternSegment::Star = &pattern.segments[0] {
-                    assert!(result, "Single * should match any string");
-                }
+            if pattern.segments.len() == 1
+                && let PatternSegment::Star = &pattern.segments[0]
+            {
+                assert!(result, "Single * should match any string");
             }
 
             if !pattern.segments.is_empty()
-                && pattern.segments.iter().all(|s| matches!(s, PatternSegment::Star))
+                && pattern
+                    .segments
+                    .iter()
+                    .all(|s| matches!(s, PatternSegment::Star))
             {
                 assert!(result, "All-star pattern should match any string");
             }

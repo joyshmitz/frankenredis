@@ -58,7 +58,10 @@ fn fuzz_raw_function_source(body: &[u8], mode: u8) {
     };
 
     let mut store = Store::new();
-    if store.function_load(source.as_bytes(), mode & 0b1000 != 0).is_ok() {
+    if store
+        .function_load(source.as_bytes(), mode & 0b1000 != 0)
+        .is_ok()
+    {
         assert_dump_restore_roundtrip(&store);
     }
 }
@@ -82,9 +85,9 @@ fn fuzz_valid_function_library(case: ValidFunctionLibrary) {
 }
 
 fn fuzz_raw_function_restore(body: &[u8]) {
-    let (policy_selector, payload) = body.split_first().map_or((0, &[][..]), |(&head, tail)| {
-        (head, tail)
-    });
+    let (policy_selector, payload) = body
+        .split_first()
+        .map_or((0, &[][..]), |(&head, tail)| (head, tail));
     let payload = truncate_bytes(payload.to_vec(), MAX_PAYLOAD_LEN);
     let policy = restore_policy(policy_selector);
 
