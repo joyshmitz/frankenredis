@@ -7,10 +7,11 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fr_conformance::{
-    CaseOutcome, HarnessConfig, LiveOptionalReplyCase, LiveOracleConfig, run_fixture,
-    run_live_redis_diff, run_live_redis_diff_for_cases, run_live_redis_multi_client_diff,
-    run_live_redis_optional_reply_sequence_diff, run_protocol_fixture, run_replay_fixture,
-    run_replication_handshake_fixture, run_smoke,
+    CaseOutcome, HarnessConfig, LiveInfoContractCase, LiveInfoFieldComparison,
+    LiveInfoFieldContract, LiveOptionalReplyCase, LiveOracleConfig, run_fixture,
+    run_live_redis_diff, run_live_redis_diff_for_cases, run_live_redis_info_contract_diff,
+    run_live_redis_multi_client_diff, run_live_redis_optional_reply_sequence_diff,
+    run_protocol_fixture, run_replay_fixture, run_replication_handshake_fixture, run_smoke,
 };
 use fr_protocol::{RespFrame, parse_frame};
 use fr_runtime::Runtime;
@@ -147,6 +148,34 @@ const CORE_SCRIPTING_LIVE_STABLE_CASES: &[&str] = &[
     "eval_math_functions",
 ];
 
+fn live_info_case(
+    case_name: &str,
+    required_sections: &[&str],
+    field_contracts: &[LiveInfoFieldContract],
+) -> LiveInfoContractCase {
+    LiveInfoContractCase {
+        case_name: case_name.to_string(),
+        required_sections: required_sections.iter().map(|section| (*section).to_string()).collect(),
+        field_contracts: field_contracts.to_vec(),
+    }
+}
+
+fn live_info_setup_case(case_name: &str) -> LiveInfoContractCase {
+    live_info_case(case_name, &[], &[])
+}
+
+fn live_info_field(
+    section: &str,
+    field: &str,
+    comparison: LiveInfoFieldComparison,
+) -> LiveInfoFieldContract {
+    LiveInfoFieldContract {
+        section: section.to_string(),
+        field: field.to_string(),
+        comparison,
+    }
+}
+
 const CORE_STRINGS_LIVE_STABLE_CASES: &[&str] = &[
     // Basic SET/GET
     "ping",
@@ -246,6 +275,92 @@ const CORE_STRINGS_LIVE_STABLE_CASES: &[&str] = &[
     "getset_nonexistent_creates_key",
     // SUBSTR
     "substr_basic",
+];
+
+const CORE_LIST_LIVE_STABLE_CASES: &[&str] = &[
+    // Basic LPUSH/RPUSH/LRANGE
+    "lpush_single",
+    "lpush_multiple",
+    "lrange_all",
+    "rpush_single",
+    // LLEN
+    "llen",
+    "llen_missing_key",
+    // LINDEX
+    "lindex_zero",
+    "lindex_negative",
+    "lindex_out_of_range",
+    // LPOP/RPOP
+    "lpop_head",
+    "rpop_tail",
+    "lrange_after_pops",
+    "lpop_empty_key",
+    "rpop_empty_key",
+    "lpop_with_count",
+    "lpop_count_2",
+    "rpop_count_2",
+    // LSET
+    "lset_element",
+    "lindex_after_set",
+    // LINSERT
+    "linsert_setup",
+    "linsert_before",
+    "linsert_after",
+    "linsert_missing_pivot",
+    "linsert_missing_key",
+    // LREM
+    "lrem_setup",
+    "lrem_positive_count",
+    "lrange_after_lrem",
+    // LTRIM
+    "ltrim_setup",
+    "ltrim_middle",
+    "lrange_after_ltrim",
+    // LPUSHX/RPUSHX
+    "lpushx_existing",
+    "lpushx_missing",
+    "rpushx_existing",
+    "rpushx_missing",
+    // LMOVE
+    "lmove_setup",
+    "lmove_left_right",
+    "lmove_verify_src",
+    "lmove_verify_dst",
+    // LPOS
+    "lpos_setup",
+    "lpos_basic",
+    "lpos_missing_element",
+    "lpos_rank_2",
+    "lpos_rank_negative",
+    "lpos_count_0",
+    "lpos_count_2",
+    "lpos_missing_key",
+    // LMPOP (non-blocking)
+    "lmpop_setup",
+    "lmpop_left_single",
+    "lmpop_right_single",
+    "lmpop_left_count_2",
+    "lmpop_verify_remaining",
+    "lmpop_all_empty",
+    // RPOPLPUSH
+    "rpoplpush_setup",
+    "rpoplpush_basic",
+    "rpoplpush_verify_src",
+    "rpoplpush_verify_dst",
+    "rpoplpush_empty_src",
+    "rpoplpush_same_key_setup",
+    "rpoplpush_same_key",
+    "rpoplpush_same_key_verify",
+    "rpoplpush_wrong_arity",
+    // LMOVE variants
+    "lmove_rl_setup",
+    "lmove_right_left",
+    "lmove_right_right",
+    "lmove_left_left",
+    "lmove_empty_src",
+    // Wrongtype errors
+    "lpush_wrongtype_on_string",
+    "lpush_wrongtype_error",
 ];
 
 struct VendoredRedisOracle {
@@ -1286,6 +1401,150 @@ fn core_server_config_rewrite_live_redis_matches_runtime() {
 }
 
 #[test]
+fn core_server_info_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_info_contract_diff(
+        &cfg,
+        "core_server.json",
+        &[
+            live_info_setup_case("info_keyspace_flush_for_test"),
+            live_info_case("info_keyspace_section_empty_db", &["Keyspace"], &[]),
+            live_info_setup_case("info_keyspace_setup"),
+            live_info_case(
+                "info_keyspace_section_with_key",
+                &["Keyspace"],
+                &[live_info_field(
+                    "Keyspace",
+                    "db0",
+                    LiveInfoFieldComparison::Exact,
+                )],
+            ),
+            live_info_case("info_unknown_section_empty", &[], &[]),
+            live_info_case(
+                "info_server_section",
+                &["Server"],
+                &[
+                    live_info_field("Server", "redis_mode", LiveInfoFieldComparison::Exact),
+                    live_info_field("Server", "process_id", LiveInfoFieldComparison::Shape),
+                    live_info_field("Server", "run_id", LiveInfoFieldComparison::Shape),
+                    live_info_field("Server", "tcp_port", LiveInfoFieldComparison::Shape),
+                    live_info_field(
+                        "Server",
+                        "uptime_in_seconds",
+                        LiveInfoFieldComparison::Shape,
+                    ),
+                ],
+            ),
+            live_info_case(
+                "info_case_insensitive",
+                &["Server"],
+                &[
+                    live_info_field("Server", "redis_mode", LiveInfoFieldComparison::Exact),
+                    live_info_field("Server", "process_id", LiveInfoFieldComparison::Shape),
+                    live_info_field("Server", "run_id", LiveInfoFieldComparison::Shape),
+                ],
+            ),
+            live_info_case(
+                "info_clients_section",
+                &["Clients"],
+                &[
+                    live_info_field(
+                        "Clients",
+                        "connected_clients",
+                        LiveInfoFieldComparison::Shape,
+                    ),
+                    live_info_field("Clients", "maxclients", LiveInfoFieldComparison::Shape),
+                    live_info_field("Clients", "blocked_clients", LiveInfoFieldComparison::Shape),
+                    live_info_field("Clients", "tracking_clients", LiveInfoFieldComparison::Shape),
+                ],
+            ),
+            live_info_case(
+                "info_memory_section",
+                &["Memory"],
+                &[
+                    live_info_field("Memory", "used_memory", LiveInfoFieldComparison::Shape),
+                    live_info_field(
+                        "Memory",
+                        "used_memory_human",
+                        LiveInfoFieldComparison::Shape,
+                    ),
+                    live_info_field("Memory", "used_memory_rss", LiveInfoFieldComparison::Shape),
+                    live_info_field(
+                        "Memory",
+                        "mem_fragmentation_ratio",
+                        LiveInfoFieldComparison::Shape,
+                    ),
+                    live_info_field(
+                        "Memory",
+                        "maxmemory_policy",
+                        LiveInfoFieldComparison::Exact,
+                    ),
+                ],
+            ),
+            live_info_case(
+                "info_persistence_section",
+                &["Persistence"],
+                &[
+                    live_info_field("Persistence", "loading", LiveInfoFieldComparison::Exact),
+                    live_info_field(
+                        "Persistence",
+                        "rdb_changes_since_last_save",
+                        LiveInfoFieldComparison::Shape,
+                    ),
+                    live_info_field(
+                        "Persistence",
+                        "rdb_last_save_time",
+                        LiveInfoFieldComparison::Shape,
+                    ),
+                    live_info_field("Persistence", "aof_enabled", LiveInfoFieldComparison::Exact),
+                ],
+            ),
+            live_info_case(
+                "info_replication_section",
+                &["Replication"],
+                &[
+                    live_info_field("Replication", "role", LiveInfoFieldComparison::Exact),
+                    live_info_field(
+                        "Replication",
+                        "connected_slaves",
+                        LiveInfoFieldComparison::Exact,
+                    ),
+                    live_info_field(
+                        "Replication",
+                        "master_replid",
+                        LiveInfoFieldComparison::Shape,
+                    ),
+                    live_info_field(
+                        "Replication",
+                        "master_repl_offset",
+                        LiveInfoFieldComparison::Shape,
+                    ),
+                    live_info_field(
+                        "Replication",
+                        "repl_backlog_active",
+                        LiveInfoFieldComparison::Exact,
+                    ),
+                ],
+            ),
+        ],
+        &oracle,
+    )
+    .expect("server info live contract diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
 fn fr_p2c_007_cluster_disabled_surface_live_redis_matches_runtime() {
     let cfg = HarnessConfig::default_paths();
     let oracle_server = VendoredRedisOracle::start(&cfg);
@@ -1469,6 +1728,30 @@ fn core_strings_live_redis_matches_runtime() {
         &oracle,
     )
     .expect("strings live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_list_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_list.json",
+        CORE_LIST_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("list live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",
