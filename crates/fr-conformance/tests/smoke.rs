@@ -1299,13 +1299,9 @@ fn core_scan_live_redis_matches_runtime() {
         port: oracle_server.port,
         ..LiveOracleConfig::default()
     };
-    let report = run_live_redis_diff_for_cases(
-        &cfg,
-        "core_scan.json",
-        CORE_SCAN_LIVE_STABLE_CASES,
-        &oracle,
-    )
-    .expect("scan live diff");
+    let report =
+        run_live_redis_diff_for_cases(&cfg, "core_scan.json", CORE_SCAN_LIVE_STABLE_CASES, &oracle)
+            .expect("scan live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",
@@ -1330,6 +1326,24 @@ fn core_object_live_redis_matches_runtime() {
         &oracle,
     )
     .expect("object live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_sort_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff(&cfg, "core_sort.json", &oracle).expect("sort live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",
