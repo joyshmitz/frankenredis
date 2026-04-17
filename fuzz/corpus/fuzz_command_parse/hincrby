@@ -1,0 +1,9 @@
+*4
+$7
+HINCRBY
+$4
+hash
+$7
+counter
+$1
+5

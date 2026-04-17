@@ -1,0 +1,7 @@
+*3
+$4
+ZREM
+$4
+zset
+$6
+member

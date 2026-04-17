@@ -1,0 +1,7 @@
+*3
+$9
+SISMEMBER
+$3
+set
+$1
+a

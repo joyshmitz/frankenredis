@@ -1,0 +1,5 @@
+*2
+$7
+HGETALL
+$4
+hash

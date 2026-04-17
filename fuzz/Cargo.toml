@@ -22,6 +22,9 @@ path = "../crates/fr-persist"
 [dependencies.fr-store]
 path = "../crates/fr-store"
 
+[dependencies.fr-command]
+path = "../crates/fr-command"
+
 [[bin]]
 name = "fuzz_resp_parser"
 path = "fuzz_targets/fuzz_resp_parser.rs"
@@ -53,6 +56,13 @@ bench = false
 [[bin]]
 name = "fuzz_dump_restore"
 path = "fuzz_targets/fuzz_dump_restore.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_command_parse"
+path = "fuzz_targets/fuzz_command_parse.rs"
 test = false
 doc = false
 bench = false
