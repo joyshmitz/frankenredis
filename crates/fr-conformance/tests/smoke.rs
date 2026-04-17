@@ -1258,6 +1258,113 @@ const CORE_HYPERLOGLOG_LIVE_STABLE_CASES: &[&str] = &[
     "pfmerge_wrong_arity",
 ];
 
+const CORE_GEO_LIVE_STABLE_CASES: &[&str] = &[
+    // GEOADD basic
+    "geoadd_seed",
+    "geoadd_ch_same_coordinate_is_zero",
+    "geoadd_ch_changed_coordinate_counts_update",
+    "geoadd_nx_skips_existing",
+    "geoadd_xx_skips_missing",
+    "geoadd_negative_longitude",
+    "geoadd_multiple_members_at_once",
+    "geoadd_multiple_at_once",
+    "geoadd_ch_flag_update",
+    "geoadd_ch_flag_change",
+    // GEOHASH (avoiding precision-dependent cases)
+    "geohash_missing_member",
+    "geohash_on_missing_key",
+    // GEODIST
+    "geodist_kilometers",
+    "geodist_missing_member",
+    "geodist_meters_default",
+    "geodist_miles",
+    "geodist_feet",
+    "geodist_nonexistent_key",
+    "geodist_same_member",
+    "geodist_sf_la",
+    "geodist_feet_setup_a",
+    "geodist_feet_setup_b",
+    // GEOPOS (avoiding coordinate precision cases)
+    "geopos_missing_member",
+    "geopos_missing_key",
+    "geopos_on_empty_key",
+    // GEORADIUS (deprecated but still supported)
+    "geoadd_seed_geo2",
+    "georadius_basic",
+    "georadius_count_1",
+    "georadius_desc",
+    "georadius_no_match",
+    "georadius_nonexistent_key",
+    "georadius_withdist",
+    "georadius_ro_basic",
+    // GEORADIUSBYMEMBER
+    "georadiusbymember_basic",
+    "georadiusbymember_missing_member",
+    "georadiusbymember_ro_basic",
+    // GEOSEARCH
+    "geosearch_fromlonlat_byradius",
+    "geosearch_frommember_byradius",
+    "geosearch_fromlonlat_byradius_count",
+    "geosearch_fromlonlat_bybox",
+    "geosearch_nonexistent_key",
+    "geosearch_bybox_narrow",
+    "geosearch_frommember_missing",
+    "geosearch_desc_order",
+    "geosearch_large_radius_all",
+    "geosearch_small_radius_none",
+    "geosearch_asc_setup",
+    "geosearch_asc",
+    "geosearch_desc",
+    "geosearch_count_1_asc",
+    "geosearch_bybox",
+    // GEOSEARCHSTORE
+    "geosearchstore_basic",
+    "geosearchstore_verify_dest_type",
+    "geosearchstore_verify_dest_card",
+    "geosearchstore_storedist",
+    // GEORADIUS STORE
+    "georadius_store_setup",
+    "georadius_store_basic",
+    "georadius_store_verify_type",
+    "georadius_store_verify_card",
+    "georadius_storedist_basic",
+    "georadius_storedist_verify_type",
+    "georadius_storedist_verify_scores_are_distances",
+    "georadius_store_no_match_deletes_dest",
+    "georadius_store_nonexistent_key",
+    "georadius_store_with_count",
+    "georadius_store_count1_verify",
+    "georadius_store_all_with_large_radius",
+    "georadius_store_all_verify",
+    // GEORADIUSBYMEMBER STORE
+    "georadiusbymember_store_basic",
+    "georadiusbymember_store_verify_card",
+    "georadiusbymember_storedist_basic",
+    "georadiusbymember_storedist_verify_type",
+    // Error cases (avoiding those with differing error messages)
+    "geoadd_invalid_long_lat_pair",
+    "geodist_invalid_unit",
+    "geoadd_nx_xx_is_syntax_error",
+    "geoadd_latitude_out_of_range",
+    "georadius_ro_negative_radius_error",
+    "geoadd_incomplete_triple",
+    // Wrong type errors
+    "wrongtype_geoadd_on_string",
+    "wrongtype_geoadd_on_string_error",
+    "wrongtype_geopos_on_string_error",
+    "wrongtype_geodist_on_string_error",
+    "wrongtype_geohash_on_string_error",
+    // Wrong arity
+    "geoadd_wrong_arity_no_members",
+    "geohash_wrong_arity",
+    "geopos_wrong_arity",
+    "geodist_wrong_arity",
+    "geosearch_wrong_arity",
+    "geosearchstore_wrong_arity",
+    "georadius_wrong_arity",
+    "georadiusbymember_wrong_arity",
+];
+
 struct VendoredRedisOracle {
     child: Child,
     port: u16,
@@ -2780,6 +2887,26 @@ fn core_hyperloglog_live_redis_matches_runtime() {
         &oracle,
     )
     .expect("hyperloglog live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_geo_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report =
+        run_live_redis_diff_for_cases(&cfg, "core_geo.json", CORE_GEO_LIVE_STABLE_CASES, &oracle)
+            .expect("geo live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",
