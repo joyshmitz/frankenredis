@@ -1,7 +1,7 @@
 //! Generate seed corpus files for fuzz targets.
 //! Run: cargo run -p fr-persist --example generate_fuzz_corpus
 
-use fr_persist::{encode_aof_stream, encode_rdb, AofRecord, RdbEntry, RdbValue};
+use fr_persist::{AofRecord, RdbEntry, RdbValue, encode_aof_stream, encode_rdb};
 use std::fs;
 use std::path::Path;
 
@@ -220,27 +220,21 @@ fn generate_dump_corpus(dir: &Path) {
     fs::write(dir.join("string_payload"), &string_dump).ok();
 
     // List payload
-    let mut list_dump = Vec::new();
-    list_dump.push(0x00);
-    list_dump.push(0x01); // type: list
-    list_dump.push(0x02); // 2 elements
-    list_dump.push(0x01);
-    list_dump.push(b'a');
-    list_dump.push(0x01);
-    list_dump.push(b'b');
+    let mut list_dump = vec![
+        0x00, 0x01, // type: list
+        0x02, // 2 elements
+        0x01, b'a', 0x01, b'b',
+    ];
     list_dump.extend_from_slice(&11u16.to_le_bytes());
     list_dump.extend_from_slice(&[0; 8]);
     fs::write(dir.join("list_payload"), &list_dump).ok();
 
     // Hash payload
-    let mut hash_dump = Vec::new();
-    hash_dump.push(0x00);
-    hash_dump.push(0x04); // type: hash
-    hash_dump.push(0x01); // 1 field
-    hash_dump.push(0x01);
-    hash_dump.push(b'f');
-    hash_dump.push(0x01);
-    hash_dump.push(b'v');
+    let mut hash_dump = vec![
+        0x00, 0x04, // type: hash
+        0x01, // 1 field
+        0x01, b'f', 0x01, b'v',
+    ];
     hash_dump.extend_from_slice(&11u16.to_le_bytes());
     hash_dump.extend_from_slice(&[0; 8]);
     fs::write(dir.join("hash_payload"), &hash_dump).ok();

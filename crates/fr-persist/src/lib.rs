@@ -1537,7 +1537,11 @@ mod tests {
             };
             let encoded = encode_aof_stream(&[record]);
             let golden = b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n";
-            assert_eq!(encoded, golden.as_slice(), "AOF SET command encoding changed");
+            assert_eq!(
+                encoded,
+                golden.as_slice(),
+                "AOF SET command encoding changed"
+            );
         }
 
         /// Golden test: AOF multi-command stream encoding.
@@ -1552,8 +1556,13 @@ mod tests {
                 },
             ];
             let encoded = encode_aof_stream(&records);
-            let golden = b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n*2\r\n$4\r\nINCR\r\n$7\r\ncounter\r\n";
-            assert_eq!(encoded, golden.as_slice(), "AOF multi-command encoding changed");
+            let golden =
+                b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n*2\r\n$4\r\nINCR\r\n$7\r\ncounter\r\n";
+            assert_eq!(
+                encoded,
+                golden.as_slice(),
+                "AOF multi-command encoding changed"
+            );
         }
 
         /// Golden test: RDB magic header must be exactly "REDIS" + version.
@@ -1572,11 +1581,7 @@ mod tests {
             let encoded = encode_rdb(&[], &[]);
             // REDIS0011 (9 bytes) + EOF opcode (1 byte) + CRC64 checksum (8 bytes)
             assert_eq!(encoded.len(), 18, "Empty RDB should be 18 bytes");
-            assert_eq!(
-                &encoded[..9],
-                b"REDIS0011",
-                "RDB header must be REDIS0011"
-            );
+            assert_eq!(&encoded[..9], b"REDIS0011", "RDB header must be REDIS0011");
             assert_eq!(encoded[9], 0xFF, "RDB EOF opcode must be 0xFF");
         }
 
@@ -1585,7 +1590,10 @@ mod tests {
         fn golden_rdb_aux_field() {
             let encoded = encode_rdb(&[], &[("redis-ver", "7.0.0")]);
             // Header + AUX opcode (0xFA) + length-prefixed key + length-prefixed value
-            assert!(encoded.starts_with(b"REDIS0011"), "RDB header must be REDIS0011");
+            assert!(
+                encoded.starts_with(b"REDIS0011"),
+                "RDB header must be REDIS0011"
+            );
             // Aux opcode is 0xFA
             assert_eq!(encoded[9], 0xFA, "AUX opcode must be 0xFA");
         }
@@ -1717,7 +1725,10 @@ mod tests {
 
             // TYPE_ZSET_2 = 5
             let type_byte_found = encoded.windows(2).any(|w| w[0] == 0x05 && w[1] == 0x06);
-            assert!(type_byte_found, "RDB sorted set must have TYPE_ZSET_2 (0x05)");
+            assert!(
+                type_byte_found,
+                "RDB sorted set must have TYPE_ZSET_2 (0x05)"
+            );
         }
 
         /// Golden test: RDB stream type encoding uses correct type byte.
