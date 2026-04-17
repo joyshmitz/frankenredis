@@ -12,6 +12,7 @@ This directory contains fuzz targets for security-critical parser surfaces.
 | `fuzz_rdb_decoder` | RDB file parsing | Crash detector |
 | `fuzz_dump_restore` | DUMP/RESTORE payload handling | Structure-aware round-trip + hostile payload invariants |
 | `fuzz_acl_rules` | ACL file parsing and canonicalization | Structure-aware round-trip + hostile text stabilization |
+| `fuzz_function_restore` | FUNCTION LOAD/DUMP/RESTORE handling | Structure-aware round-trip + hostile restore atomicity |
 
 ## Running Fuzz Tests
 
@@ -33,6 +34,9 @@ cargo +nightly fuzz run fuzz_dump_restore
 
 # Run ACL rule parser fuzzer
 cargo +nightly fuzz run fuzz_acl_rules
+
+# Run FUNCTION load/restore fuzzer
+cargo +nightly fuzz run fuzz_function_restore
 
 # Run round-trip invariant checker
 cargo +nightly fuzz run fuzz_resp_roundtrip
