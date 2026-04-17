@@ -66,3 +66,10 @@ path = "fuzz_targets/fuzz_command_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_runtime_sequence"
+path = "fuzz_targets/fuzz_runtime_sequence.rs"
+test = false
+doc = false
+bench = false
