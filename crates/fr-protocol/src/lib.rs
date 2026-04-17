@@ -1261,4 +1261,191 @@ mod tests {
             assert_eq!(frame.to_bytes(), golden, "Sequence encoding changed");
         }
     }
+
+    /// Metamorphic tests for RESP encoding/decoding invariants.
+    mod metamorphic {
+        use super::super::{parse_frame, RespFrame};
+        use proptest::prelude::*;
+
+        fn arb_simple_string() -> impl Strategy<Value = RespFrame> {
+            "[a-zA-Z0-9 ]{0,50}"
+                .prop_filter("no CRLF", |s| !s.contains('\r') && !s.contains('\n'))
+                .prop_map(RespFrame::SimpleString)
+        }
+
+        fn arb_error() -> impl Strategy<Value = RespFrame> {
+            "[A-Z]{3,10} [a-zA-Z0-9 ]{0,40}"
+                .prop_filter("no CRLF", |s| !s.contains('\r') && !s.contains('\n'))
+                .prop_map(RespFrame::Error)
+        }
+
+        fn arb_integer() -> impl Strategy<Value = RespFrame> {
+            any::<i64>().prop_map(RespFrame::Integer)
+        }
+
+        fn arb_bulk_string() -> impl Strategy<Value = RespFrame> {
+            prop_oneof![
+                Just(RespFrame::BulkString(None)),
+                prop::collection::vec(any::<u8>(), 0..100)
+                    .prop_map(|v| RespFrame::BulkString(Some(v))),
+            ]
+        }
+
+        fn arb_frame_leaf() -> impl Strategy<Value = RespFrame> {
+            prop_oneof![
+                arb_simple_string(),
+                arb_error(),
+                arb_integer(),
+                arb_bulk_string(),
+            ]
+        }
+
+        fn arb_frame() -> impl Strategy<Value = RespFrame> {
+            arb_frame_leaf().prop_recursive(3, 32, 8, |inner| {
+                prop_oneof![
+                    Just(RespFrame::Array(None)),
+                    prop::collection::vec(inner.clone(), 0..8)
+                        .prop_map(|v| RespFrame::Array(Some(v))),
+                ]
+            })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(500))]
+
+            /// MR1: Encode-decode roundtrip identity
+            /// encode(frame) → parse(encoded) == frame
+            #[test]
+            fn mr_encode_decode_roundtrip(frame in arb_frame()) {
+                let encoded = frame.to_bytes();
+                let parsed = parse_frame(&encoded).expect("encoded frame must parse");
+                prop_assert_eq!(parsed.frame, frame, "roundtrip mismatch");
+                prop_assert_eq!(parsed.consumed, encoded.len(), "consumed mismatch");
+            }
+
+            /// MR2: Encoding determinism
+            /// encode(frame) == encode(clone(frame))
+            #[test]
+            fn mr_encoding_determinism(frame in arb_frame()) {
+                let enc1 = frame.to_bytes();
+                let enc2 = frame.clone().to_bytes();
+                prop_assert_eq!(enc1, enc2, "encoding not deterministic");
+            }
+
+            /// MR3: Encoding length monotonicity for bulk strings
+            /// len(encode(bulk(a))) < len(encode(bulk(a ++ b))) when b is non-empty
+            #[test]
+            fn mr_bulk_length_monotonic(
+                base in prop::collection::vec(any::<u8>(), 0..50),
+                extra in prop::collection::vec(any::<u8>(), 1..20),
+            ) {
+                let short_frame = RespFrame::BulkString(Some(base.clone()));
+                let mut long_data = base.clone();
+                long_data.extend(&extra);
+                let long_frame = RespFrame::BulkString(Some(long_data));
+
+                let short_enc = short_frame.to_bytes();
+                let long_enc = long_frame.to_bytes();
+
+                prop_assert!(short_enc.len() < long_enc.len(),
+                    "adding bytes should increase encoding length: {} vs {}",
+                    short_enc.len(), long_enc.len());
+            }
+
+            /// MR4: Array length encoding correctness
+            /// len(array) == count from encoded header
+            #[test]
+            fn mr_array_length_encoding(elements in prop::collection::vec(arb_frame_leaf(), 0..20)) {
+                let frame = RespFrame::Array(Some(elements.clone()));
+                let encoded = frame.to_bytes();
+
+                // Parse the array count from the header
+                let header_end = encoded.windows(2)
+                    .position(|w| w == b"\r\n")
+                    .expect("must have CRLF");
+                let count_str = std::str::from_utf8(&encoded[1..header_end])
+                    .expect("count must be ASCII");
+                let count: usize = count_str.parse().expect("count must be number");
+
+                prop_assert_eq!(count, elements.len(),
+                    "array count in header doesn't match element count");
+            }
+
+            /// MR5: Concatenated encoding equals sequence encoding
+            /// concat(encode(a), encode(b)) == encode(Sequence([a, b]))
+            #[test]
+            fn mr_sequence_concat_equivalence(
+                frame_a in arb_frame_leaf(),
+                frame_b in arb_frame_leaf(),
+            ) {
+                let concat = {
+                    let mut v = frame_a.to_bytes();
+                    v.extend(frame_b.to_bytes());
+                    v
+                };
+                let seq = RespFrame::Sequence(vec![frame_a.clone(), frame_b.clone()]);
+                let seq_encoded = seq.to_bytes();
+
+                prop_assert_eq!(concat, seq_encoded,
+                    "sequence encoding differs from concatenation");
+            }
+
+            /// MR6: Integer encoding preserves ordering
+            /// a < b => encode(:a) lexicographically relates to encode(:b)
+            /// (Note: not lex order due to length prefixes, but decoded value order)
+            #[test]
+            fn mr_integer_order_preservation(a in -10000i64..10000i64, b in -10000i64..10000i64) {
+                let frame_a = RespFrame::Integer(a);
+                let frame_b = RespFrame::Integer(b);
+
+                let enc_a = frame_a.to_bytes();
+                let enc_b = frame_b.to_bytes();
+
+                let parsed_a = parse_frame(&enc_a).expect("must parse").frame;
+                let parsed_b = parse_frame(&enc_b).expect("must parse").frame;
+
+                if let (RespFrame::Integer(va), RespFrame::Integer(vb)) = (parsed_a, parsed_b) {
+                    if a < b {
+                        prop_assert!(va < vb, "order not preserved: {} < {} but {} >= {}", a, b, va, vb);
+                    } else if a > b {
+                        prop_assert!(va > vb, "order not preserved: {} > {} but {} <= {}", a, b, va, vb);
+                    } else {
+                        prop_assert_eq!(va, vb, "equal integers should decode equal");
+                    }
+                } else {
+                    prop_assert!(false, "decoded frames are not integers");
+                }
+            }
+
+            /// MR7: Nested arrays decode to matching depth
+            #[test]
+            fn mr_nested_array_depth(depth in 1usize..6, value in any::<i64>()) {
+                // Build nested array: [[[[value]]]] with `depth` levels
+                let mut frame = RespFrame::Integer(value);
+                for _ in 0..depth {
+                    frame = RespFrame::Array(Some(vec![frame]));
+                }
+
+                let encoded = frame.to_bytes();
+                let parsed = parse_frame(&encoded).expect("nested array must parse");
+
+                // Unwrap the nesting to verify depth
+                let mut current = parsed.frame;
+                let mut actual_depth = 0;
+                while let RespFrame::Array(Some(inner)) = current {
+                    actual_depth += 1;
+                    current = inner.into_iter().next().expect("should have one element");
+                }
+
+                prop_assert_eq!(actual_depth, depth, "nesting depth mismatch");
+
+                // Verify the inner value
+                if let RespFrame::Integer(v) = current {
+                    prop_assert_eq!(v, value, "inner value mismatch");
+                } else {
+                    prop_assert!(false, "inner value is not an integer");
+                }
+            }
+        }
+    }
 }
