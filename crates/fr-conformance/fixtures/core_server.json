@@ -1419,28 +1419,64 @@
         "kind": "array",
         "value": [
           {
-            "kind": "bulk",
+            "kind": "simple",
             "value": "OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"
           },
           {
-            "kind": "bulk",
-            "value": "ENCODING <key> - Return the encoding of the object at <key>."
+            "kind": "simple",
+            "value": "ENCODING <key>"
           },
           {
-            "kind": "bulk",
-            "value": "FREQ <key> - Return the access frequency of <key>."
+            "kind": "simple",
+            "value": "    Return the kind of internal representation used in order to store the value"
           },
           {
-            "kind": "bulk",
-            "value": "HELP - Return subcommand help summary."
+            "kind": "simple",
+            "value": "    associated with a <key>."
           },
           {
-            "kind": "bulk",
-            "value": "IDLETIME <key> - Return the idle time of <key>."
+            "kind": "simple",
+            "value": "FREQ <key>"
           },
           {
-            "kind": "bulk",
-            "value": "REFCOUNT <key> - Return the reference count of <key>."
+            "kind": "simple",
+            "value": "    Return the access frequency index of the <key>. The returned integer is"
+          },
+          {
+            "kind": "simple",
+            "value": "    proportional to the logarithm of the recent access frequency of the key."
+          },
+          {
+            "kind": "simple",
+            "value": "IDLETIME <key>"
+          },
+          {
+            "kind": "simple",
+            "value": "    Return the idle time of the <key>, that is the approximated number of"
+          },
+          {
+            "kind": "simple",
+            "value": "    seconds elapsed since the last access to the key."
+          },
+          {
+            "kind": "simple",
+            "value": "REFCOUNT <key>"
+          },
+          {
+            "kind": "simple",
+            "value": "    Return the number of references of the value associated with the specified"
+          },
+          {
+            "kind": "simple",
+            "value": "    <key>."
+          },
+          {
+            "kind": "simple",
+            "value": "HELP"
+          },
+          {
+            "kind": "simple",
+            "value": "    Print this help."
           }
         ]
       }

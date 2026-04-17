@@ -522,13 +522,19 @@
       "name": "expire_nx_xx_conflict",
       "now_ms": 32401,
       "argv": ["EXPIRE", "exp_conflict", "10", "NX", "XX"],
-      "expect": {"kind": "error", "value": "ERR syntax error"}
+      "expect": {
+        "kind": "error",
+        "value": "ERR NX and XX, GT or LT options at the same time are not compatible"
+      }
     },
     {
       "name": "expire_gt_lt_conflict",
       "now_ms": 32402,
       "argv": ["EXPIRE", "exp_conflict", "10", "GT", "LT"],
-      "expect": {"kind": "error", "value": "ERR syntax error"}
+      "expect": {
+        "kind": "error",
+        "value": "ERR GT and LT options at the same time are not compatible"
+      }
     },
     {
       "name": "type_string_returns_string",
@@ -1788,7 +1794,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR NX and XX, GT or LT options at the same time are not compatible"
       }
     },
     {
@@ -1955,7 +1961,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR GT and LT options at the same time are not compatible"
       }
     },
     {
@@ -1970,7 +1976,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR NX and XX, GT or LT options at the same time are not compatible"
       }
     },
     {

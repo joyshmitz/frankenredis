@@ -206,7 +206,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR NX and XX, GT or LT options at the same time are not compatible"
       }
     },
     {
@@ -221,7 +221,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR NX and XX, GT or LT options at the same time are not compatible"
       }
     },
     {
@@ -236,7 +236,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR GT and LT options at the same time are not compatible"
       }
     },
     {
@@ -265,7 +265,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR GT and LT options at the same time are not compatible"
       }
     },
     {

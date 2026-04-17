@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -147,6 +148,120 @@ const CORE_SCRIPTING_LIVE_STABLE_CASES: &[&str] = &[
     "eval_redis_call_with_keys_argv",
     "eval_string_format_basic",
     "eval_math_functions",
+];
+
+const CORE_EXPIRY_LIVE_STABLE_CASES: &[&str] = &[
+    // Missing/no-expiry observability
+    "pttl_missing_key_returns_minus2",
+    "ttl_missing_key_returns_minus2",
+    "set_key_for_expiry_tests",
+    "pttl_no_expiry_returns_minus1",
+    "ttl_no_expiry_returns_minus1",
+    "expire_sets_ttl_returns_1",
+    "persist_removes_expiry_returns_1",
+    "pttl_after_persist_returns_minus1",
+    "persist_no_expiry_returns_0",
+    "persist_missing_key_returns_0",
+    "expire_missing_key_returns_0",
+    "set_key_no_expiry_for_expiretime",
+    "expiretime_no_expiry_returns_minus1",
+    "pexpiretime_no_expiry_returns_minus1",
+    "expiretime_missing_key_returns_minus2",
+    "pexpiretime_missing_key_returns_minus2",
+    // Relative expiry option matrices
+    "pexpire_opts_setup",
+    "pexpire_nx_no_ttl_succeeds",
+    "pexpire_nx_has_ttl_fails",
+    "pexpire_xx_has_ttl_succeeds",
+    "pexpire_gt_larger_succeeds",
+    "pexpire_gt_smaller_fails",
+    "pexpire_lt_smaller_succeeds",
+    "pexpire_lt_larger_fails",
+    "expire_nx_option_only_set_when_no_expiry",
+    "expire_nx_on_no_expiry_succeeds",
+    "expire_nx_on_existing_expiry_fails",
+    "expire_xx_on_existing_expiry_succeeds",
+    "expire_gt_sets_longer_ttl",
+    "expire_gt_rejects_shorter_ttl",
+    "expire_lt_sets_shorter_ttl",
+    "expire_lt_rejects_longer_ttl",
+    "pexpire_nx_setup",
+    "pexpire_nx_no_existing_expiry",
+    "pexpire_nx_already_has_expiry",
+    "pexpire_xx_has_expiry",
+    "pexpire_gt_longer",
+    "pexpire_gt_shorter_rejected",
+    "pexpire_lt_shorter",
+    "pexpire_lt_longer_rejected",
+    "pexpire_missing_key",
+    "expire_xx_no_expiry_setup",
+    "expire_xx_no_existing_expiry_fails",
+    "expire_nx_missing_key",
+    "expire_xx_missing_key",
+    // GETEX / KEEPTTL paths that do not depend on wall-clock alignment
+    "getex_no_option_setup",
+    "getex_no_option",
+    "getex_no_option_verify_no_expiry",
+    "getex_missing_key",
+    "getex_wrong_arity",
+    "getex_ex_setup",
+    "getex_persist",
+    "getex_persist_verify_no_ttl",
+    "set_keepttl_no_existing_ttl_setup",
+    "set_keepttl_no_existing_ttl",
+    "set_keepttl_no_existing_ttl_verify",
+    // Validation and parse errors
+    "expire_wrong_arity",
+    "pttl_wrong_arity",
+    "ttl_wrong_arity",
+    "persist_wrong_arity",
+    "pexpire_wrong_arity",
+    "expire_invalid_combo_setup",
+    "expire_nx_gt_error",
+    "expire_non_integer_error",
+    "pexpire_non_integer_error",
+    "expiretime_wrong_arity",
+    "pexpiretime_wrong_arity",
+    "expire_gt_lt_error",
+    "pexpire_nx_xx_error",
+    "getex_wrongtype_setup",
+    "getex_wrongtype",
+    "getex_ex_non_integer",
+    "persist_missing_key_returns_zero",
+    "persist_no_ttl_setup",
+    "persist_no_ttl_returns_zero",
+    "persist_with_ttl_setup",
+    "persist_with_ttl_returns_one",
+    "persist_ttl_removed",
+    "persist_nonexistent_returns_zero",
+    "ttl_nonexistent_returns_minus2",
+    "pttl_nonexistent_returns_minus2",
+    "expire_nonexistent_returns_zero",
+    "expire_rejects_leading_plus",
+    "expire_rejects_leading_zero",
+    "pexpire_rejects_leading_plus",
+    "pexpire_rejects_leading_zero",
+    // Immediate deletion semantics that remain stable against wall clock
+    "expire_zero_setup",
+    "expire_zero_set_key",
+    "expire_zero_deletes_key",
+    "expire_zero_key_gone",
+    "expire_negative_setup",
+    "expire_negative_deletes",
+    "expire_negative_get_missing",
+    "expire_negative_pttl_missing",
+    "pexpire_zero_setup",
+    "pexpire_zero_deletes",
+    "pexpire_zero_get_missing",
+    "expireat_zero_set_key",
+    "expireat_zero_deletes_key",
+    "expireat_zero_key_gone",
+    "expireat_past_setup",
+    "expireat_past_deletes",
+    "expireat_past_get_missing",
+    "pexpireat_past_setup",
+    "pexpireat_past_deletes",
+    "pexpireat_past_pttl_missing",
 ];
 
 fn live_info_case(
@@ -1528,6 +1643,39 @@ const CORE_CONNECTION_HELLO_LIVE_CASES: &[&str] = &[
     "hello_version_0_unsupported",
 ];
 
+const CORE_CLIENT_LIVE_STABLE_CASES: &[&str] = &[
+    "client_getredir_returns_minus_one",
+    "client_getredir_wrong_arity",
+    "client_trackinginfo_returns_off",
+    "client_tracking_on_optin",
+    "client_caching_yes_optin_ok",
+    "client_caching_no_optin_rejected",
+    "client_tracking_bcast_requires_disable",
+    "client_getredir_returns_zero_when_tracking_enabled",
+    "client_trackinginfo_retains_optin_caching_yes_after_rejected_bcast_switch",
+    "client_tracking_optout_requires_disable",
+    "client_caching_no_without_optout_rejected",
+    "client_caching_yes_remains_valid_after_rejected_optout_switch",
+    "client_trackinginfo_wrong_arity",
+    "client_tracking_off",
+    "client_getredir_returns_minus_one",
+];
+
+const CORE_CLIENT_UNBLOCK_LIVE_STABLE_CASES: &[&str] = &[
+    "client_unblock_wrong_arity",
+    "client_unblock_nonexistent",
+    "client_unblock_with_timeout",
+    "client_unblock_with_error",
+    "client_unblock_invalid_mode",
+];
+
+const CORE_CLIENT_PAUSE_LIVE_STABLE_CASES: &[&str] = &[
+    "client_pause_wrong_arity",
+    "client_unpause_wrong_arity",
+    "client_pause_invalid_timeout",
+    "client_pause_invalid_mode",
+];
+
 const CORE_DEBUG_LIVE_STABLE_CASES: &[&str] = &[
     // Arity error (top-level only - subcommand arity errors differ between Redis/FR)
     "debug_wrong_arity",
@@ -1710,6 +1858,14 @@ fn command_frame(argv: &[&str]) -> RespFrame {
     ))
 }
 
+fn command_frame_owned(argv: &[String]) -> RespFrame {
+    RespFrame::Array(Some(
+        argv.iter()
+            .map(|arg| RespFrame::BulkString(Some(arg.as_bytes().to_vec())))
+            .collect(),
+    ))
+}
+
 fn send_frame_and_read(stream: &mut TcpStream, frame: &RespFrame) -> RespFrame {
     stream
         .write_all(&frame.to_bytes())
@@ -1733,6 +1889,23 @@ fn read_frame_from_stream(stream: &mut TcpStream) -> RespFrame {
             Err(err) => panic!("vendored redis emitted invalid RESP: {err}"),
         }
     }
+}
+
+fn run_runtime_live_exact(
+    runtime: &mut Runtime,
+    live: &mut TcpStream,
+    now_ms: u64,
+    argv: &[&str],
+) -> RespFrame {
+    let frame = command_frame(argv);
+    let runtime_reply = runtime.execute_frame(frame.clone(), now_ms);
+    let live_reply = send_frame_and_read(live, &frame);
+    assert_eq!(
+        runtime_reply, live_reply,
+        "runtime/live command drift for {:?}",
+        argv
+    );
+    runtime_reply
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1894,6 +2067,21 @@ fn bulk_text(frame: &RespFrame) -> String {
         RespFrame::BulkString(Some(bytes)) => String::from_utf8_lossy(bytes).to_string(),
         other => panic!("expected bulk string, got {other:?}"),
     }
+}
+
+fn parse_client_info_fields(frame: &RespFrame) -> BTreeMap<String, String> {
+    let reply = bulk_text(frame);
+    let line = reply
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_else(|| panic!("expected non-empty CLIENT info/list line in {reply:?}"));
+    let mut fields = BTreeMap::new();
+    for part in line.split_whitespace() {
+        if let Some((key, value)) = part.split_once('=') {
+            fields.insert(key.to_string(), value.to_string());
+        }
+    }
+    fields
 }
 
 fn int_value(frame: &RespFrame) -> i64 {
@@ -2462,11 +2650,294 @@ fn core_expiry_conformance() {
 }
 
 #[test]
+fn core_expiry_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        align_timing_from_fixture: false,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_expiry.json",
+        CORE_EXPIRY_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("expiry live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+
+    let mut runtime = Runtime::default_strict();
+    let mut live =
+        TcpStream::connect(("127.0.0.1", oracle_server.port)).expect("connect vendored redis");
+    live.set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set vendored redis read timeout");
+    live.set_write_timeout(Some(Duration::from_secs(2)))
+        .expect("set vendored redis write timeout");
+
+    let mut now_ms = 50_000u64;
+    let mut run_pair = |argv: Vec<String>| {
+        let frame = command_frame_owned(&argv);
+        let runtime_reply = runtime.execute_frame(frame.clone(), now_ms);
+        let live_reply = send_frame_and_read(&mut live, &frame);
+        assert_eq!(
+            runtime_reply, live_reply,
+            "expiry live contract drift for {:?}",
+            argv
+        );
+        now_ms += 1;
+        runtime_reply
+    };
+
+    let _ = run_pair(vec!["FLUSHALL".to_string()]);
+
+    let unix_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("unix time");
+    let unix_now_ms = u64::try_from(unix_now.as_millis()).expect("unix millis fit u64");
+
+    let exat_deadline = unix_now.as_secs() + 300;
+    let exat_deadline_i64 = i64::try_from(exat_deadline).expect("EXAT deadline fits i64");
+    let exat_deadline_ms_i64 =
+        i64::try_from(exat_deadline.saturating_mul(1000)).expect("EXAT ms fits i64");
+    let pxat_deadline = unix_now_ms + 330_000;
+    let pxat_deadline_i64 = i64::try_from(pxat_deadline).expect("PXAT deadline fits i64");
+    let pxat_deadline_secs_i64 =
+        i64::try_from(pxat_deadline.saturating_add(500) / 1000).expect("PXAT seconds fit i64");
+    let getex_exat_deadline = exat_deadline + 360;
+    let getex_exat_deadline_i64 =
+        i64::try_from(getex_exat_deadline).expect("GETEX EXAT deadline fits i64");
+    let getex_pxat_deadline = unix_now_ms + 390_000;
+    let getex_pxat_deadline_i64 =
+        i64::try_from(getex_pxat_deadline).expect("GETEX PXAT deadline fits i64");
+    let set_exat_deadline = exat_deadline + 420;
+    let set_exat_deadline_i64 =
+        i64::try_from(set_exat_deadline).expect("SET EXAT deadline fits i64");
+    let set_pxat_deadline = unix_now_ms + 450_000;
+    let set_pxat_deadline_i64 =
+        i64::try_from(set_pxat_deadline).expect("SET PXAT deadline fits i64");
+
+    assert_eq!(
+        run_pair(vec![
+            "SET".to_string(),
+            "live:expiry:exat".to_string(),
+            "value".to_string(),
+        ]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "EXPIREAT".to_string(),
+            "live:expiry:exat".to_string(),
+            exat_deadline.to_string(),
+        ])),
+        1
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "EXPIRETIME".to_string(),
+            "live:expiry:exat".to_string(),
+        ])),
+        exat_deadline_i64
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "PEXPIRETIME".to_string(),
+            "live:expiry:exat".to_string(),
+        ])),
+        exat_deadline_ms_i64
+    );
+
+    assert_eq!(
+        run_pair(vec![
+            "SET".to_string(),
+            "live:expiry:pxat".to_string(),
+            "value".to_string(),
+        ]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "PEXPIREAT".to_string(),
+            "live:expiry:pxat".to_string(),
+            pxat_deadline.to_string(),
+        ])),
+        1
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "PEXPIRETIME".to_string(),
+            "live:expiry:pxat".to_string(),
+        ])),
+        pxat_deadline_i64
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "EXPIRETIME".to_string(),
+            "live:expiry:pxat".to_string(),
+        ])),
+        pxat_deadline_secs_i64
+    );
+
+    assert_eq!(
+        run_pair(vec![
+            "SET".to_string(),
+            "live:expiry:getex-exat".to_string(),
+            "value".to_string(),
+        ]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        bulk_text(&run_pair(vec![
+            "GETEX".to_string(),
+            "live:expiry:getex-exat".to_string(),
+            "EXAT".to_string(),
+            getex_exat_deadline.to_string(),
+        ])),
+        "value"
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "EXPIRETIME".to_string(),
+            "live:expiry:getex-exat".to_string(),
+        ])),
+        getex_exat_deadline_i64
+    );
+
+    assert_eq!(
+        run_pair(vec![
+            "SET".to_string(),
+            "live:expiry:getex-pxat".to_string(),
+            "value".to_string(),
+        ]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        bulk_text(&run_pair(vec![
+            "GETEX".to_string(),
+            "live:expiry:getex-pxat".to_string(),
+            "PXAT".to_string(),
+            getex_pxat_deadline.to_string(),
+        ])),
+        "value"
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "PEXPIRETIME".to_string(),
+            "live:expiry:getex-pxat".to_string(),
+        ])),
+        getex_pxat_deadline_i64
+    );
+
+    assert_eq!(
+        run_pair(vec![
+            "SET".to_string(),
+            "live:expiry:set-exat".to_string(),
+            "value".to_string(),
+            "EXAT".to_string(),
+            set_exat_deadline.to_string(),
+        ]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "EXPIRETIME".to_string(),
+            "live:expiry:set-exat".to_string(),
+        ])),
+        set_exat_deadline_i64
+    );
+
+    assert_eq!(
+        run_pair(vec![
+            "SET".to_string(),
+            "live:expiry:set-pxat".to_string(),
+            "value".to_string(),
+            "PXAT".to_string(),
+            set_pxat_deadline.to_string(),
+        ]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        int_value(&run_pair(vec![
+            "PEXPIRETIME".to_string(),
+            "live:expiry:set-pxat".to_string(),
+        ])),
+        set_pxat_deadline_i64
+    );
+}
+
+#[test]
 fn core_client_conformance() {
     let cfg = HarnessConfig::default_paths();
     let diff = run_fixture(&cfg, "core_client.json").expect("client fixture");
     assert_eq!(diff.total, diff.passed, "failed: {:?}", diff.failed);
     assert!(diff.failed.is_empty());
+}
+
+#[test]
+fn core_client_tracking_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_client.json",
+        CORE_CLIENT_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("client tracking live diff");
+    assert_eq!(report.total, report.passed, "failed: {:?}", report.failed);
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_client_unblock_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_client.json",
+        CORE_CLIENT_UNBLOCK_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("client unblock live diff");
+    assert_eq!(report.total, report.passed, "failed: {:?}", report.failed);
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_client_pause_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_client.json",
+        CORE_CLIENT_PAUSE_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("client pause live diff");
+    assert_eq!(report.total, report.passed, "failed: {:?}", report.failed);
+    assert!(report.failed.is_empty());
 }
 
 #[test]
@@ -3173,6 +3644,305 @@ fn core_object_live_redis_matches_runtime() {
         report.failed
     );
     assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_client_no_touch_object_idletime_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let mut runtime = Runtime::default_strict();
+    let mut live = TcpStream::connect(("127.0.0.1", oracle_server.port))
+        .expect("connect to vendored redis for OBJECT IDLETIME smoke");
+    live.set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set vendored redis read timeout");
+    live.set_write_timeout(Some(Duration::from_secs(2)))
+        .expect("set vendored redis write timeout");
+
+    let start = Instant::now();
+    let now_ms = || u64::try_from(start.elapsed().as_millis()).expect("elapsed millis fit u64");
+
+    assert_eq!(
+        run_runtime_live_exact(&mut runtime, &mut live, now_ms(), &["FLUSHALL"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        run_runtime_live_exact(&mut runtime, &mut live, now_ms(), &["OBJECT", "HELP"]),
+        RespFrame::Array(Some(vec![
+            RespFrame::SimpleString(
+                "OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string(),
+            ),
+            RespFrame::SimpleString("ENCODING <key>".to_string()),
+            RespFrame::SimpleString(
+                "    Return the kind of internal representation used in order to store the value"
+                    .to_string(),
+            ),
+            RespFrame::SimpleString("    associated with a <key>.".to_string()),
+            RespFrame::SimpleString("FREQ <key>".to_string()),
+            RespFrame::SimpleString(
+                "    Return the access frequency index of the <key>. The returned integer is"
+                    .to_string(),
+            ),
+            RespFrame::SimpleString(
+                "    proportional to the logarithm of the recent access frequency of the key."
+                    .to_string(),
+            ),
+            RespFrame::SimpleString("IDLETIME <key>".to_string()),
+            RespFrame::SimpleString(
+                "    Return the idle time of the <key>, that is the approximated number of"
+                    .to_string(),
+            ),
+            RespFrame::SimpleString(
+                "    seconds elapsed since the last access to the key.".to_string(),
+            ),
+            RespFrame::SimpleString("REFCOUNT <key>".to_string()),
+            RespFrame::SimpleString(
+                "    Return the number of references of the value associated with the specified"
+                    .to_string(),
+            ),
+            RespFrame::SimpleString("    <key>.".to_string()),
+            RespFrame::SimpleString("HELP".to_string()),
+            RespFrame::SimpleString("    Print this help.".to_string()),
+        ]))
+    );
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["SET", "live:client:no-touch", "value"],
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["CLIENT", "NO-TOUCH", "ON"]
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    sleep(Duration::from_millis(2_100));
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["GET", "live:client:no-touch"]
+        ),
+        RespFrame::BulkString(Some(b"value".to_vec()))
+    );
+
+    sleep(Duration::from_millis(200));
+    let idletime_frame = command_frame(&["OBJECT", "IDLETIME", "live:client:no-touch"]);
+    let runtime_idletime = runtime.execute_frame(idletime_frame.clone(), now_ms());
+    let live_idletime = send_frame_and_read(&mut live, &idletime_frame);
+    let runtime_idle = int_value(&runtime_idletime);
+    let live_idle = int_value(&live_idletime);
+    assert!(
+        runtime_idle >= 2,
+        "runtime OBJECT IDLETIME should preserve pre-GET idle time under CLIENT NO-TOUCH, got {runtime_idle}"
+    );
+    assert!(
+        live_idle >= 2,
+        "live Redis OBJECT IDLETIME should preserve pre-GET idle time under CLIENT NO-TOUCH, got {live_idle}"
+    );
+    assert!(
+        runtime_idle.abs_diff(live_idle) <= 1,
+        "runtime/live OBJECT IDLETIME drifted too far under CLIENT NO-TOUCH: runtime={runtime_idle}, live={live_idle}"
+    );
+
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["TOUCH", "live:client:no-touch"]
+        ),
+        RespFrame::Integer(1)
+    );
+    let idletime_after_touch = command_frame(&["OBJECT", "IDLETIME", "live:client:no-touch"]);
+    assert_eq!(
+        runtime.execute_frame(idletime_after_touch.clone(), now_ms()),
+        RespFrame::Integer(0)
+    );
+    assert_eq!(
+        send_frame_and_read(&mut live, &idletime_after_touch),
+        RespFrame::Integer(0)
+    );
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["CLIENT", "NO-TOUCH", "OFF"]
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+}
+
+#[test]
+fn core_client_setinfo_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let mut runtime = Runtime::default_strict();
+    let mut live = TcpStream::connect(("127.0.0.1", oracle_server.port))
+        .expect("connect to vendored redis for CLIENT SETINFO smoke");
+    live.set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set vendored redis read timeout");
+    live.set_write_timeout(Some(Duration::from_secs(2)))
+        .expect("set vendored redis write timeout");
+
+    let start = Instant::now();
+    let now_ms = || u64::try_from(start.elapsed().as_millis()).expect("elapsed millis fit u64");
+
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["CLIENT", "SETINFO", "LIB-NAME", "redis-rs"],
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["CLIENT", "SETINFO", "lib-ver", "1.2.3"],
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["CLIENT", "SETINFO", "LIB-NAME", "final-client"],
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    let invalid_setinfo = command_frame(&["CLIENT", "SETINFO", "UNKNOWN", "value"]);
+    let runtime_invalid = runtime.execute_frame(invalid_setinfo.clone(), now_ms());
+    let live_invalid = send_frame_and_read(&mut live, &invalid_setinfo);
+    assert_eq!(runtime_invalid, live_invalid);
+    assert_eq!(
+        error_text(&runtime_invalid),
+        "ERR Unrecognized option 'UNKNOWN'"
+    );
+
+    let runtime_info = runtime.execute_frame(command_frame(&["CLIENT", "INFO"]), now_ms());
+    let live_info = send_frame_and_read(&mut live, &command_frame(&["CLIENT", "INFO"]));
+    let runtime_info_fields = parse_client_info_fields(&runtime_info);
+    let live_info_fields = parse_client_info_fields(&live_info);
+    for (key, expected) in [
+        ("lib-name", "final-client"),
+        ("lib-ver", "1.2.3"),
+        ("user", "default"),
+        ("resp", "2"),
+        ("cmd", "client|info"),
+    ] {
+        assert_eq!(
+            runtime_info_fields.get(key).map(String::as_str),
+            Some(expected),
+            "runtime CLIENT INFO missing {key}={expected}: {runtime_info:?}"
+        );
+        assert_eq!(
+            live_info_fields.get(key).map(String::as_str),
+            Some(expected),
+            "live CLIENT INFO missing {key}={expected}: {live_info:?}"
+        );
+    }
+
+    let runtime_list = runtime.execute_frame(
+        command_frame(&["CLIENT", "LIST", "TYPE", "normal"]),
+        now_ms(),
+    );
+    let live_list = send_frame_and_read(
+        &mut live,
+        &command_frame(&["CLIENT", "LIST", "TYPE", "normal"]),
+    );
+    let runtime_list_fields = parse_client_info_fields(&runtime_list);
+    let live_list_fields = parse_client_info_fields(&live_list);
+    for (key, expected) in [
+        ("lib-name", "final-client"),
+        ("lib-ver", "1.2.3"),
+        ("user", "default"),
+        ("resp", "2"),
+        ("cmd", "client|list"),
+    ] {
+        assert_eq!(
+            runtime_list_fields.get(key).map(String::as_str),
+            Some(expected),
+            "runtime CLIENT LIST missing {key}={expected}: {runtime_list:?}"
+        );
+        assert_eq!(
+            live_list_fields.get(key).map(String::as_str),
+            Some(expected),
+            "live CLIENT LIST missing {key}={expected}: {live_list:?}"
+        );
+    }
+
+    assert_eq!(
+        run_runtime_live_exact(&mut runtime, &mut live, now_ms(), &["RESET"]),
+        RespFrame::SimpleString("RESET".to_string())
+    );
+
+    let runtime_info_after_reset =
+        runtime.execute_frame(command_frame(&["CLIENT", "INFO"]), now_ms());
+    let live_info_after_reset = send_frame_and_read(&mut live, &command_frame(&["CLIENT", "INFO"]));
+    let runtime_info_after_reset_fields = parse_client_info_fields(&runtime_info_after_reset);
+    let live_info_after_reset_fields = parse_client_info_fields(&live_info_after_reset);
+    for (key, expected) in [
+        ("lib-name", "final-client"),
+        ("lib-ver", "1.2.3"),
+        ("user", "default"),
+        ("resp", "2"),
+        ("cmd", "client|info"),
+    ] {
+        assert_eq!(
+            runtime_info_after_reset_fields.get(key).map(String::as_str),
+            Some(expected),
+            "runtime CLIENT INFO after RESET missing {key}={expected}: {runtime_info_after_reset:?}"
+        );
+        assert_eq!(
+            live_info_after_reset_fields.get(key).map(String::as_str),
+            Some(expected),
+            "live CLIENT INFO after RESET missing {key}={expected}: {live_info_after_reset:?}"
+        );
+    }
+
+    let runtime_list_after_reset = runtime.execute_frame(
+        command_frame(&["CLIENT", "LIST", "TYPE", "normal"]),
+        now_ms(),
+    );
+    let live_list_after_reset = send_frame_and_read(
+        &mut live,
+        &command_frame(&["CLIENT", "LIST", "TYPE", "normal"]),
+    );
+    let runtime_list_after_reset_fields = parse_client_info_fields(&runtime_list_after_reset);
+    let live_list_after_reset_fields = parse_client_info_fields(&live_list_after_reset);
+    for (key, expected) in [
+        ("lib-name", "final-client"),
+        ("lib-ver", "1.2.3"),
+        ("user", "default"),
+        ("resp", "2"),
+        ("cmd", "client|list"),
+    ] {
+        assert_eq!(
+            runtime_list_after_reset_fields.get(key).map(String::as_str),
+            Some(expected),
+            "runtime CLIENT LIST after RESET missing {key}={expected}: {runtime_list_after_reset:?}"
+        );
+        assert_eq!(
+            live_list_after_reset_fields.get(key).map(String::as_str),
+            Some(expected),
+            "live CLIENT LIST after RESET missing {key}={expected}: {live_list_after_reset:?}"
+        );
+    }
 }
 
 #[test]

@@ -413,7 +413,21 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
+      }
+    },
+    {
+      "name": "client_pause_invalid_mode",
+      "now_ms": 61,
+      "argv": [
+        "CLIENT",
+        "PAUSE",
+        "1000",
+        "MAYBE"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR CLIENT PAUSE mode must be WRITE or ALL"
       }
     },
     {
@@ -638,7 +652,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unrecognized option 'UNKNOWN' for CLIENT SETINFO"
+        "value": "ERR Unrecognized option 'UNKNOWN'"
       }
     },
     {
@@ -1220,6 +1234,33 @@
       }
     },
     {
+      "name": "client_reset_preserves_setinfo",
+      "now_ms": 222,
+      "argv": [
+        "RESET"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "RESET"
+      }
+    },
+    {
+      "name": "client_info_after_reset_preserves_setinfo",
+      "now_ms": 223,
+      "argv": [
+        "CLIENT",
+        "INFO"
+      ],
+      "expect": {
+        "kind": "bulk_contains_all",
+        "value": [
+          "lib-name=mylib",
+          "lib-ver=1.0.0",
+          "resp=2"
+        ]
+      }
+    },
+    {
       "name": "client_no_evict_on",
       "now_ms": 230,
       "argv": [
@@ -1380,7 +1421,7 @@
       }
     },
     {
-      "name": "client_tracking_on_bcast_prefix_noloop",
+      "name": "client_tracking_bcast_requires_disable",
       "now_ms": 274,
       "argv": [
         "CLIENT",
@@ -1394,8 +1435,8 @@
         "bar"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR You can't switch BCAST mode on/off before disabling tracking for this client, and then re-enabling it with a different mode."
       }
     },
     {
@@ -1411,7 +1452,7 @@
       }
     },
     {
-      "name": "client_trackinginfo_returns_bcast_prefix_noloop",
+      "name": "client_trackinginfo_retains_optin_caching_yes_after_rejected_bcast_switch",
       "now_ms": 276,
       "argv": [
         "CLIENT",
@@ -1423,21 +1464,18 @@
           {"kind": "bulk", "value": "flags"},
           {"kind": "array", "value": [
             {"kind": "bulk", "value": "on"},
-            {"kind": "bulk", "value": "bcast"},
-            {"kind": "bulk", "value": "noloop"}
+            {"kind": "bulk", "value": "optin"},
+            {"kind": "bulk", "value": "caching-yes"}
           ]},
           {"kind": "bulk", "value": "redirect"},
           {"kind": "integer", "value": 0},
           {"kind": "bulk", "value": "prefixes"},
-          {"kind": "array", "value": [
-            {"kind": "bulk", "value": "bar"},
-            {"kind": "bulk", "value": "foo"}
-          ]}
+          {"kind": "array", "value": []}
         ]
       }
     },
     {
-      "name": "client_tracking_on_optout",
+      "name": "client_tracking_optout_requires_disable",
       "now_ms": 277,
       "argv": [
         "CLIENT",
@@ -1446,12 +1484,12 @@
         "OPTOUT"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR You can't switch OPTIN/OPTOUT mode before disabling tracking for this client, and then re-enabling it with a different mode."
       }
     },
     {
-      "name": "client_caching_no_optout_ok",
+      "name": "client_caching_no_without_optout_rejected",
       "now_ms": 278,
       "argv": [
         "CLIENT",
@@ -1459,12 +1497,12 @@
         "NO"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR CLIENT CACHING NO is only valid when tracking is enabled in OPTOUT mode."
       }
     },
     {
-      "name": "client_caching_yes_optout_rejected",
+      "name": "client_caching_yes_remains_valid_after_rejected_optout_switch",
       "now_ms": 279,
       "argv": [
         "CLIENT",
@@ -1472,8 +1510,8 @@
         "YES"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR CLIENT CACHING YES is only valid when tracking is enabled in OPTIN mode."
+        "kind": "simple",
+        "value": "OK"
       }
     },
     {
@@ -1553,7 +1591,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR CLIENT UNBLOCK reason should be TIMEOUT or ERROR"
       }
     },
     {
@@ -1589,6 +1627,95 @@
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'client|info' command"
+      }
+    },
+    {
+      "name": "client_no_touch_object_idletime_setup",
+      "now_ms": 300,
+      "argv": [
+        "SET",
+        "client_no_touch_idle",
+        "value"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_no_touch_object_idletime_on",
+      "now_ms": 301,
+      "argv": [
+        "CLIENT",
+        "NO-TOUCH",
+        "ON"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_no_touch_object_idletime_get",
+      "now_ms": 2401,
+      "argv": [
+        "GET",
+        "client_no_touch_idle"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "value"
+      }
+    },
+    {
+      "name": "client_no_touch_object_idletime_after_get",
+      "now_ms": 2601,
+      "argv": [
+        "OBJECT",
+        "IDLETIME",
+        "client_no_touch_idle"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "client_no_touch_object_idletime_touch",
+      "now_ms": 2602,
+      "argv": [
+        "TOUCH",
+        "client_no_touch_idle"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "client_no_touch_object_idletime_after_touch",
+      "now_ms": 2603,
+      "argv": [
+        "OBJECT",
+        "IDLETIME",
+        "client_no_touch_idle"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
+      "name": "client_no_touch_object_idletime_off",
+      "now_ms": 2604,
+      "argv": [
+        "CLIENT",
+        "NO-TOUCH",
+        "OFF"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
       }
     }
   ]
