@@ -261,6 +261,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fr-sentinel"
+version = "0.1.0"
+dependencies = [
+ "fr-protocol",
+ "proptest",
+]
+
+[[package]]
 name = "fr-server"
 version = "0.1.0"
 dependencies = [

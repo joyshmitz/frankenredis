@@ -1,0 +1,10 @@
+[package]
+name = "fr-sentinel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fr-protocol = { version = "0.1.0", path = "../fr-protocol" }
+
+[dev-dependencies]
+proptest = "1"

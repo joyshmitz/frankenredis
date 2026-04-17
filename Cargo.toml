@@ -12,6 +12,7 @@ members = [
   "crates/fr-config",
   "crates/fr-conformance",
   "crates/fr-runtime",
+  "crates/fr-sentinel",
   "crates/fr-server",
 ]
 
