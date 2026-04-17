@@ -124,3 +124,17 @@ path = "fuzz_targets/fuzz_glob_match.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_lua_eval"
+path = "fuzz_targets/fuzz_lua_eval.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_rdb_structured"
+path = "fuzz_targets/fuzz_rdb_structured.rs"
+test = false
+doc = false
+bench = false

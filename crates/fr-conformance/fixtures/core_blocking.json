@@ -1560,12 +1560,17 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "a"
-              },
-              {
-                "kind": "bulk",
-                "value": "5"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "a"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "5"
+                  }
+                ]
               }
             ]
           }
@@ -1593,12 +1598,17 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "c"
-              },
-              {
-                "kind": "bulk",
-                "value": "15"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "c"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "15"
+                  }
+                ]
               }
             ]
           }
@@ -1644,12 +1654,17 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "b"
-              },
-              {
-                "kind": "bulk",
-                "value": "10"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "b"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "10"
+                  }
+                ]
               }
             ]
           }

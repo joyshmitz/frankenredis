@@ -2732,16 +2732,10 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             "ERR XX and NX options at the same time are not compatible".to_string(),
         ));
     }
-    // NX and GT/LT are mutually exclusive
-    if nx && (gt || lt) {
+    // GT/LT/NX combinations share the same Redis error wording.
+    if (nx && (gt || lt)) || (gt && lt) {
         return Ok(RespFrame::Error(
-            "ERR GT, LT, and NX options at the same time are not compatible".to_string(),
-        ));
-    }
-    // GT and LT are mutually exclusive
-    if gt && lt {
-        return Ok(RespFrame::Error(
-            "ERR GT and LT options at the same time are not compatible".to_string(),
+            "ERR GT, LT, and/or NX options at the same time are not compatible".to_string(),
         ));
     }
 
@@ -8042,9 +8036,10 @@ fn zmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                     };
                     match result {
                         Some((member, score)) => {
-                            popped.push(RespFrame::BulkString(Some(member)));
-                            popped
-                                .push(RespFrame::BulkString(Some(score.to_string().into_bytes())));
+                            popped.push(RespFrame::Array(Some(vec![
+                                RespFrame::BulkString(Some(member)),
+                                RespFrame::BulkString(Some(score.to_string().into_bytes())),
+                            ])));
                         }
                         None => break,
                     }
@@ -13137,11 +13132,11 @@ fn bzmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
             Ok(pairs) if !pairs.is_empty() => {
                 let elements: Vec<RespFrame> = pairs
                     .into_iter()
-                    .flat_map(|(member, score)| {
-                        vec![
+                    .map(|(member, score)| {
+                        RespFrame::Array(Some(vec![
                             RespFrame::BulkString(Some(member)),
                             RespFrame::BulkString(Some(score.to_string().into_bytes())),
-                        ]
+                        ]))
                     })
                     .collect();
                 return Ok(RespFrame::Array(Some(vec![
@@ -22869,12 +22864,51 @@ mod tests {
             out,
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"zs".to_vec())),
-                RespFrame::Array(Some(vec![
+                RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"a".to_vec())),
                     RespFrame::BulkString(Some(b"1".to_vec())),
-                ])),
+                ])),])),
             ]))
         );
+    }
+
+    #[test]
+    fn zadd_conflict_errors_match_redis_wording() {
+        let mut store = Store::new();
+        for argv in [
+            vec![
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"GT".to_vec(),
+                b"LT".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            vec![
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"NX".to_vec(),
+                b"GT".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            vec![
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"NX".to_vec(),
+                b"LT".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+        ] {
+            let out = dispatch_argv(&argv, &mut store, 0).expect("zadd conflict");
+            assert_eq!(
+                out,
+                RespFrame::Error(
+                    "ERR GT, LT, and/or NX options at the same time are not compatible".to_string(),
+                )
+            );
+        }
     }
 
     #[test]
@@ -23429,10 +23463,10 @@ mod tests {
             out,
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"myzset".to_vec())),
-                RespFrame::Array(Some(vec![
+                RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"a".to_vec())),
                     RespFrame::BulkString(Some(b"1".to_vec())),
-                ])),
+                ])),])),
             ]))
         );
     }
@@ -23488,10 +23522,24 @@ mod tests {
                 assert_eq!(arr.len(), 2);
                 // First element is key
                 assert_eq!(arr[0], RespFrame::BulkString(Some(b"myzset".to_vec())));
-                // Second element is array of [member, score, member, score]
+                // Second element is an array of [member, score] tuples.
                 match &arr[1] {
                     RespFrame::Array(Some(elements)) => {
-                        assert_eq!(elements.len(), 4); // 2 members * 2 (member + score)
+                        assert_eq!(elements.len(), 2);
+                        assert_eq!(
+                            elements[0],
+                            RespFrame::Array(Some(vec![
+                                RespFrame::BulkString(Some(b"c".to_vec())),
+                                RespFrame::BulkString(Some(b"3".to_vec())),
+                            ]))
+                        );
+                        assert_eq!(
+                            elements[1],
+                            RespFrame::Array(Some(vec![
+                                RespFrame::BulkString(Some(b"b".to_vec())),
+                                RespFrame::BulkString(Some(b"2".to_vec())),
+                            ]))
+                        );
                     }
                     other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
                 }
@@ -29641,8 +29689,7 @@ mod tests {
 
             /// MR: Empty argv produces empty keys.
             #[test]
-            fn mr_empty_argv_no_keys(dummy in Just(())) {
-                let _ = dummy;
+            fn mr_empty_argv_no_keys(_dummy in Just(())) {
                 let keys = command_keys(&[]);
                 let indexes = command_key_indexes(&[]);
                 prop_assert!(keys.is_empty(), "empty argv should have no keys");

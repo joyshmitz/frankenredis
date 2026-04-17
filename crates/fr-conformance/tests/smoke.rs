@@ -977,8 +977,7 @@ const CORE_GENERIC_LIVE_STABLE_CASES: &[&str] = &[
     "keys_setup_prefix_a",
     "keys_setup_prefix_b",
     "keys_setup_suffix",
-    "keys_prefix_wildcard",
-    "keys_suffix_wildcard",
+    // keys_prefix_wildcard and keys_suffix_wildcard excluded: KEYS ordering is non-deterministic
     "keys_char_class_setup_a",
     "keys_char_class_setup_b",
     "keys_char_class_setup_x",
@@ -1363,6 +1362,158 @@ const CORE_GEO_LIVE_STABLE_CASES: &[&str] = &[
     "geosearchstore_wrong_arity",
     "georadius_wrong_arity",
     "georadiusbymember_wrong_arity",
+];
+
+const CORE_COPY_LIVE_STABLE_CASES: &[&str] = &[
+    // Setup
+    "setup_string",
+    "setup_list",
+    "setup_set",
+    "setup_hash",
+    "setup_zset",
+    // Basic COPY operations
+    "copy_string",
+    "verify_copy_string",
+    "verify_source_unchanged",
+    "copy_list",
+    "verify_copy_list",
+    "copy_set",
+    "verify_copy_set_card",
+    "copy_hash",
+    "verify_copy_hash",
+    "copy_zset",
+    "verify_copy_zset",
+    // Edge cases
+    "copy_nonexistent_source",
+    "copy_destination_exists_no_replace",
+    "verify_destination_unchanged",
+    // REPLACE option
+    "setup_overwrite_target",
+    "copy_with_replace",
+    "verify_replace_worked",
+    "copy_with_replace_case_insensitive",
+    "copy_replace_lowercase",
+    // DB option
+    "copy_with_db_option",
+    "copy_with_replace_and_db",
+    // Arity and syntax errors
+    "copy_wrong_arity_no_args",
+    "copy_wrong_arity_one_arg",
+    "copy_invalid_option",
+    // DUMP command
+    "dump_nonexistent_key",
+    "dump_wrong_arity",
+    "dump_wrong_arity_extra",
+    // RESTORE command errors
+    "restore_wrong_arity",
+    "restore_wrong_arity_two",
+    "restore_wrong_arity_three",
+    "restore_bad_payload",
+    // Self-copy (verify only - copy_src_eq_dst behavior differs between versions)
+    "verify_src_str_after_self_copy",
+    // Cross-type replace
+    "copy_replace_cross_type_setup",
+    "copy_string_over_list_with_replace",
+    "verify_cross_list_is_now_string",
+    "verify_cross_list_type",
+    // Type preservation
+    "copy_list_preserves_type",
+    "verify_list_copy_type",
+    "verify_list_copy_contents",
+    "copy_hash_preserves_type",
+    "verify_hash_copy_type",
+    "verify_hash_copy_field",
+    "copy_set_preserves_type",
+    "verify_set_copy_type",
+    "verify_set_copy_card",
+    "copy_zset_preserves_type",
+    "verify_zset_copy_type",
+    "verify_zset_copy_score",
+    // DB operations
+    "copy_with_db_nonzero",
+    "verify_db_copy",
+    "verify_db_copy_value",
+    "copy_with_db_and_replace",
+    "copy_with_db_and_replace_value",
+    // Independence verification
+    "copy_independent_modification",
+    "copy_for_independence",
+    "modify_source_after_copy",
+    "verify_copy_unaffected",
+    // Additional type verification
+    "copy_string_type_setup",
+    "copy_string_type_copy",
+    "copy_string_type_verify",
+    "copy_string_value_verify",
+    "copy_nonexistent_returns_zero",
+    "copy_bad_option",
+    // Replace diff type
+    "copy_replace_diff_type_setup",
+    "copy_replace_string_over_list",
+    "copy_replace_type_verify",
+    "copy_replace_value_verify",
+    // Stream COPY
+    "copy_stream_setup_xadd",
+    "copy_stream_setup_xadd2",
+    "copy_stream_setup_group",
+    "copy_stream",
+    "copy_stream_type_verify",
+    "copy_stream_len_verify",
+    "copy_stream_encoding_verify",
+    "copy_stream_data_verify",
+    "copy_stream_group_preserved_setid",
+    // DB parsing errors
+    "copy_db_leading_plus",
+    "copy_db_leading_zeros",
+    "copy_db_non_numeric",
+    "copy_db_negative",
+    "copy_db_float",
+    "copy_db_empty",
+    "copy_db_missing_value",
+    // RESTORE TTL parsing errors
+    "restore_ttl_leading_plus",
+    "restore_ttl_leading_zeros",
+    "restore_ttl_non_numeric",
+    "restore_ttl_float",
+    "restore_ttl_empty",
+];
+
+const CORE_CONNECTION_LIVE_STABLE_CASES: &[&str] = &[
+    // PING/ECHO basics
+    "ping_no_args_returns_pong",
+    "ping_with_message",
+    "ping_wrong_arity",
+    "echo_returns_argument",
+    "echo_wrong_arity_no_args",
+    "echo_wrong_arity_too_many",
+    "echo_binary_safe",
+    "ping_binary_message",
+    "echo_empty_string",
+    "ping_with_custom_message",
+    "echo_empty_string_returns_empty",
+    // Session-scoped SELECT cases
+    "select_db0_ok",
+    "select_db1_ok",
+    "select_wrong_arity",
+    "select_invalid_db",
+    "select_noncanonical_plus",
+    "select_noncanonical_leading_zero",
+    "select_db15_ok",
+    "select_db0_after_db15",
+    "select_negative_db",
+    "select_large_db",
+    "select_too_many_args",
+    "select_db_negative",
+    "select_db_very_large",
+    "select_db_non_integer",
+    // Dedicated connection/session commands
+    "quit_returns_ok",
+    "readonly_reports_cluster_disabled",
+    "readwrite_reports_cluster_disabled",
+    "readonly_wrong_arity",
+    "readwrite_wrong_arity",
+    "reset_returns_reset",
+    "auth_no_password_configured",
 ];
 
 struct VendoredRedisOracle {
@@ -2711,6 +2862,50 @@ fn core_sort_live_redis_matches_runtime() {
         ..LiveOracleConfig::default()
     };
     let report = run_live_redis_diff(&cfg, "core_sort.json", &oracle).expect("sort live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_copy_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report =
+        run_live_redis_diff_for_cases(&cfg, "core_copy.json", CORE_COPY_LIVE_STABLE_CASES, &oracle)
+            .expect("copy live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_connection_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_connection.json",
+        CORE_CONNECTION_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("connection live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",

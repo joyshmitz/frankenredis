@@ -2365,19 +2365,19 @@
       "name": "zadd_gt_lt_conflict",
       "now_ms": 111,
       "argv": ["ZADD", "zconflict", "GT", "LT", "1", "member"],
-      "expect": {"kind": "error", "value": "ERR GT and LT options at the same time are not compatible"}
+      "expect": {"kind": "error", "value": "ERR GT, LT, and/or NX options at the same time are not compatible"}
     },
     {
       "name": "zadd_nx_gt_conflict",
       "now_ms": 112,
       "argv": ["ZADD", "zconflict", "NX", "GT", "1", "member"],
-      "expect": {"kind": "error", "value": "ERR GT, LT, and NX options at the same time are not compatible"}
+      "expect": {"kind": "error", "value": "ERR GT, LT, and/or NX options at the same time are not compatible"}
     },
     {
       "name": "zadd_nx_lt_conflict",
       "now_ms": 113,
       "argv": ["ZADD", "zconflict", "NX", "LT", "1", "member"],
-      "expect": {"kind": "error", "value": "ERR GT, LT, and NX options at the same time are not compatible"}
+      "expect": {"kind": "error", "value": "ERR GT, LT, and/or NX options at the same time are not compatible"}
     },
     {
       "name": "zadd_xx_gt_setup",
@@ -4361,12 +4361,17 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "one"
-              },
-              {
-                "kind": "bulk",
-                "value": "1"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "one"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "1"
+                  }
+                ]
               }
             ]
           }
@@ -4393,12 +4398,17 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "three"
-              },
-              {
-                "kind": "bulk",
-                "value": "3"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "three"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "3"
+                  }
+                ]
               }
             ]
           }
@@ -4459,20 +4469,30 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "alpha"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "alpha"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "10"
+                  }
+                ]
               },
               {
-                "kind": "bulk",
-                "value": "10"
-              },
-              {
-                "kind": "bulk",
-                "value": "beta"
-              },
-              {
-                "kind": "bulk",
-                "value": "20"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "beta"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "20"
+                  }
+                ]
               }
             ]
           }
@@ -4501,20 +4521,30 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "delta"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "delta"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "40"
+                  }
+                ]
               },
               {
-                "kind": "bulk",
-                "value": "40"
-              },
-              {
-                "kind": "bulk",
-                "value": "gamma"
-              },
-              {
-                "kind": "bulk",
-                "value": "30"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "gamma"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "30"
+                  }
+                ]
               }
             ]
           }
@@ -4596,12 +4626,17 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "x"
-              },
-              {
-                "kind": "bulk",
-                "value": "5"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "x"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "5"
+                  }
+                ]
               }
             ]
           }
@@ -4669,12 +4704,17 @@
             "kind": "array",
             "value": [
               {
-                "kind": "bulk",
-                "value": "y"
-              },
-              {
-                "kind": "bulk",
-                "value": "10"
+                "kind": "array",
+                "value": [
+                  {
+                    "kind": "bulk",
+                    "value": "y"
+                  },
+                  {
+                    "kind": "bulk",
+                    "value": "10"
+                  }
+                ]
               }
             ]
           }
