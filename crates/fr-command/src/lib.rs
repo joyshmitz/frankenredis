@@ -7,8 +7,7 @@ use fr_protocol::RespFrame;
 use fr_store::{
     ExpireTimeValue, MaxmemoryPolicy, PttlValue, PubSubMessage, ScoreBound, Store, StoreError,
     StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply,
-    StreamGroupReadCursor, StreamGroupReadOptions, StreamId, ValueType, crc16_slot, glob_match,
-    read_rss_bytes,
+    StreamGroupReadCursor, StreamGroupReadOptions, StreamId, ValueType, glob_match, read_rss_bytes,
 };
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
@@ -5465,38 +5464,62 @@ fn cluster_disabled_error() -> CommandError {
     CommandError::Custom("ERR This instance has cluster support disabled".to_string())
 }
 
+fn cluster_wrong_subcommand_arity(subcommand: &str) -> CommandError {
+    CommandError::Custom(format!(
+        "ERR wrong number of arguments for 'cluster|{}' command",
+        subcommand.to_ascii_lowercase()
+    ))
+}
+
+fn cluster_unknown_subcommand_error(subcommand: &str) -> CommandError {
+    CommandError::Custom(format!(
+        "ERR unknown subcommand '{subcommand}'. Try CLUSTER HELP."
+    ))
+}
+
 // ── CLUSTER ─────────────────────────────────────────────────────────
 
 fn cluster_cmd(
     argv: &[Vec<u8>],
-    store: &mut Store,
-    now_ms: u64,
+    _store: &mut Store,
+    _now_ms: u64,
 ) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("CLUSTER"));
     }
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-    if sub.eq_ignore_ascii_case("INFO") {
-        Ok(RespFrame::BulkString(Some(
-            b"cluster_enabled:0\r\n\
-              cluster_state:ok\r\n\
-              cluster_slots_assigned:0\r\n\
-              cluster_slots_ok:0\r\n\
-              cluster_slots_pfail:0\r\n\
-              cluster_slots_fail:0\r\n\
-              cluster_known_nodes:0\r\n\
-              cluster_size:0\r\n\
-              cluster_current_epoch:0\r\n\
-              cluster_my_epoch:0\r\n\
-              cluster_stats_messages_sent:0\r\n\
-              cluster_stats_messages_received:0\r\n\
-              total_cluster_links_buffer_limit_exceeded:0\r\n"
-                .to_vec(),
-        )))
-    } else if sub.eq_ignore_ascii_case("MYID")
+    if sub.eq_ignore_ascii_case("HELP")
+        || sub.eq_ignore_ascii_case("INFO")
+        || sub.eq_ignore_ascii_case("MYID")
         || sub.eq_ignore_ascii_case("SLOTS")
         || sub.eq_ignore_ascii_case("SHARDS")
         || sub.eq_ignore_ascii_case("NODES")
+        || sub.eq_ignore_ascii_case("LINKS")
+    {
+        if argv.len() != 2 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        return Err(cluster_disabled_error());
+    }
+    if sub.eq_ignore_ascii_case("KEYSLOT") {
+        if argv.len() != 3 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        return Err(cluster_disabled_error());
+    }
+    if sub.eq_ignore_ascii_case("GETKEYSINSLOT") {
+        if argv.len() != 4 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        return Err(cluster_disabled_error());
+    }
+    if sub.eq_ignore_ascii_case("COUNTKEYSINSLOT") {
+        if argv.len() != 3 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        return Err(cluster_disabled_error());
+    }
+    if sub.eq_ignore_ascii_case("RESET")
         || sub.eq_ignore_ascii_case("MEET")
         || sub.eq_ignore_ascii_case("FORGET")
         || sub.eq_ignore_ascii_case("REPLICATE")
@@ -5510,108 +5533,12 @@ fn cluster_cmd(
         || sub.eq_ignore_ascii_case("SAVECONFIG")
         || sub.eq_ignore_ascii_case("SET-CONFIG-EPOCH")
         || sub.eq_ignore_ascii_case("BUMPEPOCH")
-        || sub.eq_ignore_ascii_case("LINKS")
         || sub.eq_ignore_ascii_case("MYSHARDID")
         || sub.eq_ignore_ascii_case("SLOTSTATE")
     {
-        Err(cluster_disabled_error())
-    } else if sub.eq_ignore_ascii_case("RESET") {
-        if argv.len() > 3 {
-            return Err(CommandError::WrongArity("CLUSTER"));
-        }
-        if argv.len() == 3 {
-            let mode =
-                std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-            if !mode.eq_ignore_ascii_case("HARD") && !mode.eq_ignore_ascii_case("SOFT") {
-                return Err(CommandError::SyntaxError);
-            }
-        }
-        Ok(RespFrame::SimpleString("OK".to_string()))
-    } else if sub.eq_ignore_ascii_case("KEYSLOT") {
-        if argv.len() != 3 {
-            return Err(CommandError::WrongArity("CLUSTER"));
-        }
-        let slot = crc16_slot(&argv[2]);
-        Ok(RespFrame::Integer(slot as i64))
-    } else if sub.eq_ignore_ascii_case("GETKEYSINSLOT") {
-        if argv.len() != 4 {
-            return Err(CommandError::WrongArity("CLUSTER"));
-        }
-        let slot_val = parse_i64_arg(&argv[2])?;
-        if !(0..=16383).contains(&slot_val) {
-            return Err(CommandError::Custom(
-                "ERR Invalid slot or number of keys".to_string(),
-            ));
-        }
-        let slot = slot_val as u16;
-        let count_val = parse_i64_arg(&argv[3])?;
-        if count_val < 0 {
-            return Err(CommandError::Custom(
-                "ERR Invalid slot or number of keys".to_string(),
-            ));
-        }
-        let count = if count_val == 0 {
-            0
-        } else {
-            usize::try_from(count_val).map_err(|_| CommandError::InvalidInteger)?
-        };
-        let keys = store.keys_in_slot(slot, count, now_ms);
-        let frames = keys
-            .into_iter()
-            .map(|k| RespFrame::BulkString(Some(k)))
-            .collect();
-        Ok(RespFrame::Array(Some(frames)))
-    } else if sub.eq_ignore_ascii_case("COUNTKEYSINSLOT") {
-        if argv.len() != 3 {
-            return Err(CommandError::WrongArity("CLUSTER"));
-        }
-        let slot_val = parse_i64_arg(&argv[2])?;
-        if !(0..=16383).contains(&slot_val) {
-            return Err(CommandError::Custom("ERR Invalid slot".to_string()));
-        }
-        let slot = slot_val as u16;
-        let count = store.count_keys_in_slot(slot, now_ms);
-        Ok(RespFrame::Integer(count as i64))
-    } else if sub.eq_ignore_ascii_case("HELP") {
-        if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLUSTER",
-                subcommand: "HELP".to_string(),
-            });
-        }
-        Ok(RespFrame::Array(Some(vec![
-            hello_bulk("CLUSTER INFO"),
-            hello_bulk("CLUSTER MYID"),
-            hello_bulk("CLUSTER KEYSLOT <key>"),
-            hello_bulk("CLUSTER GETKEYSINSLOT <slot> <count>"),
-            hello_bulk("CLUSTER COUNTKEYSINSLOT <slot>"),
-            hello_bulk("CLUSTER SLOTS"),
-            hello_bulk("CLUSTER SHARDS"),
-            hello_bulk("CLUSTER NODES"),
-            hello_bulk("CLUSTER RESET [HARD|SOFT]"),
-            hello_bulk("CLUSTER MEET <ip> <port> [bus-port]"),
-            hello_bulk("CLUSTER FORGET <node-id>"),
-            hello_bulk("CLUSTER REPLICATE <node-id>"),
-            hello_bulk("CLUSTER REPLICAS <node-id>"),
-            hello_bulk("CLUSTER FAILOVER [FORCE|TAKEOVER]"),
-            hello_bulk("CLUSTER ADDSLOTS <slot> [slot ...]"),
-            hello_bulk("CLUSTER DELSLOTS <slot> [slot ...]"),
-            hello_bulk("CLUSTER ADDSLOTSRANGE <start-slot> <end-slot> [start-slot end-slot ...]"),
-            hello_bulk("CLUSTER DELSLOTSRANGE <start-slot> <end-slot> [start-slot end-slot ...]"),
-            hello_bulk("CLUSTER FLUSHSLOTS"),
-            hello_bulk("CLUSTER SAVECONFIG"),
-            hello_bulk("CLUSTER SET-CONFIG-EPOCH <epoch>"),
-            hello_bulk("CLUSTER BUMPEPOCH"),
-            hello_bulk("CLUSTER LINKS"),
-            hello_bulk("CLUSTER MYSHARDID"),
-            hello_bulk("CLUSTER SLOTSTATE <slot>"),
-        ])))
-    } else {
-        Err(CommandError::UnknownSubcommand {
-            command: "CLUSTER",
-            subcommand: sub.to_string(),
-        })
+        return Err(cluster_disabled_error());
     }
+    Err(cluster_unknown_subcommand_error(sub))
 }
 
 // ── REPLCONF ────────────────────────────────────────────────────────
@@ -5641,8 +5568,7 @@ fn replconf_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         if option.eq_ignore_ascii_case("listening-port") {
             let parsed = parse_i64_arg(&argv[idx + 1])?;
             u16::try_from(parsed).map_err(|_| CommandError::InvalidInteger)?;
-        } else if option.eq_ignore_ascii_case("ip-address") || option.eq_ignore_ascii_case("capa")
-        {
+        } else if option.eq_ignore_ascii_case("ip-address") || option.eq_ignore_ascii_case("capa") {
             // Accept configuration pairs silently.
         } else {
             return Err(CommandError::Custom(format!(
@@ -10193,6 +10119,13 @@ fn client_info_line(store: &Store, sub: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+fn client_wrong_subcommand_arity(subcommand: &str) -> CommandError {
+    CommandError::Custom(format!(
+        "ERR wrong number of arguments for 'client|{}' command",
+        subcommand.to_ascii_lowercase()
+    ))
+}
+
 fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("CLIENT"));
@@ -10200,10 +10133,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("SETNAME") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         if argv[2].iter().any(|&b| b <= b' ') {
             return Err(CommandError::Custom(
@@ -10219,30 +10149,21 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("GETNAME") {
         if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         Ok(RespFrame::BulkString(
             store.dispatch_client_ctx.client_name.clone(),
         ))
     } else if sub.eq_ignore_ascii_case("ID") {
         if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         Ok(RespFrame::Integer(
             i64::try_from(store.dispatch_client_ctx.client_id).unwrap_or(i64::MAX),
         ))
     } else if sub.eq_ignore_ascii_case("LIST") || sub.eq_ignore_ascii_case("INFO") {
         if sub.eq_ignore_ascii_case("INFO") && argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         let info_line = client_info_line(store, sub);
         if sub.eq_ignore_ascii_case("LIST") {
@@ -10286,10 +10207,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::BulkString(Some(info_line)))
     } else if sub.eq_ignore_ascii_case("NO-EVICT") || sub.eq_ignore_ascii_case("NO-TOUCH") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if !mode.eq_ignore_ascii_case("ON") && !mode.eq_ignore_ascii_case("OFF") {
@@ -10300,10 +10218,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("SETINFO") {
         if argv.len() != 4 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         let attr = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         let val = std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -10339,10 +10254,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("REPLY") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if !mode.eq_ignore_ascii_case("ON")
@@ -10353,16 +10265,107 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("KILL") {
-        // CLIENT KILL [ip:port | ID client-id | ...]
-        // In standalone single-connection mode, always return 0 (no clients killed)
-        Ok(RespFrame::Integer(0))
+        // CLIENT KILL [ip:port | ID client-id | TYPE type | USER user | SKIPME yes|no]
+        if argv.len() < 3 {
+            return Err(client_wrong_subcommand_arity(sub));
+        }
+
+        let legacy_addr = if argv.len() == 3 {
+            Some(std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?)
+        } else {
+            None
+        };
+        let mut skipme = legacy_addr.is_none();
+        let mut filter_id: Option<u64> = None;
+        let mut filter_type: Option<String> = None;
+        let mut filter_user: Option<Vec<u8>> = None;
+        let mut filter_addr = legacy_addr.map(str::to_owned);
+
+        if legacy_addr.is_none() {
+            let mut i = 2;
+            while i < argv.len() {
+                let opt =
+                    std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+
+                if opt.eq_ignore_ascii_case("ID") && i + 1 < argv.len() {
+                    let id = match parse_i64_arg(&argv[i + 1]) {
+                        Ok(id) if id > 0 => id as u64,
+                        _ => return Err(CommandError::Custom("ERR Invalid client ID".to_string())),
+                    };
+                    filter_id = Some(id);
+                    i += 2;
+                } else if opt.eq_ignore_ascii_case("TYPE") && i + 1 < argv.len() {
+                    let kind = std::str::from_utf8(&argv[i + 1])
+                        .map_err(|_| CommandError::InvalidUtf8Argument)?
+                        .to_string();
+                    if !matches!(
+                        kind.to_ascii_lowercase().as_str(),
+                        "normal" | "master" | "replica" | "pubsub"
+                    ) {
+                        return Err(CommandError::Custom(format!(
+                            "ERR Unknown client type '{kind}'"
+                        )));
+                    }
+                    filter_type = Some(kind);
+                    i += 2;
+                } else if opt.eq_ignore_ascii_case("USER") && i + 1 < argv.len() {
+                    filter_user = Some(argv[i + 1].clone());
+                    i += 2;
+                } else if opt.eq_ignore_ascii_case("ADDR") && i + 1 < argv.len() {
+                    let addr = std::str::from_utf8(&argv[i + 1])
+                        .map_err(|_| CommandError::InvalidUtf8Argument)?
+                        .to_string();
+                    filter_addr = Some(addr);
+                    i += 2;
+                } else if opt.eq_ignore_ascii_case("SKIPME") && i + 1 < argv.len() {
+                    let val = std::str::from_utf8(&argv[i + 1])
+                        .map_err(|_| CommandError::InvalidUtf8Argument)?;
+                    if val.eq_ignore_ascii_case("yes") {
+                        skipme = true;
+                    } else if val.eq_ignore_ascii_case("no") {
+                        skipme = false;
+                    } else {
+                        return Err(CommandError::Custom(
+                            "ERR argument must be 'yes' or 'no'".to_string(),
+                        ));
+                    }
+                    i += 2;
+                } else {
+                    return Err(CommandError::SyntaxError);
+                }
+            }
+        }
+
+        let matches_current_client = !skipme
+            && filter_id.is_none_or(|id| store.dispatch_client_ctx.client_id == id)
+            && filter_type.as_ref().is_none_or(|kind| {
+                let current_kind = if store.dispatch_client_ctx.is_pubsub {
+                    "pubsub"
+                } else {
+                    "normal"
+                };
+                current_kind.eq_ignore_ascii_case(kind)
+            })
+            && filter_user
+                .as_ref()
+                .is_none_or(|user| &store.dispatch_client_ctx.authenticated_user == user)
+            && filter_addr
+                .as_ref()
+                .is_none_or(|addr| &store.dispatch_client_ctx.peer_addr == addr);
+
+        if legacy_addr.is_some() {
+            if matches_current_client {
+                Ok(RespFrame::SimpleString("OK".to_string()))
+            } else {
+                Err(CommandError::Custom("ERR No such client".to_string()))
+            }
+        } else {
+            Ok(RespFrame::Integer(i64::from(matches_current_client)))
+        }
     } else if sub.eq_ignore_ascii_case("PAUSE") {
         // CLIENT PAUSE timeout [WRITE|ALL]
         if argv.len() < 3 || argv.len() > 4 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         parse_i64_arg(&argv[2])?;
         if let Some(mode_arg) = argv.get(3) {
@@ -10375,19 +10378,13 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("UNPAUSE") {
         if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("TRACKING") {
         // CLIENT TRACKING ON|OFF [REDIRECT id] [PREFIX prefix ...] [BCAST] [OPTIN] [OPTOUT] [NOLOOP]
         if argv.len() < 3 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if !mode.eq_ignore_ascii_case("ON") && !mode.eq_ignore_ascii_case("OFF") {
@@ -10397,10 +10394,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     } else if sub.eq_ignore_ascii_case("CACHING") {
         // CLIENT CACHING YES|NO
         if argv.len() != 3 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if !mode.eq_ignore_ascii_case("YES") && !mode.eq_ignore_ascii_case("NO") {
@@ -10409,18 +10403,12 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("GETREDIR") {
         if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         Ok(RespFrame::Integer(-1))
     } else if sub.eq_ignore_ascii_case("TRACKINGINFO") {
         if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"flags".to_vec())),
@@ -10432,10 +10420,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         ])))
     } else if sub.eq_ignore_ascii_case("UNBLOCK") {
         if argv.len() != 3 && argv.len() != 4 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         let target_id = parse_i64_arg(&argv[2])?;
         if target_id <= 0 {
@@ -10451,10 +10436,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::Integer(0))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: sub.to_string(),
-            });
+            return Err(client_wrong_subcommand_arity(sub));
         }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
@@ -13367,9 +13349,10 @@ mod tests {
     use fr_store::{Store, StoreError};
 
     use super::{
-        COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec, classify_command, dispatch_argv,
-        drain_pubsub_messages, eq_ascii_command, execute_migrate, frame_to_argv, is_write_command,
-        parse_blocking_deadline_milliseconds, parse_migrate_request, pubsub_message_to_frame,
+        COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec, classify_command,
+        client_wrong_subcommand_arity, dispatch_argv, drain_pubsub_messages, eq_ascii_command,
+        execute_migrate, frame_to_argv, is_write_command, parse_blocking_deadline_milliseconds,
+        parse_migrate_request, pubsub_message_to_frame,
     };
 
     fn classify_command_linear(cmd: &[u8]) -> Option<CommandId> {
@@ -25798,96 +25781,103 @@ mod tests {
     // ── CLUSTER tests ───────────────────────────────────────────────
 
     #[test]
-    fn cluster_info_standalone() {
+    fn cluster_known_subcommands_report_cluster_disabled() {
         let mut store = Store::new();
-        let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"INFO".to_vec()], &mut store, 0).unwrap();
-        match out {
-            RespFrame::BulkString(Some(data)) => {
-                let text = String::from_utf8_lossy(&data);
-                assert!(text.contains("cluster_enabled:0"));
-            }
-            other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
+        for argv in [
+            vec![b"CLUSTER".to_vec(), b"HELP".to_vec()],
+            vec![b"CLUSTER".to_vec(), b"INFO".to_vec()],
+            vec![b"CLUSTER".to_vec(), b"MYID".to_vec()],
+            vec![b"CLUSTER".to_vec(), b"SLOTS".to_vec()],
+            vec![b"CLUSTER".to_vec(), b"KEYSLOT".to_vec(), b"foo".to_vec()],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+            assert_eq!(
+                err,
+                CommandError::Custom("ERR This instance has cluster support disabled".to_string())
+            );
         }
     }
 
     #[test]
-    fn cluster_myid() {
+    fn cluster_unknown_subcommand_matches_redis_error() {
         let mut store = Store::new();
-        let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"MYID".to_vec()], &mut store, 0).unwrap();
-        match out {
-            RespFrame::BulkString(Some(_)) => {}
-            other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
-        }
+        let err =
+            dispatch_argv(&[b"CLUSTER".to_vec(), b"NOPE".to_vec()], &mut store, 0).unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom("ERR unknown subcommand 'NOPE'. Try CLUSTER HELP.".to_string())
+        );
     }
 
     #[test]
-    fn cluster_slots_empty() {
+    fn cluster_known_subcommand_wrong_arity_matches_redis_error() {
         let mut store = Store::new();
-        let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"SLOTS".to_vec()], &mut store, 0).unwrap();
-        assert_eq!(out, RespFrame::Array(Some(Vec::new())));
-    }
-
-    #[test]
-    fn cluster_keyslot() {
-        let mut store = Store::new();
-        let out = dispatch_argv(
-            &[b"CLUSTER".to_vec(), b"KEYSLOT".to_vec(), b"foo".to_vec()],
-            &mut store,
-            0,
-        )
-        .unwrap();
-        // "foo" -> CRC16 slot 12182
-        assert_eq!(out, RespFrame::Integer(12182));
-    }
-
-    #[test]
-    fn cluster_keyslot_hashtag() {
-        let mut store = Store::new();
-        let out = dispatch_argv(
-            &[
-                b"CLUSTER".to_vec(),
-                b"KEYSLOT".to_vec(),
-                b"{user}.info".to_vec(),
-            ],
-            &mut store,
-            0,
-        )
-        .unwrap();
-        // {user} -> hash "user" -> slot 5474
-        assert_eq!(out, RespFrame::Integer(5474));
-    }
-
-    #[test]
-    fn cluster_help_lists_getkeysinslot_and_countkeysinslot() {
-        let mut store = Store::new();
-        let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
-        let RespFrame::Array(Some(items)) = out else {
-            panic!("expected array"); // ubs:ignore — AI triage
-        };
-        assert!(items.contains(&RespFrame::BulkString(Some(
-            b"CLUSTER GETKEYSINSLOT <slot> <count>".to_vec()
-        ))));
-        assert!(items.contains(&RespFrame::BulkString(Some(
-            b"CLUSTER COUNTKEYSINSLOT <slot>".to_vec()
-        ))));
+        let err =
+            dispatch_argv(&[b"CLUSTER".to_vec(), b"KEYSLOT".to_vec()], &mut store, 0).unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom(
+                "ERR wrong number of arguments for 'cluster|keyslot' command".to_string()
+            )
+        );
     }
 
     // ── CLIENT KILL/PAUSE/UNPAUSE tests ─────────────────────────────
 
     #[test]
-    fn client_kill_returns_zero() {
+    fn client_kill_preserves_legacy_addr_and_filter_modes() {
         let mut store = Store::new();
+        store.dispatch_client_ctx.peer_addr = "10.0.0.9:7777".to_string();
+
+        let err = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"KILL".to_vec(),
+                b"10.0.0.9:9999".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::Custom("ERR No such client".to_string()));
+
         let out = dispatch_argv(
             &[
                 b"CLIENT".to_vec(),
                 b"KILL".to_vec(),
-                b"127.0.0.1:1234".to_vec(),
+                b"10.0.0.9:7777".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+
+        let out = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"KILL".to_vec(),
+                b"ID".to_vec(),
+                b"99999".to_vec(),
             ],
             &mut store,
             0,
         )
         .unwrap();
         assert_eq!(out, RespFrame::Integer(0));
+
+        let out = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"KILL".to_vec(),
+                b"SKIPME".to_vec(),
+                b"no".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::Integer(1));
     }
 
     #[test]
@@ -25919,13 +25909,7 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: "PAUSE".to_string(),
-            }
-        );
+        assert_eq!(err, client_wrong_subcommand_arity("PAUSE"));
 
         let err = dispatch_argv(
             &[
@@ -25950,13 +25934,7 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: "UNPAUSE".to_string(),
-            }
-        );
+        assert_eq!(err, client_wrong_subcommand_arity("UNPAUSE"));
     }
 
     #[test]
@@ -25981,13 +25959,7 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: "REPLY".to_string(),
-            }
-        );
+        assert_eq!(err, client_wrong_subcommand_arity("REPLY"));
     }
 
     #[test]
@@ -26015,13 +25987,7 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: "NO-TOUCH".to_string(),
-            }
-        );
+        assert_eq!(err, client_wrong_subcommand_arity("NO-TOUCH"));
     }
 
     #[test]
@@ -26425,7 +26391,11 @@ mod tests {
     fn replicaof_invalid_port_uses_redis_error_text() {
         let mut store = Store::new();
         let err = dispatch_argv(
-            &[b"REPLICAOF".to_vec(), b"127.0.0.1".to_vec(), b"+6379".to_vec()],
+            &[
+                b"REPLICAOF".to_vec(),
+                b"127.0.0.1".to_vec(),
+                b"+6379".to_vec(),
+            ],
             &mut store,
             0,
         )
@@ -26824,13 +26794,7 @@ mod tests {
         let mut store = Store::new();
         let err =
             dispatch_argv(&[b"CLIENT".to_vec(), b"SETNAME".to_vec()], &mut store, 0).unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: "SETNAME".to_string(),
-            }
-        );
+        assert_eq!(err, client_wrong_subcommand_arity("SETNAME"));
 
         let err = dispatch_argv(
             &[
@@ -26872,13 +26836,7 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: "GETNAME".to_string(),
-            }
-        );
+        assert_eq!(err, client_wrong_subcommand_arity("GETNAME"));
 
         let err = dispatch_argv(
             &[b"CLIENT".to_vec(), b"ID".to_vec(), b"extra".to_vec()],
@@ -26886,13 +26844,7 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(
-            err,
-            CommandError::WrongSubcommandArity {
-                command: "CLIENT",
-                subcommand: "ID".to_string(),
-            }
-        );
+        assert_eq!(err, client_wrong_subcommand_arity("ID"));
     }
 
     #[test]
