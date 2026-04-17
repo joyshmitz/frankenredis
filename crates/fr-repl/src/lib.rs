@@ -201,9 +201,6 @@ pub enum PsyncReply {
 }
 
 pub fn parse_psync_reply(line: &str) -> Result<PsyncReply, ReplError> {
-    if line == "CONTINUE" {
-        return Ok(PsyncReply::Continue);
-    }
     let mut parts = line.split_ascii_whitespace();
     let Some(kind) = parts.next() else {
         return Err(ReplError::PsyncReplyStateMismatch {
@@ -211,7 +208,12 @@ pub fn parse_psync_reply(line: &str) -> Result<PsyncReply, ReplError> {
         });
     };
     if kind == "CONTINUE" {
-        return Ok(PsyncReply::Continue);
+        return match (parts.next(), parts.next()) {
+            (None, None) | (Some(_), None) => Ok(PsyncReply::Continue),
+            _ => Err(ReplError::PsyncReplyStateMismatch {
+                state: HandshakeState::PsyncSent,
+            }),
+        };
     }
     if kind != "FULLRESYNC" {
         return Err(ReplError::PsyncReplyStateMismatch {
@@ -439,6 +441,10 @@ mod tests {
     fn parse_psync_reply_accepts_continue_and_fullresync() {
         assert_eq!(parse_psync_reply("CONTINUE"), Ok(PsyncReply::Continue));
         assert_eq!(
+            parse_psync_reply("CONTINUE 1111111111111111111111111111111111111111"),
+            Ok(PsyncReply::Continue)
+        );
+        assert_eq!(
             parse_psync_reply("FULLRESYNC replid-a 42"),
             Ok(PsyncReply::FullResync {
                 replid: "replid-a".to_string(),
@@ -449,8 +455,10 @@ mod tests {
 
     #[test]
     fn parse_psync_reply_rejects_invalid_shape() {
+        assert!(parse_psync_reply("CONTINUE replid extra").is_err());
         assert!(parse_psync_reply("FULLRESYNC only-two").is_err());
         assert!(parse_psync_reply("FULLRESYNC replid nope").is_err());
+        assert!(parse_psync_reply("FULLRESYNC replid 42 extra").is_err());
         assert!(parse_psync_reply("ERR nope").is_err());
     }
 

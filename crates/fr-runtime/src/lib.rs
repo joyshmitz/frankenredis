@@ -12728,6 +12728,52 @@ mod tests {
     }
 
     #[test]
+    fn replication_continue_apply_accepts_psync2_replid_suffix() {
+        let mut primary = Runtime::default_strict();
+        assert_eq!(
+            primary.execute_frame(command(&[b"SET", b"alpha", b"1"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let fullresync = match primary.execute_frame(command(&[b"PSYNC", b"?", b"-1"]), 1) {
+            RespFrame::SimpleString(line) => line,
+            other => unreachable!("expected fullresync, got {other:?}"),
+        };
+        let snapshot = primary.encoded_rdb_snapshot(1);
+        let fullresync_offset = primary.replication_primary_offset().0;
+
+        let mut replica = Runtime::default_strict();
+        assert_eq!(
+            replica.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"6380"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        replica
+            .apply_replication_sync_payload(&fullresync, &snapshot, 3)
+            .expect("apply fullresync");
+
+        assert_eq!(
+            primary.execute_frame(command(&[b"SET", b"beta", b"2"]), 4),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let backlog = primary.encoded_aof_stream_from_offset(fullresync_offset);
+        replica
+            .apply_replication_sync_payload(
+                "CONTINUE 1111111111111111111111111111111111111111",
+                &backlog,
+                5,
+            )
+            .expect("apply psync2-style continue backlog");
+
+        assert_eq!(
+            replica.execute_frame(command(&[b"GET", b"alpha"]), 6),
+            RespFrame::BulkString(Some(b"1".to_vec()))
+        );
+        assert_eq!(
+            replica.execute_frame(command(&[b"GET", b"beta"]), 7),
+            RespFrame::BulkString(Some(b"2".to_vec()))
+        );
+    }
+
+    #[test]
     fn fr_p2c_004_runtime_special_command_classifier_matches_linear_reference() {
         let samples: &[&[u8]] = &[
             b"AUTH",
