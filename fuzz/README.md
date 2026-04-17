@@ -14,6 +14,9 @@ This directory contains fuzz targets for security-critical parser surfaces.
 | `fuzz_acl_rules` | ACL file parsing and canonicalization | Structure-aware round-trip + hostile text stabilization |
 | `fuzz_runtime_execute_bytes` | Raw runtime RESP ingress | Structure-aware execute_bytes vs execute_frame differential |
 | `fuzz_function_restore` | FUNCTION LOAD/DUMP/RESTORE handling | Structure-aware round-trip + hostile restore atomicity |
+| `fuzz_psync_reply` | Replica PSYNC reply parsing | Structure-aware parser shape validation + raw canonicalization |
+| `fuzz_tls_config` | TLS config directive parsing and apply planning | Structure-aware parser/validator invariants + rewrite/apply determinism |
+| `fuzz_lua_eval` | Embedded Lua parser and evaluator | Structure-aware pure-script determinism + whitespace/semicolon invariance |
 
 ## Running Fuzz Tests
 
@@ -41,6 +44,15 @@ cargo +nightly fuzz run fuzz_runtime_execute_bytes
 
 # Run FUNCTION load/restore fuzzer
 cargo +nightly fuzz run fuzz_function_restore
+
+# Run PSYNC reply parser fuzzer
+cargo +nightly fuzz run fuzz_psync_reply
+
+# Run TLS config parser/planner fuzzer
+cargo +nightly fuzz run fuzz_tls_config
+
+# Run Lua parser/evaluator fuzzer
+cargo +nightly fuzz run fuzz_lua_eval
 
 # Run round-trip invariant checker
 cargo +nightly fuzz run fuzz_resp_roundtrip
