@@ -2058,7 +2058,7 @@ fn expiretime(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     let value = match store.expiretime_value(&argv[1], now_ms) {
         ExpireTimeValue::KeyMissing => -2,
         ExpireTimeValue::NoExpiry => -1,
-        ExpireTimeValue::ExpiresAt(abs_ms) => (abs_ms / 1000) as i64,
+        ExpireTimeValue::ExpiresAt(abs_ms) => (abs_ms.saturating_add(500) / 1000) as i64,
     };
     Ok(RespFrame::Integer(value))
 }
@@ -7484,8 +7484,15 @@ fn parse_expire_options(extra_args: &[Vec<u8>]) -> Result<ExpireOptions, Command
         }
     }
 
-    if (options.nx && (options.xx || options.gt || options.lt)) || (options.gt && options.lt) {
-        return Err(CommandError::SyntaxError);
+    if options.nx && (options.xx || options.gt || options.lt) {
+        return Err(CommandError::Custom(
+            "ERR NX and XX, GT or LT options at the same time are not compatible".to_string(),
+        ));
+    }
+    if options.gt && options.lt {
+        return Err(CommandError::Custom(
+            "ERR GT and LT options at the same time are not compatible".to_string(),
+        ));
     }
 
     Ok(options)
@@ -10137,11 +10144,16 @@ const CLIENT_TRACKING_OPTIN_OPTOUT_CONFLICT: &str =
     "ERR You can't specify both OPTIN mode and OPTOUT mode";
 const CLIENT_TRACKING_BCAST_OPT_CONFLICT: &str =
     "ERR OPTIN and OPTOUT are not compatible with BCAST";
+const CLIENT_TRACKING_BCAST_SWITCH_REQUIRES_DISABLE: &str = "ERR You can't switch BCAST mode on/off before disabling tracking for this client, and then re-enabling it with a different mode.";
+const CLIENT_TRACKING_OPT_SWITCH_REQUIRES_DISABLE: &str = "ERR You can't switch OPTIN/OPTOUT mode before disabling tracking for this client, and then re-enabling it with a different mode.";
 const CLIENT_CACHING_REQUIRES_TRACKING: &str = "ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled";
 const CLIENT_CACHING_YES_REQUIRES_OPTIN: &str =
     "ERR CLIENT CACHING YES is only valid when tracking is enabled in OPTIN mode.";
 const CLIENT_CACHING_NO_REQUIRES_OPTOUT: &str =
     "ERR CLIENT CACHING NO is only valid when tracking is enabled in OPTOUT mode.";
+pub const CLIENT_PAUSE_TIMEOUT_INVALID: &str = "ERR timeout is not an integer or out of range";
+pub const CLIENT_PAUSE_MODE_INVALID: &str = "ERR CLIENT PAUSE mode must be WRITE or ALL";
+const CLIENT_UNBLOCK_REASON_INVALID: &str = "ERR CLIENT UNBLOCK reason should be TIMEOUT or ERROR";
 
 fn script_noscript_command_error() -> CommandError {
     CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
@@ -10184,6 +10196,14 @@ fn client_tracking_flags(state: &ClientTrackingState) -> Vec<RespFrame> {
     }
     if state.optout {
         flags.push(RespFrame::BulkString(Some(b"optout".to_vec())));
+    }
+    if let Some(caching_yes) = state.caching {
+        let flag = if caching_yes {
+            b"caching-yes".to_vec()
+        } else {
+            b"caching-no".to_vec()
+        };
+        flags.push(RespFrame::BulkString(Some(flag)));
     }
     if state.noloop {
         flags.push(RespFrame::BulkString(Some(b"noloop".to_vec())));
@@ -10288,9 +10308,35 @@ pub fn parse_client_tracking_state(argv: &[Vec<u8>]) -> Result<ClientTrackingSta
         bcast,
         optin,
         optout,
+        caching: None,
         noloop,
         prefixes,
     })
+}
+
+pub fn apply_client_tracking_update(
+    current: &ClientTrackingState,
+    requested: ClientTrackingState,
+) -> Result<ClientTrackingState, CommandError> {
+    if !requested.enabled {
+        return Ok(ClientTrackingState::default());
+    }
+
+    let mut next = requested;
+    if current.enabled {
+        if current.bcast != next.bcast {
+            return Err(CommandError::Custom(
+                CLIENT_TRACKING_BCAST_SWITCH_REQUIRES_DISABLE.to_string(),
+            ));
+        }
+        if current.optin != next.optin || current.optout != next.optout {
+            return Err(CommandError::Custom(
+                CLIENT_TRACKING_OPT_SWITCH_REQUIRES_DISABLE.to_string(),
+            ));
+        }
+        next.caching = current.caching;
+    }
+    Ok(next)
 }
 
 pub fn validate_client_caching_mode(
@@ -10316,6 +10362,15 @@ pub fn validate_client_caching_mode(
             CLIENT_CACHING_NO_REQUIRES_OPTOUT.to_string(),
         ));
     }
+    Ok(())
+}
+
+pub fn apply_client_caching_mode(
+    mode: &str,
+    tracking: &mut ClientTrackingState,
+) -> Result<(), CommandError> {
+    validate_client_caching_mode(mode, tracking)?;
+    tracking.caching = Some(mode.eq_ignore_ascii_case("YES"));
     Ok(())
 }
 
@@ -10497,7 +10552,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             };
         } else {
             return Err(CommandError::Custom(format!(
-                "ERR Unrecognized option '{attr}' for CLIENT SETINFO"
+                "ERR Unrecognized option '{attr}'"
             )));
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
@@ -10616,12 +10671,13 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         if argv.len() < 3 || argv.len() > 4 {
             return Err(client_wrong_subcommand_arity(sub));
         }
-        parse_i64_arg(&argv[2])?;
+        parse_i64_arg(&argv[2])
+            .map_err(|_| CommandError::Custom(CLIENT_PAUSE_TIMEOUT_INVALID.to_string()))?;
         if let Some(mode_arg) = argv.get(3) {
             let mode =
                 std::str::from_utf8(mode_arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if !mode.eq_ignore_ascii_case("WRITE") && !mode.eq_ignore_ascii_case("ALL") {
-                return Err(CommandError::SyntaxError);
+                return Err(CommandError::Custom(CLIENT_PAUSE_MODE_INVALID.to_string()));
             }
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
@@ -10632,7 +10688,10 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("TRACKING") {
         // CLIENT TRACKING ON|OFF [REDIRECT id] [PREFIX prefix ...] [BCAST] [OPTIN] [OPTOUT] [NOLOOP]
-        store.dispatch_client_ctx.client_tracking = parse_client_tracking_state(argv)?;
+        let requested = parse_client_tracking_state(argv)?;
+        let current = store.dispatch_client_ctx.client_tracking.clone();
+        store.dispatch_client_ctx.client_tracking =
+            apply_client_tracking_update(&current, requested)?;
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("CACHING") {
         // CLIENT CACHING YES|NO
@@ -10640,7 +10699,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             return Err(client_wrong_subcommand_arity(sub));
         }
         let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-        validate_client_caching_mode(mode, &store.dispatch_client_ctx.client_tracking)?;
+        apply_client_caching_mode(mode, &mut store.dispatch_client_ctx.client_tracking)?;
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("GETREDIR") {
         if argv.len() != 2 {
@@ -10668,7 +10727,9 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             let mode =
                 std::str::from_utf8(mode_arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if !mode.eq_ignore_ascii_case("TIMEOUT") && !mode.eq_ignore_ascii_case("ERROR") {
-                return Err(CommandError::SyntaxError);
+                return Err(CommandError::Custom(
+                    CLIENT_UNBLOCK_REASON_INVALID.to_string(),
+                ));
             }
         }
         Ok(RespFrame::Integer(0))
@@ -10967,22 +11028,31 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             });
         }
         Ok(RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(
-                b"OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"ENCODING <key> - Return the encoding of the object at <key>.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"FREQ <key> - Return the access frequency of <key>.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
-            RespFrame::BulkString(Some(
-                b"IDLETIME <key> - Return the idle time of <key>.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"REFCOUNT <key> - Return the reference count of <key>.".to_vec(),
-            )),
+            hello_simple("OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("ENCODING <key>"),
+            hello_simple(
+                "    Return the kind of internal representation used in order to store the value",
+            ),
+            hello_simple("    associated with a <key>."),
+            hello_simple("FREQ <key>"),
+            hello_simple(
+                "    Return the access frequency index of the <key>. The returned integer is",
+            ),
+            hello_simple(
+                "    proportional to the logarithm of the recent access frequency of the key.",
+            ),
+            hello_simple("IDLETIME <key>"),
+            hello_simple(
+                "    Return the idle time of the <key>, that is the approximated number of",
+            ),
+            hello_simple("    seconds elapsed since the last access to the key."),
+            hello_simple("REFCOUNT <key>"),
+            hello_simple(
+                "    Return the number of references of the value associated with the specified",
+            ),
+            hello_simple("    <key>."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])))
     } else {
         Err(CommandError::UnknownSubcommand {
@@ -13588,9 +13658,11 @@ mod tests {
 
     use super::{
         CLIENT_CACHING_NO_REQUIRES_OPTOUT, CLIENT_CACHING_REQUIRES_TRACKING,
-        CLIENT_CACHING_YES_REQUIRES_OPTIN, CLIENT_TRACKING_BCAST_OPT_CONFLICT,
-        CLIENT_TRACKING_OPTIN_OPTOUT_CONFLICT, CLIENT_TRACKING_PREFIX_REQUIRES_BCAST,
-        CLIENT_TRACKING_REDIRECT_MISSING, COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec,
+        CLIENT_CACHING_YES_REQUIRES_OPTIN, CLIENT_PAUSE_MODE_INVALID, CLIENT_PAUSE_TIMEOUT_INVALID,
+        CLIENT_TRACKING_BCAST_OPT_CONFLICT, CLIENT_TRACKING_BCAST_SWITCH_REQUIRES_DISABLE,
+        CLIENT_TRACKING_OPT_SWITCH_REQUIRES_DISABLE, CLIENT_TRACKING_OPTIN_OPTOUT_CONFLICT,
+        CLIENT_TRACKING_PREFIX_REQUIRES_BCAST, CLIENT_TRACKING_REDIRECT_MISSING,
+        CLIENT_UNBLOCK_REASON_INVALID, COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec,
         SCRIPT_NOSCRIPT_ERROR, classify_command, client_wrong_subcommand_arity, dispatch_argv,
         drain_pubsub_messages, eq_ascii_command, execute_migrate, frame_to_argv, is_write_command,
         parse_blocking_deadline_milliseconds, parse_migrate_request, pubsub_message_to_frame,
@@ -15253,7 +15325,12 @@ mod tests {
             0,
         )
         .expect_err("nx+xx should fail");
-        assert!(matches!(nx_xx, super::CommandError::SyntaxError));
+        assert_eq!(
+            nx_xx,
+            super::CommandError::Custom(
+                "ERR NX and XX, GT or LT options at the same time are not compatible".to_string()
+            )
+        );
 
         let gt_lt = dispatch_argv(
             &[
@@ -15267,7 +15344,12 @@ mod tests {
             0,
         )
         .expect_err("gt+lt should fail");
-        assert!(matches!(gt_lt, super::CommandError::SyntaxError));
+        assert_eq!(
+            gt_lt,
+            super::CommandError::Custom(
+                "ERR GT and LT options at the same time are not compatible".to_string()
+            )
+        );
 
         let unknown = dispatch_argv(
             &[
@@ -15309,7 +15391,12 @@ mod tests {
             0,
         )
         .expect_err("nx cannot combine with xx/gt");
-        assert!(matches!(nx_xx_gt, super::CommandError::SyntaxError));
+        assert_eq!(
+            nx_xx_gt,
+            super::CommandError::Custom(
+                "ERR NX and XX, GT or LT options at the same time are not compatible".to_string()
+            )
+        );
     }
 
     #[test]
@@ -15420,10 +15507,11 @@ mod tests {
         )
         .expect("pexpire key");
 
-        // expires_at_ms = 1000 + 2500 = 3500; EXPIRETIME truncates to seconds: 3500/1000 = 3
+        // expires_at_ms = 1000 + 2500 = 3500; Redis rounds absolute
+        // millisecond deadlines to seconds via (abs_ms + 500) / 1000.
         let expiretime = dispatch_argv(&[b"EXPIRETIME".to_vec(), b"k".to_vec()], &mut store, 1_000)
             .expect("expiretime");
-        assert_eq!(expiretime, RespFrame::Integer(3));
+        assert_eq!(expiretime, RespFrame::Integer(4));
 
         let pexpiretime =
             dispatch_argv(&[b"PEXPIRETIME".to_vec(), b"k".to_vec()], &mut store, 1_000)
@@ -26271,6 +26359,21 @@ mod tests {
             &[
                 b"CLIENT".to_vec(),
                 b"PAUSE".to_vec(),
+                b"notanumber".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom(CLIENT_PAUSE_TIMEOUT_INVALID.to_string())
+        );
+
+        let err = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"PAUSE".to_vec(),
                 b"1000".to_vec(),
                 b"WAT".to_vec(),
             ],
@@ -26278,7 +26381,10 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(err, CommandError::SyntaxError);
+        assert_eq!(
+            err,
+            CommandError::Custom(CLIENT_PAUSE_MODE_INVALID.to_string())
+        );
     }
 
     #[test]
@@ -27181,12 +27287,26 @@ mod tests {
     fn client_tracking_state_is_reflected_in_info_commands() {
         let mut store = Store::new();
         let out = dispatch_argv(
-            &[b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()],
+            &[
+                b"CLIENT".to_vec(),
+                b"TRACKING".to_vec(),
+                b"ON".to_vec(),
+                b"OPTIN".to_vec(),
+            ],
             &mut store,
             0,
         )
         .unwrap();
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(
+            dispatch_argv(
+                &[b"CLIENT".to_vec(), b"CACHING".to_vec(), b"YES".to_vec()],
+                &mut store,
+                0,
+            )
+            .unwrap(),
+            RespFrame::SimpleString("OK".to_string())
+        );
         assert_eq!(
             dispatch_argv(&[b"CLIENT".to_vec(), b"GETREDIR".to_vec()], &mut store, 0).unwrap(),
             RespFrame::Integer(0)
@@ -27200,7 +27320,11 @@ mod tests {
             .unwrap(),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"flags".to_vec())),
-                RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"on".to_vec()))])),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"optin".to_vec())),
+                    RespFrame::BulkString(Some(b"caching-yes".to_vec())),
+                ])),
                 RespFrame::BulkString(Some(b"redirect".to_vec())),
                 RespFrame::Integer(0),
                 RespFrame::BulkString(Some(b"prefixes".to_vec())),
@@ -27208,6 +27332,60 @@ mod tests {
             ]))
         );
 
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLIENT".to_vec(),
+                    b"TRACKING".to_vec(),
+                    b"ON".to_vec(),
+                    b"NOLOOP".to_vec(),
+                    b"PREFIX".to_vec(),
+                    b"foo".to_vec(),
+                    b"BCAST".to_vec(),
+                    b"PREFIX".to_vec(),
+                    b"bar".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::Custom(CLIENT_TRACKING_BCAST_SWITCH_REQUIRES_DISABLE.to_string())
+        );
+        assert_eq!(
+            dispatch_argv(
+                &[b"CLIENT".to_vec(), b"TRACKINGINFO".to_vec()],
+                &mut store,
+                0
+            )
+            .unwrap(),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"optin".to_vec())),
+                    RespFrame::BulkString(Some(b"caching-yes".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"redirect".to_vec())),
+                RespFrame::Integer(0),
+                RespFrame::BulkString(Some(b"prefixes".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLIENT".to_vec(),
+                    b"TRACKING".to_vec(),
+                    b"OFF".to_vec(),
+                    b"PREFIX".to_vec(),
+                    b"ignored".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap(),
+            RespFrame::SimpleString("OK".to_string())
+        );
         assert_eq!(
             dispatch_argv(
                 &[
@@ -27252,15 +27430,9 @@ mod tests {
         );
         assert_eq!(
             dispatch_argv(
-                &[
-                    b"CLIENT".to_vec(),
-                    b"TRACKING".to_vec(),
-                    b"OFF".to_vec(),
-                    b"PREFIX".to_vec(),
-                    b"ignored".to_vec(),
-                ],
+                &[b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"OFF".to_vec()],
                 &mut store,
-                0,
+                0
             )
             .unwrap(),
             RespFrame::SimpleString("OK".to_string())
@@ -27391,6 +27563,35 @@ mod tests {
             CommandError::Custom(CLIENT_CACHING_NO_REQUIRES_OPTOUT.to_string())
         );
 
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLIENT".to_vec(),
+                    b"TRACKING".to_vec(),
+                    b"ON".to_vec(),
+                    b"OPTOUT".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::Custom(CLIENT_TRACKING_OPT_SWITCH_REQUIRES_DISABLE.to_string())
+        );
+        assert_eq!(
+            dispatch_argv(
+                &[b"CLIENT".to_vec(), b"CACHING".to_vec(), b"YES".to_vec()],
+                &mut store,
+                0
+            )
+            .unwrap(),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        dispatch_argv(
+            &[b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"OFF".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
         dispatch_argv(
             &[
                 b"CLIENT".to_vec(),
@@ -27573,9 +27774,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err,
-            CommandError::Custom(
-                "ERR Unrecognized option 'UNKNOWN' for CLIENT SETINFO".to_string()
-            )
+            CommandError::Custom("ERR Unrecognized option 'UNKNOWN'".to_string())
         );
 
         let err = dispatch_argv(
@@ -27657,7 +27856,10 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(err, CommandError::SyntaxError);
+        assert_eq!(
+            err,
+            CommandError::Custom(CLIENT_UNBLOCK_REASON_INVALID.to_string())
+        );
     }
 
     #[test]
@@ -29561,13 +29763,62 @@ mod tests {
         assert!(matches!(r, RespFrame::BulkString(None)));
     }
 
+    #[test]
+    fn object_help_matches_redis_help_shape() {
+        let mut store = Store::new();
+        let reply = dispatch_argv(&[b"OBJECT".to_vec(), b"HELP".to_vec()], &mut store, 0)
+            .expect("object help");
+        assert_eq!(
+            reply,
+            RespFrame::Array(Some(vec![
+                RespFrame::SimpleString(
+                    "OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string(),
+                ),
+                RespFrame::SimpleString("ENCODING <key>".to_string()),
+                RespFrame::SimpleString(
+                    "    Return the kind of internal representation used in order to store the value"
+                        .to_string(),
+                ),
+                RespFrame::SimpleString("    associated with a <key>.".to_string()),
+                RespFrame::SimpleString("FREQ <key>".to_string()),
+                RespFrame::SimpleString(
+                    "    Return the access frequency index of the <key>. The returned integer is"
+                        .to_string(),
+                ),
+                RespFrame::SimpleString(
+                    "    proportional to the logarithm of the recent access frequency of the key."
+                        .to_string(),
+                ),
+                RespFrame::SimpleString("IDLETIME <key>".to_string()),
+                RespFrame::SimpleString(
+                    "    Return the idle time of the <key>, that is the approximated number of"
+                        .to_string(),
+                ),
+                RespFrame::SimpleString(
+                    "    seconds elapsed since the last access to the key.".to_string(),
+                ),
+                RespFrame::SimpleString("REFCOUNT <key>".to_string()),
+                RespFrame::SimpleString(
+                    "    Return the number of references of the value associated with the specified"
+                        .to_string(),
+                ),
+                RespFrame::SimpleString("    <key>.".to_string()),
+                RespFrame::SimpleString("HELP".to_string()),
+                RespFrame::SimpleString("    Print this help.".to_string()),
+            ]))
+        );
+    }
+
     mod metamorphic {
         use crate::{
-            check_command_arity, command_key_indexes, command_keys, frame_to_argv,
-            is_known_command, is_write_command,
+            apply_client_reply_state, check_command_arity, client_trackinginfo_frame,
+            command_key_indexes, command_keys, frame_to_argv, is_known_command, is_write_command,
+            parse_client_tracking_state,
         };
         use fr_protocol::RespFrame;
+        use fr_store::{ClientReplyState, ClientTrackingState};
         use proptest::prelude::*;
+        use std::collections::BTreeSet;
 
         fn byte_vec_strategy(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
             prop::collection::vec(any::<u8>(), 1..=max_len)
@@ -29589,6 +29840,253 @@ mod tests {
                     argv.extend(args);
                     argv
                 })
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum TrackingFlavor {
+            Plain,
+            Bcast,
+            Optin,
+            Optout,
+        }
+
+        #[derive(Clone, Debug)]
+        struct ValidTrackingCase {
+            flavor: TrackingFlavor,
+            redirect: Option<u16>,
+            prefixes: Vec<Vec<u8>>,
+            noloop: bool,
+            order_seed: u8,
+        }
+
+        #[derive(Clone, Debug)]
+        struct ShadowedRedirectCase {
+            base: ValidTrackingCase,
+            earlier_redirect: u16,
+        }
+
+        fn tracking_token() -> impl Strategy<Value = Vec<u8>> {
+            prop::string::string_regex("[a-z0-9:_-]{1,12}")
+                .expect("valid tracking token regex")
+                .prop_map(|token| token.into_bytes())
+        }
+
+        fn tracking_flavor_strategy() -> impl Strategy<Value = TrackingFlavor> {
+            prop_oneof![
+                Just(TrackingFlavor::Plain),
+                Just(TrackingFlavor::Bcast),
+                Just(TrackingFlavor::Optin),
+                Just(TrackingFlavor::Optout),
+            ]
+        }
+
+        fn valid_tracking_case_strategy() -> impl Strategy<Value = ValidTrackingCase> {
+            (
+                tracking_flavor_strategy(),
+                prop::option::of(1u16..=512),
+                prop::collection::vec(tracking_token(), 0..=4),
+                any::<bool>(),
+                any::<u8>(),
+            )
+                .prop_map(|(flavor, redirect, prefixes, noloop, order_seed)| {
+                    ValidTrackingCase {
+                        flavor,
+                        redirect,
+                        prefixes,
+                        noloop,
+                        order_seed,
+                    }
+                })
+        }
+
+        fn bcast_tracking_case_strategy() -> impl Strategy<Value = ValidTrackingCase> {
+            (
+                prop::option::of(1u16..=512),
+                prop::collection::vec(tracking_token(), 1..=4),
+                any::<bool>(),
+                any::<u8>(),
+            )
+                .prop_map(|(redirect, prefixes, noloop, order_seed)| {
+                    ValidTrackingCase {
+                        flavor: TrackingFlavor::Bcast,
+                        redirect,
+                        prefixes,
+                        noloop,
+                        order_seed,
+                    }
+                })
+        }
+
+        fn shadowed_redirect_case_strategy() -> impl Strategy<Value = ShadowedRedirectCase> {
+            (
+                prop_oneof![
+                    Just(TrackingFlavor::Plain),
+                    Just(TrackingFlavor::Bcast),
+                    Just(TrackingFlavor::Optin),
+                    Just(TrackingFlavor::Optout),
+                ],
+                1u16..=512,
+                1u16..=512,
+                prop::collection::vec(tracking_token(), 0..=4),
+                any::<bool>(),
+                any::<u8>(),
+            )
+                .prop_map(
+                    |(flavor, final_redirect, earlier_redirect, prefixes, noloop, order_seed)| {
+                        let earlier_redirect = if earlier_redirect == final_redirect {
+                            final_redirect.saturating_add(1).max(1)
+                        } else {
+                            earlier_redirect
+                        };
+                        ShadowedRedirectCase {
+                            base: ValidTrackingCase {
+                                flavor,
+                                redirect: Some(final_redirect),
+                                prefixes,
+                                noloop,
+                                order_seed,
+                            },
+                            earlier_redirect,
+                        }
+                    },
+                )
+        }
+
+        impl ValidTrackingCase {
+            fn expected_state(&self) -> ClientTrackingState {
+                let prefixes = if matches!(self.flavor, TrackingFlavor::Bcast) {
+                    self.prefixes.iter().cloned().collect::<BTreeSet<Vec<u8>>>()
+                } else {
+                    BTreeSet::new()
+                };
+
+                ClientTrackingState {
+                    enabled: true,
+                    redirect: self.redirect.map(u64::from),
+                    bcast: matches!(self.flavor, TrackingFlavor::Bcast),
+                    optin: matches!(self.flavor, TrackingFlavor::Optin),
+                    optout: matches!(self.flavor, TrackingFlavor::Optout),
+                    caching: None,
+                    noloop: self.noloop,
+                    prefixes,
+                }
+            }
+        }
+
+        fn canonical_tracking_argv(state: &ClientTrackingState) -> Vec<Vec<u8>> {
+            let mut argv = vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()];
+            if let Some(redirect) = state.redirect {
+                argv.push(b"REDIRECT".to_vec());
+                argv.push(redirect.to_string().into_bytes());
+            }
+            if state.bcast {
+                argv.push(b"BCAST".to_vec());
+            }
+            if state.optin {
+                argv.push(b"OPTIN".to_vec());
+            }
+            if state.optout {
+                argv.push(b"OPTOUT".to_vec());
+            }
+            if state.noloop {
+                argv.push(b"NOLOOP".to_vec());
+            }
+            for prefix in &state.prefixes {
+                argv.push(b"PREFIX".to_vec());
+                argv.push(prefix.clone());
+            }
+            argv
+        }
+
+        fn reordered_tracking_argv(case: &ValidTrackingCase) -> Vec<Vec<u8>> {
+            let state = case.expected_state();
+            let mut argv = vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()];
+            let mut chunks = tracking_chunks(&state, false);
+            reorder_tracking_chunks(&mut chunks, case.order_seed);
+            argv.extend(chunks.into_iter().flatten());
+            argv
+        }
+
+        fn duplicate_prefix_tracking_argv(case: &ValidTrackingCase) -> Vec<Vec<u8>> {
+            let state = case.expected_state();
+            let mut argv = vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()];
+            let mut chunks = tracking_chunks(&state, true);
+            reorder_tracking_chunks(&mut chunks, case.order_seed);
+            argv.extend(chunks.into_iter().flatten());
+            argv
+        }
+
+        fn shadowed_redirect_tracking_argv(case: &ShadowedRedirectCase) -> Vec<Vec<u8>> {
+            let state = case.base.expected_state();
+            let mut argv = vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()];
+            if state.redirect.is_some() {
+                argv.push(b"REDIRECT".to_vec());
+                argv.push(case.earlier_redirect.to_string().into_bytes());
+            }
+            let mut chunks = tracking_chunks(&state, false);
+            reorder_tracking_chunks(&mut chunks, case.base.order_seed);
+            argv.extend(chunks.into_iter().flatten());
+            argv
+        }
+
+        fn tracking_chunks(
+            state: &ClientTrackingState,
+            duplicate_prefixes: bool,
+        ) -> Vec<Vec<Vec<u8>>> {
+            let mut chunks = Vec::new();
+            if let Some(redirect) = state.redirect {
+                chunks.push(vec![
+                    b"REDIRECT".to_vec(),
+                    redirect.to_string().into_bytes(),
+                ]);
+            }
+            if state.bcast {
+                chunks.push(vec![b"BCAST".to_vec()]);
+            }
+            if state.optin {
+                chunks.push(vec![b"OPTIN".to_vec()]);
+            }
+            if state.optout {
+                chunks.push(vec![b"OPTOUT".to_vec()]);
+            }
+            if state.noloop {
+                chunks.push(vec![b"NOLOOP".to_vec()]);
+            }
+            for prefix in &state.prefixes {
+                chunks.push(vec![b"PREFIX".to_vec(), prefix.clone()]);
+                if duplicate_prefixes {
+                    chunks.push(vec![b"PREFIX".to_vec(), prefix.clone()]);
+                }
+            }
+            chunks
+        }
+
+        fn reorder_tracking_chunks(chunks: &mut [Vec<Vec<u8>>], order_seed: u8) {
+            if chunks.len() < 2 {
+                return;
+            }
+            match order_seed % 3 {
+                0 => {}
+                1 => chunks.rotate_left(1),
+                _ => chunks.reverse(),
+            }
+        }
+
+        fn client_reply_mode_argv(mode: &[u8]) -> Vec<Vec<u8>> {
+            vec![b"CLIENT".to_vec(), b"REPLY".to_vec(), mode.to_vec()]
+        }
+
+        fn echo_argv(payload: Vec<u8>) -> Vec<Vec<u8>> {
+            vec![b"ECHO".to_vec(), payload]
+        }
+
+        fn apply_reply_sequence(sequence: &[Vec<Vec<u8>>]) -> ClientReplyState {
+            let mut state = ClientReplyState::default();
+            for argv in sequence {
+                apply_client_reply_state(argv, &mut state)
+                    .expect("metamorphic CLIENT REPLY sequence should stay valid");
+            }
+            state
         }
 
         proptest! {
@@ -29715,6 +30213,157 @@ mod tests {
                 let result_lower = check_command_arity(&lower, argv.len());
 
                 prop_assert_eq!(result_upper, result_lower, "arity check case mismatch");
+            }
+
+            /// MR: Reordering valid CLIENT TRACKING options preserves the effective state and TRACKINGINFO view.
+            #[test]
+            fn mr_client_tracking_option_order_preserves_state(
+                case in valid_tracking_case_strategy()
+            ) {
+                let expected = case.expected_state();
+                let canonical = parse_client_tracking_state(&canonical_tracking_argv(&expected))
+                    .expect("canonical tracking argv should parse");
+                let reordered = parse_client_tracking_state(&reordered_tracking_argv(&case))
+                    .expect("reordered tracking argv should parse");
+
+                prop_assert_eq!(&canonical, &expected, "canonical tracking state mismatch");
+                prop_assert_eq!(&reordered, &expected, "reordered tracking state mismatch");
+                prop_assert_eq!(
+                    client_trackinginfo_frame(&canonical),
+                    client_trackinginfo_frame(&reordered),
+                    "TRACKINGINFO should be invariant under valid option reordering",
+                );
+            }
+
+            /// MR: Repeating the same PREFIX tokens should not change the resulting tracking state.
+            #[test]
+            fn mr_client_tracking_duplicate_prefixes_are_idempotent(
+                case in bcast_tracking_case_strategy()
+            ) {
+                let deduped = parse_client_tracking_state(&reordered_tracking_argv(&case))
+                    .expect("deduped tracking argv should parse");
+                let duplicated = parse_client_tracking_state(&duplicate_prefix_tracking_argv(&case))
+                    .expect("duplicated-prefix tracking argv should parse");
+
+                prop_assert_eq!(
+                    &deduped,
+                    &duplicated,
+                    "duplicate PREFIX options should collapse to the same tracking state",
+                );
+                prop_assert_eq!(
+                    client_trackinginfo_frame(&deduped),
+                    client_trackinginfo_frame(&duplicated),
+                    "TRACKINGINFO should ignore duplicate PREFIX tokens",
+                );
+            }
+
+            /// MR: Earlier REDIRECT options shadowed by a later REDIRECT must not change the final state.
+            #[test]
+            fn mr_client_tracking_shadowed_redirect_last_wins(
+                case in shadowed_redirect_case_strategy()
+            ) {
+                let canonical = parse_client_tracking_state(&reordered_tracking_argv(&case.base))
+                    .expect("canonical redirect tracking argv should parse");
+                let shadowed = parse_client_tracking_state(&shadowed_redirect_tracking_argv(&case))
+                    .expect("shadowed redirect tracking argv should parse");
+
+                prop_assert_eq!(
+                    &canonical,
+                    &shadowed,
+                    "earlier REDIRECT values should be shadowed by the final REDIRECT",
+                );
+                prop_assert_eq!(
+                    client_trackinginfo_frame(&canonical),
+                    client_trackinginfo_frame(&shadowed),
+                    "TRACKINGINFO should reflect only the effective redirect target",
+                );
+            }
+
+            /// MR: Once replies are OFF, additional OFF commands are redundant and must not
+            /// change suppression of later non-CLIENT commands.
+            #[test]
+            fn mr_client_reply_redundant_off_is_idempotent(
+                payload in byte_vec_strategy(16),
+                extra_offs in 1usize..=6,
+            ) {
+                let baseline = apply_reply_sequence(&[
+                    client_reply_mode_argv(b"OFF"),
+                    echo_argv(payload.clone()),
+                ]);
+
+                let mut transformed = vec![client_reply_mode_argv(b"OFF")];
+                transformed.extend(
+                    std::iter::repeat_with(|| client_reply_mode_argv(b"OFF")).take(extra_offs),
+                );
+                transformed.push(echo_argv(payload));
+                let transformed = apply_reply_sequence(&transformed);
+
+                prop_assert_eq!(
+                    &baseline,
+                    &transformed,
+                    "repeating CLIENT REPLY OFF should not change later suppression state",
+                );
+            }
+
+            /// MR: CLIENT REPLY SKIP is absorbed while replies are already OFF.
+            #[test]
+            fn mr_client_reply_skip_is_absorbed_while_off(
+                payload in byte_vec_strategy(16),
+                off_prefix_len in 1usize..=4,
+            ) {
+                let mut baseline = Vec::new();
+                baseline.extend(
+                    std::iter::repeat_with(|| client_reply_mode_argv(b"OFF"))
+                        .take(off_prefix_len),
+                );
+                baseline.push(echo_argv(payload.clone()));
+                let baseline = apply_reply_sequence(&baseline);
+
+                let mut transformed = Vec::new();
+                transformed.extend(
+                    std::iter::repeat_with(|| client_reply_mode_argv(b"OFF"))
+                        .take(off_prefix_len),
+                );
+                transformed.push(client_reply_mode_argv(b"SKIP"));
+                transformed.push(echo_argv(payload));
+                let transformed = apply_reply_sequence(&transformed);
+
+                prop_assert_eq!(
+                    &baseline,
+                    &transformed,
+                    "CLIENT REPLY SKIP should be a no-op while replies are already OFF",
+                );
+            }
+
+            /// MR: CLIENT REPLY ON clears any pending SKIP, so shadowed SKIP prefixes
+            /// must not affect the next non-CLIENT command.
+            #[test]
+            fn mr_client_reply_on_clears_pending_skip(
+                payload in byte_vec_strategy(16),
+                extra_ons in 0usize..=4,
+            ) {
+                let mut baseline = vec![client_reply_mode_argv(b"ON")];
+                baseline.extend(
+                    std::iter::repeat_with(|| client_reply_mode_argv(b"ON")).take(extra_ons),
+                );
+                baseline.push(echo_argv(payload.clone()));
+                let baseline = apply_reply_sequence(&baseline);
+
+                let mut transformed = vec![
+                    client_reply_mode_argv(b"SKIP"),
+                    client_reply_mode_argv(b"ON"),
+                ];
+                transformed.extend(
+                    std::iter::repeat_with(|| client_reply_mode_argv(b"ON")).take(extra_ons),
+                );
+                transformed.push(echo_argv(payload));
+                let transformed = apply_reply_sequence(&transformed);
+
+                prop_assert_eq!(
+                    &baseline,
+                    &transformed,
+                    "CLIENT REPLY ON should clear any pending SKIP before later commands",
+                );
             }
         }
     }

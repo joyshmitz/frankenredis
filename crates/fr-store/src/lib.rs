@@ -133,9 +133,9 @@ pub fn keyspace_events_to_string(flags: u32) -> String {
         if flags & NOTIFY_STREAM != 0 {
             s.push('t');
         }
-        if flags & NOTIFY_NEW != 0 {
-            s.push('n');
-        }
+    }
+    if flags & NOTIFY_NEW != 0 {
+        s.push('n');
     }
     if flags & NOTIFY_KEYSPACE != 0 {
         s.push('K');
@@ -881,6 +881,7 @@ pub struct ClientTrackingState {
     pub bcast: bool,
     pub optin: bool,
     pub optout: bool,
+    pub caching: Option<bool>,
     pub noloop: bool,
     pub prefixes: BTreeSet<Vec<u8>>,
 }
@@ -14280,7 +14281,10 @@ mod tests {
 
     // ── Golden artifact tests ──────────────────────────────────────────
     mod golden {
-        use crate::{DB_NAMESPACE_PREFIX, decode_db_key, encode_db_key, glob_match};
+        use crate::{
+            DB_NAMESPACE_PREFIX, decode_db_key, encode_db_key, glob_match, keyspace_events_parse,
+            keyspace_events_to_string,
+        };
 
         #[test]
         fn golden_encode_db_key_db0_passthrough() {
@@ -14400,12 +14404,57 @@ mod tests {
             assert!(glob_match(b"h[^ae]llo", b"hillo"));
             assert!(!glob_match(b"h[^ae]llo", b"hello"));
         }
+
+        #[test]
+        fn golden_keyspace_events_all_preserves_new_flag() {
+            let flags = keyspace_events_parse("KAn").expect("valid notify-keyspace-events");
+            assert_eq!(keyspace_events_to_string(flags), "AnK");
+        }
     }
 
     // ── Metamorphic property tests ──────────────────────────────────────────
     mod metamorphic {
-        use crate::{decode_db_key, encode_db_key, glob_match};
+        use crate::{
+            decode_db_key, encode_db_key, glob_match, keyspace_events_parse,
+            keyspace_events_to_string,
+        };
         use proptest::prelude::*;
+
+        fn valid_keyspace_char() -> impl Strategy<Value = char> {
+            prop_oneof![
+                Just('A'),
+                Just('g'),
+                Just('$'),
+                Just('l'),
+                Just('s'),
+                Just('h'),
+                Just('z'),
+                Just('x'),
+                Just('e'),
+                Just('K'),
+                Just('E'),
+                Just('t'),
+                Just('m'),
+                Just('n'),
+            ]
+        }
+
+        fn event_only_keyspace_char() -> impl Strategy<Value = char> {
+            prop_oneof![
+                Just('A'),
+                Just('g'),
+                Just('$'),
+                Just('l'),
+                Just('s'),
+                Just('h'),
+                Just('z'),
+                Just('x'),
+                Just('e'),
+                Just('t'),
+                Just('m'),
+                Just('n'),
+            ]
+        }
 
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(200))]
@@ -14483,6 +14532,65 @@ mod tests {
                 string.extend_from_slice(&suffix);
 
                 prop_assert!(glob_match(&pattern, &string), "? must match single char");
+            }
+
+            #[test]
+            fn mr_keyspace_events_order_invariant(classes in prop::collection::vec(valid_keyspace_char(), 0..24)) {
+                let original: String = classes.iter().copied().collect();
+                let reversed: String = classes.iter().rev().copied().collect();
+
+                prop_assert_eq!(
+                    keyspace_events_parse(&original),
+                    keyspace_events_parse(&reversed),
+                    "notify-keyspace-events parsing should be invariant to token order",
+                );
+            }
+
+            #[test]
+            fn mr_keyspace_events_duplicate_tokens_idempotent(
+                prefix in prop::collection::vec(valid_keyspace_char(), 0..16),
+                duplicated in valid_keyspace_char(),
+                suffix in prop::collection::vec(valid_keyspace_char(), 0..16)
+            ) {
+                let mut original_chars = prefix.clone();
+                original_chars.push(duplicated);
+                original_chars.extend_from_slice(&suffix);
+                let original: String = original_chars.iter().copied().collect();
+
+                let mut duplicated_chars = prefix;
+                duplicated_chars.push(duplicated);
+                duplicated_chars.push(duplicated);
+                duplicated_chars.extend_from_slice(&suffix);
+                let duplicated_string: String = duplicated_chars.iter().copied().collect();
+
+                prop_assert_eq!(
+                    keyspace_events_parse(&original),
+                    keyspace_events_parse(&duplicated_string),
+                    "duplicating a notify-keyspace-events token should not change parsed flags",
+                );
+            }
+
+            #[test]
+            fn mr_keyspace_events_k_or_e_free_classes_collapse_to_zero(
+                classes in prop::collection::vec(event_only_keyspace_char(), 1..24)
+            ) {
+                let input: String = classes.iter().copied().collect();
+                let reversed: String = classes.iter().rev().copied().collect();
+
+                prop_assert_eq!(keyspace_events_parse(&input), Some(0));
+                prop_assert_eq!(keyspace_events_parse(&reversed), Some(0));
+            }
+
+            #[test]
+            fn mr_keyspace_events_canonicalization_is_stable(classes in prop::collection::vec(valid_keyspace_char(), 0..24)) {
+                let input: String = classes.iter().copied().collect();
+                let flags = keyspace_events_parse(&input).expect("generated classes must stay valid");
+                let canonical = keyspace_events_to_string(flags);
+                let reparsed = keyspace_events_parse(&canonical).expect("canonical form must parse");
+                let recanonical = keyspace_events_to_string(reparsed);
+
+                prop_assert_eq!(reparsed, flags);
+                prop_assert_eq!(recanonical, canonical);
             }
         }
     }

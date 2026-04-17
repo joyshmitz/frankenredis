@@ -3694,7 +3694,7 @@ mod tests {
 
     #[test]
     fn inline_command_parsing() {
-        let parsed = crate::try_parse_inline(b"SET key value\r\n").expect("parse inline");
+        let parsed = fr_server::try_parse_inline(b"SET key value\r\n").expect("parse inline");
         assert!(
             matches!(parsed, InlineParseResult::Command(_, _)),
             "expected inline command"
@@ -3718,7 +3718,7 @@ mod tests {
 
     #[test]
     fn inline_quoted_strings() {
-        let args = crate::split_inline_args(b"SET key \"hello world\"").expect("parse quoted");
+        let args = fr_server::split_inline_args(b"SET key \"hello world\"").expect("parse quoted");
         assert_eq!(args.len(), 3);
         assert_eq!(args[0], b"SET");
         assert_eq!(args[1], b"key");
@@ -3727,7 +3727,7 @@ mod tests {
 
     #[test]
     fn inline_unbalanced_double_quotes_rejected() {
-        let result = crate::split_inline_args(b"SET key \"unclosed");
+        let result = fr_server::split_inline_args(b"SET key \"unclosed");
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -3737,13 +3737,14 @@ mod tests {
 
     #[test]
     fn inline_unbalanced_single_quotes_rejected() {
-        let result = crate::split_inline_args(b"SET key 'unclosed");
+        let result = fr_server::split_inline_args(b"SET key 'unclosed");
         assert!(result.is_err());
     }
 
     #[test]
     fn inline_unbalanced_quotes_via_try_parse() {
-        let result = crate::try_parse_inline(b"SET key \"unclosed\r\n").expect("should parse ok");
+        let result =
+            fr_server::try_parse_inline(b"SET key \"unclosed\r\n").expect("should parse ok");
         assert!(
             matches!(result, InlineParseResult::ProtocolError(_, _)),
             "expected ProtocolError"
@@ -3757,13 +3758,13 @@ mod tests {
 
     #[test]
     fn inline_incomplete_returns_error() {
-        let result = crate::try_parse_inline(b"SET key value");
+        let result = fr_server::try_parse_inline(b"SET key value");
         assert!(result.is_err());
     }
 
     #[test]
     fn blank_inline_line_is_consumed_without_command() {
-        let result = crate::try_parse_inline(b"\r\n").expect("blank line should parse");
+        let result = fr_server::try_parse_inline(b"\r\n").expect("blank line should parse");
         assert!(
             matches!(result, InlineParseResult::EmptyLine(_)),
             "blank line should not become a command or error"

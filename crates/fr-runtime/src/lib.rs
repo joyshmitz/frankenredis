@@ -7,10 +7,11 @@ use std::{
 };
 
 use fr_command::{
-    CommandError, MigrateKeySpec, apply_client_reply_state, build_unknown_args_preview,
-    client_tracking_getredir_value, client_trackinginfo_frame, command_acl_categories,
-    commands_in_acl_category, dispatch_argv, execute_migrate, frame_to_argv,
-    parse_client_tracking_state, parse_migrate_request, validate_client_caching_mode,
+    CLIENT_PAUSE_MODE_INVALID, CLIENT_PAUSE_TIMEOUT_INVALID, CommandError, MigrateKeySpec,
+    apply_client_caching_mode, apply_client_reply_state, apply_client_tracking_update,
+    build_unknown_args_preview, client_tracking_getredir_value, client_trackinginfo_frame,
+    command_acl_categories, commands_in_acl_category, dispatch_argv, execute_migrate,
+    frame_to_argv, parse_client_tracking_state, parse_migrate_request,
 };
 use fr_config::{
     DecisionAction, DriftSeverity, HardenedDeviationCategory, Mode, RuntimePolicy, ThreatClass,
@@ -1943,8 +1944,6 @@ impl ClientSession {
         self.selected_db = 0;
         self.resp_protocol_version = 2;
         self.client_name = None;
-        self.client_lib_name = None;
-        self.client_lib_ver = None;
         self.client_no_evict = false;
         self.client_no_touch = false;
         self.client_tracking = ClientTrackingState::default();
@@ -6772,9 +6771,7 @@ impl Runtime {
                 }
                 self.session.client_lib_ver = if val.is_empty() { None } else { Some(val) };
             } else {
-                return RespFrame::Error(format!(
-                    "ERR Unrecognized option '{attr}' for CLIENT SETINFO"
-                ));
+                return RespFrame::Error(format!("ERR Unrecognized option '{attr}'"));
             }
             RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("REPLY") {
@@ -6929,7 +6926,7 @@ impl Runtime {
             }
             let timeout_ms = match parse_i64_arg(&argv[2]) {
                 Ok(ms) => ms.max(0) as u64,
-                _ => return CommandError::InvalidInteger.to_resp(),
+                _ => return RespFrame::Error(CLIENT_PAUSE_TIMEOUT_INVALID.to_string()),
             };
             let pause_all = if argv.len() == 4 {
                 let mode =
@@ -6937,7 +6934,7 @@ impl Runtime {
                 match mode {
                     Ok(m) if m.eq_ignore_ascii_case("ALL") => true,
                     Ok(m) if m.eq_ignore_ascii_case("WRITE") => false,
-                    _ => return RespFrame::Error("ERR syntax error".to_string()),
+                    _ => return RespFrame::Error(CLIENT_PAUSE_MODE_INVALID.to_string()),
                 }
             } else {
                 true // default is ALL
@@ -6961,17 +6958,22 @@ impl Runtime {
             RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("TRACKING") {
             // CLIENT TRACKING ON|OFF [REDIRECT id] [PREFIX prefix ...] [BCAST] [OPTIN] [OPTOUT] [NOLOOP]
-            let tracking = match parse_client_tracking_state(argv) {
+            let requested = match parse_client_tracking_state(argv) {
                 Ok(tracking) => tracking,
                 Err(err) => return err.to_resp(),
             };
-            if let Some(target_id) = tracking.redirect
+            if let Some(target_id) = requested.redirect
                 && !self.client_list_sessions().contains_key(&target_id)
             {
                 return RespFrame::Error(
                     "ERR The client ID you want redirect to does not exist".to_string(),
                 );
             }
+            let tracking =
+                match apply_client_tracking_update(&self.session.client_tracking, requested) {
+                    Ok(tracking) => tracking,
+                    Err(err) => return err.to_resp(),
+                };
             self.session.client_tracking = tracking;
             RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("CACHING") {
@@ -6983,7 +6985,7 @@ impl Runtime {
                 Ok(mode) => mode,
                 Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
             };
-            if let Err(err) = validate_client_caching_mode(mode, &self.session.client_tracking) {
+            if let Err(err) = apply_client_caching_mode(mode, &mut self.session.client_tracking) {
                 return err.to_resp();
             }
             RespFrame::SimpleString("OK".to_string())
@@ -7020,7 +7022,9 @@ impl Runtime {
                 } else if mode.eq_ignore_ascii_case("ERROR") {
                     ClientUnblockMode::Error
                 } else {
-                    return RespFrame::Error("ERR syntax error".to_string());
+                    return RespFrame::Error(
+                        "ERR CLIENT UNBLOCK reason should be TIMEOUT or ERROR".to_string(),
+                    );
                 }
             } else {
                 ClientUnblockMode::Timeout
@@ -9484,7 +9488,9 @@ pub mod ecosystem {
 mod tests {
     use std::time::Instant;
 
-    use fr_command::{CommandError, dispatch_argv};
+    use fr_command::{
+        CLIENT_PAUSE_MODE_INVALID, CLIENT_PAUSE_TIMEOUT_INVALID, CommandError, dispatch_argv,
+    };
     use fr_config::{
         DecisionAction, DriftSeverity, HardenedDeviationCategory, Mode, RuntimePolicy, ThreatClass,
         TlsAuthClients, TlsConfig, TlsProtocol,
@@ -10502,6 +10508,17 @@ mod tests {
                 RespFrame::Array(Some(Vec::new())),
             ]))
         );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CLIENT", b"SETINFO", b"LIB-NAME", b"redis-rs"]),
+                2
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"SETINFO", b"LIB-VER", b"1.2.3"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
         rt.session.selected_db = 7;
 
         assert_eq!(
@@ -10512,6 +10529,8 @@ mod tests {
         assert_eq!(rt.session.selected_db, 0);
         assert_eq!(rt.session.resp_protocol_version, 2);
         assert_eq!(rt.session.client_name, None);
+        assert_eq!(rt.session.client_lib_name.as_deref(), Some("redis-rs"));
+        assert_eq!(rt.session.client_lib_ver.as_deref(), Some("1.2.3"));
         assert_eq!(
             rt.execute_frame(command(&[b"GET", b"k"]), 3),
             RespFrame::Error("NOAUTH Authentication required.".to_string())
@@ -11400,18 +11419,26 @@ mod tests {
     fn client_tracking_stateful_info_matches_redis() {
         let mut rt = Runtime::default_strict();
         assert_eq!(
-            rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"ON"]), 1),
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"ON", b"OPTIN"]), 1),
             RespFrame::SimpleString("OK".to_string())
         );
         assert_eq!(
-            rt.execute_frame(command(&[b"CLIENT", b"GETREDIR"]), 2),
+            rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"YES"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"GETREDIR"]), 3),
             RespFrame::Integer(0)
         );
         assert_eq!(
-            rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 3),
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 4),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"flags".to_vec())),
-                RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"on".to_vec()))])),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"optin".to_vec())),
+                    RespFrame::BulkString(Some(b"caching-yes".to_vec())),
+                ])),
                 RespFrame::BulkString(Some(b"redirect".to_vec())),
                 RespFrame::Integer(0),
                 RespFrame::BulkString(Some(b"prefixes".to_vec())),
@@ -11431,12 +11458,51 @@ mod tests {
                     b"PREFIX",
                     b"bar",
                 ]),
-                4,
+                5,
+            ),
+            RespFrame::Error("ERR You can't switch BCAST mode on/off before disabling tracking for this client, and then re-enabling it with a different mode.".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 6),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"optin".to_vec())),
+                    RespFrame::BulkString(Some(b"caching-yes".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"redirect".to_vec())),
+                RespFrame::Integer(0),
+                RespFrame::BulkString(Some(b"prefixes".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CLIENT", b"TRACKING", b"OFF", b"PREFIX", b"ignored"]),
+                7
             ),
             RespFrame::SimpleString("OK".to_string())
         );
         assert_eq!(
-            rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 5),
+            rt.execute_frame(
+                command(&[
+                    b"CLIENT",
+                    b"TRACKING",
+                    b"ON",
+                    b"NOLOOP",
+                    b"PREFIX",
+                    b"foo",
+                    b"BCAST",
+                    b"PREFIX",
+                    b"bar",
+                ]),
+                8,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 9),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"flags".to_vec())),
                 RespFrame::Array(Some(vec![
@@ -11454,14 +11520,11 @@ mod tests {
             ]))
         );
         assert_eq!(
-            rt.execute_frame(
-                command(&[b"CLIENT", b"TRACKING", b"OFF", b"PREFIX", b"ignored"]),
-                6,
-            ),
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"OFF"]), 10),
             RespFrame::SimpleString("OK".to_string())
         );
         assert_eq!(
-            rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 7),
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 11),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"flags".to_vec())),
                 RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"off".to_vec()))])),
@@ -11499,14 +11562,28 @@ mod tests {
         );
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"ON", b"OPTOUT"]), 5),
+            RespFrame::Error(
+                "ERR You can't switch OPTIN/OPTOUT mode before disabling tracking for this client, and then re-enabling it with a different mode.".to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"YES"]), 6),
             RespFrame::SimpleString("OK".to_string())
         );
         assert_eq!(
-            rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"NO"]), 6),
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"OFF"]), 7),
             RespFrame::SimpleString("OK".to_string())
         );
         assert_eq!(
-            rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"YES"]), 7),
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"ON", b"OPTOUT"]), 8),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"NO"]), 9),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"YES"]), 10),
             RespFrame::Error(
                 "ERR CLIENT CACHING YES is only valid when tracking is enabled in OPTIN mode."
                     .to_string()
@@ -11965,7 +12042,7 @@ mod tests {
         );
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"UNBLOCK", b"1", b"wat"]), 1),
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error("ERR CLIENT UNBLOCK reason should be TIMEOUT or ERROR".to_string())
         );
     }
 
@@ -12053,6 +12130,26 @@ mod tests {
             RespFrame::SimpleString("OK".to_string())
         );
         assert!(!rt.is_client_paused(551));
+    }
+
+    #[test]
+    fn client_pause_rejects_invalid_mode_with_redis_error() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"PAUSE", b"100", b"wat"]), 500),
+            RespFrame::Error(CLIENT_PAUSE_MODE_INVALID.to_string())
+        );
+    }
+
+    #[test]
+    fn client_pause_rejects_invalid_timeout_with_redis_error() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"PAUSE", b"notanumber"]), 500),
+            RespFrame::Error(CLIENT_PAUSE_TIMEOUT_INVALID.to_string())
+        );
     }
 
     #[test]
