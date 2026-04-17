@@ -34,6 +34,9 @@ path = "../crates/fr-repl"
 [dependencies.fr-config]
 path = "../crates/fr-config"
 
+[dependencies.fr-server]
+path = "../crates/fr-server"
+
 [[bin]]
 name = "fuzz_resp_parser"
 path = "fuzz_targets/fuzz_resp_parser.rs"
@@ -135,6 +138,13 @@ bench = false
 [[bin]]
 name = "fuzz_rdb_structured"
 path = "fuzz_targets/fuzz_rdb_structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_inline_parser"
+path = "fuzz_targets/fuzz_inline_parser.rs"
 test = false
 doc = false
 bench = false
