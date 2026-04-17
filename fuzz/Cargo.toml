@@ -85,6 +85,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_runtime_execute_bytes"
+path = "fuzz_targets/fuzz_runtime_execute_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_function_restore"
 path = "fuzz_targets/fuzz_function_restore.rs"
 test = false

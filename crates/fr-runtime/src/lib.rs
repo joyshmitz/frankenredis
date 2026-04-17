@@ -9515,6 +9515,21 @@ mod tests {
         ))
     }
 
+    fn parse_all_resp_frames(bytes: &[u8]) -> Vec<RespFrame> {
+        let mut frames = Vec::new();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let parsed = parse_frame(&bytes[offset..]).expect("runtime output must be valid RESP");
+            assert!(
+                parsed.consumed > 0,
+                "runtime output parser must make progress"
+            );
+            offset += parsed.consumed;
+            frames.push(parsed.frame);
+        }
+        frames
+    }
+
     fn argv(parts: &[&[u8]]) -> Vec<Vec<u8>> {
         parts.iter().map(|part| (*part).to_vec()).collect()
     }
@@ -13118,6 +13133,22 @@ mod tests {
         assert_eq!(event.severity, DriftSeverity::S0);
         assert_eq!(event.decision_action, DecisionAction::FailClosed);
         assert_eq!(event.reason_code, "protocol_parse_failure");
+    }
+
+    #[test]
+    fn execute_bytes_matches_execute_frame_for_sequence_replies() {
+        let raw = command(&[b"SUBSCRIBE", b"alpha", b"beta"]).to_bytes();
+        let mut bytes_runtime = Runtime::default_strict();
+        let mut frame_runtime = Runtime::default_strict();
+
+        let bytes_reply = parse_all_resp_frames(&bytes_runtime.execute_bytes(&raw, 0));
+        let frame_reply = parse_all_resp_frames(
+            &frame_runtime
+                .execute_frame(command(&[b"SUBSCRIBE", b"alpha", b"beta"]), 0)
+                .to_bytes(),
+        );
+
+        assert_eq!(bytes_reply, frame_reply);
     }
 
     #[test]
