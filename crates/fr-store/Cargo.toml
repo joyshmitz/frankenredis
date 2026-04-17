@@ -7,3 +7,6 @@ edition = "2024"
 fr-expire = { version = "0.1.0", path = "../fr-expire" }
 fr-persist = { version = "0.1.0", path = "../fr-persist" }
 libc = "0.2.184"
+
+[dev-dependencies]
+proptest = "1"

@@ -14178,4 +14178,207 @@ mod tests {
         assert_eq!(store.instantaneous_ops_per_sec(), 0);
         assert_eq!(store.instantaneous_input_kbps(), 0.0);
     }
+
+    // ── Golden artifact tests ──────────────────────────────────────────
+    mod golden {
+        use crate::{decode_db_key, encode_db_key, glob_match, DB_NAMESPACE_PREFIX};
+
+        #[test]
+        fn golden_encode_db_key_db0_passthrough() {
+            let key = b"mykey";
+            let encoded = encode_db_key(0, key);
+            assert_eq!(encoded, key.to_vec(), "DB 0 keys must be unchanged");
+        }
+
+        #[test]
+        fn golden_encode_db_key_db1_prefix() {
+            let key = b"k";
+            let encoded = encode_db_key(1, key);
+            let golden = b"\0frdb\0\x00\x00\x00\x00\x00\x00\x00\x01k";
+            assert_eq!(encoded, golden.to_vec(), "DB 1 key encoding changed");
+        }
+
+        #[test]
+        fn golden_encode_db_key_db15_prefix() {
+            let key = b"test";
+            let encoded = encode_db_key(15, key);
+            let golden = b"\0frdb\0\x00\x00\x00\x00\x00\x00\x00\x0ftest";
+            assert_eq!(encoded, golden.to_vec(), "DB 15 key encoding changed");
+        }
+
+        #[test]
+        fn golden_db_namespace_prefix() {
+            assert_eq!(
+                DB_NAMESPACE_PREFIX,
+                b"\0frdb\0",
+                "DB namespace prefix must be \\0frdb\\0"
+            );
+        }
+
+        #[test]
+        fn golden_decode_db_key_roundtrip() {
+            for db in [1, 5, 15] {
+                let key = b"testkey";
+                let encoded = encode_db_key(db, key);
+                let (decoded_db, decoded_key) = decode_db_key(&encoded).expect("decode must succeed");
+                assert_eq!(decoded_db, db);
+                assert_eq!(decoded_key, key);
+            }
+        }
+
+        #[test]
+        fn golden_decode_db_key_rejects_unprefixed() {
+            let unprefixed = b"plainkey";
+            assert!(decode_db_key(unprefixed).is_none(), "Unprefixed keys must return None");
+        }
+
+        #[test]
+        fn golden_decode_db_key_rejects_short() {
+            let short = b"\0frdb\0\x00\x00"; // Too short for full db number
+            assert!(decode_db_key(short).is_none(), "Short keys must return None");
+        }
+
+        #[test]
+        fn golden_glob_match_exact() {
+            assert!(glob_match(b"hello", b"hello"));
+            assert!(!glob_match(b"hello", b"world"));
+        }
+
+        #[test]
+        fn golden_glob_match_star_any() {
+            assert!(glob_match(b"*", b"anything"));
+            assert!(glob_match(b"*", b""));
+        }
+
+        #[test]
+        fn golden_glob_match_question_single() {
+            assert!(glob_match(b"h?llo", b"hello"));
+            assert!(glob_match(b"h?llo", b"hallo"));
+            assert!(!glob_match(b"h?llo", b"hllo")); // ? must match exactly one char
+        }
+
+        #[test]
+        fn golden_glob_match_prefix() {
+            assert!(glob_match(b"prefix*", b"prefix"));
+            assert!(glob_match(b"prefix*", b"prefix_suffix"));
+            assert!(!glob_match(b"prefix*", b"other"));
+        }
+
+        #[test]
+        fn golden_glob_match_suffix() {
+            assert!(glob_match(b"*suffix", b"suffix"));
+            assert!(glob_match(b"*suffix", b"prefix_suffix"));
+            assert!(!glob_match(b"*suffix", b"suffixnot"));
+        }
+
+        #[test]
+        fn golden_glob_match_escape() {
+            assert!(glob_match(b"hello\\*world", b"hello*world"));
+            assert!(!glob_match(b"hello\\*world", b"helloXworld"));
+        }
+
+        #[test]
+        fn golden_glob_match_bracket() {
+            assert!(glob_match(b"h[ae]llo", b"hello"));
+            assert!(glob_match(b"h[ae]llo", b"hallo"));
+            assert!(!glob_match(b"h[ae]llo", b"hillo"));
+        }
+
+        #[test]
+        fn golden_glob_match_bracket_range() {
+            assert!(glob_match(b"key[0-9]", b"key5"));
+            assert!(!glob_match(b"key[0-9]", b"keya"));
+        }
+
+        #[test]
+        fn golden_glob_match_bracket_negation() {
+            assert!(glob_match(b"h[^ae]llo", b"hillo"));
+            assert!(!glob_match(b"h[^ae]llo", b"hello"));
+        }
+    }
+
+    // ── Metamorphic property tests ──────────────────────────────────────────
+    mod metamorphic {
+        use crate::{decode_db_key, encode_db_key, glob_match};
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(200))]
+
+            #[test]
+            fn mr_encode_decode_roundtrip(db in 1usize..16, key in prop::collection::vec(any::<u8>(), 0..64)) {
+                let encoded = encode_db_key(db, &key);
+                let (decoded_db, decoded_key) = decode_db_key(&encoded).expect("roundtrip must decode");
+                prop_assert_eq!(decoded_db, db);
+                prop_assert_eq!(decoded_key, &key[..]);
+            }
+
+            #[test]
+            fn mr_db0_is_identity(key in prop::collection::vec(any::<u8>(), 0..64)) {
+                let encoded = encode_db_key(0, &key);
+                prop_assert_eq!(encoded, key, "DB 0 encoding must be identity");
+            }
+
+            #[test]
+            fn mr_glob_star_matches_all(s in prop::collection::vec(any::<u8>(), 0..32)) {
+                prop_assert!(glob_match(b"*", &s), "* must match any string");
+            }
+
+            #[test]
+            fn mr_glob_empty_pattern_matches_empty_string(s in prop::collection::vec(any::<u8>(), 0..32)) {
+                let matches_empty = glob_match(b"", &s);
+                prop_assert_eq!(matches_empty, s.is_empty(), "Empty pattern matches only empty string");
+            }
+
+            #[test]
+            fn mr_glob_exact_match_reflexive(s in prop::collection::vec(any::<u8>().prop_filter("no special chars", |b| !matches!(*b, b'*' | b'?' | b'[' | b']' | b'\\')), 1..16)) {
+                prop_assert!(glob_match(&s, &s), "Pattern must match itself when no special chars");
+            }
+
+            #[test]
+            fn mr_glob_prefix_star_always_matches_prefix(
+                prefix in prop::collection::vec(any::<u8>().prop_filter("no special", |b| !matches!(*b, b'*' | b'?' | b'[' | b']' | b'\\')), 1..8),
+                suffix in prop::collection::vec(any::<u8>(), 0..16)
+            ) {
+                let mut pattern = prefix.clone();
+                pattern.push(b'*');
+
+                let mut string = prefix.clone();
+                string.extend_from_slice(&suffix);
+
+                prop_assert!(glob_match(&pattern, &string), "prefix* must match prefix+anything");
+            }
+
+            #[test]
+            fn mr_glob_star_suffix_matches_ending(
+                prefix in prop::collection::vec(any::<u8>(), 0..16),
+                suffix in prop::collection::vec(any::<u8>().prop_filter("no special", |b| !matches!(*b, b'*' | b'?' | b'[' | b']' | b'\\')), 1..8)
+            ) {
+                let mut pattern = vec![b'*'];
+                pattern.extend_from_slice(&suffix);
+
+                let mut string = prefix;
+                string.extend_from_slice(&suffix);
+
+                prop_assert!(glob_match(&pattern, &string), "*suffix must match anything+suffix");
+            }
+
+            #[test]
+            fn mr_glob_question_requires_one_char(
+                prefix in prop::collection::vec(any::<u8>().prop_filter("no special", |b| !matches!(*b, b'*' | b'?' | b'[' | b']' | b'\\')), 0..4),
+                middle in any::<u8>().prop_filter("no special", |b| !matches!(*b, b'*' | b'?' | b'[' | b']' | b'\\')),
+                suffix in prop::collection::vec(any::<u8>().prop_filter("no special", |b| !matches!(*b, b'*' | b'?' | b'[' | b']' | b'\\')), 0..4)
+            ) {
+                let mut pattern = prefix.clone();
+                pattern.push(b'?');
+                pattern.extend_from_slice(&suffix);
+
+                let mut string = prefix;
+                string.push(middle);
+                string.extend_from_slice(&suffix);
+
+                prop_assert!(glob_match(&pattern, &string), "? must match single char");
+            }
+        }
+    }
 }
