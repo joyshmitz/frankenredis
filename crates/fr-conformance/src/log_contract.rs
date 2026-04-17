@@ -228,16 +228,64 @@ pub fn golden_packet_logs(packet_id: &str) -> Result<[StructuredLogEvent; 2], St
     }
 
     let packet_slug = packet_id.to_ascii_lowercase();
-    let unit_test_id = format!("{packet_slug}::unit_contract_smoke");
-    let e2e_scenario_id = format!("{packet_slug}::e2e_contract_smoke");
     let artifact_file =
         format!("crates/fr-conformance/fixtures/log_contract_v1/{packet_id}.golden.jsonl");
+    // These ids and replay commands are part of the user-journey corpus contract,
+    // so the packet goldens must preserve the existing hook names exactly.
+    let (unit_test_id, unit_replay_cmd, e2e_scenario_id, e2e_replay_cmd) = match packet_id {
+        "FR-P2C-004" => (
+            "fr_p2c_004_u005_noauth_gate_precedes_dispatch_and_logs".to_string(),
+            "FR_MODE=strict FR_SEED=17 rch exec -- cargo test -p fr-conformance -- --nocapture fr_p2c_004_u005_noauth_gate_precedes_dispatch_and_logs".to_string(),
+            "fr_p2c_004_e2e_contract_smoke".to_string(),
+            "FR_MODE=hardened FR_SEED=42 rch exec -- cargo test -p fr-conformance --test smoke -- --nocapture fr_p2c_004_e2e_contract_smoke".to_string(),
+        ),
+        "FR-P2C-005" => (
+            "fr_p2c_005_e001_replay_fixture_passes_with_schema_contract".to_string(),
+            "FR_MODE=strict FR_SEED=17 rch exec -- cargo test -p fr-conformance -- --nocapture fr_p2c_005_e001_replay_fixture_passes_with_schema_contract".to_string(),
+            "fr_p2c_005_e2e_contract_smoke".to_string(),
+            "FR_MODE=hardened FR_SEED=42 rch exec -- cargo test -p fr-conformance --test smoke -- --nocapture fr_p2c_005_e2e_contract_smoke".to_string(),
+        ),
+        "FR-P2C-006" => (
+            "fr_p2c_006_f_handshake_contract_vectors_are_enforced".to_string(),
+            "FR_MODE=strict FR_SEED=17 rch exec -- cargo test -p fr-conformance -- --nocapture fr_p2c_006_f_handshake_contract_vectors_are_enforced".to_string(),
+            "fr_p2c_006_e2e_contract_smoke".to_string(),
+            "FR_MODE=hardened FR_SEED=42 rch exec -- cargo test -p fr-conformance --test smoke -- --nocapture fr_p2c_006_e2e_contract_smoke".to_string(),
+        ),
+        "FR-P2C-007" => (
+            "fr_p2c_007_u001_cluster_subcommand_router_contract_and_logs".to_string(),
+            "FR_MODE=strict FR_SEED=17 rch exec -- cargo test -p fr-conformance -- --nocapture fr_p2c_007_u001_cluster_subcommand_router_contract_and_logs".to_string(),
+            "fr_p2c_007_e2e_contract_smoke".to_string(),
+            "FR_MODE=hardened FR_SEED=42 rch exec -- cargo test -p fr-conformance --test smoke -- --nocapture fr_p2c_007_e2e_contract_smoke".to_string(),
+        ),
+        "FR-P2C-008" => (
+            format!("{packet_slug}::unit_contract_smoke"),
+            unit_replay_cmd("fr-runtime", &format!("{packet_slug}::unit_contract_smoke"), LogMode::Strict, 17),
+            "fr_p2c_008_e2e_contract_smoke".to_string(),
+            "FR_MODE=hardened FR_SEED=42 rch exec -- cargo test -p fr-conformance --test smoke -- --nocapture fr_p2c_008_e2e_contract_smoke".to_string(),
+        ),
+        "FR-P2C-009" => (
+            "fr_p2c_009_e013_strict_runtime_tls_rejection_matches_expected_threat_contract".to_string(),
+            "FR_MODE=strict FR_SEED=17 rch exec -- cargo test -p fr-conformance -- --nocapture fr_p2c_009_e013_strict_runtime_tls_rejection_matches_expected_threat_contract".to_string(),
+            "fr_p2c_009_e2e_contract_smoke".to_string(),
+            "FR_MODE=hardened FR_SEED=42 rch exec -- cargo test -p fr-conformance --test smoke -- --nocapture fr_p2c_009_e2e_contract_smoke".to_string(),
+        ),
+        _ => {
+            let unit_test_id = format!("{packet_slug}::unit_contract_smoke");
+            let e2e_scenario_id = format!("{packet_slug}::e2e_contract_smoke");
+            (
+                unit_test_id.clone(),
+                unit_replay_cmd("fr-runtime", &unit_test_id, LogMode::Strict, 17),
+                e2e_scenario_id.clone(),
+                e2e_replay_cmd(&e2e_scenario_id, LogMode::Hardened, 42),
+            )
+        }
+    };
 
     let unit = StructuredLogEvent {
         schema_version: STRUCTURED_LOG_SCHEMA_VERSION.to_string(),
         ts_utc: "2026-02-14T00:00:00Z".to_string(),
         suite_id: format!("unit::{packet_slug}"),
-        test_or_scenario_id: unit_test_id.clone(),
+        test_or_scenario_id: unit_test_id,
         packet_id: packet_id.to_string(),
         mode: LogMode::Strict,
         verification_path: VerificationPath::Unit,
@@ -247,7 +295,7 @@ pub fn golden_packet_logs(packet_id: &str) -> Result<[StructuredLogEvent; 2], St
         duration_ms: 7,
         outcome: LogOutcome::Pass,
         reason_code: "parity_ok".to_string(),
-        replay_cmd: unit_replay_cmd("fr-runtime", &unit_test_id, LogMode::Strict, 17),
+        replay_cmd: unit_replay_cmd,
         artifact_refs: vec![
             "TEST_LOG_SCHEMA_V1.md".to_string(),
             "crates/fr-conformance/fixtures/log_contract_v1/manifest.json".to_string(),
@@ -263,7 +311,7 @@ pub fn golden_packet_logs(packet_id: &str) -> Result<[StructuredLogEvent; 2], St
         schema_version: STRUCTURED_LOG_SCHEMA_VERSION.to_string(),
         ts_utc: "2026-02-14T00:00:01Z".to_string(),
         suite_id: format!("e2e::{packet_slug}"),
-        test_or_scenario_id: e2e_scenario_id.clone(),
+        test_or_scenario_id: e2e_scenario_id,
         packet_id: packet_id.to_string(),
         mode: LogMode::Hardened,
         verification_path: VerificationPath::E2e,
@@ -273,7 +321,7 @@ pub fn golden_packet_logs(packet_id: &str) -> Result<[StructuredLogEvent; 2], St
         duration_ms: 11,
         outcome: LogOutcome::Pass,
         reason_code: "journey_ok".to_string(),
-        replay_cmd: e2e_replay_cmd(&e2e_scenario_id, LogMode::Hardened, 42),
+        replay_cmd: e2e_replay_cmd,
         artifact_refs: vec![
             "TEST_LOG_SCHEMA_V1.md".to_string(),
             "crates/fr-conformance/fixtures/log_contract_v1/manifest.json".to_string(),
