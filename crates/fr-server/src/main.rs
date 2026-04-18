@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use fr_command::pubsub_message_to_frame;
-use fr_config::RuntimePolicy;
+use fr_config::{RuntimePolicy, parse_redis_config_bytes};
 use fr_eventloop::{
     EventLoopMode, TickBudget, plan_tick, validate_accept_path, validate_read_path,
 };
@@ -227,12 +227,145 @@ OPTIONS:\n\
   --bind <ADDR>              Listen address (default: 127.0.0.1)\n\
   --port <PORT>              Listen port (default: {DEFAULT_PORT})\n\
   --mode <MODE>              Runtime mode: strict or hardened (default: hardened)\n\
+  --config <PATH>            Load redis.conf startup directives and use path for CONFIG REWRITE\n\
   --aof <PATH>               AOF persistence file path (enables persistence)\n\
   --rdb <PATH>               RDB snapshot file path (enables SAVE/BGSAVE snapshots)\n\
   --replicaof <HOST> <PORT>  Configure this server as a replica of the given primary\n\
   --masteruser <USERNAME>    Authenticate to the configured primary as this ACL user\n\
   --masterauth <PASSWORD>    Authenticate to the configured primary with this password\n\
   --help                     Show this help\n"
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct StartupConfig {
+    bind_addr: Option<String>,
+    port: Option<u16>,
+    requirepass: Option<Option<Vec<u8>>>,
+    masteruser: Option<Option<String>>,
+    masterauth: Option<Option<String>>,
+    replicaof: Option<Option<(String, u16)>>,
+}
+
+fn load_startup_config_file(path: &str) -> Result<StartupConfig, String> {
+    let input =
+        std::fs::read(path).map_err(|err| format!("failed to read config file '{path}': {err}"))?;
+    let parsed = parse_redis_config_bytes(&input)
+        .map_err(|err| format!("failed to parse config file '{path}': {err}"))?;
+    startup_config_from_directives(&parsed.directives)
+}
+
+fn startup_config_from_directives(
+    directives: &[fr_config::ParsedConfigDirective],
+) -> Result<StartupConfig, String> {
+    let mut config = StartupConfig::default();
+
+    for directive in directives {
+        match directive.name.as_slice() {
+            b"bind" => {
+                if directive.args.is_empty() {
+                    return Err(config_directive_error(
+                        directive,
+                        "bind requires at least one address",
+                    ));
+                }
+                config.bind_addr = Some(config_arg_string(directive, 0)?);
+            }
+            b"port" => {
+                expect_config_arg_count(directive, 1)?;
+                config.port = Some(config_arg_port(directive, 0)?);
+            }
+            b"requirepass" => {
+                expect_config_arg_count(directive, 1)?;
+                config.requirepass = Some(if directive.args[0].is_empty() {
+                    None
+                } else {
+                    Some(directive.args[0].clone())
+                });
+            }
+            b"masteruser" => {
+                expect_config_arg_count(directive, 1)?;
+                config.masteruser = Some(non_empty_config_arg_string(directive, 0)?);
+            }
+            b"masterauth" => {
+                expect_config_arg_count(directive, 1)?;
+                config.masterauth = Some(non_empty_config_arg_string(directive, 0)?);
+            }
+            b"replicaof" | b"slaveof" => {
+                expect_config_arg_count(directive, 2)?;
+                let host = config_arg_string(directive, 0)?;
+                let port_text = config_arg_string(directive, 1)?;
+                if host.eq_ignore_ascii_case("no") && port_text.eq_ignore_ascii_case("one") {
+                    config.replicaof = Some(None);
+                } else {
+                    let port = config_arg_port(directive, 1)?;
+                    config.replicaof = Some(Some((host, port)));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(config)
+}
+
+fn expect_config_arg_count(
+    directive: &fr_config::ParsedConfigDirective,
+    expected: usize,
+) -> Result<(), String> {
+    if directive.args.len() == expected {
+        return Ok(());
+    }
+    Err(config_directive_error(
+        directive,
+        &format!(
+            "expected {expected} argument(s), got {}",
+            directive.args.len()
+        ),
+    ))
+}
+
+fn config_arg_string(
+    directive: &fr_config::ParsedConfigDirective,
+    index: usize,
+) -> Result<String, String> {
+    String::from_utf8(directive.args[index].clone()).map_err(|_| {
+        config_directive_error(
+            directive,
+            &format!("argument {} must be valid UTF-8", index + 1),
+        )
+    })
+}
+
+fn non_empty_config_arg_string(
+    directive: &fr_config::ParsedConfigDirective,
+    index: usize,
+) -> Result<Option<String>, String> {
+    if directive.args[index].is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(config_arg_string(directive, index)?))
+    }
+}
+
+fn config_arg_port(
+    directive: &fr_config::ParsedConfigDirective,
+    index: usize,
+) -> Result<u16, String> {
+    let value = config_arg_string(directive, index)?;
+    value.parse::<u16>().map_err(|_| {
+        config_directive_error(
+            directive,
+            &format!("argument {} must be a TCP port", index + 1),
+        )
+    })
+}
+
+fn config_directive_error(directive: &fr_config::ParsedConfigDirective, message: &str) -> String {
+    format!(
+        "invalid config directive '{}' on line {}: {message}",
+        String::from_utf8_lossy(&directive.name),
+        directive.line_number
     )
 }
 
@@ -248,10 +381,16 @@ fn main() -> ExitCode {
     let mut replicaof: Option<(String, u16)> = None;
     let mut masteruser: Option<String> = None;
     let mut masterauth: Option<String> = None;
+    let mut cli_port = false;
+    let mut cli_bind_addr = false;
+    let mut cli_replicaof = false;
+    let mut cli_masteruser = false;
+    let mut cli_masterauth = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--port" => {
+                cli_port = true;
                 i += 1;
                 if i >= args.len() {
                     eprintln!("error: --port requires a value");
@@ -266,6 +405,7 @@ fn main() -> ExitCode {
                 };
             }
             "--bind" => {
+                cli_bind_addr = true;
                 i += 1;
                 if i >= args.len() {
                     eprintln!("error: --bind requires an address");
@@ -312,6 +452,7 @@ fn main() -> ExitCode {
                 config_path = Some(args[i].clone());
             }
             "--replicaof" => {
+                cli_replicaof = true;
                 i += 1;
                 if i >= args.len() {
                     eprintln!("error: --replicaof requires a host and port");
@@ -333,6 +474,7 @@ fn main() -> ExitCode {
                 replicaof = Some((host, replica_port));
             }
             "--masteruser" => {
+                cli_masteruser = true;
                 i += 1;
                 if i >= args.len() {
                     eprintln!("error: --masteruser requires a username");
@@ -341,6 +483,7 @@ fn main() -> ExitCode {
                 masteruser = Some(args[i].clone());
             }
             "--masterauth" => {
+                cli_masterauth = true;
                 i += 1;
                 if i >= args.len() {
                     eprintln!("error: --masterauth requires a password");
@@ -361,6 +504,33 @@ fn main() -> ExitCode {
         i += 1;
     }
 
+    let mut requirepass = None;
+    if let Some(path) = &config_path {
+        let startup_config = match load_startup_config_file(path) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::from(1);
+            }
+        };
+        if !cli_bind_addr && let Some(config_bind_addr) = startup_config.bind_addr {
+            bind_addr = config_bind_addr;
+        }
+        if !cli_port && let Some(config_port) = startup_config.port {
+            port = config_port;
+        }
+        if !cli_replicaof && let Some(config_replicaof) = startup_config.replicaof {
+            replicaof = config_replicaof;
+        }
+        if !cli_masteruser && let Some(config_masteruser) = startup_config.masteruser {
+            masteruser = config_masteruser;
+        }
+        if !cli_masterauth && let Some(config_masterauth) = startup_config.masterauth {
+            masterauth = config_masterauth;
+        }
+        requirepass = startup_config.requirepass;
+    }
+
     let policy = match mode_str {
         "strict" => RuntimePolicy::default(),
         _ => RuntimePolicy::hardened(),
@@ -368,6 +538,9 @@ fn main() -> ExitCode {
     let mut runtime = Runtime::new(policy);
     runtime.set_server_port(port);
     runtime.set_config_file_path(config_path.map(std::path::PathBuf::from));
+    if let Some(config_requirepass) = requirepass {
+        runtime.set_requirepass(config_requirepass);
+    }
     runtime.set_masteruser(masteruser.map(String::into_bytes));
     runtime.set_masterauth(masterauth.map(String::into_bytes));
     if let Some((host, primary_port)) = replicaof {
@@ -2498,14 +2671,14 @@ mod tests {
     use crate::{
         BlockingOp, CheckBlockedClientsContext, InlineParseResult, PendingClientUnblocksContext,
         REPLICA_ACK_INTERVAL_MS, REPLICA_RECONNECT_BACKOFF_MS, ReplicaPrimaryConnection,
-        ReplicaSyncState, apply_pending_client_unblocks, check_blocked_clients,
+        ReplicaSyncState, StartupConfig, apply_pending_client_unblocks, check_blocked_clients,
         consume_complete_replication_prefix, drain_replica_stream, drive_replica_sync,
         encode_eof_marked_replication_snapshot, encode_replication_snapshot, find_crlf,
         parse_blocking_deadline, parse_xread_block_deadline_argv, read_frame_from_stream,
         read_replication_snapshot_from_stream, replica_handshake_frame,
         replica_handshake_read_timeout, replication_follow_up_bytes, resolve_xread_block_argv,
-        server_help_text, should_try_inline_parsing, sync_replica_with_primary,
-        try_build_blocked_state, try_fulfill_blocked,
+        server_help_text, should_try_inline_parsing, startup_config_from_directives,
+        sync_replica_with_primary, try_build_blocked_state, try_fulfill_blocked,
     };
     use fr_config::RuntimePolicy;
     use fr_protocol::{ParserConfig, RespFrame};
@@ -2518,6 +2691,46 @@ mod tests {
     fn server_bootstrap_creates_runtime() {
         let _strict = Runtime::new(RuntimePolicy::default());
         let _hardened = Runtime::new(RuntimePolicy::hardened());
+    }
+
+    #[test]
+    fn startup_config_from_directives_extracts_basic_redis_conf_subset() {
+        let parsed = fr_config::parse_redis_config(
+            "bind 127.0.0.1 ::1\n\
+             port 6381\n\
+             requirepass \"top secret\"\n\
+             masteruser repl\n\
+             masterauth repl-secret\n\
+             replicaof primary.local 6380\n\
+             timeout 30\n",
+        )
+        .expect("parse config file");
+
+        let config = startup_config_from_directives(&parsed.directives)
+            .expect("extract startup config subset");
+
+        assert_eq!(
+            config,
+            StartupConfig {
+                bind_addr: Some("127.0.0.1".to_string()),
+                port: Some(6381),
+                requirepass: Some(Some(b"top secret".to_vec())),
+                masteruser: Some(Some("repl".to_string())),
+                masterauth: Some(Some("repl-secret".to_string())),
+                replicaof: Some(Some(("primary.local".to_string(), 6380))),
+            }
+        );
+    }
+
+    #[test]
+    fn startup_config_from_directives_accepts_slaveof_no_one_alias() {
+        let parsed =
+            fr_config::parse_redis_config("slaveof no one\n").expect("parse slaveof config");
+
+        let config = startup_config_from_directives(&parsed.directives)
+            .expect("extract startup config subset");
+
+        assert_eq!(config.replicaof, Some(None));
     }
 
     #[test]

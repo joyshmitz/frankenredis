@@ -375,6 +375,20 @@ fn spawn_frankenredis_with_config(port: u16, config_path: &str) -> ManagedChild 
     child
 }
 
+fn spawn_frankenredis_config_only(port: u16, config_path: &str) -> ManagedChild {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_frankenredis"));
+    command
+        .arg("--mode")
+        .arg("strict")
+        .arg("--config")
+        .arg(config_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = ManagedChild::spawn(command, None);
+    wait_for_port(port);
+    child
+}
+
 fn spawn_frankenredis_opts(
     port: u16,
     primary_port: Option<u16>,
@@ -2412,6 +2426,41 @@ fn tcp_config_rewrite_updates_file_on_disk() {
         content.contains("timeout 123"),
         "Config file should contain rewritten parameter, got: {}",
         content
+    );
+
+    send_shutdown_nosave(port);
+}
+
+#[test]
+fn tcp_config_file_applies_startup_port_and_requirepass() {
+    let port = reserve_port();
+    let temp_dir = unique_temp_dir("frankenredis-startup-config");
+    let config_path = temp_dir.join("frankenredis.conf");
+    let config_path_str = config_path.to_str().unwrap();
+
+    std::fs::write(
+        &config_path,
+        format!("bind 127.0.0.1\nport {port}\nrequirepass \"top secret\"\n"),
+    )
+    .unwrap();
+
+    let _server = spawn_frankenredis_config_only(port, config_path_str);
+    let mut client = connect_client(port);
+
+    assert_eq!(
+        send_command(&mut client, &[b"PING"]),
+        RespFrame::Error("NOAUTH Authentication required.".to_string())
+    );
+    assert_eq!(
+        send_command(&mut client, &[b"AUTH", b"top secret"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        send_command(&mut client, &[b"CONFIG", b"GET", b"requirepass"]),
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"requirepass".to_vec())),
+            RespFrame::BulkString(Some(b"top secret".to_vec())),
+        ]))
     );
 
     send_shutdown_nosave(port);
