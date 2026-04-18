@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 pub mod commands;
+pub mod consensus;
+pub mod health;
 
 use std::collections::HashMap;
 
