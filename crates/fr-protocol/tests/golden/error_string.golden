@@ -1,0 +1,6 @@
+ParseResult {
+    frame: Error(
+        "ERR unknown command 'foobar'",
+    ),
+    consumed: 31,
+}

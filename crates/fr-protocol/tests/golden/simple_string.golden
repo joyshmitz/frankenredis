@@ -1,0 +1,6 @@
+ParseResult {
+    frame: SimpleString(
+        "OK",
+    ),
+    consumed: 5,
+}

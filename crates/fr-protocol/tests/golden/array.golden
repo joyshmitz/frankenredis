@@ -1,0 +1,27 @@
+ParseResult {
+    frame: Array(
+        Some(
+            [
+                BulkString(
+                    Some(
+                        [
+                            102,
+                            111,
+                            111,
+                        ],
+                    ),
+                ),
+                BulkString(
+                    Some(
+                        [
+                            98,
+                            97,
+                            114,
+                        ],
+                    ),
+                ),
+            ],
+        ),
+    ),
+    consumed: 22,
+}

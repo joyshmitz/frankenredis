@@ -1,0 +1,6 @@
+ParseResult {
+    frame: BulkString(
+        None,
+    ),
+    consumed: 5,
+}

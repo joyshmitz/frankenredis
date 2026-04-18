@@ -1,0 +1,36 @@
+ParseResult {
+    frame: Array(
+        Some(
+            [
+                Array(
+                    Some(
+                        [
+                            Integer(
+                                1,
+                            ),
+                            Integer(
+                                2,
+                            ),
+                            Integer(
+                                3,
+                            ),
+                        ],
+                    ),
+                ),
+                Array(
+                    Some(
+                        [
+                            SimpleString(
+                                "Foo",
+                            ),
+                            Error(
+                                "Bar",
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        ),
+    ),
+    consumed: 36,
+}
