@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
-use crate::{InstanceLink, Role, SentinelRedisInstance, PING_PERIOD_MS};
+use crate::{InstanceLink, PING_PERIOD_MS, Role, SentinelRedisInstance};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HealthCheckResult {
     pub should_mark_s_down: bool,
     pub should_clear_s_down: bool,
@@ -10,21 +10,7 @@ pub struct HealthCheckResult {
     pub reason: Option<&'static str>,
 }
 
-impl Default for HealthCheckResult {
-    fn default() -> Self {
-        Self {
-            should_mark_s_down: false,
-            should_clear_s_down: false,
-            should_send_ping: false,
-            reason: None,
-        }
-    }
-}
-
-pub fn evaluate_instance_health(
-    instance: &SentinelRedisInstance,
-    now: u64,
-) -> HealthCheckResult {
+pub fn evaluate_instance_health(instance: &SentinelRedisInstance, now: u64) -> HealthCheckResult {
     let mut result = HealthCheckResult::default();
 
     let elapsed_since_pong = now.saturating_sub(instance.link.last_pong_time);
@@ -146,8 +132,7 @@ pub fn parse_info_response(info: &str) -> ParsedInfo {
                     result.master_link_status = Some(value == "up");
                 }
                 "master_link_down_since_seconds" => {
-                    result.master_link_down_since =
-                        value.parse::<u64>().ok().map(|s| s * 1000);
+                    result.master_link_down_since = value.parse::<u64>().ok().map(|s| s * 1000);
                 }
                 "slave_repl_offset" | "master_repl_offset" => {
                     if result.slave_repl_offset.is_none() {
@@ -346,8 +331,10 @@ slave_priority:100
 
     #[test]
     fn record_pong_clears_act_ping() {
-        let mut link = InstanceLink::default();
-        link.act_ping_time = 1000;
+        let mut link = InstanceLink {
+            act_ping_time: 1000,
+            ..Default::default()
+        };
 
         record_pong(&mut link, 2000);
         assert_eq!(link.last_pong_time, 2000);

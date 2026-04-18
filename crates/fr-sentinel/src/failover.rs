@@ -1,8 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{
-    FailoverState, InstanceFlags, LinkStatus, SentinelRedisInstance, SentinelState,
-};
+use crate::{FailoverState, InstanceFlags, LinkStatus, SentinelRedisInstance, SentinelState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlaveScore {
@@ -176,20 +174,14 @@ pub fn advance_failover_state(
     next
 }
 
-pub fn check_failover_timeout(
-    master: &SentinelRedisInstance,
-    now: u64,
-) -> bool {
+pub fn check_failover_timeout(master: &SentinelRedisInstance, now: u64) -> bool {
     if master.failover_state == FailoverState::None {
         return false;
     }
     now.saturating_sub(master.failover_start_time) > master.failover_timeout
 }
 
-pub fn should_start_failover(
-    master: &SentinelRedisInstance,
-    is_leader: bool,
-) -> bool {
+pub fn should_start_failover(master: &SentinelRedisInstance, is_leader: bool) -> bool {
     if !master.is_o_down() {
         return false;
     }
@@ -250,19 +242,18 @@ pub fn finalize_failover(
     now: u64,
 ) {
     let current_epoch = state.current_epoch;
-    if let Some(master) = state.get_master_mut(master_name) {
-        if let Some(ref promoted_key) = ctx.promoted_slave_key {
-            if let Some(promoted) = master.slaves.remove(promoted_key) {
-                master.addr = promoted.addr.clone();
-                master.runid = promoted.runid.clone();
-                master.config_epoch = current_epoch;
-                master.failover_state = FailoverState::None;
-                master.failover_state_change_time = now;
-                master.flags.remove(InstanceFlags::FAILOVER_IN_PROGRESS);
-                master.flags.remove(InstanceFlags::O_DOWN);
-                master.flags.remove(InstanceFlags::S_DOWN);
-            }
-        }
+    if let Some(master) = state.get_master_mut(master_name)
+        && let Some(ref promoted_key) = ctx.promoted_slave_key
+        && let Some(promoted) = master.slaves.remove(promoted_key)
+    {
+        master.addr = promoted.addr.clone();
+        master.runid = promoted.runid.clone();
+        master.config_epoch = current_epoch;
+        master.failover_state = FailoverState::None;
+        master.failover_state_change_time = now;
+        master.flags.remove(InstanceFlags::FAILOVER_IN_PROGRESS);
+        master.flags.remove(InstanceFlags::O_DOWN);
+        master.flags.remove(InstanceFlags::S_DOWN);
     }
 }
 
@@ -325,7 +316,11 @@ mod tests {
     #[test]
     fn select_slave_excludes_zero_priority() {
         let mut master = make_master_with_slaves();
-        master.slaves.get_mut("10.0.0.11:6379").unwrap().slave_priority = 0;
+        master
+            .slaves
+            .get_mut("10.0.0.11:6379")
+            .unwrap()
+            .slave_priority = 0;
         let selected = select_slave(&master).unwrap();
         assert_eq!(selected, "10.0.0.10:6379");
     }
@@ -349,12 +344,8 @@ mod tests {
         let mut master = SentinelRedisInstance::new_master("mymaster", addr, 2);
         let mut ctx = FailoverContext::new();
 
-        let state = advance_failover_state(
-            &mut master,
-            FailoverEvent::StartFailover,
-            &mut ctx,
-            1000,
-        );
+        let state =
+            advance_failover_state(&mut master, FailoverEvent::StartFailover, &mut ctx, 1000);
         assert_eq!(state, FailoverState::WaitStart);
 
         let state = advance_failover_state(
@@ -366,12 +357,8 @@ mod tests {
         assert_eq!(state, FailoverState::SelectSlave);
         assert_eq!(ctx.promoted_slave_key, Some("10.0.0.10:6379".to_string()));
 
-        let state = advance_failover_state(
-            &mut master,
-            FailoverEvent::SlaveofNoOneSent,
-            &mut ctx,
-            3000,
-        );
+        let state =
+            advance_failover_state(&mut master, FailoverEvent::SlaveofNoOneSent, &mut ctx, 3000);
         assert_eq!(state, FailoverState::SendSlaveofNoone);
 
         let state = advance_failover_state(
@@ -431,10 +418,7 @@ mod tests {
     #[test]
     fn reconfiguration_tracking() {
         let mut ctx = FailoverContext::new();
-        ctx.slaves_to_reconfig = vec![
-            "10.0.0.10:6379".to_string(),
-            "10.0.0.11:6379".to_string(),
-        ];
+        ctx.slaves_to_reconfig = vec!["10.0.0.10:6379".to_string(), "10.0.0.11:6379".to_string()];
 
         assert!(!is_reconfiguration_complete(&ctx));
 
@@ -452,11 +436,8 @@ mod tests {
 
         assert!(!should_start_failover(&master, true));
 
-        let mut o_down_master = SentinelRedisInstance::new_master(
-            "mymaster",
-            SentinelAddr::new("10.0.0.1", 6379),
-            2,
-        );
+        let mut o_down_master =
+            SentinelRedisInstance::new_master("mymaster", SentinelAddr::new("10.0.0.1", 6379), 2);
         o_down_master.flags.insert(InstanceFlags::O_DOWN);
         assert!(should_start_failover(&o_down_master, true));
         assert!(!should_start_failover(&o_down_master, false));

@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{
-    InstanceFlags, SentinelAddr, SentinelRedisInstance, SentinelState,
-    PUBLISH_PERIOD_MS,
-};
+use crate::{InstanceFlags, PUBLISH_PERIOD_MS, SentinelAddr, SentinelRedisInstance, SentinelState};
 
 pub const HELLO_CHANNEL: &str = "__sentinel__:hello";
 
@@ -53,10 +50,7 @@ impl HelloMessage {
     }
 }
 
-pub fn create_hello_message(
-    state: &SentinelState,
-    master: &SentinelRedisInstance,
-) -> HelloMessage {
+pub fn create_hello_message(state: &SentinelState, master: &SentinelRedisInstance) -> HelloMessage {
     let sentinel_ip = state
         .announce_ip
         .clone()
@@ -114,14 +108,14 @@ pub fn process_hello_message(
         None => return DiscoveryAction::None,
     };
 
-    if hello.master_config_epoch > master.config_epoch {
-        if hello.master_ip != master.addr.hostname || hello.master_port != master.addr.port {
-            return DiscoveryAction::UpdateMasterAddr {
-                master_name: hello.master_name.clone(),
-                new_addr: SentinelAddr::new(&hello.master_ip, hello.master_port),
-                new_epoch: hello.master_config_epoch,
-            };
-        }
+    if hello.master_config_epoch > master.config_epoch
+        && (hello.master_ip != master.addr.hostname || hello.master_port != master.addr.port)
+    {
+        return DiscoveryAction::UpdateMasterAddr {
+            master_name: hello.master_name.clone(),
+            new_addr: SentinelAddr::new(&hello.master_ip, hello.master_port),
+            new_epoch: hello.master_config_epoch,
+        };
     }
 
     let sentinel_key = format!("{}:{}", hello.sentinel_ip, hello.sentinel_port);
@@ -142,11 +136,7 @@ pub fn process_hello_message(
     }
 }
 
-pub fn apply_discovery_action(
-    state: &mut SentinelState,
-    action: DiscoveryAction,
-    now: u64,
-) {
+pub fn apply_discovery_action(state: &mut SentinelState, action: DiscoveryAction, now: u64) {
     match action {
         DiscoveryAction::AddSentinel {
             master_name,
@@ -167,11 +157,11 @@ pub fn apply_discovery_action(
             sentinel_key,
             addr,
         } => {
-            if let Some(master) = state.get_master_mut(&master_name) {
-                if let Some(sentinel) = master.sentinels.get_mut(&sentinel_key) {
-                    sentinel.addr = addr;
-                    sentinel.last_hello_time = now;
-                }
+            if let Some(master) = state.get_master_mut(&master_name)
+                && let Some(sentinel) = master.sentinels.get_mut(&sentinel_key)
+            {
+                sentinel.addr = addr;
+                sentinel.last_hello_time = now;
             }
         }
         DiscoveryAction::UpdateMasterAddr {
@@ -251,16 +241,21 @@ pub fn discover_replicas_from_info(
     for replica in replicas {
         let key = format!("{}:{}", replica.ip, replica.port);
 
-        if !master.slaves.contains_key(&key) {
-            let addr = SentinelAddr::new(&replica.ip, replica.port);
-            let mut slave = SentinelRedisInstance::new_master(&key, addr, 0);
-            slave.flags = InstanceFlags::SLAVE;
-            slave.slave_repl_offset = replica.slave_repl_offset;
-            slave.info_refresh = now;
-            master.slaves.insert(key, slave);
-        } else if let Some(slave) = master.slaves.get_mut(&key) {
-            slave.slave_repl_offset = replica.slave_repl_offset;
-            slave.info_refresh = now;
+        match master.slaves.entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let key = entry.key().clone();
+                let addr = SentinelAddr::new(&replica.ip, replica.port);
+                let mut slave = SentinelRedisInstance::new_master(&key, addr, 0);
+                slave.flags = InstanceFlags::SLAVE;
+                slave.slave_repl_offset = replica.slave_repl_offset;
+                slave.info_refresh = now;
+                entry.insert(slave);
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let slave = entry.get_mut();
+                slave.slave_repl_offset = replica.slave_repl_offset;
+                slave.info_refresh = now;
+            }
         }
     }
 }
@@ -445,7 +440,9 @@ slave1:ip=10.0.0.11,port=6379,state=online,offset=12340,lag=1
         let mut sentinel = SentinelRedisInstance::new_master("192.168.1.2:26379", sentinel_addr, 0);
         sentinel.flags = InstanceFlags::SENTINEL;
         sentinel.last_hello_time = 0;
-        master.sentinels.insert("192.168.1.2:26379".to_string(), sentinel);
+        master
+            .sentinels
+            .insert("192.168.1.2:26379".to_string(), sentinel);
 
         assert_eq!(master.sentinels.len(), 1);
         prune_stale_sentinels(&mut master, 100000, 60000);

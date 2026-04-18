@@ -3,10 +3,7 @@
 use crate::SentinelState;
 use fr_protocol::RespFrame;
 
-pub fn dispatch_sentinel_command(
-    state: &mut SentinelState,
-    args: &[&[u8]],
-) -> RespFrame {
+pub fn dispatch_sentinel_command(state: &mut SentinelState, args: &[&[u8]]) -> RespFrame {
     if args.is_empty() {
         return RespFrame::Error("ERR wrong number of arguments for 'sentinel' command".into());
     }
@@ -30,10 +27,7 @@ pub fn dispatch_sentinel_command(
         "INFO-CACHE" => cmd_info_cache(state, &args[1..]),
         "DEBUG" => cmd_debug(state, &args[1..]),
         "HELP" => cmd_help(),
-        _ => RespFrame::Error(format!(
-            "ERR Unknown sentinel subcommand '{}'",
-            subcommand
-        )),
+        _ => RespFrame::Error(format!("ERR Unknown sentinel subcommand '{}'", subcommand)),
     }
 }
 
@@ -42,17 +36,15 @@ fn cmd_myid(state: &SentinelState) -> RespFrame {
 }
 
 fn cmd_masters(state: &SentinelState) -> RespFrame {
-    let masters: Vec<RespFrame> = state
-        .masters
-        .values()
-        .map(instance_to_info_array)
-        .collect();
+    let masters: Vec<RespFrame> = state.masters.values().map(instance_to_info_array).collect();
     RespFrame::Array(Some(masters))
 }
 
 fn cmd_master(state: &SentinelState, args: &[&[u8]]) -> RespFrame {
     if args.is_empty() {
-        return RespFrame::Error("ERR wrong number of arguments for 'sentinel master' command".into());
+        return RespFrame::Error(
+            "ERR wrong number of arguments for 'sentinel master' command".into(),
+        );
     }
     let name = String::from_utf8_lossy(args[0]);
     match state.get_master(&name) {
@@ -63,16 +55,15 @@ fn cmd_master(state: &SentinelState, args: &[&[u8]]) -> RespFrame {
 
 fn cmd_replicas(state: &SentinelState, args: &[&[u8]]) -> RespFrame {
     if args.is_empty() {
-        return RespFrame::Error("ERR wrong number of arguments for 'sentinel replicas' command".into());
+        return RespFrame::Error(
+            "ERR wrong number of arguments for 'sentinel replicas' command".into(),
+        );
     }
     let name = String::from_utf8_lossy(args[0]);
     match state.get_master(&name) {
         Some(master) => {
-            let replicas: Vec<RespFrame> = master
-                .slaves
-                .values()
-                .map(instance_to_info_array)
-                .collect();
+            let replicas: Vec<RespFrame> =
+                master.slaves.values().map(instance_to_info_array).collect();
             RespFrame::Array(Some(replicas))
         }
         None => RespFrame::Error(format!("ERR No such master with that name: {}", name)),
@@ -81,7 +72,9 @@ fn cmd_replicas(state: &SentinelState, args: &[&[u8]]) -> RespFrame {
 
 fn cmd_sentinels(state: &SentinelState, args: &[&[u8]]) -> RespFrame {
     if args.is_empty() {
-        return RespFrame::Error("ERR wrong number of arguments for 'sentinel sentinels' command".into());
+        return RespFrame::Error(
+            "ERR wrong number of arguments for 'sentinel sentinels' command".into(),
+        );
     }
     let name = String::from_utf8_lossy(args[0]);
     match state.get_master(&name) {
@@ -122,7 +115,9 @@ fn cmd_monitor(state: &mut SentinelState, args: &[&[u8]]) -> RespFrame {
 
 fn cmd_remove(state: &mut SentinelState, args: &[&[u8]]) -> RespFrame {
     if args.is_empty() {
-        return RespFrame::Error("ERR wrong number of arguments for 'sentinel remove' command".into());
+        return RespFrame::Error(
+            "ERR wrong number of arguments for 'sentinel remove' command".into(),
+        );
     }
     let name = String::from_utf8_lossy(args[0]);
     match state.remove(&name) {
@@ -132,10 +127,8 @@ fn cmd_remove(state: &mut SentinelState, args: &[&[u8]]) -> RespFrame {
 }
 
 fn cmd_set(state: &mut SentinelState, args: &[&[u8]]) -> RespFrame {
-    if args.len() < 3 || args.len() % 2 == 0 {
-        return RespFrame::Error(
-            "ERR wrong number of arguments for 'sentinel set' command".into(),
-        );
+    if args.len() < 3 || args.len().is_multiple_of(2) {
+        return RespFrame::Error("ERR wrong number of arguments for 'sentinel set' command".into());
     }
     let name = String::from_utf8_lossy(args[0]);
     let master = match state.get_master_mut(&name) {
@@ -178,7 +171,9 @@ fn cmd_set(state: &mut SentinelState, args: &[&[u8]]) -> RespFrame {
 
 fn cmd_reset(state: &mut SentinelState, args: &[&[u8]]) -> RespFrame {
     if args.is_empty() {
-        return RespFrame::Error("ERR wrong number of arguments for 'sentinel reset' command".into());
+        return RespFrame::Error(
+            "ERR wrong number of arguments for 'sentinel reset' command".into(),
+        );
     }
     let pattern = String::from_utf8_lossy(args[0]);
     let mut count = 0i64;
@@ -396,11 +391,11 @@ fn glob_match(pattern: &str, text: &str) -> bool {
         let mid = &pattern[1..pattern.len() - 1];
         return text.contains(mid);
     }
-    if pattern.starts_with('*') {
-        return text.ends_with(&pattern[1..]);
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return text.ends_with(suffix);
     }
-    if pattern.ends_with('*') {
-        return text.starts_with(&pattern[..pattern.len() - 1]);
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return text.starts_with(prefix);
     }
     pattern == text
 }
@@ -441,10 +436,8 @@ mod tests {
             &[b"MONITOR", b"mymaster", b"192.168.1.100", b"6379", b"2"],
         );
 
-        let result = dispatch_sentinel_command(
-            &mut state,
-            &[b"GET-MASTER-ADDR-BY-NAME", b"mymaster"],
-        );
+        let result =
+            dispatch_sentinel_command(&mut state, &[b"GET-MASTER-ADDR-BY-NAME", b"mymaster"]);
         if let RespFrame::Array(Some(arr)) = result {
             assert_eq!(arr.len(), 2);
         } else {

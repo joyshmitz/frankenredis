@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{SentinelRedisInstance, SentinelState, ASK_PERIOD_MS};
+use crate::{ASK_PERIOD_MS, SentinelRedisInstance, SentinelState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ODownVote {
@@ -40,13 +40,10 @@ pub fn evaluate_o_down(
         votes_for_down
     };
 
-    let should_mark_o_down = !master.is_o_down()
-        && master.is_s_down()
-        && effective_votes >= quorum;
+    let should_mark_o_down = !master.is_o_down() && master.is_s_down() && effective_votes >= quorum;
 
-    let should_clear_o_down = master.is_o_down()
-        && !master.is_s_down()
-        && votes_for_down < quorum / 2;
+    let should_clear_o_down =
+        master.is_o_down() && !master.is_s_down() && votes_for_down < quorum / 2;
 
     ODownResult {
         should_mark_o_down,
@@ -56,11 +53,7 @@ pub fn evaluate_o_down(
     }
 }
 
-pub fn apply_o_down_result(
-    master: &mut SentinelRedisInstance,
-    result: &ODownResult,
-    now: u64,
-) {
+pub fn apply_o_down_result(master: &mut SentinelRedisInstance, result: &ODownResult, now: u64) {
     if result.should_mark_o_down {
         master.set_o_down(true, now);
     } else if result.should_clear_o_down {
@@ -91,10 +84,7 @@ pub fn evaluate_leader_election(
 ) -> LeaderElectionResult {
     let votes_needed = (sentinel_count / 2) + 1;
 
-    let valid_votes: Vec<&LeaderVote> = votes
-        .iter()
-        .filter(|v| v.epoch == current_epoch)
-        .collect();
+    let valid_votes: Vec<&LeaderVote> = votes.iter().filter(|v| v.epoch == current_epoch).collect();
 
     let mut vote_counts: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
     for vote in &valid_votes {
@@ -119,11 +109,7 @@ pub fn evaluate_leader_election(
     }
 }
 
-pub fn should_request_vote(
-    master: &SentinelRedisInstance,
-    my_epoch: u64,
-    _now: u64,
-) -> bool {
+pub fn should_request_vote(master: &SentinelRedisInstance, my_epoch: u64, _now: u64) -> bool {
     if !master.is_o_down() {
         return false;
     }
@@ -152,9 +138,7 @@ pub fn cast_vote(
         .get_master(master_name)
         .map(|m| m.leader_epoch)
         .unwrap_or(0);
-    let current_leader = state
-        .get_master(master_name)
-        .and_then(|m| m.leader.clone());
+    let current_leader = state.get_master(master_name).and_then(|m| m.leader.clone());
 
     if current_leader_epoch >= candidate_epoch {
         return current_leader;
@@ -186,13 +170,11 @@ mod tests {
         let mut master = make_master();
         master.flags.insert(InstanceFlags::S_DOWN);
 
-        let votes = vec![
-            ODownVote {
-                sentinel_runid: "s1".to_string(),
-                is_down: true,
-                vote_time: 1000,
-            },
-        ];
+        let votes = vec![ODownVote {
+            sentinel_runid: "s1".to_string(),
+            is_down: true,
+            vote_time: 1000,
+        }];
 
         let result = evaluate_o_down(&master, &votes, 2000);
         assert!(result.should_mark_o_down);

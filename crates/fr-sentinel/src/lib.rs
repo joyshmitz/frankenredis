@@ -365,16 +365,10 @@ impl SentinelState {
             self.previous_time = now;
             return;
         }
-        let delta = if now > self.previous_time {
-            now - self.previous_time
-        } else {
-            self.previous_time - now
-        };
-        if delta > TILT_TRIGGER_MS {
-            if !self.tilt {
-                self.tilt = true;
-                self.tilt_start_time = now;
-            }
+        let delta = now.abs_diff(self.previous_time);
+        if delta > TILT_TRIGGER_MS && !self.tilt {
+            self.tilt = true;
+            self.tilt_start_time = now;
         }
         if self.tilt && now.saturating_sub(self.tilt_start_time) > TILT_PERIOD_MS {
             self.tilt = false;
