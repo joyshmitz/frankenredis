@@ -6394,6 +6394,7 @@ impl Runtime {
             if parameter.eq_ignore_ascii_case("appendfilename")
                 || parameter.eq_ignore_ascii_case("appenddirname")
                 || parameter.eq_ignore_ascii_case("bind")
+                || parameter.eq_ignore_ascii_case("cluster-enabled")
                 || parameter.eq_ignore_ascii_case("port")
             {
                 return RespFrame::Error(format!(
@@ -14551,7 +14552,7 @@ mod tests {
     }
 
     #[test]
-    fn config_set_rejects_immutable_append_paths() {
+    fn config_set_rejects_immutable_parameters() {
         let mut rt = Runtime::default_strict();
 
         assert_eq!(
@@ -14573,6 +14574,23 @@ mod tests {
                 "ERR CONFIG SET failed (possibly related to argument 'appenddirname') - can't set immutable config"
                     .to_string()
             )
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"cluster-enabled", b"yes"]),
+                0
+            ),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'cluster-enabled') - can't set immutable config"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"cluster-enabled"]), 0),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"cluster-enabled".to_vec())),
+                RespFrame::BulkString(Some(b"no".to_vec())),
+            ]))
         );
     }
 

@@ -703,6 +703,20 @@
       }
     },
     {
+      "name": "config_set_cluster_enabled_immutable",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "cluster-enabled",
+        "yes"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'cluster-enabled') - can't set immutable config"
+      }
+    },
+    {
       "name": "config_set_known_static_noop",
       "now_ms": 0,
       "argv": [
