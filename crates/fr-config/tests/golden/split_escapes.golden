@@ -1,0 +1,4 @@
+[
+    "masterauth",
+    "foo\"bar\\baz",
+]

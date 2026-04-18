@@ -1,0 +1,60 @@
+ParsedConfigFile {
+    directives: [
+        ParsedConfigDirective {
+            line_number: 1,
+            name: [
+                112,
+                111,
+                114,
+                116,
+            ],
+            args: [
+                [
+                    54,
+                    51,
+                    55,
+                    57,
+                ],
+            ],
+        },
+        ParsedConfigDirective {
+            line_number: 2,
+            name: [
+                98,
+                105,
+                110,
+                100,
+            ],
+            args: [
+                [
+                    49,
+                    50,
+                    55,
+                    46,
+                    48,
+                    46,
+                    48,
+                    46,
+                    49,
+                ],
+            ],
+        },
+        ParsedConfigDirective {
+            line_number: 4,
+            name: [
+                116,
+                105,
+                109,
+                101,
+                111,
+                117,
+                116,
+            ],
+            args: [
+                [
+                    48,
+                ],
+            ],
+        },
+    ],
+}

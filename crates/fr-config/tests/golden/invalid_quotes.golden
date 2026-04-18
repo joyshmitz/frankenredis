@@ -1,0 +1,5 @@
+Error: ConfigFileParseError {
+    line_number: 1,
+    reason: InvalidQuotedToken,
+    line: "requirepass \"unclosed quote",
+}
