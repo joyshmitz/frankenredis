@@ -11234,6 +11234,98 @@ mod tests {
     }
 
     #[test]
+    fn fr_p2c_005_u003_runtime_aof_stream_preserves_select_boundaries() {
+        let mut source = Runtime::default_strict();
+        assert_eq!(
+            source.execute_frame(command(&[b"SET", b"db0:key", b"zero"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            source.execute_frame(command(&[b"SELECT", b"2"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            source.execute_frame(command(&[b"SET", b"db2:key", b"two"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            source.execute_frame(command(&[b"INCR", b"db2:counter"]), 3),
+            RespFrame::Integer(1)
+        );
+        assert_eq!(
+            source.execute_frame(command(&[b"SELECT", b"0"]), 4),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            source.execute_frame(command(&[b"SET", b"db0:other", b"again"]), 5),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            source.execute_frame(command(&[b"SELECT", b"2"]), 6),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            source.execute_frame(command(&[b"SET", b"db2:other", b"twice"]), 7),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let decoded = decode_aof_stream(&source.encoded_aof_stream()).expect("decode aof stream");
+        let propagated: Vec<Vec<Vec<u8>>> =
+            decoded.iter().map(|record| record.argv.clone()).collect();
+        assert_eq!(
+            propagated,
+            vec![
+                vec![b"SET".to_vec(), b"db0:key".to_vec(), b"zero".to_vec()],
+                vec![b"SELECT".to_vec(), b"2".to_vec()],
+                vec![b"SET".to_vec(), b"db2:key".to_vec(), b"two".to_vec()],
+                vec![b"INCR".to_vec(), b"db2:counter".to_vec()],
+                vec![b"SELECT".to_vec(), b"0".to_vec()],
+                vec![b"SET".to_vec(), b"db0:other".to_vec(), b"again".to_vec()],
+                vec![b"SELECT".to_vec(), b"2".to_vec()],
+                vec![b"SET".to_vec(), b"db2:other".to_vec(), b"twice".to_vec()],
+            ],
+            "AOF propagation must preserve replay-visible SELECT boundaries without redundant same-DB SELECTs"
+        );
+
+        let mut target = Runtime::default_strict();
+        let replies = target.replay_aof_records(&decoded, 100);
+        assert_eq!(replies.len(), decoded.len());
+
+        assert_eq!(
+            target.execute_frame(command(&[b"SELECT", b"0"]), 199),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            target.execute_frame(command(&[b"GET", b"db0:key"]), 200),
+            RespFrame::BulkString(Some(b"zero".to_vec()))
+        );
+        assert_eq!(
+            target.execute_frame(command(&[b"GET", b"db0:other"]), 201),
+            RespFrame::BulkString(Some(b"again".to_vec()))
+        );
+        assert_eq!(
+            target.execute_frame(command(&[b"GET", b"db2:key"]), 202),
+            RespFrame::BulkString(None)
+        );
+        assert_eq!(
+            target.execute_frame(command(&[b"SELECT", b"2"]), 203),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            target.execute_frame(command(&[b"GET", b"db2:key"]), 204),
+            RespFrame::BulkString(Some(b"two".to_vec()))
+        );
+        assert_eq!(
+            target.execute_frame(command(&[b"GET", b"db2:counter"]), 205),
+            RespFrame::BulkString(Some(b"1".to_vec()))
+        );
+        assert_eq!(
+            target.execute_frame(command(&[b"GET", b"db2:other"]), 206),
+            RespFrame::BulkString(Some(b"twice".to_vec()))
+        );
+    }
+
+    #[test]
     fn fr_p2c_005_u004_runtime_replay_aof_stream_rejects_invalid_payload() {
         let mut rt = Runtime::default_strict();
         let err = rt
@@ -15979,10 +16071,15 @@ mod tests {
             entry[12],
             RespFrame::BulkString(Some(b"client-info".to_vec()))
         );
-        let client_info = match &entry[13] {
-            RespFrame::BulkString(Some(bytes)) => String::from_utf8_lossy(bytes).to_string(),
-            other => panic!("expected ACL LOG client-info bulk string, got {other:?}"),
+        let RespFrame::BulkString(Some(bytes)) = &entry[13] else {
+            assert!(
+                matches!(&entry[13], RespFrame::BulkString(Some(_))),
+                "expected ACL LOG client-info bulk string, got {:?}",
+                entry[13]
+            );
+            return;
         };
+        let client_info = String::from_utf8_lossy(bytes).to_string();
         assert!(client_info.contains("id=4"));
         assert!(client_info.contains("cmd=auth"));
         assert!(client_info.contains("user=default"));
