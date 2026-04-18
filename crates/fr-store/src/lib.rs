@@ -2630,6 +2630,12 @@ impl Store {
     }
 
     fn update_digest_hashes(&mut self, old_hash: Option<u64>, new_hash: Option<u64>) {
+        if self.digest_stale {
+            if old_hash.is_some() || new_hash.is_some() {
+                self.bump_digest_mutations();
+            }
+            return;
+        }
         if let Some(old_hash) = old_hash {
             self.running_digest ^= old_hash;
         }
@@ -11040,6 +11046,21 @@ mod tests {
             .expect("xadd 2");
         store.xtrim(b"stream", 1, 0).expect("xtrim");
         assert_digest_matches(&mut store);
+    }
+
+    #[test]
+    fn state_digest_stays_stale_after_incremental_update_follows_direct_mutation() {
+        let mut store = Store::new();
+        store
+            .rpush(b"list", &[b"a".to_vec()], 0)
+            .expect("seed list");
+        store
+            .rpush(b"list", &[b"b".to_vec()], 0)
+            .expect("mutate list in place");
+        store.set(b"other".to_vec(), b"value".to_vec(), None, 0);
+
+        let expected = format!("{:016x}", store.state_digest_full_scan());
+        assert_eq!(store.state_digest(), expected);
     }
 
     #[test]

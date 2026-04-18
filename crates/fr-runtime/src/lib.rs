@@ -2162,7 +2162,7 @@ impl Runtime {
     }
 
     fn handle_debug_reload_requested(&mut self, now_ms: u64) -> RespFrame {
-        if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
+        if let Err(reply) = self.persist_snapshot_to_disk(now_ms, false) {
             return reply;
         }
 
@@ -7327,7 +7327,7 @@ impl Runtime {
         if argv.len() != 1 {
             return CommandError::WrongArity("SAVE").to_resp();
         }
-        if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
+        if let Err(reply) = self.persist_snapshot_to_disk(now_ms, true) {
             return reply;
         }
         self.server.store.record_save(now_ms, false);
@@ -7349,7 +7349,7 @@ impl Runtime {
             }
         }
         // In a single-threaded context, BGSAVE behaves like SAVE.
-        if let Err(reply) = self.persist_snapshot_to_disk(now_ms) {
+        if let Err(reply) = self.persist_snapshot_to_disk(now_ms, true) {
             self.server.store.record_bgsave_status(false);
             return reply;
         }
@@ -7359,17 +7359,25 @@ impl Runtime {
         RespFrame::SimpleString("Background saving started".to_string())
     }
 
-    fn persist_snapshot_to_disk(&mut self, now_ms: u64) -> Result<(), RespFrame> {
+    fn persist_snapshot_to_disk(
+        &mut self,
+        now_ms: u64,
+        record_aof_write_status: bool,
+    ) -> Result<(), RespFrame> {
         if let Some(path) = &self.server.aof_path {
             let commands = self.server.store.to_aof_commands(now_ms);
             let records = argv_to_aof_records(commands);
             if write_aof_file(path, &records).is_err() {
-                self.server.store.record_aof_write_status(false);
+                if record_aof_write_status {
+                    self.server.store.record_aof_write_status(false);
+                }
                 return Err(RespFrame::Error(
                     "ERR error saving dataset to disk".to_string(),
                 ));
             }
-            self.server.store.record_aof_write_status(true);
+            if record_aof_write_status {
+                self.server.store.record_aof_write_status(true);
+            }
         }
 
         if let Some(path) = &self.server.rdb_path {
@@ -8741,9 +8749,6 @@ slave_priority:{}\r\n",
                 {
                     if offset > replica.ack_offset {
                         replica.ack_offset = offset;
-                    }
-                    if offset > replica.fsync_offset {
-                        replica.fsync_offset = offset;
                     }
                     if idx + 3 < argv.len() && eq_ascii_token(&argv[idx + 2], b"FACK") {
                         let fsync_offset = match parse_i64_arg(&argv[idx + 3]) {
@@ -11522,6 +11527,54 @@ mod tests {
     }
 
     #[test]
+    fn fr_p2c_005_u011_waitaof_requires_replica_fack_not_plain_ack() {
+        let mut rt = Runtime::default_strict();
+        rt.set_aof_path(std::path::PathBuf::from("appendonly.aof"));
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"fr:p2c:005:waitaof", b"value"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLCONF", b"listening-port", b"6380"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let required_offset = rt.replication_primary_offset().0.to_string();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"REPLCONF", b"ACK", required_offset.as_bytes()]),
+                2,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let plain_ack_only = rt.execute_frame(command(&[b"WAITAOF", b"1", b"1", b"0"]), 3);
+        assert_eq!(
+            plain_ack_only,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1), RespFrame::Integer(0)]))
+        );
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"REPLCONF",
+                    b"ACK",
+                    required_offset.as_bytes(),
+                    b"FACK",
+                    required_offset.as_bytes(),
+                ]),
+                4,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let fack_satisfies_replica_aof_threshold =
+            rt.execute_frame(command(&[b"WAITAOF", b"1", b"1", b"0"]), 5);
+        assert_eq!(
+            fack_satisfies_replica_aof_threshold,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1), RespFrame::Integer(1)]))
+        );
+    }
+
+    #[test]
     fn fr_p2c_006_u006_waitaof_rejects_invalid_integer_arguments() {
         let mut rt = Runtime::default_strict();
 
@@ -12879,7 +12932,7 @@ mod tests {
             .get(&rt.session.client_id)
             .expect("replica state");
         assert_eq!(replica.ack_offset, fr_repl::ReplOffset(10));
-        assert_eq!(replica.fsync_offset, fr_repl::ReplOffset(10));
+        assert_eq!(replica.fsync_offset, fr_repl::ReplOffset(0));
     }
 
     #[test]
@@ -15455,6 +15508,30 @@ mod tests {
         };
         let info = String::from_utf8(info_bytes).expect("utf8 info");
         assert!(info.contains("aof_last_write_status:err\r\n"), "{info}");
+    }
+
+    #[test]
+    fn debug_reload_aof_snapshot_failure_does_not_poison_aof_write_status() {
+        let dir = std::env::temp_dir().join("fr_runtime_debug_reload_aof_failure_dir");
+        let _ = std::fs::create_dir_all(&dir);
+        let mut rt = Runtime::default_strict();
+        rt.set_aof_path(dir);
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"DEBUG", b"RELOAD"]), 1),
+            RespFrame::Error("ERR error saving dataset to disk".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"after_debug_reload", b"ok"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let info = rt.execute_frame(command(&[b"INFO", b"persistence"]), 3);
+        let RespFrame::BulkString(Some(info_bytes)) = info else {
+            unreachable!("expected bulk INFO response");
+        };
+        let info = String::from_utf8(info_bytes).expect("utf8 info");
+        assert!(info.contains("aof_last_write_status:ok\r\n"), "{info}");
     }
 
     #[test]
