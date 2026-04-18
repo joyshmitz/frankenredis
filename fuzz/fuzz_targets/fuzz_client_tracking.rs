@@ -12,14 +12,12 @@ use std::collections::BTreeSet;
 
 const CLIENT_TRACKING_PREFIX_REQUIRES_BCAST: &str =
     "ERR PREFIX option requires BCAST mode to be enabled";
-const CLIENT_TRACKING_OPTIN_OPTOUT_CONFLICT: &str =
-    "ERR OPTIN and OPTOUT are not compatible";
+const CLIENT_TRACKING_OPTIN_OPTOUT_CONFLICT: &str = "ERR OPTIN and OPTOUT are not compatible";
 const CLIENT_TRACKING_BCAST_OPT_CONFLICT: &str =
     "ERR OPTIN or OPTOUT are not compatible with BCAST";
 const CLIENT_TRACKING_REDIRECT_MISSING: &str =
     "ERR The client ID you want redirect to does not exist";
-const CLIENT_CACHING_REQUIRES_TRACKING: &str =
-    "ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled";
+const CLIENT_CACHING_REQUIRES_TRACKING: &str = "ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled";
 const CLIENT_CACHING_YES_REQUIRES_OPTIN: &str =
     "ERR CLIENT CACHING YES is only valid when tracking is enabled in OPTIN mode.";
 const CLIENT_CACHING_NO_REQUIRES_OPTOUT: &str =
@@ -229,6 +227,7 @@ fn expected_state(
                 bcast: false,
                 optin: false,
                 optout: false,
+                caching: None,
                 noloop,
                 prefixes,
             }
@@ -239,6 +238,7 @@ fn expected_state(
             bcast: true,
             optin: false,
             optout: false,
+            caching: None,
             noloop,
             prefixes,
         },
@@ -250,6 +250,7 @@ fn expected_state(
                 bcast: false,
                 optin: true,
                 optout: false,
+                caching: None,
                 noloop,
                 prefixes,
             }
@@ -262,6 +263,7 @@ fn expected_state(
                 bcast: false,
                 optin: false,
                 optout: true,
+                caching: None,
                 noloop,
                 prefixes,
             }
@@ -278,15 +280,14 @@ fn render_valid_argv(
         return canonical_tracking_argv(state);
     }
 
-    let mut argv = vec![
-        b"CLIENT".to_vec(),
-        b"TRACKING".to_vec(),
-        b"ON".to_vec(),
-    ];
+    let mut argv = vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()];
     let mut chunks = Vec::new();
 
     if let Some(redirect) = state.redirect {
-        chunks.push(vec![b"REDIRECT".to_vec(), redirect.to_string().into_bytes()]);
+        chunks.push(vec![
+            b"REDIRECT".to_vec(),
+            redirect.to_string().into_bytes(),
+        ]);
     }
     if state.bcast {
         chunks.push(vec![b"BCAST".to_vec()]);
