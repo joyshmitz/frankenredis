@@ -45,7 +45,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR unknown command 'NOPE'"
+        "value": "ERR unknown command 'NOPE', with args beginning with: "
       }
     },
     {

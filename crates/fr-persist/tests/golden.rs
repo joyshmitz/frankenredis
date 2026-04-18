@@ -95,10 +95,7 @@ fn golden_manifest_missing_seq() {
 
 #[test]
 fn golden_manifest_missing_file() {
-    parse_and_snapshot(
-        "manifest_missing_file",
-        "seq 1 type b\n",
-    );
+    parse_and_snapshot("manifest_missing_file", "seq 1 type b\n");
 }
 
 #[test]

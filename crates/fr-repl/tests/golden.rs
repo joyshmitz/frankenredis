@@ -65,17 +65,26 @@ fn golden_psync_continue_invalid() {
 
 #[test]
 fn golden_psync_fullresync() {
-    parse_and_snapshot("psync_fullresync", "FULLRESYNC 1234567890abcdef1234567890abcdef12345678 100500");
+    parse_and_snapshot(
+        "psync_fullresync",
+        "FULLRESYNC 1234567890abcdef1234567890abcdef12345678 100500",
+    );
 }
 
 #[test]
 fn golden_psync_fullresync_missing_args() {
-    parse_and_snapshot("psync_fullresync_missing_args", "FULLRESYNC 1234567890abcdef");
+    parse_and_snapshot(
+        "psync_fullresync_missing_args",
+        "FULLRESYNC 1234567890abcdef",
+    );
 }
 
 #[test]
 fn golden_psync_fullresync_invalid_offset() {
-    parse_and_snapshot("psync_fullresync_invalid_offset", "FULLRESYNC 1234567890abcdef1234567890abcdef12345678 bad_offset");
+    parse_and_snapshot(
+        "psync_fullresync_invalid_offset",
+        "FULLRESYNC 1234567890abcdef1234567890abcdef12345678 bad_offset",
+    );
 }
 
 #[test]

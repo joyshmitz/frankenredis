@@ -85,7 +85,10 @@ fn golden_null_array() {
 
 #[test]
 fn golden_nested_array() {
-    parse_and_snapshot("nested_array", b"*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n");
+    parse_and_snapshot(
+        "nested_array",
+        b"*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
+    );
 }
 
 #[test]

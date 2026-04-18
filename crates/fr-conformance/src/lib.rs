@@ -2839,7 +2839,11 @@ mod tests {
     fn fr_p2c_003_f_adversarial_error_families_are_stable() {
         let mut runtime = Runtime::default_strict();
         let cases: [(&str, &[&str], &str); 4] = [
-            ("unknown_no_args", &["NOPE"], "ERR unknown command 'NOPE'"),
+            (
+                "unknown_no_args",
+                &["NOPE"],
+                "ERR unknown command 'NOPE', with args beginning with: ",
+            ),
             (
                 "unknown_with_args_preview",
                 &["NOPE", "x", "y"],

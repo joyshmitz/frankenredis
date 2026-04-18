@@ -155,7 +155,7 @@ proptest! {
             prop_assert!(members_a.contains(m), "ZINTERSTORE result must be in A");
             prop_assert!(members_b.contains(m), "ZINTERSTORE result must be in B");
         }
-        
+
         let expected_card = members_a.intersection(&members_b).count();
         prop_assert_eq!(res.len(), expected_card, "ZINTERSTORE output size must match intersection size");
     }
