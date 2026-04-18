@@ -6399,6 +6399,7 @@ impl Runtime {
                 || parameter.eq_ignore_ascii_case("daemonize")
                 || parameter.eq_ignore_ascii_case("port")
                 || parameter.eq_ignore_ascii_case("rdbchecksum")
+                || parameter.eq_ignore_ascii_case("set-proc-title")
                 || parameter.eq_ignore_ascii_case("tcp-backlog")
             {
                 return RespFrame::Error(format!(
@@ -14650,6 +14651,20 @@ mod tests {
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"daemonize".to_vec())),
                 RespFrame::BulkString(Some(b"no".to_vec())),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"set-proc-title", b"no"]), 0),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'set-proc-title') - can't set immutable config"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"set-proc-title"]), 0),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"set-proc-title".to_vec())),
+                RespFrame::BulkString(Some(b"yes".to_vec())),
             ]))
         );
     }
