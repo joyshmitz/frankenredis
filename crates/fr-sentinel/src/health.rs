@@ -134,10 +134,10 @@ pub fn parse_info_response(info: &str) -> ParsedInfo {
                 "master_link_down_since_seconds" => {
                     result.master_link_down_since = value.parse::<u64>().ok().map(|s| s * 1000);
                 }
-                "slave_repl_offset" | "master_repl_offset" => {
-                    if result.slave_repl_offset.is_none() {
-                        result.slave_repl_offset = value.parse().ok();
-                    }
+                "slave_repl_offset" | "master_repl_offset"
+                    if result.slave_repl_offset.is_none() =>
+                {
+                    result.slave_repl_offset = value.parse().ok();
                 }
                 "slave_priority" | "replica_priority" => {
                     result.slave_priority = value.parse().ok();
