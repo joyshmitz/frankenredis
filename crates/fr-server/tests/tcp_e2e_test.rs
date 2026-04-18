@@ -2466,6 +2466,72 @@ fn tcp_config_file_applies_startup_port_and_requirepass() {
     send_shutdown_nosave(port);
 }
 
+#[test]
+fn tcp_config_file_applies_persistence_startup_paths() {
+    let port = reserve_port();
+    let temp_dir = unique_temp_dir("frankenredis-startup-persistence-config");
+    let config_path = temp_dir.join("frankenredis.conf");
+    let config_path_str = config_path.to_str().unwrap();
+    let dir_text = temp_dir.to_string_lossy();
+    let append_dir = temp_dir.join("aof-from-config");
+    let append_dir_text = append_dir.to_string_lossy();
+
+    std::fs::write(
+        &config_path,
+        format!(
+            "bind 127.0.0.1\n\
+             port {port}\n\
+             dir \"{dir_text}\"\n\
+             dbfilename startup.rdb\n\
+             appendonly yes\n\
+             appenddirname aof-from-config\n\
+             appendfilename startup.aof\n"
+        ),
+    )
+    .unwrap();
+
+    let _server = spawn_frankenredis_config_only(port, config_path_str);
+    let mut client = connect_client(port);
+
+    assert_eq!(
+        send_command(&mut client, &[b"CONFIG", b"GET", b"dir"]),
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"dir".to_vec())),
+            RespFrame::BulkString(Some(dir_text.as_bytes().to_vec())),
+        ]))
+    );
+    assert_eq!(
+        send_command(&mut client, &[b"CONFIG", b"GET", b"dbfilename"]),
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"dbfilename".to_vec())),
+            RespFrame::BulkString(Some(b"startup.rdb".to_vec())),
+        ]))
+    );
+    assert_eq!(
+        send_command(&mut client, &[b"CONFIG", b"GET", b"appendonly"]),
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"appendonly".to_vec())),
+            RespFrame::BulkString(Some(b"yes".to_vec())),
+        ]))
+    );
+    assert_eq!(
+        send_command(&mut client, &[b"CONFIG", b"GET", b"appenddirname"]),
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"appenddirname".to_vec())),
+            RespFrame::BulkString(Some(append_dir_text.as_bytes().to_vec())),
+        ]))
+    );
+    assert_eq!(
+        send_command(&mut client, &[b"CONFIG", b"GET", b"appendfilename"]),
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"appendfilename".to_vec())),
+            RespFrame::BulkString(Some(b"startup.aof".to_vec())),
+        ]))
+    );
+
+    send_shutdown_nosave(port);
+}
+
 fn expected_single_stream_entry(stream: &[u8], id: &[u8], field: &[u8], value: &[u8]) -> RespFrame {
     RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
         RespFrame::BulkString(Some(stream.to_vec())),

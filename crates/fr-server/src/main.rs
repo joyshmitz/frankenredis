@@ -245,6 +245,43 @@ struct StartupConfig {
     masteruser: Option<Option<String>>,
     masterauth: Option<Option<String>>,
     replicaof: Option<Option<(String, u16)>>,
+    dir: Option<String>,
+    dbfilename: Option<String>,
+    appendonly: Option<bool>,
+    appenddirname: Option<String>,
+    appendfilename: Option<String>,
+}
+
+impl StartupConfig {
+    fn configured_rdb_path(&self) -> Option<String> {
+        if self.dir.is_none() && self.dbfilename.is_none() {
+            return None;
+        }
+        let dir = self.dir.as_deref().unwrap_or(".");
+        let filename = self.dbfilename.as_deref().unwrap_or("dump.rdb");
+        Some(
+            std::path::PathBuf::from(dir)
+                .join(filename)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    fn configured_aof_path(&self) -> Option<String> {
+        if self.appendonly != Some(true) {
+            return None;
+        }
+        let dir = self.dir.as_deref().unwrap_or(".");
+        let dirname = self.appenddirname.as_deref().unwrap_or("appendonlydir");
+        let filename = self.appendfilename.as_deref().unwrap_or("appendonly.aof");
+        Some(
+            std::path::PathBuf::from(dir)
+                .join(dirname)
+                .join(filename)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
 }
 
 fn load_startup_config_file(path: &str) -> Result<StartupConfig, String> {
@@ -301,6 +338,26 @@ fn startup_config_from_directives(
                     let port = config_arg_port(directive, 1)?;
                     config.replicaof = Some(Some((host, port)));
                 }
+            }
+            b"dir" => {
+                expect_config_arg_count(directive, 1)?;
+                config.dir = Some(config_arg_string(directive, 0)?);
+            }
+            b"dbfilename" => {
+                expect_config_arg_count(directive, 1)?;
+                config.dbfilename = Some(config_arg_string(directive, 0)?);
+            }
+            b"appendonly" => {
+                expect_config_arg_count(directive, 1)?;
+                config.appendonly = Some(config_arg_bool(directive, 0)?);
+            }
+            b"appenddirname" => {
+                expect_config_arg_count(directive, 1)?;
+                config.appenddirname = Some(config_arg_string(directive, 0)?);
+            }
+            b"appendfilename" => {
+                expect_config_arg_count(directive, 1)?;
+                config.appendfilename = Some(config_arg_string(directive, 0)?);
             }
             _ => {}
         }
@@ -361,6 +418,23 @@ fn config_arg_port(
     })
 }
 
+fn config_arg_bool(
+    directive: &fr_config::ParsedConfigDirective,
+    index: usize,
+) -> Result<bool, String> {
+    let value = config_arg_string(directive, index)?;
+    if value.eq_ignore_ascii_case("yes") {
+        Ok(true)
+    } else if value.eq_ignore_ascii_case("no") {
+        Ok(false)
+    } else {
+        Err(config_directive_error(
+            directive,
+            &format!("argument {} must be yes or no", index + 1),
+        ))
+    }
+}
+
 fn config_directive_error(directive: &fr_config::ParsedConfigDirective, message: &str) -> String {
     format!(
         "invalid config directive '{}' on line {}: {message}",
@@ -386,6 +460,8 @@ fn main() -> ExitCode {
     let mut cli_replicaof = false;
     let mut cli_masteruser = false;
     let mut cli_masterauth = false;
+    let mut cli_aof = false;
+    let mut cli_rdb = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -428,6 +504,7 @@ fn main() -> ExitCode {
                 };
             }
             "--aof" => {
+                cli_aof = true;
                 i += 1;
                 if i >= args.len() {
                     eprintln!("error: --aof requires a file path");
@@ -436,6 +513,7 @@ fn main() -> ExitCode {
                 aof_path = Some(args[i].clone());
             }
             "--rdb" => {
+                cli_rdb = true;
                 i += 1;
                 if i >= args.len() {
                     eprintln!("error: --rdb requires a file path");
@@ -513,6 +591,8 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        let config_rdb_path = startup_config.configured_rdb_path();
+        let config_aof_path = startup_config.configured_aof_path();
         if !cli_bind_addr && let Some(config_bind_addr) = startup_config.bind_addr {
             bind_addr = config_bind_addr;
         }
@@ -527,6 +607,12 @@ fn main() -> ExitCode {
         }
         if !cli_masterauth && let Some(config_masterauth) = startup_config.masterauth {
             masterauth = config_masterauth;
+        }
+        if !cli_rdb && let Some(config_path) = config_rdb_path {
+            rdb_path = Some(config_path);
+        }
+        if !cli_aof && let Some(config_path) = config_aof_path {
+            aof_path = Some(config_path);
         }
         requirepass = startup_config.requirepass;
     }
@@ -2702,6 +2788,11 @@ mod tests {
              masteruser repl\n\
              masterauth repl-secret\n\
              replicaof primary.local 6380\n\
+             dir /tmp/frankenredis-startup\n\
+             dbfilename startup.rdb\n\
+             appendonly yes\n\
+             appenddirname aof-from-config\n\
+             appendfilename startup.aof\n\
              timeout 30\n",
         )
         .expect("parse config file");
@@ -2718,7 +2809,20 @@ mod tests {
                 masteruser: Some(Some("repl".to_string())),
                 masterauth: Some(Some("repl-secret".to_string())),
                 replicaof: Some(Some(("primary.local".to_string(), 6380))),
+                dir: Some("/tmp/frankenredis-startup".to_string()),
+                dbfilename: Some("startup.rdb".to_string()),
+                appendonly: Some(true),
+                appenddirname: Some("aof-from-config".to_string()),
+                appendfilename: Some("startup.aof".to_string()),
             }
+        );
+        assert_eq!(
+            config.configured_rdb_path(),
+            Some("/tmp/frankenredis-startup/startup.rdb".to_string())
+        );
+        assert_eq!(
+            config.configured_aof_path(),
+            Some("/tmp/frankenredis-startup/aof-from-config/startup.aof".to_string())
         );
     }
 
