@@ -24,6 +24,12 @@ pub struct AofReplayStream {
     pub records: Vec<AofReplayRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AofReplayTransactionTrim {
+    pub records: Vec<AofReplayRecord>,
+    pub truncated_from_offset: Option<usize>,
+}
+
 #[derive(Debug)]
 pub enum PersistError {
     InvalidFrame,
@@ -484,6 +490,40 @@ pub fn decode_aof_replay_stream(input: &[u8]) -> Result<AofReplayStream, Persist
         rdb_preamble: None,
         records: decode_aof_stream_with_offsets(input)?,
     })
+}
+
+/// Return the replay-safe prefix, trimming a terminal unmatched MULTI block.
+#[must_use]
+pub fn trim_incomplete_multi_replay(records: &[AofReplayRecord]) -> AofReplayTransactionTrim {
+    let mut multi_start_index = None;
+
+    for (index, replay_record) in records.iter().enumerate() {
+        let Some(command) = replay_record.record.argv.first() else {
+            continue;
+        };
+
+        if command.eq_ignore_ascii_case(b"MULTI") {
+            if multi_start_index.is_none() {
+                multi_start_index = Some(index);
+            }
+        } else if multi_start_index.is_some()
+            && (command.eq_ignore_ascii_case(b"EXEC") || command.eq_ignore_ascii_case(b"DISCARD"))
+        {
+            multi_start_index = None;
+        }
+    }
+
+    if let Some(index) = multi_start_index {
+        return AofReplayTransactionTrim {
+            records: records[..index].to_vec(),
+            truncated_from_offset: Some(records[index].start_offset),
+        };
+    }
+
+    AofReplayTransactionTrim {
+        records: records.to_vec(),
+        truncated_from_offset: None,
+    }
 }
 
 /// Convert a list of command argv vectors (from `Store::to_aof_commands()`)
@@ -1379,7 +1419,7 @@ mod tests {
     use super::{
         AofManifest, AofManifestFileType, AofRecord, PersistError, decode_aof_replay_stream,
         decode_aof_stream, decode_aof_stream_with_offsets, encode_aof_stream, format_aof_manifest,
-        parse_aof_manifest,
+        parse_aof_manifest, trim_incomplete_multi_replay,
     };
 
     #[test]
@@ -1483,6 +1523,79 @@ mod tests {
         assert_eq!(replay.records[1].record, records[1]);
         assert_eq!(replay.records[1].start_offset, first_len);
         assert_eq!(replay.records[1].end_offset, encoded.len());
+    }
+
+    #[test]
+    fn trim_incomplete_multi_replay_returns_valid_prefix_and_truncation_offset() {
+        let records = vec![
+            AofRecord {
+                argv: vec![b"SET".to_vec(), b"before".to_vec(), b"1".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"MULTI".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"SET".to_vec(), b"inside".to_vec(), b"2".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"INCR".to_vec(), b"inside-counter".to_vec()],
+            },
+        ];
+        let replay_records =
+            decode_aof_stream_with_offsets(&encode_aof_stream(&records)).expect("decode records");
+        let multi_offset = replay_records[1].start_offset;
+
+        let trimmed = trim_incomplete_multi_replay(&replay_records);
+
+        assert_eq!(trimmed.records, replay_records[..1]);
+        assert_eq!(trimmed.truncated_from_offset, Some(multi_offset));
+    }
+
+    #[test]
+    fn trim_incomplete_multi_replay_preserves_complete_exec_transaction() {
+        let records = vec![
+            AofRecord {
+                argv: vec![b"multi".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"exec".to_vec()],
+            },
+        ];
+        let replay_records =
+            decode_aof_stream_with_offsets(&encode_aof_stream(&records)).expect("decode records");
+
+        let trimmed = trim_incomplete_multi_replay(&replay_records);
+
+        assert_eq!(trimmed.records, replay_records);
+        assert_eq!(trimmed.truncated_from_offset, None);
+    }
+
+    #[test]
+    fn trim_incomplete_multi_replay_preserves_discarded_transaction_boundary() {
+        let records = vec![
+            AofRecord {
+                argv: vec![b"MULTI".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"DISCARD".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"SET".to_vec(), b"after".to_vec(), b"1".to_vec()],
+            },
+        ];
+        let replay_records =
+            decode_aof_stream_with_offsets(&encode_aof_stream(&records)).expect("decode records");
+
+        let trimmed = trim_incomplete_multi_replay(&replay_records);
+
+        assert_eq!(trimmed.records, replay_records);
+        assert_eq!(trimmed.truncated_from_offset, None);
     }
 
     #[test]
