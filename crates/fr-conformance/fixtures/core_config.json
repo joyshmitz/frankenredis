@@ -731,6 +731,20 @@
       }
     },
     {
+      "name": "config_set_tcp_backlog_immutable",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "tcp-backlog",
+        "1024"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'tcp-backlog') - can't set immutable config"
+      }
+    },
+    {
       "name": "config_set_known_static_noop",
       "now_ms": 0,
       "argv": [
