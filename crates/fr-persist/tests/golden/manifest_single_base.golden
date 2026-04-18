@@ -1,0 +1,13 @@
+AofManifest {
+    base: Some(
+        AofManifestEntry {
+            file_name: "appendonly.aof.1.base.rdb",
+            file_seq: 1,
+            file_type: Base,
+        },
+    ),
+    history: [],
+    incremental: [],
+    curr_base_file_seq: 1,
+    curr_incr_file_seq: 0,
+}

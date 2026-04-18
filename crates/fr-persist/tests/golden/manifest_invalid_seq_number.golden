@@ -1,0 +1,4 @@
+Error: ManifestParseViolation {
+    line: 1,
+    reason: "invalid seq field",
+}
