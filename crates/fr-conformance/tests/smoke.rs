@@ -3152,7 +3152,15 @@ fn redis_config_argument_splitter_conformance_matrix() {
         vec![b"foo\x0bbar".to_vec(), b"baz".to_vec()]
     );
     assert_eq!(
+        split_config_line_args("foo\x0cbar baz").expect("form feed inside bare token"),
+        vec![b"foo\x0cbar".to_vec(), b"baz".to_vec()]
+    );
+    assert_eq!(
         split_config_line_args("\"foo\"\x0bbar").expect("vertical tab after closed quote"),
+        vec![b"foo".to_vec(), b"bar".to_vec()]
+    );
+    assert_eq!(
+        split_config_line_args("\"foo\"\x0cbar").expect("form feed after closed quote"),
         vec![b"foo".to_vec(), b"bar".to_vec()]
     );
     assert_eq!(

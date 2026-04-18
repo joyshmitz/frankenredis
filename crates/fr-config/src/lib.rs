@@ -1320,6 +1320,18 @@ mod tests {
     }
 
     #[test]
+    fn redis_config_line_split_preserves_form_feed_in_bare_tokens() {
+        assert_eq!(
+            split_config_line_args("foo\x0cbar baz").expect("form feed inside bare token"),
+            vec![b"foo\x0cbar".to_vec(), b"baz".to_vec()]
+        );
+        assert_eq!(
+            split_config_line_args("\"foo\"\x0cbar").expect("form feed after closed quote"),
+            vec![b"foo".to_vec(), b"bar".to_vec()]
+        );
+    }
+
+    #[test]
     fn redis_config_line_split_rejects_invalid_quoted_tokens() {
         let err = split_config_line_args(r#"port "6379"#).expect_err("unterminated quote");
         assert_eq!(err, ConfigFileParseErrorReason::InvalidQuotedToken);
