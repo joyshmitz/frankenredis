@@ -211,3 +211,10 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_command_parse_advanced"
+path = "fuzz_targets/fuzz_command_parse_advanced.rs"
+test = false
+doc = false
+bench = false
+
