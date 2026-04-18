@@ -192,8 +192,8 @@
         "0"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "kind": "integer",
+        "value": 0
       }
     },
     {
@@ -205,8 +205,8 @@
         "0"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "kind": "integer",
+        "value": 0
       }
     },
     {
@@ -219,7 +219,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     },
     {
@@ -258,7 +258,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     },
     {
@@ -399,17 +399,8 @@
         "0"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR value is out of range, value must between 0 and 1"
       }
     },
     {
@@ -534,7 +525,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR value is out of range, value must between 0 and 1"
       }
     },
     {
@@ -548,7 +539,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR value is out of range, must be positive"
       }
     },
     {
@@ -562,7 +553,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR value is out of range, must be positive"
       }
     },
     {
@@ -576,7 +567,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     },
     {
@@ -590,7 +581,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is negative"
       }
     },
     {
@@ -618,7 +609,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR value is out of range, must be positive"
       }
     },
     {
@@ -632,7 +623,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     },
     {
@@ -685,7 +676,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     },
     {
@@ -698,7 +689,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     },
     {
@@ -740,7 +731,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR value is out of range, must be positive"
       }
     },
     {
@@ -754,7 +745,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR value is out of range, must be positive"
       }
     },
     {
@@ -768,7 +759,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     },
     {
@@ -782,7 +773,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR timeout is not an integer or out of range"
       }
     }
   ]

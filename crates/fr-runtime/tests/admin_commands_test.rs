@@ -410,3 +410,68 @@ fn command_getkeys_set() {
         RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"mykey".to_vec()))]))
     );
 }
+
+#[test]
+fn command_getkeys_ping_reports_no_key_arguments() {
+    let mut rt = Runtime::default_strict();
+    let out = rt.execute_frame(command(&[b"COMMAND", b"GETKEYS", b"PING"]), 0);
+    assert_eq!(
+        out,
+        RespFrame::Error("ERR The command has no key arguments".to_string())
+    );
+}
+
+#[test]
+fn command_getkeys_unknown_command_uses_redis_error() {
+    let mut rt = Runtime::default_strict();
+    let out = rt.execute_frame(command(&[b"COMMAND", b"GETKEYS", b"NOSUCHCMD", b"arg1"]), 0);
+    assert_eq!(
+        out,
+        RespFrame::Error("ERR Invalid command specified".to_string())
+    );
+}
+
+#[test]
+fn command_getkeysandflags_set_and_rename_match_upstream_roles() {
+    let mut rt = Runtime::default_strict();
+
+    let set = rt.execute_frame(
+        command(&[b"COMMAND", b"GETKEYSANDFLAGS", b"SET", b"alpha", b"1"]),
+        0,
+    );
+    assert_eq!(
+        set,
+        RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"alpha".to_vec())),
+            RespFrame::Array(Some(vec![
+                RespFrame::SimpleString("OW".to_string()),
+                RespFrame::SimpleString("update".to_string()),
+            ])),
+        ]))]))
+    );
+
+    let rename = rt.execute_frame(
+        command(&[b"COMMAND", b"GETKEYSANDFLAGS", b"RENAME", b"src", b"dst"]),
+        0,
+    );
+    assert_eq!(
+        rename,
+        RespFrame::Array(Some(vec![
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"src".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::SimpleString("RW".to_string()),
+                    RespFrame::SimpleString("access".to_string()),
+                    RespFrame::SimpleString("delete".to_string()),
+                ])),
+            ])),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"dst".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::SimpleString("OW".to_string()),
+                    RespFrame::SimpleString("update".to_string()),
+                ])),
+            ])),
+        ]))
+    );
+}

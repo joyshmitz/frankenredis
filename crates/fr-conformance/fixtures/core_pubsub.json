@@ -196,8 +196,8 @@
         "world"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'publish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -284,25 +284,8 @@
         "ch2"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "ch1"
-          },
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "bulk",
-            "value": "ch2"
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -338,8 +321,8 @@
         "NUMPAT"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numpat': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -351,8 +334,8 @@
         "evacuate"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'publish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -363,8 +346,8 @@
         "SHARDCHANNELS"
       ],
       "expect": {
-        "kind": "array",
-        "value": []
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|shardchannels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -376,17 +359,8 @@
         "ch1"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "ch1"
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|shardnumsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -443,7 +417,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR unknown subcommand 'NOSUCHSUB'. Try PUBSUB HELP."
       }
     },
     {
@@ -455,8 +429,8 @@
         "msg"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 0
+        "kind": "error",
+        "value": "ERR Can't execute 'spublish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -492,13 +466,8 @@
         "SHARDCHANNELS"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "shardch"
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|shardchannels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -511,25 +480,8 @@
         "other"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "shardch"
-          },
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "bulk",
-            "value": "other"
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|shardnumsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -541,8 +493,8 @@
         "msg"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'spublish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -695,13 +647,8 @@
         "al*"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "alpha"
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|channels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -713,8 +660,8 @@
         "zz*"
       ],
       "expect": {
-        "kind": "array",
-        "value": []
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|channels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -725,8 +672,8 @@
         "NUMSUB"
       ],
       "expect": {
-        "kind": "array",
-        "value": []
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -740,33 +687,8 @@
         "nosuch"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "alpha"
-          },
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "bulk",
-            "value": "beta"
-          },
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "bulk",
-            "value": "nosuch"
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -778,8 +700,8 @@
         "msg1"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'publish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -791,8 +713,8 @@
         "msg2"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 0
+        "kind": "error",
+        "value": "ERR Can't execute 'publish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -851,8 +773,8 @@
         "NUMPAT"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 2
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numpat': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -864,8 +786,8 @@
         "msg3"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 2
+        "kind": "error",
+        "value": "ERR Can't execute 'publish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -877,8 +799,8 @@
         "msg4"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 2
+        "kind": "error",
+        "value": "ERR Can't execute 'publish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -915,8 +837,8 @@
         "msg5"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'publish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -977,8 +899,8 @@
         "NUMPAT"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 0
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numpat': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1102,17 +1024,8 @@
         "dup"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "dup"
-          },
-          {
-            "kind": "integer",
-            "value": 1
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1220,8 +1133,8 @@
         "shardmsg"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'spublish': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1232,17 +1145,8 @@
         "SHARDCHANNELS"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "sch1"
-          },
-          {
-            "kind": "bulk",
-            "value": "sch2"
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|shardchannels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1256,33 +1160,8 @@
         "nosuch"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "sch1"
-          },
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "bulk",
-            "value": "sch2"
-          },
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "bulk",
-            "value": "nosuch"
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|shardnumsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1376,13 +1255,8 @@
         "*"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "news:only"
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|channels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1394,13 +1268,8 @@
         "news:*"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "news:only"
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|channels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1412,8 +1281,8 @@
         "weather:*"
       ],
       "expect": {
-        "kind": "array",
-        "value": []
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|channels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1425,17 +1294,8 @@
         "nonexistent"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "nonexistent"
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1448,25 +1308,8 @@
         "nonexistent"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "news:only"
-          },
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "bulk",
-            "value": "nonexistent"
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1502,8 +1345,8 @@
         "NUMPAT"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numpat': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1514,13 +1357,8 @@
         "channels"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "news:only"
-          }
-        ]
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|channels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1531,8 +1369,8 @@
         "numsub"
       ],
       "expect": {
-        "kind": "array",
-        "value": []
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
@@ -1543,8 +1381,8 @@
         "numpat"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR Can't execute 'pubsub|numpat': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
       }
     },
     {
