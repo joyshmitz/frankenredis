@@ -6195,7 +6195,9 @@ fn function_cmd(
             hello_simple("    * Library description"),
             hello_simple("    * Functions list"),
             hello_simple("    * Library code (if WITHCODE is given)"),
-            hello_simple("    It also possible to get only function that matches a pattern using LIBRARYNAME argument."),
+            hello_simple(
+                "    It also possible to get only function that matches a pattern using LIBRARYNAME argument.",
+            ),
             hello_simple("STATS"),
             hello_simple("    Return information about the current function running:"),
             hello_simple("    * Function name"),
@@ -6207,19 +6209,31 @@ fn function_cmd(
             hello_simple("    Kill the current running function."),
             hello_simple("FLUSH [ASYNC|SYNC]"),
             hello_simple("    Delete all the libraries."),
-            hello_simple("    When called without the optional mode argument, the behavior is determined by the"),
+            hello_simple(
+                "    When called without the optional mode argument, the behavior is determined by the",
+            ),
             hello_simple("    lazyfree-lazy-user-flush configuration directive. Valid modes are:"),
             hello_simple("    * ASYNC: Asynchronously flush the libraries."),
             hello_simple("    * SYNC: Synchronously flush the libraries."),
             hello_simple("DUMP"),
-            hello_simple("    Return a serialized payload representing the current libraries, can be restored using FUNCTION RESTORE command"),
+            hello_simple(
+                "    Return a serialized payload representing the current libraries, can be restored using FUNCTION RESTORE command",
+            ),
             hello_simple("RESTORE <PAYLOAD> [FLUSH|APPEND|REPLACE]"),
-            hello_simple("    Restore the libraries represented by the given payload, it is possible to give a restore policy to"),
+            hello_simple(
+                "    Restore the libraries represented by the given payload, it is possible to give a restore policy to",
+            ),
             hello_simple("    control how to handle existing libraries (default APPEND):"),
             hello_simple("    * FLUSH: delete all existing libraries."),
-            hello_simple("    * APPEND: appends the restored libraries to the existing libraries. On collision, abort."),
-            hello_simple("    * REPLACE: appends the restored libraries to the existing libraries, On collision, replace the old"),
-            hello_simple("      libraries with the new libraries (notice that even on this option there is a chance of failure"),
+            hello_simple(
+                "    * APPEND: appends the restored libraries to the existing libraries. On collision, abort.",
+            ),
+            hello_simple(
+                "    * REPLACE: appends the restored libraries to the existing libraries, On collision, replace the old",
+            ),
+            hello_simple(
+                "      libraries with the new libraries (notice that even on this option there is a chance of failure",
+            ),
             hello_simple("      in case of functions name collision with another library)."),
             hello_simple("HELP"),
             hello_simple("    Print this help."),
@@ -6238,7 +6252,11 @@ fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     let is_ro = cmd_name.eq_ignore_ascii_case("FCALL_RO");
 
     if argv.len() < 3 {
-        return Err(CommandError::WrongArity(if is_ro { "fcall_ro" } else { "fcall" }));
+        return Err(CommandError::WrongArity(if is_ro {
+            "fcall_ro"
+        } else {
+            "fcall"
+        }));
     }
     if store.script_nesting_level >= 1 {
         return Ok(RespFrame::Error(
@@ -6260,7 +6278,10 @@ fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     // Look up the function by name
     let (script, has_no_writes) = match store.function_get(func_name) {
         Some((lib, func)) => {
-            let no_writes = func.flags.iter().any(|f| f.eq_ignore_ascii_case("no-writes"));
+            let no_writes = func
+                .flags
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case("no-writes"));
             (lib.code.clone(), no_writes)
         }
         None => {
@@ -6269,7 +6290,9 @@ fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     };
 
     if is_ro && !has_no_writes {
-        return Ok(RespFrame::Error("ERR Can not execute a script with write flag using *_ro command.".to_string()));
+        return Ok(RespFrame::Error(
+            "ERR Can not execute a script with write flag using *_ro command.".to_string(),
+        ));
     }
 
     let (_numkeys, keys, args) = parse_eval_args(argv)?;
@@ -28386,6 +28409,127 @@ mod tests {
         assert_eq!(
             store.dispatch_client_ctx.client_name.as_deref(),
             Some(b"bravo".as_slice())
+        );
+    }
+
+    #[test]
+    fn function_and_script_parity_errors_match_vendored_redis() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LOAD".to_vec(),
+                b"#!lua\nredis.register_function('f', function(keys, args) return 1 end)".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error("ERR Library name was not given".to_string())
+        );
+
+        let cases = [
+            (
+                vec![b"FUNCTION".to_vec(), b"DELETE".to_vec()],
+                "ERR wrong number of arguments for 'function|delete' command",
+            ),
+            (
+                vec![b"FUNCTION".to_vec(), b"LOAD".to_vec()],
+                "ERR wrong number of arguments for 'function|load' command",
+            ),
+            (
+                vec![b"FUNCTION".to_vec(), b"RESTORE".to_vec()],
+                "ERR wrong number of arguments for 'function|restore' command",
+            ),
+            (
+                vec![b"SCRIPT".to_vec(), b"EXISTS".to_vec()],
+                "ERR wrong number of arguments for 'script|exists' command",
+            ),
+            (
+                vec![b"SCRIPT".to_vec(), b"LOAD".to_vec()],
+                "ERR wrong number of arguments for 'script|load' command",
+            ),
+        ];
+        for (argv, expected) in cases {
+            let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+            assert_eq!(
+                err.to_resp(),
+                RespFrame::Error(expected.to_string()),
+                "argv: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fcall_lookup_precedes_numkeys_validation_and_ro_alias_matches_redis() {
+        let mut store = Store::new();
+        let lookup_first_cases = [
+            vec![b"FCALL".to_vec(), b"myfunc".to_vec(), b"abc".to_vec()],
+            vec![b"FCALL".to_vec(), b"myfunc".to_vec(), b"-1".to_vec()],
+            vec![b"FCALL".to_vec(), b"myfunc".to_vec(), b"5".to_vec()],
+            vec![b"FCALL_RO".to_vec(), b"myfunc".to_vec(), b"abc".to_vec()],
+            vec![b"FCALL_RO".to_vec(), b"myfunc".to_vec(), b"-1".to_vec()],
+            vec![b"FCALL_RO".to_vec(), b"myfunc".to_vec(), b"5".to_vec()],
+        ];
+        for argv in lookup_first_cases {
+            let out = dispatch_argv(&argv, &mut store, 0).unwrap();
+            assert_eq!(
+                out,
+                RespFrame::Error("ERR Function not found".to_string()),
+                "argv: {argv:?}"
+            );
+        }
+
+        let arity_cases = [
+            vec![b"FCALL_RO".to_vec()],
+            vec![b"FCALL_RO".to_vec(), b"func".to_vec()],
+        ];
+        for argv in arity_cases {
+            let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+            assert_eq!(
+                err.to_resp(),
+                RespFrame::Error(
+                    "ERR wrong number of arguments for 'fcall_ro' command".to_string()
+                ),
+                "argv: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fcall_ro_rejects_positional_functions_without_no_writes_flag_like_redis() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LOAD".to_vec(),
+                b"#!lua name=rolib\nredis.register_function('echo_ro', function(keys, args) return args[1] end)"
+                    .to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::BulkString(Some(b"rolib".to_vec())));
+
+        let out = dispatch_argv(
+            &[
+                b"FCALL_RO".to_vec(),
+                b"echo_ro".to_vec(),
+                b"0".to_vec(),
+                b"readonly_val".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            RespFrame::Error(
+                "ERR Can not execute a script with write flag using *_ro command.".to_string()
+            )
         );
     }
 

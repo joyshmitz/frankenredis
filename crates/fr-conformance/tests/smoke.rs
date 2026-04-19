@@ -3429,12 +3429,27 @@ const CORE_FUNCTION_LIVE_STABLE_CASES: &[&str] = &[
     "script_flush",
     "script_exists_after_flush",
     "function_unknown_subcommand",
+    "function_load_missing_name",
+    "function_load_wrong_arity",
+    "function_delete_wrong_arity",
+    "function_restore_wrong_arity",
     "fcall_ro_basic",
+    "fcall_ro_returns_arg",
     "function_delete_rolib",
     "function_flush_sync",
     "function_list_after_sync_flush",
     "fcall_not_found_after_flush",
+    "fcall_invalid_numkeys",
+    "fcall_negative_numkeys",
+    "fcall_numkeys_exceeds_args",
+    "fcall_ro_wrong_arity",
+    "fcall_ro_wrong_arity_no_numkeys",
+    "fcall_ro_invalid_numkeys",
+    "fcall_ro_negative_numkeys",
+    "fcall_ro_numkeys_exceeds_args",
     "script_wrong_arity",
+    "script_exists_wrong_arity",
+    "script_load_wrong_arity",
     "script_unknown_subcommand",
     "script_flush_sync",
     "script_flush_async",
@@ -3449,9 +3464,13 @@ fn core_function_live_redis_matches_runtime() {
         port: oracle_server.port,
         ..LiveOracleConfig::default()
     };
-    let report =
-        fr_conformance::run_live_redis_diff_for_cases(&cfg, "core_function.json", CORE_FUNCTION_LIVE_STABLE_CASES, &oracle)
-            .expect("function live diff");
+    let report = fr_conformance::run_live_redis_diff_for_cases(
+        &cfg,
+        "core_function.json",
+        CORE_FUNCTION_LIVE_STABLE_CASES,
+        &oracle,
+    )
+    .expect("function live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",

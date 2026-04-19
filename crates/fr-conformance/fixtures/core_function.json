@@ -974,8 +974,8 @@
         "readonly_val"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "readonly_val"
+        "kind": "error",
+        "value": "ERR Can not execute a script with write flag using *_ro command."
       }
     },
     {
@@ -1026,7 +1026,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Missing library metadata"
+        "value": "ERR Library name was not given"
       }
     },
     {
@@ -1050,7 +1050,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'fcall' command"
+        "value": "ERR wrong number of arguments for 'fcall_ro' command"
       }
     },
     {
@@ -1062,7 +1062,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'fcall' command"
+        "value": "ERR wrong number of arguments for 'fcall_ro' command"
       }
     },
     {
@@ -1124,7 +1124,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR Function not found"
       }
     },
     {
@@ -1137,7 +1137,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Number of keys can't be negative"
+        "value": "ERR Function not found"
       }
     },
     {
@@ -1150,7 +1150,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR Function not found"
       }
     },
     {
@@ -1163,7 +1163,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Number of keys can't be negative"
+        "value": "ERR Function not found"
       }
     },
     {
@@ -1175,7 +1175,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'function' command"
+        "value": "ERR wrong number of arguments for 'function|delete' command"
       }
     },
     {
@@ -1187,7 +1187,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'function' command"
+        "value": "ERR wrong number of arguments for 'function|load' command"
       }
     },
     {
@@ -1211,7 +1211,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'function' command"
+        "value": "ERR wrong number of arguments for 'function|restore' command"
       }
     },
     {
@@ -1223,7 +1223,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'script|exists' subcommand"
+        "value": "ERR wrong number of arguments for 'script|exists' command"
       }
     },
     {
@@ -1235,7 +1235,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'script|load' subcommand"
+        "value": "ERR wrong number of arguments for 'script|load' command"
       }
     },
     {
@@ -1248,7 +1248,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Number of keys can't be greater than number of args"
+        "value": "ERR Function not found"
       }
     },
     {
@@ -1261,7 +1261,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Number of keys can't be greater than number of args"
+        "value": "ERR Function not found"
       }
     },
     {
@@ -1301,7 +1301,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'function' command"
+        "value": "ERR wrong number of arguments for 'function|delete' command"
       }
     },
     {
@@ -1326,8 +1326,8 @@
         "0"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "readonly_result"
+        "kind": "error",
+        "value": "ERR Can not execute a script with write flag using *_ro command."
       }
     },
     {
@@ -1355,8 +1355,8 @@
         "myarg"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "mykey:myarg"
+        "kind": "error",
+        "value": "ERR Can not execute a script with write flag using *_ro command."
       }
     },
     {
