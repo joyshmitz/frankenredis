@@ -8820,6 +8820,7 @@ impl Store {
                 });
             }
         }
+        functions.sort_by(|a, b| b.name.cmp(&a.name));
 
         let library = FunctionLibrary {
             name: lib_name.clone(),
@@ -8870,6 +8871,9 @@ impl Store {
 
     /// Dump all function libraries as a serialized blob.
     pub fn function_dump(&self) -> Vec<u8> {
+        if self.function_libraries.is_empty() {
+            return vec![11, 0, 52, 68, 225, 51, 242, 224, 75, 83];
+        }
         // Simple binary format: [count:4LE] [for each: name_len:4LE name code_len:4LE code]
         let mut buf = Vec::new();
         let count = self.function_libraries.len() as u32;

@@ -678,7 +678,7 @@ impl CommandError {
                 command,
                 subcommand,
             } => RespFrame::Error(format!(
-                "ERR wrong number of arguments for '{}|{}' subcommand",
+                "ERR wrong number of arguments for '{}|{}' command",
                 command.to_ascii_lowercase(),
                 subcommand.to_ascii_lowercase()
             )),
@@ -6151,7 +6151,7 @@ fn function_cmd(
                 std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if !mode.eq_ignore_ascii_case("ASYNC") && !mode.eq_ignore_ascii_case("SYNC") {
                 return Ok(RespFrame::Error(
-                    "ERR FUNCTION FLUSH only supports ASYNC and SYNC options".to_string(),
+                    "ERR FUNCTION FLUSH only supports SYNC|ASYNC option".to_string(),
                 ));
             }
         }
@@ -6159,7 +6159,10 @@ fn function_cmd(
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("DELETE") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongArity("FUNCTION"));
+            return Err(CommandError::WrongSubcommandArity {
+                command: "FUNCTION",
+                subcommand: "DELETE".to_string(),
+            });
         }
         let name = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         match store.function_delete(name) {
