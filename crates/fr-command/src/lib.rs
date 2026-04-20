@@ -28776,6 +28776,48 @@ mod tests {
     }
 
     #[test]
+    fn client_trackinginfo_reports_optout_caching_no() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"TRACKING".to_vec(),
+                b"ON".to_vec(),
+                b"OPTOUT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        dispatch_argv(
+            &[b"CLIENT".to_vec(), b"CACHING".to_vec(), b"NO".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            dispatch_argv(
+                &[b"CLIENT".to_vec(), b"TRACKINGINFO".to_vec()],
+                &mut store,
+                0
+            )
+            .unwrap(),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"optout".to_vec())),
+                    RespFrame::BulkString(Some(b"caching-no".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"redirect".to_vec())),
+                RespFrame::Integer(0),
+                RespFrame::BulkString(Some(b"prefixes".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+    }
+
+    #[test]
     fn client_setname_validates_arity_and_characters() {
         let mut store = Store::new();
         let err =

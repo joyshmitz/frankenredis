@@ -1515,6 +1515,69 @@
       }
     },
     {
+      "name": "client_tracking_off_before_optout_caching_no",
+      "now_ms": 2791,
+      "argv": [
+        "CLIENT",
+        "TRACKING",
+        "OFF"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_tracking_on_optout",
+      "now_ms": 2792,
+      "argv": [
+        "CLIENT",
+        "TRACKING",
+        "ON",
+        "OPTOUT"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_caching_no_optout_ok",
+      "now_ms": 2793,
+      "argv": [
+        "CLIENT",
+        "CACHING",
+        "NO"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "client_trackinginfo_reports_optout_caching_no",
+      "now_ms": 2794,
+      "argv": [
+        "CLIENT",
+        "TRACKINGINFO"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind": "bulk", "value": "flags"},
+          {"kind": "array", "value": [
+            {"kind": "bulk", "value": "on"},
+            {"kind": "bulk", "value": "optout"},
+            {"kind": "bulk", "value": "caching-no"}
+          ]},
+          {"kind": "bulk", "value": "redirect"},
+          {"kind": "integer", "value": 0},
+          {"kind": "bulk", "value": "prefixes"},
+          {"kind": "array", "value": []}
+        ]
+      }
+    },
+    {
       "name": "client_trackinginfo_wrong_arity",
       "now_ms": 280,
       "argv": [

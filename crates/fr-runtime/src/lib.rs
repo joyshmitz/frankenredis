@@ -12166,6 +12166,34 @@ mod tests {
     }
 
     #[test]
+    fn client_trackinginfo_reports_optout_caching_no() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKING", b"ON", b"OPTOUT"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"NO"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 3),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"optout".to_vec())),
+                    RespFrame::BulkString(Some(b"caching-no".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"redirect".to_vec())),
+                RespFrame::Integer(0),
+                RespFrame::BulkString(Some(b"prefixes".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+    }
+
+    #[test]
     fn client_list_reports_live_pubsub_counts() {
         let mut rt = Runtime::default_strict();
         let observer = rt.new_session();
