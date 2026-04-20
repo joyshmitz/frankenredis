@@ -3533,6 +3533,107 @@ fn core_function_live_redis_matches_runtime() {
 }
 
 #[test]
+fn core_function_dump_restore_roundtrip_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let mut runtime = Runtime::default_strict();
+    let mut live = TcpStream::connect(("127.0.0.1", oracle_server.port))
+        .expect("connect to vendored redis for FUNCTION DUMP/RESTORE smoke");
+    live.set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set vendored redis read timeout");
+    live.set_write_timeout(Some(Duration::from_secs(2)))
+        .expect("set vendored redis write timeout");
+
+    let start = Instant::now();
+    let now_ms = || u64::try_from(start.elapsed().as_millis()).expect("elapsed millis fit u64");
+    let bulk = |bytes: &[u8]| RespFrame::BulkString(Some(bytes.to_vec()));
+    let library = "#!lua name=roundtriplib\nredis.register_function('roundtrip_echo', function(keys, args) return args[1] end)";
+
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["FUNCTION", "FLUSH", "SYNC"],
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["FUNCTION", "LOAD", "REPLACE", library],
+        ),
+        RespFrame::BulkString(Some(b"roundtriplib".to_vec()))
+    );
+
+    let dump_frame = command_frame(&["FUNCTION", "DUMP"]);
+    let runtime_dump = runtime.execute_frame(dump_frame.clone(), now_ms());
+    let live_dump = send_frame_and_read(&mut live, &dump_frame);
+    let runtime_dump_bytes = match runtime_dump {
+        RespFrame::BulkString(Some(bytes)) => bytes,
+        other => panic!("runtime FUNCTION DUMP returned unexpected reply: {other:?}"),
+    };
+    let live_dump_bytes = match live_dump {
+        RespFrame::BulkString(Some(bytes)) => bytes,
+        other => panic!("live FUNCTION DUMP returned unexpected reply: {other:?}"),
+    };
+    assert!(
+        !runtime_dump_bytes.is_empty(),
+        "runtime FUNCTION DUMP payload was empty"
+    );
+    assert!(
+        !live_dump_bytes.is_empty(),
+        "live FUNCTION DUMP payload was empty"
+    );
+
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["FUNCTION", "FLUSH", "SYNC"],
+        ),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    let runtime_restore = RespFrame::Array(Some(vec![
+        bulk(b"FUNCTION"),
+        bulk(b"RESTORE"),
+        RespFrame::BulkString(Some(runtime_dump_bytes)),
+    ]));
+    let live_restore = RespFrame::Array(Some(vec![
+        bulk(b"FUNCTION"),
+        bulk(b"RESTORE"),
+        RespFrame::BulkString(Some(live_dump_bytes)),
+    ]));
+    assert_eq!(
+        runtime.execute_frame(runtime_restore, now_ms()),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        send_frame_and_read(&mut live, &live_restore),
+        RespFrame::SimpleString("OK".to_string())
+    );
+
+    let function_list_frame = command_frame(&["FUNCTION", "LIST"]);
+    let runtime_function_list = runtime.execute_frame(function_list_frame.clone(), now_ms());
+    let live_function_list = send_frame_and_read(&mut live, &function_list_frame);
+    assert_eq!(runtime_function_list, live_function_list);
+
+    assert_eq!(
+        run_runtime_live_exact(
+            &mut runtime,
+            &mut live,
+            now_ms(),
+            &["FCALL", "roundtrip_echo", "0", "echoed"],
+        ),
+        RespFrame::BulkString(Some(b"echoed".to_vec()))
+    );
+}
+
+#[test]
 fn core_wait_conformance() {
     let cfg = HarnessConfig::default_paths();
     let diff = run_fixture(&cfg, "core_wait.json").expect("wait fixture");

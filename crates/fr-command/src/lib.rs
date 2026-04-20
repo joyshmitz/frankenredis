@@ -29042,6 +29042,69 @@ mod tests {
     }
 
     #[test]
+    fn function_dump_restore_roundtrip_via_command_path() {
+        let mut store = Store::new();
+        let library = b"#!lua name=roundtriplib\nredis.register_function('roundtrip_echo', function(keys, args) return args[1] end)";
+
+        let out = dispatch_argv(
+            &[b"FUNCTION".to_vec(), b"LOAD".to_vec(), library.to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::BulkString(Some(b"roundtriplib".to_vec())));
+
+        let dumped =
+            dispatch_argv(&[b"FUNCTION".to_vec(), b"DUMP".to_vec()], &mut store, 0).unwrap();
+        let RespFrame::BulkString(Some(dumped_bytes)) = dumped else {
+            panic!("FUNCTION DUMP must return a bulk string");
+        };
+        assert!(
+            !dumped_bytes.is_empty(),
+            "FUNCTION DUMP payload must be non-empty"
+        );
+
+        let out = dispatch_argv(
+            &[b"FUNCTION".to_vec(), b"FLUSH".to_vec(), b"SYNC".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+
+        let out = dispatch_argv(
+            &[b"FUNCTION".to_vec(), b"RESTORE".to_vec(), dumped_bytes],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+
+        let out = dispatch_argv(&[b"FUNCTION".to_vec(), b"LIST".to_vec()], &mut store, 0).unwrap();
+        let RespFrame::Array(Some(libraries)) = out else {
+            panic!("FUNCTION LIST must return an array");
+        };
+        assert_eq!(
+            libraries.len(),
+            1,
+            "restored dump must recreate the library"
+        );
+
+        let out = dispatch_argv(
+            &[
+                b"FCALL".to_vec(),
+                b"roundtrip_echo".to_vec(),
+                b"0".to_vec(),
+                b"echoed".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::BulkString(Some(b"echoed".to_vec())));
+    }
+
+    #[test]
     fn fcall_ro_rejects_positional_functions_without_no_writes_flag_like_redis() {
         let mut store = Store::new();
         let out = dispatch_argv(
