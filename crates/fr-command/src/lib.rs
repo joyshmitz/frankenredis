@@ -6172,6 +6172,12 @@ fn function_cmd(
                 subcommand: "RESTORE".to_string(),
             });
         }
+        if argv.len() > 4 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'RESTORE'. Try FUNCTION HELP."
+                    .to_string(),
+            ));
+        }
         let policy = if argv.len() >= 4 {
             std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?
         } else {
@@ -28948,6 +28954,16 @@ mod tests {
                 "ERR wrong number of arguments for 'function|restore' command",
             ),
             (
+                vec![
+                    b"FUNCTION".to_vec(),
+                    b"RESTORE".to_vec(),
+                    b"payload".to_vec(),
+                    b"FLUSH".to_vec(),
+                    b"EXTRA".to_vec(),
+                ],
+                "ERR unknown subcommand or wrong number of arguments for 'RESTORE'. Try FUNCTION HELP.",
+            ),
+            (
                 vec![b"SCRIPT".to_vec(), b"EXISTS".to_vec()],
                 "ERR wrong number of arguments for 'script|exists' command",
             ),
@@ -29000,6 +29016,29 @@ mod tests {
                 "argv: {argv:?}"
             );
         }
+    }
+
+    #[test]
+    fn function_restore_policy_errors_match_redis() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"RESTORE".to_vec(),
+                b"payload".to_vec(),
+                b"BOGUS".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error(
+                "ERR Wrong restore policy given, value should be either FLUSH, APPEND or REPLACE."
+                    .to_string(),
+            )
+        );
     }
 
     #[test]

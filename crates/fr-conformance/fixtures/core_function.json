@@ -1380,6 +1380,35 @@
       }
     },
     {
+      "name": "function_restore_wrong_policy",
+      "now_ms": 100,
+      "argv": [
+        "FUNCTION",
+        "RESTORE",
+        "payload",
+        "BOGUS"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR Wrong restore policy given, value should be either FLUSH, APPEND or REPLACE."
+      }
+    },
+    {
+      "name": "function_restore_extra_args",
+      "now_ms": 100,
+      "argv": [
+        "FUNCTION",
+        "RESTORE",
+        "payload",
+        "FLUSH",
+        "EXTRA"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR unknown subcommand or wrong number of arguments for 'RESTORE'. Try FUNCTION HELP."
+      }
+    },
+    {
       "name": "script_exists_wrong_arity",
       "now_ms": 100,
       "argv": [

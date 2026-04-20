@@ -3483,6 +3483,8 @@ const CORE_FUNCTION_LIVE_STABLE_CASES: &[&str] = &[
     "function_load_wrong_arity",
     "function_delete_wrong_arity",
     "function_restore_wrong_arity",
+    "function_restore_wrong_policy",
+    "function_restore_extra_args",
     "fcall_ro_basic",
     "fcall_ro_returns_arg",
     "function_delete_rolib",

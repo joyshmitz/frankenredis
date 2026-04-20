@@ -9035,7 +9035,8 @@ impl Store {
         // Reject unknown policies
         if !flush && !replace && !append {
             return Err(StoreError::GenericError(
-                "ERR Invalid restore policy".to_string(),
+                "ERR Wrong restore policy given, value should be either FLUSH, APPEND or REPLACE."
+                    .to_string(),
             ));
         }
 
@@ -14701,6 +14702,37 @@ mod tests {
             function_library_snapshot(&store),
             before,
             "failed FUNCTION RESTORE must not clear or partially mutate state"
+        );
+    }
+
+    #[test]
+    fn function_restore_flush_replaces_existing_libraries() {
+        let mut source = Store::new();
+        source
+            .function_load(&sample_function_library("seedlib", "alpha", "beta"), false)
+            .expect("seed library must load");
+        let source_snapshot = function_library_snapshot(&source);
+        let dumped = source.function_dump();
+
+        let mut restored = Store::new();
+        restored
+            .function_load(&sample_function_library("stale", "gamma", "delta"), false)
+            .expect("stale library must load");
+
+        restored
+            .function_restore(&dumped, "FLUSH")
+            .expect("FUNCTION RESTORE FLUSH must replace existing libraries");
+
+        let restored_snapshot = function_library_snapshot(&restored);
+        assert_eq!(restored_snapshot.len(), 1);
+        assert_eq!(restored_snapshot[0].0, source_snapshot[0].0);
+        assert_eq!(restored_snapshot[0].1, source_snapshot[0].1);
+        assert_eq!(restored_snapshot[0].2, source_snapshot[0].2);
+        let mut function_names = restored_snapshot[0].3.clone();
+        function_names.sort();
+        assert_eq!(
+            function_names,
+            vec!["alpha".to_string(), "beta".to_string()]
         );
     }
 
