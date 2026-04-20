@@ -520,6 +520,8 @@ struct Entry {
     expires_at_ms: Option<u64>,
     /// Last access timestamp in milliseconds (for OBJECT IDLETIME / LRU).
     last_access_ms: u64,
+    /// LFU access frequency counter exposed via OBJECT FREQ when LFU eviction is active.
+    lfu_freq: u8,
     /// Monotonic modification counter (bumped on every write, used by WATCH).
     modification_count: u64,
 }
@@ -530,6 +532,7 @@ impl Entry {
             value,
             expires_at_ms,
             last_access_ms: now_ms,
+            lfu_freq: 0,
             modification_count: 0,
         }
     }
@@ -539,6 +542,10 @@ impl Entry {
             return;
         }
         self.last_access_ms = now_ms;
+    }
+
+    fn bump_lfu_freq(&mut self) {
+        self.lfu_freq = self.lfu_freq.saturating_add(1);
     }
 
     fn bump_mod_count(&mut self) {
@@ -651,6 +658,11 @@ impl MaxmemoryPolicy {
             Self::AllkeysLfu => "allkeys-lfu",
             Self::VolatileLfu => "volatile-lfu",
         }
+    }
+
+    #[must_use]
+    pub fn tracks_lfu(self) -> bool {
+        matches!(self, Self::AllkeysLfu | Self::VolatileLfu)
     }
 }
 
@@ -1482,6 +1494,10 @@ impl Store {
         hit
     }
 
+    fn lfu_tracking_enabled(&self) -> bool {
+        self.maxmemory_policy.tracks_lfu()
+    }
+
     pub fn record_latency_sample(&mut self, event: &str, duration_ms: u64, now_sec: u64) {
         self.latency_tracker
             .record_sample(event, duration_ms, now_sec);
@@ -1590,10 +1606,14 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(None);
         }
+        let lfu_tracking_enabled = self.lfu_tracking_enabled();
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::String(v) => {
                     let v = v.clone();
+                    if lfu_tracking_enabled {
+                        entry.bump_lfu_freq();
+                    }
                     entry.touch(now_ms);
                     Ok(Some(v))
                 }
@@ -1604,10 +1624,20 @@ impl Store {
     }
 
     pub fn set(&mut self, key: Vec<u8>, value: Vec<u8>, px_ttl_ms: Option<u64>, now_ms: u64) {
+        self.drop_if_expired(key.as_slice(), now_ms);
         let expires_at_ms = px_ttl_ms.map(|ttl| now_ms.saturating_add(ttl));
+        let next_lfu_freq = if self.lfu_tracking_enabled() {
+            self.entries
+                .get(key.as_slice())
+                .map_or(0, |entry| entry.lfu_freq.saturating_add(1))
+        } else {
+            0
+        };
         self.stream_groups.remove(key.as_slice());
         self.stream_last_ids.remove(key.as_slice());
-        self.internal_entries_insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
+        let mut entry = Entry::new(Value::String(value), expires_at_ms, now_ms);
+        entry.lfu_freq = next_lfu_freq;
+        self.internal_entries_insert(key, entry);
         self.dirty = self.dirty.saturating_add(1);
     }
 
@@ -1619,9 +1649,19 @@ impl Store {
         expires_at_ms: Option<u64>,
         now_ms: u64,
     ) {
+        self.drop_if_expired(key.as_slice(), now_ms);
+        let next_lfu_freq = if self.lfu_tracking_enabled() {
+            self.entries
+                .get(key.as_slice())
+                .map_or(0, |entry| entry.lfu_freq.saturating_add(1))
+        } else {
+            0
+        };
         self.stream_groups.remove(key.as_slice());
         self.stream_last_ids.remove(key.as_slice());
-        self.internal_entries_insert(key, Entry::new(Value::String(value), expires_at_ms, now_ms));
+        let mut entry = Entry::new(Value::String(value), expires_at_ms, now_ms);
+        entry.lfu_freq = next_lfu_freq;
+        self.internal_entries_insert(key, entry);
         self.dirty = self.dirty.saturating_add(1);
     }
 
@@ -1662,7 +1702,11 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return false;
         }
+        let lfu_tracking_enabled = self.lfu_tracking_enabled();
         if let Some(entry) = self.entries.get_mut(key) {
+            if lfu_tracking_enabled {
+                entry.bump_lfu_freq();
+            }
             entry.touch(now_ms);
             true
         } else {
@@ -2519,10 +2563,22 @@ impl Store {
         })
     }
 
+    /// Return the LFU access frequency counter for a key without mutating it.
+    pub fn object_freq(&mut self, key: &[u8], now_ms: u64) -> Option<u8> {
+        if !self.record_keyspace_lookup(key, now_ms) {
+            return None;
+        }
+        self.entries.get(key).map(|entry| entry.lfu_freq)
+    }
+
     /// Touch a key (update its last access time) without modifying the value.
     pub fn touch_key(&mut self, key: &[u8], now_ms: u64) -> bool {
         self.drop_if_expired(key, now_ms);
+        let lfu_tracking_enabled = self.lfu_tracking_enabled();
         if let Some(entry) = self.entries.get_mut(key) {
+            if lfu_tracking_enabled {
+                entry.bump_lfu_freq();
+            }
             entry.touch(now_ms);
             true
         } else {
@@ -8454,11 +8510,15 @@ impl Store {
     /// TOUCH: returns count of keys that exist and updates last access time.
     pub fn touch(&mut self, keys: &[&[u8]], now_ms: u64) -> i64 {
         let mut count = 0i64;
+        let lfu_tracking_enabled = self.lfu_tracking_enabled();
         for &key in keys {
             if !self.record_keyspace_lookup(key, now_ms) {
                 continue;
             }
             if let Some(entry) = self.entries.get_mut(key) {
+                if lfu_tracking_enabled {
+                    entry.bump_lfu_freq();
+                }
                 entry.touch(now_ms);
                 count += 1;
             }
@@ -11455,6 +11515,25 @@ mod tests {
 
         assert_eq!(store.object_idletime(b"missing", 2_100), None);
         assert_eq!(store.stat_keyspace_misses, 1);
+    }
+
+    #[test]
+    fn object_freq_tracks_lfu_accesses_and_preserves_lru_switch_behavior() {
+        let mut store = Store::new();
+        store.set(b"k".to_vec(), b"v".to_vec(), None, 100);
+        assert_eq!(store.object_freq(b"k", 150), Some(0));
+
+        store.maxmemory_policy = MaxmemoryPolicy::AllkeysLfu;
+        assert_eq!(store.object_freq(b"k", 200), Some(0));
+
+        assert_eq!(store.get(b"k", 300).unwrap(), Some(b"v".to_vec()));
+        assert_eq!(store.object_freq(b"k", 301), Some(1));
+
+        store.set(b"k".to_vec(), b"v2".to_vec(), None, 400);
+        assert_eq!(store.object_freq(b"k", 401), Some(2));
+
+        store.maxmemory_policy = MaxmemoryPolicy::AllkeysLru;
+        assert_eq!(store.object_freq(b"k", 500), Some(2));
     }
 
     #[test]

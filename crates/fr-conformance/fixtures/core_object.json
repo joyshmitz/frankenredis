@@ -164,18 +164,72 @@
     },
 
     {
-      "name": "object_freq_returns_zero",
+      "name": "object_freq_non_lfu_policy_errors",
       "now_ms": 20000,
       "argv": ["OBJECT", "FREQ", "obj_int"],
-      "expect": { "kind": "integer", "value": 0 }
+      "expect": {
+        "kind": "error",
+        "value": "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."
+      }
     },
     {
       "name": "object_freq_missing_key",
       "now_ms": 20001,
       "argv": ["OBJECT", "FREQ", "no_such_key_obj"],
       "expect": {
+        "kind": "bulk",
+        "value": null
+      }
+    },
+    {
+      "name": "object_freq_enable_allkeys_lfu",
+      "now_ms": 20002,
+      "argv": ["CONFIG", "SET", "maxmemory-policy", "allkeys-lfu"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_freq_existing_key_starts_at_zero_after_lfu_switch",
+      "now_ms": 20003,
+      "argv": ["OBJECT", "FREQ", "obj_int"],
+      "expect": { "kind": "integer", "value": 0 }
+    },
+    {
+      "name": "object_freq_get_increments_counter",
+      "now_ms": 20004,
+      "argv": ["GET", "obj_int"],
+      "expect": { "kind": "bulk", "value": "12345" }
+    },
+    {
+      "name": "object_freq_reports_incremented_counter",
+      "now_ms": 20005,
+      "argv": ["OBJECT", "FREQ", "obj_int"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "object_freq_overwrite_increments_counter",
+      "now_ms": 20006,
+      "argv": ["SET", "obj_int", "12345"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_freq_reports_counter_after_overwrite",
+      "now_ms": 20007,
+      "argv": ["OBJECT", "FREQ", "obj_int"],
+      "expect": { "kind": "integer", "value": 2 }
+    },
+    {
+      "name": "object_freq_disable_lfu_again",
+      "now_ms": 20008,
+      "argv": ["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "object_freq_lru_policy_errors",
+      "now_ms": 20009,
+      "argv": ["OBJECT", "FREQ", "obj_int"],
+      "expect": {
         "kind": "error",
-        "value": "ERR no such key"
+        "value": "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."
       }
     },
 
@@ -229,7 +283,7 @@
       "argv": ["OBJECT", "ENCODING"],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'object|encoding' subcommand"
+        "value": "ERR wrong number of arguments for 'object|encoding' command"
       }
     },
 
@@ -438,8 +492,8 @@
       "now_ms": 38003,
       "argv": ["OBJECT", "FREQ", "obj_exp_key"],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {
@@ -482,7 +536,10 @@
       "name": "object_freq_hll",
       "now_ms": 45003,
       "argv": ["OBJECT", "FREQ", "obj_hll"],
-      "expect": { "kind": "integer", "value": 0 }
+      "expect": {
+        "kind": "error",
+        "value": "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."
+      }
     },
     {
       "name": "object_encoding_stream_setup",

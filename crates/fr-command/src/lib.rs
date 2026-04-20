@@ -2015,7 +2015,7 @@ fn set(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
     let key_exists = if get {
         old_value.is_some()
     } else {
-        store.exists(&argv[1], now_ms)
+        store.exists_no_touch(&argv[1], now_ms)
     };
     if nx && key_exists {
         return Ok(if get {
@@ -11317,17 +11317,18 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             None => Ok(RespFrame::Error("ERR no such key".to_string())),
         }
     } else if sub.eq_ignore_ascii_case("FREQ") {
-        // LFU frequency counter - returns 0 since we don't track frequency
         if argv.len() < 3 {
             return Err(CommandError::WrongSubcommandArity {
                 command: "OBJECT",
                 subcommand: sub.to_string(),
             });
         }
-        if store.exists_no_touch(&argv[2], now_ms) {
-            Ok(RespFrame::Integer(0))
-        } else {
-            Ok(RespFrame::Error("ERR no such key".to_string()))
+        match store.object_freq(&argv[2], now_ms) {
+            None => Ok(RespFrame::BulkString(None)),
+            Some(freq) if store.maxmemory_policy.tracks_lfu() => Ok(RespFrame::Integer(freq.into())),
+            Some(_) => Ok(RespFrame::Error(
+                "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.".to_string(),
+            )),
         }
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
@@ -30926,6 +30927,106 @@ mod tests {
                 RespFrame::SimpleString("HELP".to_string()),
                 RespFrame::SimpleString("    Print this help.".to_string()),
             ]))
+        );
+    }
+
+    #[test]
+    fn object_freq_matches_lfu_policy_gating_and_counter_semantics() {
+        let mut store = Store::new();
+
+        dispatch_argv(
+            &[b"SET".to_vec(), b"obj".to_vec(), b"v".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed key");
+
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"missing".to_vec()],
+            &mut store,
+            1,
+        )
+        .expect("missing freq reply");
+        assert_eq!(reply, RespFrame::BulkString(None));
+
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"obj".to_vec()],
+            &mut store,
+            2,
+        )
+        .expect("non-lfu freq reply");
+        assert_eq!(
+            reply,
+            RespFrame::Error(
+                "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.".to_string()
+            )
+        );
+
+        dispatch_argv(
+            &[
+                b"CONFIG".to_vec(),
+                b"SET".to_vec(),
+                b"maxmemory-policy".to_vec(),
+                b"allkeys-lfu".to_vec(),
+            ],
+            &mut store,
+            3,
+        )
+        .expect("enable lfu");
+
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"obj".to_vec()],
+            &mut store,
+            4,
+        )
+        .expect("lfu freq reply");
+        assert_eq!(reply, RespFrame::Integer(0));
+
+        dispatch_argv(&[b"GET".to_vec(), b"obj".to_vec()], &mut store, 5).expect("get obj");
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"obj".to_vec()],
+            &mut store,
+            6,
+        )
+        .expect("lfu freq after get");
+        assert_eq!(reply, RespFrame::Integer(1));
+
+        dispatch_argv(
+            &[b"SET".to_vec(), b"obj".to_vec(), b"vv".to_vec()],
+            &mut store,
+            7,
+        )
+        .expect("overwrite obj");
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"obj".to_vec()],
+            &mut store,
+            8,
+        )
+        .expect("lfu freq after overwrite");
+        assert_eq!(reply, RespFrame::Integer(2));
+
+        dispatch_argv(
+            &[
+                b"CONFIG".to_vec(),
+                b"SET".to_vec(),
+                b"maxmemory-policy".to_vec(),
+                b"allkeys-lru".to_vec(),
+            ],
+            &mut store,
+            9,
+        )
+        .expect("disable lfu");
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"obj".to_vec()],
+            &mut store,
+            10,
+        )
+        .expect("non-lfu freq reply after switch");
+        assert_eq!(
+            reply,
+            RespFrame::Error(
+                "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.".to_string()
+            )
         );
     }
 
