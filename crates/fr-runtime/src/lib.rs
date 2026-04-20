@@ -8169,7 +8169,9 @@ impl Runtime {
             _ => CommandError::InvalidInteger,
         })?;
         if target_db == self.session.selected_db {
-            return Ok(RespFrame::Integer(0));
+            return Err(CommandError::Custom(
+                "ERR source and destination objects are the same".to_string(),
+            ));
         }
         let source = encode_db_key(self.session.selected_db, &argv[1]);
         let destination = encode_db_key(target_db, &argv[1]);
@@ -11237,6 +11239,28 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"GET", b"swap"]), 11),
             RespFrame::BulkString(Some(b"db0".to_vec()))
+        );
+    }
+
+    #[test]
+    fn move_same_db_errors_before_key_lookup_like_redis() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"moveme", b"value"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"MOVE", b"moveme", b"0"]), 1),
+            RespFrame::Error("ERR source and destination objects are the same".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"GET", b"moveme"]), 2),
+            RespFrame::BulkString(Some(b"value".to_vec()))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"MOVE", b"missing", b"0"]), 3),
+            RespFrame::Error("ERR source and destination objects are the same".to_string())
         );
     }
 

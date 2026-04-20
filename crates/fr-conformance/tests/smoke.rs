@@ -1661,6 +1661,7 @@ const CORE_CONNECTION_LIVE_STABLE_CASES: &[&str] = &[
     "select_db_negative",
     "select_db_very_large",
     "select_db_non_integer",
+    "move_same_db_errors_even_when_key_is_missing",
     // Dedicated connection/session commands
     "quit_returns_ok",
     "readonly_reports_cluster_disabled",
@@ -3995,6 +3996,7 @@ const CORE_SERVER_LIVE_STABLE_CASES: &[&str] = &[
     "latency_history_empty",
     "latency_reset_ok",
     "latency_help",
+    "move_same_db_errors_even_when_key_exists",
     "command_info_get",
     "command_list_filterby_module_unknown_returns_empty",
     "command_list_filterby_module_missing_name_syntax_error",
@@ -4023,6 +4025,30 @@ fn core_server_live_redis_matches_runtime() {
         &oracle,
     )
     .expect("server live diff");
+    assert_eq!(
+        report.total, report.passed,
+        "mismatches: {:?}",
+        report.failed
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn core_server_move_same_db_live_redis_matches_runtime() {
+    let cfg = HarnessConfig::default_paths();
+    let oracle_server = VendoredRedisOracle::start(&cfg);
+    let oracle = LiveOracleConfig {
+        host: "127.0.0.1".to_string(),
+        port: oracle_server.port,
+        ..LiveOracleConfig::default()
+    };
+    let report = run_live_redis_diff_for_cases(
+        &cfg,
+        "core_server.json",
+        &["move_same_db_errors_even_when_key_exists"],
+        &oracle,
+    )
+    .expect("server move same-db live diff");
     assert_eq!(
         report.total, report.passed,
         "mismatches: {:?}",

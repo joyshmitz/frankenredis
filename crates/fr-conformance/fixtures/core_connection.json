@@ -1426,7 +1426,7 @@
       }
     },
     {
-      "name": "move_same_db_returns_0",
+      "name": "move_same_db_errors_even_when_key_is_missing",
       "now_ms": 100,
       "argv": [
         "MOVE",
@@ -1434,8 +1434,8 @@
         "0"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 0
+        "kind": "error",
+        "value": "ERR source and destination objects are the same"
       }
     },
     {
