@@ -620,6 +620,11 @@ const CORE_SET_LIVE_STABLE_CASES: &[&str] = &[
     "sismember_removed_by_smove",
     "smove_missing_member",
     "smove_nonexistent_source",
+    "smove_same_key_setup",
+    "smove_same_key_existing_member",
+    "smove_same_key_member_still_present",
+    "smove_same_key_cardinality_unchanged",
+    "smove_same_key_missing_member",
     // SINTERSTORE/SUNIONSTORE/SDIFFSTORE
     "sinterstore_dest",
     "sinterstore_src2",

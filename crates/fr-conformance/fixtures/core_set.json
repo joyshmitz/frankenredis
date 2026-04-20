@@ -930,6 +930,73 @@
       }
     },
     {
+      "name": "smove_same_key_setup",
+      "now_ms": 850,
+      "argv": [
+        "SADD",
+        "smove_same_key",
+        "a",
+        "b"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "smove_same_key_existing_member",
+      "now_ms": 850,
+      "argv": [
+        "SMOVE",
+        "smove_same_key",
+        "smove_same_key",
+        "a"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "smove_same_key_member_still_present",
+      "now_ms": 850,
+      "argv": [
+        "SISMEMBER",
+        "smove_same_key",
+        "a"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "smove_same_key_cardinality_unchanged",
+      "now_ms": 850,
+      "argv": [
+        "SCARD",
+        "smove_same_key"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 2
+      }
+    },
+    {
+      "name": "smove_same_key_missing_member",
+      "now_ms": 850,
+      "argv": [
+        "SMOVE",
+        "smove_same_key",
+        "smove_same_key",
+        "z"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
+    },
+    {
       "name": "sadd_wrong_arity",
       "now_ms": 900,
       "argv": [

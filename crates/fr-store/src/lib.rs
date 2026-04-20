@@ -5137,6 +5137,16 @@ impl Store {
         {
             return Err(StoreError::WrongType);
         }
+        if source == destination {
+            let present = match self.entries.get(source) {
+                Some(entry) => match &entry.value {
+                    Value::Set(set) => set.contains(member),
+                    _ => return Err(StoreError::WrongType),
+                },
+                None => false,
+            };
+            return Ok(present);
+        }
 
         // Remove from source
         let mut source_empty = false;
@@ -11359,6 +11369,22 @@ mod tests {
 
         let expected = format!("{:016x}", store.state_digest_full_scan());
         assert_eq!(store.state_digest(), expected);
+    }
+
+    #[test]
+    fn smove_same_source_and_destination_is_a_membership_check() {
+        let mut store = Store::new();
+        store
+            .sadd(b"s", &[b"a".to_vec(), b"b".to_vec()], 0)
+            .expect("seed set");
+
+        assert!(store.smove(b"s", b"s", b"a", 0).expect("existing member"));
+        assert_eq!(
+            store.smembers(b"s", 0).expect("members"),
+            vec![b"a".to_vec(), b"b".to_vec()]
+        );
+        assert!(!store.smove(b"s", b"s", b"z", 0).expect("missing member"));
+        assert_eq!(store.scard(b"s", 0).expect("set cardinality"), 2);
     }
 
     #[test]
