@@ -730,6 +730,10 @@ impl AuthState {
                 user.denied_categories.clear();
             } else if rule_str.eq_ignore_ascii_case("allkeys") || rule_str == "~*" {
                 user.all_keys = true;
+            } else if rule_str.eq_ignore_ascii_case("resetkeys") {
+                // Redis treats ACL modifiers as order-sensitive, so resetkeys must
+                // clear any earlier allkeys/~* grant and let later grants re-enable it.
+                user.all_keys = false;
             } else if rule_str.eq_ignore_ascii_case("allchannels") || rule_str == "&*" {
                 user.all_channels = true;
             } else if rule_str == "-@all" || rule_str.eq_ignore_ascii_case("nocommands") {
@@ -17048,6 +17052,86 @@ mod tests {
         assert!(
             matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
             "GET should be denied after reset, got: {reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_setuser_resetkeys_modifier_is_order_sensitive() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"order1",
+                    b"on",
+                    b"nopass",
+                    b"allcommands",
+                    b"allkeys",
+                    b"resetkeys",
+                ]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"GETUSER", b"order1"]), 1),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"nopass".to_vec())),
+                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"passwords".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+                RespFrame::BulkString(Some(b"commands".to_vec())),
+                RespFrame::BulkString(Some(b"+@all".to_vec())),
+                RespFrame::BulkString(Some(b"keys".to_vec())),
+                RespFrame::BulkString(Some(Vec::new())),
+                RespFrame::BulkString(Some(b"channels".to_vec())),
+                RespFrame::BulkString(Some(Vec::new())),
+                RespFrame::BulkString(Some(b"selectors".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"order2",
+                    b"on",
+                    b"nopass",
+                    b"allcommands",
+                    b"resetkeys",
+                    b"allkeys",
+                ]),
+                2,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"GETUSER", b"order2"]), 3),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"nopass".to_vec())),
+                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"passwords".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+                RespFrame::BulkString(Some(b"commands".to_vec())),
+                RespFrame::BulkString(Some(b"+@all".to_vec())),
+                RespFrame::BulkString(Some(b"keys".to_vec())),
+                RespFrame::BulkString(Some(b"~*".to_vec())),
+                RespFrame::BulkString(Some(b"channels".to_vec())),
+                RespFrame::BulkString(Some(Vec::new())),
+                RespFrame::BulkString(Some(b"selectors".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
         );
     }
 

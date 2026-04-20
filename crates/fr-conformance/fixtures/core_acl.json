@@ -1299,12 +1299,224 @@
       }
     },
     {
+      "name": "acl_setuser_allkeys_then_resetkeys",
+      "now_ms": 102,
+      "argv": [
+        "ACL",
+        "SETUSER",
+        "order1",
+        "on",
+        "nopass",
+        "allcommands",
+        "allkeys",
+        "resetkeys"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "acl_getuser_after_allkeys_then_resetkeys",
+      "now_ms": 103,
+      "argv": [
+        "ACL",
+        "GETUSER",
+        "order1"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "flags"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "on"
+              },
+              {
+                "kind": "bulk",
+                "value": "nopass"
+              },
+              {
+                "kind": "bulk",
+                "value": "sanitize-payload"
+              }
+            ]
+          },
+          {
+            "kind": "bulk",
+            "value": "passwords"
+          },
+          {
+            "kind": "array",
+            "value": []
+          },
+          {
+            "kind": "bulk",
+            "value": "commands"
+          },
+          {
+            "kind": "bulk",
+            "value": "+@all"
+          },
+          {
+            "kind": "bulk",
+            "value": "keys"
+          },
+          {
+            "kind": "bulk",
+            "value": ""
+          },
+          {
+            "kind": "bulk",
+            "value": "channels"
+          },
+          {
+            "kind": "bulk",
+            "value": ""
+          },
+          {
+            "kind": "bulk",
+            "value": "selectors"
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "acl_setuser_resetkeys_then_allkeys",
+      "now_ms": 104,
+      "argv": [
+        "ACL",
+        "SETUSER",
+        "order2",
+        "on",
+        "nopass",
+        "allcommands",
+        "resetkeys",
+        "allkeys"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "acl_getuser_after_resetkeys_then_allkeys",
+      "now_ms": 105,
+      "argv": [
+        "ACL",
+        "GETUSER",
+        "order2"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "flags"
+          },
+          {
+            "kind": "array",
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "on"
+              },
+              {
+                "kind": "bulk",
+                "value": "nopass"
+              },
+              {
+                "kind": "bulk",
+                "value": "sanitize-payload"
+              }
+            ]
+          },
+          {
+            "kind": "bulk",
+            "value": "passwords"
+          },
+          {
+            "kind": "array",
+            "value": []
+          },
+          {
+            "kind": "bulk",
+            "value": "commands"
+          },
+          {
+            "kind": "bulk",
+            "value": "+@all"
+          },
+          {
+            "kind": "bulk",
+            "value": "keys"
+          },
+          {
+            "kind": "bulk",
+            "value": "~*"
+          },
+          {
+            "kind": "bulk",
+            "value": "channels"
+          },
+          {
+            "kind": "bulk",
+            "value": ""
+          },
+          {
+            "kind": "bulk",
+            "value": "selectors"
+          },
+          {
+            "kind": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
       "name": "acl_deluser_cleanup_testuser",
       "now_ms": 110,
       "argv": [
         "ACL",
         "DELUSER",
         "testuser"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "acl_deluser_cleanup_order1",
+      "now_ms": 112,
+      "argv": [
+        "ACL",
+        "DELUSER",
+        "order1"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
+      }
+    },
+    {
+      "name": "acl_deluser_cleanup_order2",
+      "now_ms": 113,
+      "argv": [
+        "ACL",
+        "DELUSER",
+        "order2"
       ],
       "expect": {
         "kind": "integer",

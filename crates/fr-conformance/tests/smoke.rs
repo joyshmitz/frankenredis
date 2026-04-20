@@ -2595,6 +2595,12 @@ const CORE_ACL_LIVE_STABLE_CASES: &[&str] = &[
     "acl_setuser_bob_on",
     "acl_setuser_bob_off",
     "acl_deluser_bob",
+    "acl_setuser_allkeys_then_resetkeys",
+    "acl_getuser_after_allkeys_then_resetkeys",
+    "acl_setuser_resetkeys_then_allkeys",
+    "acl_getuser_after_resetkeys_then_allkeys",
+    "acl_deluser_cleanup_order1",
+    "acl_deluser_cleanup_order2",
 ];
 
 #[test]
