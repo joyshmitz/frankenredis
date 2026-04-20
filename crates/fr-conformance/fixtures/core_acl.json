@@ -104,6 +104,10 @@
               {
                 "kind": "bulk",
                 "value": "on"
+              },
+              {
+                "kind": "bulk",
+                "value": "sanitize-payload"
               }
             ]
           },
@@ -113,7 +117,12 @@
           },
           {
             "kind": "array",
-            "value": []
+            "value": [
+              {
+                "kind": "bulk",
+                "value": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f"
+              }
+            ]
           },
           {
             "kind": "bulk",
@@ -121,7 +130,7 @@
           },
           {
             "kind": "bulk",
-            "value": "+@all"
+            "value": "-@all"
           },
           {
             "kind": "bulk",
@@ -129,7 +138,7 @@
           },
           {
             "kind": "bulk",
-            "value": "~*"
+            "value": ""
           },
           {
             "kind": "bulk",
@@ -137,7 +146,15 @@
           },
           {
             "kind": "bulk",
-            "value": "&*"
+            "value": ""
+          },
+          {
+            "kind": "bulk",
+            "value": "selectors"
+          },
+          {
+            "kind": "array",
+            "value": []
           }
         ]
       }

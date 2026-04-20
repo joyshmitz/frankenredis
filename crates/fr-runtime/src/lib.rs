@@ -41,6 +41,7 @@ use fr_store::{
     EvictionLoopFailure, EvictionLoopResult, EvictionLoopStatus, EvictionSafetyGateState,
     MaxmemoryPolicy, Store, decode_db_key, encode_db_key, glob_match,
 };
+use sha2::{Digest, Sha256};
 
 static PACKET_COUNTER: AtomicU64 = AtomicU64::new(1);
 static CLIENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -55,6 +56,20 @@ const AOF_DISK_ERROR_WRITE_DENIED: &str =
 const ACL_UNKNOWN_SUBCOMMAND_ERROR: &str =
     "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP.";
 const DEFAULT_ACLLOG_MAX_LEN: i64 = 128;
+
+fn sha256_hex_bytes(input: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    hex::encode(hasher.finalize()).into_bytes()
+}
+
+fn normalize_acl_hash(hash: &str) -> Option<Vec<u8>> {
+    if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(hash.to_ascii_lowercase().into_bytes())
+    } else {
+        None
+    }
+}
 
 #[derive(Debug, Clone)]
 struct AclLogEntry {
@@ -443,10 +458,7 @@ impl AclUser {
         if self.nopass {
             return true;
         }
-        use sha2::Digest;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(password);
-        let hash_hex = hex::encode(hasher.finalize()).into_bytes();
+        let hash_hex = sha256_hex_bytes(password);
         self.passwords.iter().any(|p| {
             let p_slice = p.as_slice();
             if p_slice.len() != hash_hex.len() {
@@ -586,13 +598,14 @@ impl AclUser {
         } else {
             "off".to_string()
         });
+        parts.push("sanitize-payload".to_string());
         if self.nopass {
             parts.push("nopass".to_string());
         } else if self.passwords.is_empty() {
             parts.push("resetpass".to_string());
         } else {
             for password in &self.passwords {
-                parts.push(format!(">{}", String::from_utf8_lossy(password)));
+                parts.push(format!("#{}", String::from_utf8_lossy(password)));
             }
         }
         if self.all_keys {
@@ -635,7 +648,7 @@ impl AuthState {
             .entry(DEFAULT_AUTH_USER.to_vec())
             .or_insert_with(AclUser::new_default);
         if let Some(pass) = requirepass {
-            default_user.passwords = vec![pass];
+            default_user.passwords = vec![sha256_hex_bytes(&pass)];
             default_user.nopass = false;
         } else {
             // Redis bridge behavior: empty requirepass maps back to default-user nopass.
@@ -649,7 +662,7 @@ impl AuthState {
             .acl_users
             .entry(username)
             .or_insert_with(AclUser::new_default);
-        user.passwords = vec![password];
+        user.passwords = vec![sha256_hex_bytes(&password)];
         user.nopass = false;
     }
 
@@ -718,6 +731,9 @@ impl AuthState {
                 user.enabled = true;
             } else if rule_str.eq_ignore_ascii_case("off") {
                 user.enabled = false;
+            } else if rule_str.eq_ignore_ascii_case("sanitize-payload") {
+                // Redis persists this marker in ACL SAVE output and reports it in GETUSER flags.
+                // We always behave as if it is enabled, so parsing it is a no-op.
             } else if rule_str.eq_ignore_ascii_case("nopass") {
                 user.passwords.clear();
                 user.nopass = true;
@@ -767,35 +783,29 @@ impl AuthState {
                 user.denied_commands.insert(cmd_lower.clone());
                 user.allowed_commands.remove(&cmd_lower);
             } else if let Some(pass) = rule_str.strip_prefix('>') {
-                use sha2::Digest;
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(pass.as_bytes());
-                let hash_hex = hex::encode(hasher.finalize()).into_bytes();
-                user.passwords.push(hash_hex);
+                user.passwords.push(sha256_hex_bytes(pass.as_bytes()));
                 user.nopass = false; // adding a password disables nopass
             } else if let Some(pass) = rule_str.strip_prefix('<') {
-                use sha2::Digest;
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(pass.as_bytes());
-                let hash_hex = hex::encode(hasher.finalize()).into_bytes();
-                user.passwords.retain(|p| p.as_slice() != hash_hex.as_slice());
+                let hash_hex = sha256_hex_bytes(pass.as_bytes());
+                user.passwords
+                    .retain(|p| p.as_slice() != hash_hex.as_slice());
             } else if let Some(hash) = rule_str.strip_prefix('#') {
-                if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
-                    user.passwords.push(hash.to_ascii_lowercase().into_bytes());
+                if let Some(hash_hex) = normalize_acl_hash(hash) {
+                    user.passwords.push(hash_hex);
                     user.nopass = false;
                 } else {
                     return Err(format!(
-                        "ERR Error in ACL SETUSER modifier '{}': Hash must be exactly 64 hex characters",
+                        "ERR Error in ACL SETUSER modifier '{}': Syntax error",
                         rule_str
                     ));
                 }
             } else if let Some(hash) = rule_str.strip_prefix('!') {
-                if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
-                    let hash_hex = hash.to_ascii_lowercase().into_bytes();
-                    user.passwords.retain(|p| p.as_slice() != hash_hex.as_slice());
+                if let Some(hash_hex) = normalize_acl_hash(hash) {
+                    user.passwords
+                        .retain(|p| p.as_slice() != hash_hex.as_slice());
                 } else {
                     return Err(format!(
-                        "ERR Error in ACL SETUSER modifier '{}': Hash must be exactly 64 hex characters",
+                        "ERR Error in ACL SETUSER modifier '{}': Syntax error",
                         rule_str
                     ));
                 }
@@ -5070,7 +5080,7 @@ impl Runtime {
 
         let mut passwords = Vec::new();
         for p in &user.passwords {
-            passwords.push(RespFrame::BulkString(Some(hex::encode(p).into_bytes())));
+            passwords.push(RespFrame::BulkString(Some(p.clone())));
         }
 
         let commands_str = user.commands_string();
@@ -17336,6 +17346,40 @@ mod tests {
     }
 
     #[test]
+    fn acl_getuser_reports_sha256_passwords_for_new_restricted_users() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"SETUSER", b"alice", b"on", b">password123"]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"GETUSER", b"alice"]), 1),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"passwords".to_vec())),
+                RespFrame::Array(Some(vec![RespFrame::BulkString(Some(
+                    b"ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f".to_vec(),
+                ))])),
+                RespFrame::BulkString(Some(b"commands".to_vec())),
+                RespFrame::BulkString(Some(b"-@all".to_vec())),
+                RespFrame::BulkString(Some(b"keys".to_vec())),
+                RespFrame::BulkString(Some(Vec::new())),
+                RespFrame::BulkString(Some(b"channels".to_vec())),
+                RespFrame::BulkString(Some(Vec::new())),
+                RespFrame::BulkString(Some(b"selectors".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+    }
+
+    #[test]
     fn acl_help_lists_dryrun_subcommand() {
         let mut rt = Runtime::default_strict();
         let reply = rt.execute_frame(command(&[b"ACL", b"HELP"]), 0);
@@ -17372,7 +17416,9 @@ mod tests {
 
         let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
         assert!(
-            saved.contains("user alice reset on >pass ~* &* +get"),
+            saved.contains(
+                "user alice reset on sanitize-payload #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 ~* &* +get"
+            ),
             "saved ACL file should contain serialized alice rules, got: {saved}"
         );
 
