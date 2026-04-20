@@ -2156,7 +2156,16 @@
       "argv": ["SINTERCARD", "2", "sic_s1", "sic_s2", "LIMIT", "-1"],
       "expect": {
         "kind": "error",
-        "value": "ERR syntax error"
+        "value": "ERR LIMIT can't be negative"
+      }
+    },
+    {
+      "name": "sintercard_duplicate_limit_uses_last_value",
+      "now_ms": 1000,
+      "argv": ["SINTERCARD", "2", "sic_s1", "sic_s2", "LIMIT", "1", "LIMIT", "2"],
+      "expect": {
+        "kind": "integer",
+        "value": 2
       }
     },
     {

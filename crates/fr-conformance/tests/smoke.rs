@@ -623,6 +623,8 @@ const CORE_SET_LIVE_STABLE_CASES: &[&str] = &[
     "sintercard_basic",
     "sintercard_with_limit",
     "sintercard_limit_zero",
+    "sintercard_limit_negative",
+    "sintercard_duplicate_limit_uses_last_value",
     "sintercard_nokey",
     "sintercard_single_key",
     // SRANDMEMBER

@@ -8047,7 +8047,9 @@ fn sintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             }
             let val = parse_i64_arg(&argv[idx])?;
             if val < 0 {
-                return Err(CommandError::SyntaxError);
+                return Err(CommandError::Custom(
+                    "ERR LIMIT can't be negative".to_string(),
+                ));
             }
             limit = val as u64;
             idx += 1;
@@ -23316,6 +23318,70 @@ mod tests {
         )
         .expect("sintercard limit");
         assert_eq!(out, RespFrame::Integer(1));
+    }
+
+    #[test]
+    fn sintercard_limit_parity_matches_vendored_redis() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"SADD".to_vec(),
+                b"s1".to_vec(),
+                b"a".to_vec(),
+                b"b".to_vec(),
+                b"c".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("sadd s1");
+        dispatch_argv(
+            &[
+                b"SADD".to_vec(),
+                b"s2".to_vec(),
+                b"b".to_vec(),
+                b"c".to_vec(),
+                b"d".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("sadd s2");
+
+        let duplicate_limit = dispatch_argv(
+            &[
+                b"SINTERCARD".to_vec(),
+                b"2".to_vec(),
+                b"s1".to_vec(),
+                b"s2".to_vec(),
+                b"LIMIT".to_vec(),
+                b"1".to_vec(),
+                b"LIMIT".to_vec(),
+                b"2".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("duplicate LIMIT should use last value");
+        assert_eq!(duplicate_limit, RespFrame::Integer(2));
+
+        let negative_limit = dispatch_argv(
+            &[
+                b"SINTERCARD".to_vec(),
+                b"2".to_vec(),
+                b"s1".to_vec(),
+                b"s2".to_vec(),
+                b"LIMIT".to_vec(),
+                b"-1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("negative LIMIT should fail");
+        assert_eq!(
+            negative_limit,
+            CommandError::Custom("ERR LIMIT can't be negative".to_string())
+        );
     }
 
     #[test]
