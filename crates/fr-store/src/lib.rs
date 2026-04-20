@@ -522,6 +522,8 @@ struct Entry {
     last_access_ms: u64,
     /// LFU access frequency counter exposed via OBJECT FREQ when LFU eviction is active.
     lfu_freq: u8,
+    /// Last LFU access/decrement timestamp in whole minutes.
+    lfu_last_touch_min: u64,
     /// Monotonic modification counter (bumped on every write, used by WATCH).
     modification_count: u64,
 }
@@ -533,6 +535,7 @@ impl Entry {
             expires_at_ms,
             last_access_ms: now_ms,
             lfu_freq: 0,
+            lfu_last_touch_min: now_ms / 60_000,
             modification_count: 0,
         }
     }
@@ -544,8 +547,20 @@ impl Entry {
         self.last_access_ms = now_ms;
     }
 
-    fn bump_lfu_freq(&mut self) {
-        self.lfu_freq = self.lfu_freq.saturating_add(1);
+    fn current_lfu_freq(&self, now_ms: u64, decay_time: u64) -> u8 {
+        if decay_time == 0 {
+            return self.lfu_freq;
+        }
+        let now_min = now_ms / 60_000;
+        let elapsed = now_min.saturating_sub(self.lfu_last_touch_min);
+        let periods = elapsed / decay_time;
+        self.lfu_freq
+            .saturating_sub(u8::try_from(periods).unwrap_or(u8::MAX))
+    }
+
+    fn bump_lfu_freq(&mut self, now_ms: u64, decay_time: u64) {
+        self.lfu_freq = self.current_lfu_freq(now_ms, decay_time).saturating_add(1);
+        self.lfu_last_touch_min = now_ms / 60_000;
     }
 
     fn bump_mod_count(&mut self) {
@@ -991,6 +1006,7 @@ pub struct Store {
 
     // Eviction policy — configurable via CONFIG SET maxmemory-policy.
     pub maxmemory_policy: MaxmemoryPolicy,
+    pub lfu_decay_time: u64,
 
     // Encoding thresholds — configurable via CONFIG SET, used by OBJECT ENCODING.
     pub hash_max_listpack_entries: usize,
@@ -1208,6 +1224,7 @@ impl Default for Store {
             pubsub_pending: Vec::new(),
             function_libraries: HashMap::new(),
             maxmemory_policy: MaxmemoryPolicy::default(),
+            lfu_decay_time: 1,
             hash_max_listpack_entries: 128,
             hash_max_listpack_value: 64,
             list_max_listpack_size: -2,
@@ -1612,7 +1629,7 @@ impl Store {
                 Value::String(v) => {
                     let v = v.clone();
                     if lfu_tracking_enabled {
-                        entry.bump_lfu_freq();
+                        entry.bump_lfu_freq(now_ms, self.lfu_decay_time);
                     }
                     entry.touch(now_ms);
                     Ok(Some(v))
@@ -1627,9 +1644,11 @@ impl Store {
         self.drop_if_expired(key.as_slice(), now_ms);
         let expires_at_ms = px_ttl_ms.map(|ttl| now_ms.saturating_add(ttl));
         let next_lfu_freq = if self.lfu_tracking_enabled() {
-            self.entries
-                .get(key.as_slice())
-                .map_or(0, |entry| entry.lfu_freq.saturating_add(1))
+            self.entries.get(key.as_slice()).map_or(0, |entry| {
+                entry
+                    .current_lfu_freq(now_ms, self.lfu_decay_time)
+                    .saturating_add(1)
+            })
         } else {
             0
         };
@@ -1637,6 +1656,7 @@ impl Store {
         self.stream_last_ids.remove(key.as_slice());
         let mut entry = Entry::new(Value::String(value), expires_at_ms, now_ms);
         entry.lfu_freq = next_lfu_freq;
+        entry.lfu_last_touch_min = now_ms / 60_000;
         self.internal_entries_insert(key, entry);
         self.dirty = self.dirty.saturating_add(1);
     }
@@ -1651,9 +1671,11 @@ impl Store {
     ) {
         self.drop_if_expired(key.as_slice(), now_ms);
         let next_lfu_freq = if self.lfu_tracking_enabled() {
-            self.entries
-                .get(key.as_slice())
-                .map_or(0, |entry| entry.lfu_freq.saturating_add(1))
+            self.entries.get(key.as_slice()).map_or(0, |entry| {
+                entry
+                    .current_lfu_freq(now_ms, self.lfu_decay_time)
+                    .saturating_add(1)
+            })
         } else {
             0
         };
@@ -1661,6 +1683,7 @@ impl Store {
         self.stream_last_ids.remove(key.as_slice());
         let mut entry = Entry::new(Value::String(value), expires_at_ms, now_ms);
         entry.lfu_freq = next_lfu_freq;
+        entry.lfu_last_touch_min = now_ms / 60_000;
         self.internal_entries_insert(key, entry);
         self.dirty = self.dirty.saturating_add(1);
     }
@@ -1705,7 +1728,7 @@ impl Store {
         let lfu_tracking_enabled = self.lfu_tracking_enabled();
         if let Some(entry) = self.entries.get_mut(key) {
             if lfu_tracking_enabled {
-                entry.bump_lfu_freq();
+                entry.bump_lfu_freq(now_ms, self.lfu_decay_time);
             }
             entry.touch(now_ms);
             true
@@ -2568,7 +2591,9 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return None;
         }
-        self.entries.get(key).map(|entry| entry.lfu_freq)
+        self.entries
+            .get(key)
+            .map(|entry| entry.current_lfu_freq(now_ms, self.lfu_decay_time))
     }
 
     /// Touch a key (update its last access time) without modifying the value.
@@ -2577,7 +2602,7 @@ impl Store {
         let lfu_tracking_enabled = self.lfu_tracking_enabled();
         if let Some(entry) = self.entries.get_mut(key) {
             if lfu_tracking_enabled {
-                entry.bump_lfu_freq();
+                entry.bump_lfu_freq(now_ms, self.lfu_decay_time);
             }
             entry.touch(now_ms);
             true
@@ -8527,7 +8552,7 @@ impl Store {
             }
             if let Some(entry) = self.entries.get_mut(key) {
                 if lfu_tracking_enabled {
-                    entry.bump_lfu_freq();
+                    entry.bump_lfu_freq(now_ms, self.lfu_decay_time);
                 }
                 entry.touch(now_ms);
                 count += 1;
@@ -11561,6 +11586,25 @@ mod tests {
 
         store.maxmemory_policy = MaxmemoryPolicy::AllkeysLru;
         assert_eq!(store.object_freq(b"k", 500), Some(2));
+    }
+
+    #[test]
+    fn object_freq_decays_before_reporting_and_before_next_access_bump() {
+        let mut store = Store::new();
+        store.maxmemory_policy = MaxmemoryPolicy::AllkeysLfu;
+        store.lfu_decay_time = 1;
+        store.set(b"k".to_vec(), b"v".to_vec(), None, 0);
+
+        assert_eq!(store.get(b"k", 1).unwrap(), Some(b"v".to_vec()));
+        assert_eq!(store.object_freq(b"k", 2), Some(1));
+        assert_eq!(store.object_freq(b"k", 60_000), Some(0));
+
+        assert_eq!(store.get(b"k", 60_001).unwrap(), Some(b"v".to_vec()));
+        assert_eq!(store.object_freq(b"k", 60_002), Some(1));
+
+        store.lfu_decay_time = 2;
+        assert_eq!(store.object_freq(b"k", 179_999), Some(1));
+        assert_eq!(store.object_freq(b"k", 180_000), Some(0));
     }
 
     #[test]

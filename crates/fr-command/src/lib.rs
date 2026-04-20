@@ -10434,6 +10434,7 @@ const CONFIG_DYNAMIC_PARAM_NAMES: &[&str] = &[
     "zset-max-listpack-value",
     "zset-max-ziplist-entries",
     "zset-max-ziplist-value",
+    "lfu-decay-time",
     "maxmemory-policy",
 ];
 
@@ -10493,6 +10494,9 @@ fn config_collect_store_entries(pattern: &str, store: &Store, entries: &mut Vec<
             store.maxmemory_policy.as_config_str(),
         );
     }
+    if matches(pattern, "lfu-decay-time") {
+        push_pair(entries, "lfu-decay-time", &store.lfu_decay_time.to_string());
+    }
 
     // Emit static defaults for params not dynamically managed.
     for &(name, default_value) in CONFIG_STATIC_DEFAULTS {
@@ -10551,6 +10555,10 @@ fn config_apply_store_sets(pairs: &[Vec<u8>], store: &mut Store) -> Result<(), C
                             "ERR Invalid argument '{val}' for CONFIG SET 'maxmemory-policy'"
                         ))
                     })?;
+            }
+            "lfu-decay-time" => {
+                store.lfu_decay_time =
+                    u64::try_from(parse_config_usize(lower.as_str(), val)?).unwrap_or(u64::MAX);
             }
             _ => {
                 // Unknown params are silently accepted — the runtime layer
@@ -31532,6 +31540,58 @@ mod tests {
                 "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.".to_string()
             )
         );
+    }
+
+    #[test]
+    fn object_freq_applies_lfu_decay_time_before_reporting() {
+        let mut store = Store::new();
+
+        dispatch_argv(
+            &[b"SET".to_vec(), b"obj".to_vec(), b"v".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed key");
+        dispatch_argv(
+            &[
+                b"CONFIG".to_vec(),
+                b"SET".to_vec(),
+                b"maxmemory-policy".to_vec(),
+                b"allkeys-lfu".to_vec(),
+                b"lfu-decay-time".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            1,
+        )
+        .expect("enable lfu with decay");
+
+        dispatch_argv(&[b"GET".to_vec(), b"obj".to_vec()], &mut store, 2).expect("first get");
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"obj".to_vec()],
+            &mut store,
+            3,
+        )
+        .expect("freq after first get");
+        assert_eq!(reply, RespFrame::Integer(1));
+
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"obj".to_vec()],
+            &mut store,
+            60_000,
+        )
+        .expect("freq after decay window");
+        assert_eq!(reply, RespFrame::Integer(0));
+
+        dispatch_argv(&[b"GET".to_vec(), b"obj".to_vec()], &mut store, 60_001)
+            .expect("get after decay");
+        let reply = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"obj".to_vec()],
+            &mut store,
+            60_002,
+        )
+        .expect("freq after decayed access");
+        assert_eq!(reply, RespFrame::Integer(1));
     }
 
     #[test]

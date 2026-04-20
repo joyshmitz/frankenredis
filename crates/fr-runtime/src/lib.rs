@@ -5929,6 +5929,7 @@ impl Runtime {
         let mut next_acllog_max_len = self.server.acllog_max_len;
         let mut next_maxmemory: Option<usize> = None;
         let mut next_maxmemory_policy: Option<MaxmemoryPolicy> = None;
+        let mut next_lfu_decay_time: Option<u64> = None;
         let mut next_slowlog_slower_than: Option<i64> = None;
         let mut next_slowlog_max_len: Option<usize> = None;
         let mut next_latency_monitor_threshold: Option<u64> = None;
@@ -6041,6 +6042,26 @@ impl Runtime {
                         ));
                     }
                 }
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("lfu-decay-time") {
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return RespFrame::Error(
+                            "ERR CONFIG SET failed (possibly related to argument 'lfu-decay-time') - argument couldn't be parsed into an integer"
+                                .to_string(),
+                        );
+                    }
+                };
+                if parsed < 0 {
+                    return RespFrame::Error(
+                        "ERR CONFIG SET failed (possibly related to argument 'lfu-decay-time') - argument must be between 0 and 9223372036854775807 inclusive"
+                            .to_string(),
+                    );
+                }
+                next_lfu_decay_time = Some(parsed as u64);
+                static_override_updates.push(("lfu-decay-time".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("slowlog-log-slower-than") {
@@ -6720,6 +6741,9 @@ impl Runtime {
         }
         if let Some(maxmemory_policy) = next_maxmemory_policy {
             self.server.store.maxmemory_policy = maxmemory_policy;
+        }
+        if let Some(lfu_decay_time) = next_lfu_decay_time {
+            self.server.store.lfu_decay_time = lfu_decay_time;
         }
         if let Some(threshold) = next_slowlog_slower_than {
             self.server.store.slowlog_log_slower_than_us = threshold;
