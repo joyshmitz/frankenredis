@@ -4873,6 +4873,51 @@
       }
     },
     {
+      "name": "command_list_filterby_module_unknown_returns_empty",
+      "now_ms": 63005,
+      "argv": [
+        "COMMAND",
+        "LIST",
+        "FILTERBY",
+        "MODULE",
+        "nosuchmodule"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "command_list_filterby_module_missing_name_syntax_error",
+      "now_ms": 63006,
+      "argv": [
+        "COMMAND",
+        "LIST",
+        "FILTERBY",
+        "MODULE"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
+    },
+    {
+      "name": "command_list_filterby_module_extra_arg_syntax_error",
+      "now_ms": 63007,
+      "argv": [
+        "COMMAND",
+        "LIST",
+        "FILTERBY",
+        "MODULE",
+        "nosuchmodule",
+        "extra"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
+    },
+    {
       "name": "time_returns_array_of_two",
       "now_ms": 64000,
       "argv": [

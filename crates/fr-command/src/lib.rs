@@ -9683,10 +9683,13 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             let filter_type =
                 std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if filter_type.eq_ignore_ascii_case("MODULE") {
+                if argv.len() != 5 {
+                    return Ok(RespFrame::Error("ERR syntax error".to_string()));
+                }
                 // We have no modules — return empty list
                 return Ok(RespFrame::Array(Some(Vec::new())));
             } else if filter_type.eq_ignore_ascii_case("ACLCAT") {
-                if argv.len() < 5 {
+                if argv.len() != 5 {
                     return Ok(RespFrame::Error("ERR syntax error".to_string()));
                 }
                 let category =
@@ -9698,7 +9701,7 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                     .collect();
                 return Ok(RespFrame::Array(Some(names)));
             } else if filter_type.eq_ignore_ascii_case("PATTERN") {
-                if argv.len() < 5 {
+                if argv.len() != 5 {
                     return Ok(RespFrame::Error("ERR syntax error".to_string()));
                 }
                 let pattern = &argv[4];
@@ -31613,6 +31616,45 @@ mod tests {
                 RespFrame::Array(Some(Vec::new())),
             ]))]))
         );
+    }
+
+    #[test]
+    fn command_list_filterby_module_requires_exact_module_name_arity() {
+        let mut store = Store::new();
+
+        let reply = dispatch_argv(
+            &[
+                b"COMMAND".to_vec(),
+                b"LIST".to_vec(),
+                b"FILTERBY".to_vec(),
+                b"MODULE".to_vec(),
+                b"nosuchmodule".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("command list filterby module");
+        assert_eq!(reply, RespFrame::Array(Some(Vec::new())));
+
+        for argv in [
+            vec![
+                b"COMMAND".to_vec(),
+                b"LIST".to_vec(),
+                b"FILTERBY".to_vec(),
+                b"MODULE".to_vec(),
+            ],
+            vec![
+                b"COMMAND".to_vec(),
+                b"LIST".to_vec(),
+                b"FILTERBY".to_vec(),
+                b"MODULE".to_vec(),
+                b"nosuchmodule".to_vec(),
+                b"extra".to_vec(),
+            ],
+        ] {
+            let reply = dispatch_argv(&argv, &mut store, 0).expect("module syntax reply");
+            assert_eq!(reply, RespFrame::Error("ERR syntax error".to_string()));
+        }
     }
 
     mod metamorphic {
