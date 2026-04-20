@@ -839,6 +839,9 @@ fn main() -> ExitCode {
             last_ops_sample_ms = ts;
         }
 
+        // Check for completed background child processes
+        runtime.check_child_processes(ts);
+
         // Drive the primary link from the main loop so replicas can sustain
         // online deltas, ACK traffic, and reconnect after link loss.
         drive_replica_sync(&mut runtime, &mut replica_sync, ts);

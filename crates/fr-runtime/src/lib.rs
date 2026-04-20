@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -1492,6 +1492,10 @@ pub struct ServerState {
     aof_path: Option<std::path::PathBuf>,
     /// Configured AOF target path, preserved even when appendonly is disabled.
     aof_config_path: Option<std::path::PathBuf>,
+    /// Child PID for BGSAVE
+    pub rdb_bgsave_pid: Option<i32>,
+    /// Child PID for BGREWRITEAOF
+    pub aof_rewrite_pid: Option<i32>,
     /// Path for RDB persistence file (used by SAVE/BGSAVE).
     rdb_path: Option<std::path::PathBuf>,
     /// Path for the main redis.conf configuration file (used by CONFIG REWRITE).
@@ -1598,6 +1602,8 @@ impl Default for ServerState {
             latency_percentiles: vec![50.0, 99.0, 99.9],
             aof_path: None,
             aof_config_path: None,
+            rdb_bgsave_pid: None,
+            aof_rewrite_pid: None,
             rdb_path: None,
             config_file_path: None,
             acl_file_path: None,
@@ -3217,6 +3223,33 @@ impl Runtime {
         }
         self.server.tls_state = next_state;
         Ok(())
+    }
+
+    /// Check and reap any completed background child processes.
+    #[allow(unsafe_code)]
+    pub fn check_child_processes(&mut self, _now_ms: u64) {
+        #[cfg(unix)]
+        unsafe {
+            if let Some(pid) = self.server.rdb_bgsave_pid {
+                let mut status = 0;
+                let res = libc::waitpid(pid, &mut status, libc::WNOHANG);
+                if res == pid {
+                    self.server.rdb_bgsave_pid = None;
+                    let success = libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
+                    self.server.store.record_bgsave_status(success);
+                }
+            }
+            if let Some(pid) = self.server.aof_rewrite_pid {
+                let mut status = 0;
+                let res = libc::waitpid(pid, &mut status, libc::WNOHANG);
+                if res == pid {
+                    self.server.aof_rewrite_pid = None;
+                    let success = libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
+                    // For now, AOF rewrite CoW is just tracked, but let's record status generically
+                    self.server.store.record_aof_bgrewrite_status(success);
+                }
+            }
+        }
     }
 
     pub fn execute_frame(&mut self, frame: RespFrame, now_ms: u64) -> RespFrame {
@@ -7498,6 +7531,7 @@ impl Runtime {
         RespFrame::SimpleString("OK".to_string())
     }
 
+    #[allow(unsafe_code)]
     fn handle_bgsave_command(&mut self, argv: &[Vec<u8>], now_ms: u64) -> RespFrame {
         if argv.len() > 2 {
             return CommandError::SyntaxError.to_resp();
@@ -7511,15 +7545,41 @@ impl Runtime {
                 return CommandError::SyntaxError.to_resp();
             }
         }
-        // In a single-threaded context, BGSAVE behaves like SAVE.
-        if let Err(reply) = self.persist_snapshot_to_disk(now_ms, true) {
-            self.server.store.record_bgsave_status(false);
-            return reply;
+        #[cfg(unix)]
+        unsafe {
+            if self.server.rdb_bgsave_pid.is_some() || self.server.aof_rewrite_pid.is_some() {
+                return RespFrame::Error("ERR Background save already in progress".to_string());
+            }
+
+            match libc::fork() {
+                -1 => {
+                    self.server.store.record_bgsave_status(false);
+                    return RespFrame::Error("ERR Can't bgsave: fork error".to_string());
+                }
+                0 => {
+                    let result = self.persist_snapshot_to_disk(now_ms, true);
+                    std::process::exit(if result.is_ok() { 0 } else { 1 });
+                }
+                pid => {
+                    self.server.rdb_bgsave_pid = Some(pid);
+                    self.server.store.record_save(now_ms, true);
+                    self.server.store.record_bgsave_status(true);
+                    self.server.last_save_time_sec = self.server.store.last_save_time_sec;
+                    return RespFrame::SimpleString("Background saving started".to_string());
+                }
+            }
         }
-        self.server.store.record_save(now_ms, true);
-        self.server.store.record_bgsave_status(true);
-        self.server.last_save_time_sec = self.server.store.last_save_time_sec;
-        RespFrame::SimpleString("Background saving started".to_string())
+        #[cfg(not(unix))]
+        {
+            if let Err(reply) = self.persist_snapshot_to_disk(now_ms, true) {
+                self.server.store.record_bgsave_status(false);
+                return reply;
+            }
+            self.server.store.record_save(now_ms, true);
+            self.server.store.record_bgsave_status(true);
+            self.server.last_save_time_sec = self.server.store.last_save_time_sec;
+            RespFrame::SimpleString("Background saving started".to_string())
+        }
     }
 
     fn persist_snapshot_to_disk(
