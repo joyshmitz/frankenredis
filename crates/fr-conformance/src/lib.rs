@@ -356,7 +356,7 @@ fn run_live_redis_diff_with_fixture(
             configure_runtime_for_fixture(&mut isolated_runtime, fixture_name);
             isolated_runtime
         });
-        
+
         match dedicated_runtime.as_mut() {
             Some(isolated_runtime) => isolated_runtime.check_child_processes(case.now_ms),
             None => runtime.check_child_processes(case.now_ms),
@@ -2480,6 +2480,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
             ciphers: Some("HIGH:!aNULL".to_string()),
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: Some(16380),
             max_new_tls_connections_per_cycle: 64,
         }

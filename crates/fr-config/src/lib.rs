@@ -411,6 +411,22 @@ impl TlsAuthClients {
     }
 }
 
+#[must_use]
+pub fn parse_tls_bool(token: &str) -> Option<bool> {
+    if token.eq_ignore_ascii_case("yes") || token.eq_ignore_ascii_case("on") {
+        return Some(true);
+    }
+    if token.eq_ignore_ascii_case("no") || token.eq_ignore_ascii_case("off") {
+        return Some(false);
+    }
+    None
+}
+
+#[must_use]
+pub fn tls_bool_token(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsConfig {
     pub tls_port: Option<u16>,
@@ -420,6 +436,9 @@ pub struct TlsConfig {
     pub protocols: Vec<TlsProtocol>,
     pub ciphers: Option<String>,
     pub auth_clients: TlsAuthClients,
+    pub session_caching: bool,
+    pub session_cache_size: usize,
+    pub session_cache_timeout_sec: usize,
     pub cluster_announce_tls_port: Option<u16>,
     pub max_new_tls_connections_per_cycle: usize,
 }
@@ -434,6 +453,9 @@ impl Default for TlsConfig {
             protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
             ciphers: None,
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: None,
             max_new_tls_connections_per_cycle: 1_000,
         }
@@ -540,6 +562,9 @@ pub enum TlsDirective {
     TlsProtocols,
     TlsCiphers,
     TlsAuthClients,
+    TlsSessionCaching,
+    TlsSessionCacheSize,
+    TlsSessionCacheTimeout,
     ClusterAnnounceTlsPort,
     MaxNewTlsConnectionsPerCycle,
 }
@@ -578,6 +603,18 @@ pub fn tls_directive_policy(directive: TlsDirective) -> TlsDirectivePolicy {
             sensitive: false,
         },
         TlsDirective::TlsAuthClients => TlsDirectivePolicy {
+            mutable_at_runtime: true,
+            sensitive: false,
+        },
+        TlsDirective::TlsSessionCaching => TlsDirectivePolicy {
+            mutable_at_runtime: true,
+            sensitive: false,
+        },
+        TlsDirective::TlsSessionCacheSize => TlsDirectivePolicy {
+            mutable_at_runtime: true,
+            sensitive: false,
+        },
+        TlsDirective::TlsSessionCacheTimeout => TlsDirectivePolicy {
             mutable_at_runtime: true,
             sensitive: false,
         },
@@ -624,6 +661,30 @@ pub fn validate_tls_directive_value(
             TlsAuthClients::parse(value).ok_or_else(|| {
                 TlsCfgError::DirectiveRegistryContractViolation(format!(
                     "invalid tls-auth-clients value '{value}'"
+                ))
+            })?;
+            Ok(())
+        }
+        TlsDirective::TlsSessionCaching => {
+            parse_tls_bool(value).ok_or_else(|| {
+                TlsCfgError::DirectiveRegistryContractViolation(format!(
+                    "invalid tls-session-caching value '{value}'"
+                ))
+            })?;
+            Ok(())
+        }
+        TlsDirective::TlsSessionCacheSize => {
+            value.parse::<usize>().map_err(|_| {
+                TlsCfgError::OperationalKnobContractViolation(format!(
+                    "invalid tls-session-cache-size value '{value}'"
+                ))
+            })?;
+            Ok(())
+        }
+        TlsDirective::TlsSessionCacheTimeout => {
+            value.parse::<usize>().map_err(|_| {
+                TlsCfgError::OperationalKnobContractViolation(format!(
+                    "invalid tls-session-cache-timeout value '{value}'"
                 ))
             })?;
             Ok(())
@@ -784,7 +845,7 @@ pub fn validate_bind_transition_atomicity(
 
 pub fn rewrite_tls_directives(config: &TlsConfig) -> Result<Vec<(String, String)>, TlsCfgError> {
     validate_tls_config(config)?;
-    let mut directives = Vec::with_capacity(9);
+    let mut directives = Vec::with_capacity(12);
     directives.push((
         "tls-port".to_string(),
         config.tls_port.unwrap_or(0).to_string(),
@@ -805,6 +866,18 @@ pub fn rewrite_tls_directives(config: &TlsConfig) -> Result<Vec<(String, String)
     directives.push((
         "max-new-tls-connections-per-cycle".to_string(),
         config.max_new_tls_connections_per_cycle.to_string(),
+    ));
+    directives.push((
+        "tls-session-caching".to_string(),
+        tls_bool_token(config.session_caching).to_string(),
+    ));
+    directives.push((
+        "tls-session-cache-size".to_string(),
+        config.session_cache_size.to_string(),
+    ));
+    directives.push((
+        "tls-session-cache-timeout".to_string(),
+        config.session_cache_timeout_sec.to_string(),
     ));
 
     if config.tls_enabled() {
@@ -880,8 +953,8 @@ mod tests {
         HardenedDeviationCategory, Mode, RuntimePolicy, ThreatClass, TlsAuthClients, TlsCfgError,
         TlsConfig, TlsDirective, TlsListenerTransition, TlsProtocol, TlsRuntimeState,
         evaluate_tls_hardened_deviation, parse_redis_config, parse_redis_config_bytes,
-        parse_tls_protocols, plan_tls_runtime_apply, rewrite_tls_directives,
-        split_config_line_args, split_config_line_args_bytes, tls_directive_policy,
+        parse_tls_bool, parse_tls_protocols, plan_tls_runtime_apply, rewrite_tls_directives,
+        split_config_line_args, split_config_line_args_bytes, tls_bool_token, tls_directive_policy,
         validate_bind_transition_atomicity, validate_tls_config, validate_tls_directive_value,
     };
 
@@ -985,6 +1058,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2],
             ciphers: Some("HIGH:!aNULL".to_string()),
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: None,
             max_new_tls_connections_per_cycle: 128,
         };
@@ -1002,6 +1078,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2],
             ciphers: None,
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: None,
             max_new_tls_connections_per_cycle: 16,
         };
@@ -1026,6 +1105,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2],
             ciphers: None,
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: Some(16380),
             max_new_tls_connections_per_cycle: 16,
         };
@@ -1051,6 +1133,16 @@ mod tests {
             err.reason_code(),
             "tlscfg.directive_registry_contract_violation"
         );
+        assert_eq!(parse_tls_bool("yes"), Some(true));
+        assert_eq!(parse_tls_bool("off"), Some(false));
+        assert_eq!(tls_bool_token(true), "yes");
+        assert_eq!(tls_bool_token(false), "no");
+        validate_tls_directive_value(TlsDirective::TlsSessionCaching, "no")
+            .expect("valid session caching toggle");
+        validate_tls_directive_value(TlsDirective::TlsSessionCacheSize, "0")
+            .expect("zero cache size means unlimited");
+        validate_tls_directive_value(TlsDirective::TlsSessionCacheTimeout, "300")
+            .expect("valid session timeout");
     }
 
     #[test]
@@ -1064,6 +1156,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
             ciphers: Some("HIGH:!aNULL".to_string()),
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: None,
             max_new_tls_connections_per_cycle: 64,
         };
@@ -1084,6 +1179,9 @@ mod tests {
                 protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
                 ciphers: Some("HIGH:!aNULL".to_string()),
                 auth_clients: TlsAuthClients::Required,
+                session_caching: true,
+                session_cache_size: 20 * 1024,
+                session_cache_timeout_sec: 300,
                 cluster_announce_tls_port: None,
                 max_new_tls_connections_per_cycle: 64,
             }),
@@ -1099,6 +1197,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2],
             ciphers: None,
             auth_clients: TlsAuthClients::Required,
+            session_caching: false,
+            session_cache_size: 0,
+            session_cache_timeout_sec: 0,
             cluster_announce_tls_port: None,
             max_new_tls_connections_per_cycle: 16,
         };
@@ -1120,6 +1221,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
             ciphers: Some("HIGH:!aNULL".to_string()),
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: None,
             max_new_tls_connections_per_cycle: 64,
         };
@@ -1165,6 +1269,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
             ciphers: Some("HIGH:!aNULL".to_string()),
             auth_clients: TlsAuthClients::Optional,
+            session_caching: false,
+            session_cache_size: 0,
+            session_cache_timeout_sec: 60,
             cluster_announce_tls_port: Some(16380),
             max_new_tls_connections_per_cycle: 32,
         };
@@ -1177,6 +1284,9 @@ mod tests {
                 "tls-protocols",
                 "tls-auth-clients",
                 "max-new-tls-connections-per-cycle",
+                "tls-session-caching",
+                "tls-session-cache-size",
+                "tls-session-cache-timeout",
                 "tls-cert-file",
                 "tls-key-file",
                 "tls-ca-file",
@@ -1184,6 +1294,36 @@ mod tests {
                 "cluster-announce-tls-port",
             ]
         );
+    }
+
+    #[test]
+    fn fr_p2c_009_u011_session_resumption_knobs_drive_context_reconfigure() {
+        let current = TlsRuntimeState {
+            active_config: Some(TlsConfig {
+                tls_port: Some(6380),
+                cert_file: Some("cert.pem".to_string()),
+                key_file: Some("key.pem".to_string()),
+                ca_file: Some("ca.pem".to_string()),
+                protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+                ciphers: Some("HIGH:!aNULL".to_string()),
+                auth_clients: TlsAuthClients::Required,
+                session_caching: true,
+                session_cache_size: 20 * 1024,
+                session_cache_timeout_sec: 300,
+                cluster_announce_tls_port: None,
+                max_new_tls_connections_per_cycle: 64,
+            }),
+            tls_listener_enabled: true,
+            tcp_listener_enabled: true,
+            connection_type_configured: true,
+        };
+        let mut candidate = current.active_config.clone().expect("active config");
+        candidate.session_cache_timeout_sec = 60;
+
+        let plan = plan_tls_runtime_apply(&current, candidate).expect("plan");
+        assert_eq!(plan.listener_transition, TlsListenerTransition::Keep);
+        assert!(plan.requires_context_swap);
+        assert!(plan.requires_connection_type_configure);
     }
 
     #[test]
@@ -1230,6 +1370,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2],
             ciphers: Some("HIGH:!aNULL".to_string()),
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: None,
             max_new_tls_connections_per_cycle: 16,
         };

@@ -14067,6 +14067,9 @@ mod tests {
             protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
             ciphers: Some("HIGH:!aNULL".to_string()),
             auth_clients: TlsAuthClients::Required,
+            session_caching: true,
+            session_cache_size: 20 * 1024,
+            session_cache_timeout_sec: 300,
             cluster_announce_tls_port: Some(16380),
             max_new_tls_connections_per_cycle: 64,
         }
