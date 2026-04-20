@@ -464,6 +464,51 @@
       }
     },
     {
+      "name": "failover_force_only_no_replicas",
+      "now_ms": 67,
+      "argv": ["FAILOVER", "FORCE"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR FAILOVER requires connected replicas."
+      }
+    },
+    {
+      "name": "failover_reordered_force_timeout_to_no_replicas",
+      "now_ms": 67,
+      "argv": ["FAILOVER", "TIMEOUT", "1000", "FORCE", "TO", "127.0.0.1", "6380"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR FAILOVER requires connected replicas."
+      }
+    },
+    {
+      "name": "failover_duplicate_to_is_syntax_error",
+      "now_ms": 67,
+      "argv": ["FAILOVER", "TO", "127.0.0.1", "6380", "TO", "127.0.0.1", "6381"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
+    },
+    {
+      "name": "failover_duplicate_timeout_is_syntax_error",
+      "now_ms": 67,
+      "argv": ["FAILOVER", "TIMEOUT", "1000", "TIMEOUT", "2000"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
+    },
+    {
+      "name": "failover_duplicate_abort_is_syntax_error",
+      "now_ms": 67,
+      "argv": ["FAILOVER", "ABORT", "ABORT"],
+      "expect": {
+        "kind": "error",
+        "value": "ERR syntax error"
+      }
+    },
+    {
       "name": "failover_combined_timeout_and_abort",
       "now_ms": 68,
       "argv": ["FAILOVER", "TIMEOUT", "1000", "ABORT"],

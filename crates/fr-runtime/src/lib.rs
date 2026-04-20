@@ -701,10 +701,13 @@ impl AuthState {
 
     fn set_user(&mut self, username: Vec<u8>, rules: &[&[u8]]) -> Result<(), String> {
         let is_default = username == DEFAULT_AUTH_USER.to_vec();
-        let user = self
-            .acl_users
-            .entry(username)
-            .or_insert_with(|| if is_default { AclUser::new_default() } else { AclUser::new_restricted() });
+        let user = self.acl_users.entry(username).or_insert_with(|| {
+            if is_default {
+                AclUser::new_default()
+            } else {
+                AclUser::new_restricted()
+            }
+        });
         for rule in rules {
             let rule_str = std::str::from_utf8(rule).unwrap_or("");
             if rule_str.eq_ignore_ascii_case("on") {
@@ -4982,7 +4985,7 @@ impl Runtime {
         let commands_str = user.commands_string();
         let keys_str = if user.all_keys { "~*" } else { "" };
         let channels_str = if user.all_channels { "&*" } else { "" };
-        
+
         RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"flags".to_vec())),
             RespFrame::Array(Some(flags)),
@@ -5392,17 +5395,27 @@ impl Runtime {
     /// Collect all config parameter entries matching a single pattern.
     fn collect_config_entries(&self, pattern: &str, entries: &mut Vec<RespFrame>) {
         if pattern == "maxmemory*" {
-            entries.push(RespFrame::BulkString(Some(b"maxmemory-eviction-tenacity".to_vec())));
+            entries.push(RespFrame::BulkString(Some(
+                b"maxmemory-eviction-tenacity".to_vec(),
+            )));
             entries.push(RespFrame::BulkString(Some(b"10".to_vec())));
             entries.push(RespFrame::BulkString(Some(b"maxmemory-clients".to_vec())));
             entries.push(RespFrame::BulkString(Some(b"0".to_vec())));
             entries.push(RespFrame::BulkString(Some(b"maxmemory-policy".to_vec())));
             entries.push(RespFrame::BulkString(Some(
-                self.server.store.maxmemory_policy.as_config_str().as_bytes().to_vec(),
+                self.server
+                    .store
+                    .maxmemory_policy
+                    .as_config_str()
+                    .as_bytes()
+                    .to_vec(),
             )));
             entries.push(RespFrame::BulkString(Some(b"maxmemory-samples".to_vec())));
             entries.push(RespFrame::BulkString(Some(
-                self.server.maxmemory_eviction_sample_limit.to_string().into_bytes(),
+                self.server
+                    .maxmemory_eviction_sample_limit
+                    .to_string()
+                    .into_bytes(),
             )));
             entries.push(RespFrame::BulkString(Some(b"maxmemory".to_vec())));
             entries.push(RespFrame::BulkString(Some(
@@ -8671,7 +8684,16 @@ slave_priority:{}\r\n",
             );
         }
 
-        let mut abort = false;
+        if argv.len() == 2 {
+            let arg = match std::str::from_utf8(&argv[1]) {
+                Ok(arg) => arg,
+                Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+            };
+            if arg.eq_ignore_ascii_case("ABORT") {
+                return RespFrame::Error("ERR No failover in progress.".to_string());
+            }
+        }
+
         let mut target_host: Option<String> = None;
         let mut target_port: Option<u16> = None;
         let mut force = false;
@@ -8682,34 +8704,7 @@ slave_priority:{}\r\n",
                 Ok(arg) => arg,
                 Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
             };
-            if arg.eq_ignore_ascii_case("ABORT") {
-                abort = true;
-                i += 1;
-            } else if arg.eq_ignore_ascii_case("TO") {
-                if i + 2 >= argv.len() {
-                    return CommandError::SyntaxError.to_resp();
-                }
-                target_host = Some(String::from_utf8_lossy(&argv[i + 1]).into_owned());
-                let parsed_port = match parse_i64_arg(&argv[i + 2]) {
-                    Ok(value) => value,
-                    Err(err) => return err.to_resp(),
-                };
-                let Ok(parsed_port) = u16::try_from(parsed_port) else {
-                    return CommandError::InvalidInteger.to_resp();
-                };
-                target_port = Some(parsed_port);
-                i += 3;
-                if i < argv.len()
-                    && std::str::from_utf8(&argv[i])
-                        .is_ok_and(|next| next.eq_ignore_ascii_case("FORCE"))
-                {
-                    force = true;
-                    i += 1;
-                }
-            } else if arg.eq_ignore_ascii_case("TIMEOUT") {
-                if i + 1 >= argv.len() {
-                    return CommandError::SyntaxError.to_resp();
-                }
+            if arg.eq_ignore_ascii_case("TIMEOUT") && i + 1 < argv.len() && timeout_ms.is_none() {
                 let parsed_timeout = match parse_i64_arg(&argv[i + 1]) {
                     Ok(value) => value,
                     Err(err) => return err.to_resp(),
@@ -8721,18 +8716,24 @@ slave_priority:{}\r\n",
                 }
                 timeout_ms = Some(parsed_timeout as u64);
                 i += 2;
+            } else if arg.eq_ignore_ascii_case("TO") && i + 2 < argv.len() && target_host.is_none()
+            {
+                target_host = Some(String::from_utf8_lossy(&argv[i + 1]).into_owned());
+                let parsed_port = match parse_i64_arg(&argv[i + 2]) {
+                    Ok(value) => value,
+                    Err(err) => return err.to_resp(),
+                };
+                let Ok(parsed_port) = u16::try_from(parsed_port) else {
+                    return CommandError::InvalidInteger.to_resp();
+                };
+                target_port = Some(parsed_port);
+                i += 3;
+            } else if arg.eq_ignore_ascii_case("FORCE") && !force {
+                force = true;
+                i += 1;
             } else {
                 return CommandError::SyntaxError.to_resp();
             }
-        }
-
-        if abort
-            && (target_host.is_some() || target_port.is_some() || force || timeout_ms.is_some())
-        {
-            return CommandError::SyntaxError.to_resp();
-        }
-        if abort {
-            return RespFrame::Error("ERR No failover in progress.".to_string());
         }
 
         if self.server.replication_runtime_state.replicas.is_empty() {

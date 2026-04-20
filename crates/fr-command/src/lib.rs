@@ -7545,8 +7545,17 @@ fn migrate_cmd(
 }
 
 fn failover_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
-    // Parse FAILOVER arguments: [TO host port [FORCE]] [ABORT] [TIMEOUT ms]
-    let mut abort = false;
+    if argv.len() == 2 {
+        let arg = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        if arg.eq_ignore_ascii_case("ABORT") {
+            return Err(CommandError::Custom(
+                "ERR No failover in progress.".to_string(),
+            ));
+        }
+    }
+
+    // Parse FAILOVER arguments using Redis's option grammar:
+    // [TO host port] [FORCE] [TIMEOUT ms], with each option accepted at most once.
     let mut _to_host: Option<&[u8]> = None;
     let mut _to_port: Option<u16> = None;
     let mut _force = false;
@@ -7555,33 +7564,7 @@ fn failover_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     let mut i = 1;
     while i < argv.len() {
         let arg = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-        if arg.eq_ignore_ascii_case("ABORT") {
-            abort = true;
-            i += 1;
-        } else if arg.eq_ignore_ascii_case("TO") {
-            if i + 2 >= argv.len() {
-                return Err(CommandError::SyntaxError);
-            }
-            _to_host = Some(&argv[i + 1]);
-            let port = parse_i64_arg(&argv[i + 2])?;
-            let Ok(port) = u16::try_from(port) else {
-                return Err(CommandError::InvalidInteger);
-            };
-            _to_port = Some(port);
-            i += 3;
-            // Check for FORCE
-            if i < argv.len() {
-                let next =
-                    std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-                if next.eq_ignore_ascii_case("FORCE") {
-                    _force = true;
-                    i += 1;
-                }
-            }
-        } else if arg.eq_ignore_ascii_case("TIMEOUT") {
-            if i + 1 >= argv.len() {
-                return Err(CommandError::SyntaxError);
-            }
+        if arg.eq_ignore_ascii_case("TIMEOUT") && i + 1 < argv.len() && _timeout_ms.is_none() {
             let ms = parse_i64_arg(&argv[i + 1])?;
             if ms <= 0 {
                 return Err(CommandError::Custom(
@@ -7590,20 +7573,20 @@ fn failover_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
             }
             _timeout_ms = Some(ms as u64);
             i += 2;
+        } else if arg.eq_ignore_ascii_case("TO") && i + 2 < argv.len() && _to_host.is_none() {
+            _to_host = Some(&argv[i + 1]);
+            let port = parse_i64_arg(&argv[i + 2])?;
+            let Ok(port) = u16::try_from(port) else {
+                return Err(CommandError::InvalidInteger);
+            };
+            _to_port = Some(port);
+            i += 3;
+        } else if arg.eq_ignore_ascii_case("FORCE") && !_force {
+            _force = true;
+            i += 1;
         } else {
             return Err(CommandError::SyntaxError);
         }
-    }
-
-    if abort && (_to_host.is_some() || _to_port.is_some() || _force || _timeout_ms.is_some()) {
-        return Err(CommandError::SyntaxError);
-    }
-
-    if abort {
-        // No failover in progress in standalone mode
-        return Err(CommandError::Custom(
-            "ERR No failover in progress.".to_string(),
-        ));
     }
 
     // In standalone mode without replicas, FAILOVER cannot proceed
@@ -22987,6 +22970,79 @@ mod tests {
         )
         .expect_err("invalid FAILOVER port should fail");
         assert_eq!(err, CommandError::InvalidInteger);
+    }
+
+    #[test]
+    fn failover_accepts_force_before_target_and_timeout() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[
+                b"FAILOVER".to_vec(),
+                b"FORCE".to_vec(),
+                b"TIMEOUT".to_vec(),
+                b"1000".to_vec(),
+                b"TO".to_vec(),
+                b"127.0.0.1".to_vec(),
+                b"6380".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("reordered FAILOVER options should parse");
+        assert_eq!(
+            err,
+            CommandError::Custom("ERR FAILOVER requires connected replicas.".to_string())
+        );
+    }
+
+    #[test]
+    fn failover_duplicate_to_is_syntax_error() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[
+                b"FAILOVER".to_vec(),
+                b"TO".to_vec(),
+                b"127.0.0.1".to_vec(),
+                b"6380".to_vec(),
+                b"TO".to_vec(),
+                b"127.0.0.1".to_vec(),
+                b"6381".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("duplicate FAILOVER TO should fail");
+        assert_eq!(err, CommandError::SyntaxError);
+    }
+
+    #[test]
+    fn failover_duplicate_timeout_is_syntax_error() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[
+                b"FAILOVER".to_vec(),
+                b"TIMEOUT".to_vec(),
+                b"1000".to_vec(),
+                b"TIMEOUT".to_vec(),
+                b"2000".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("duplicate FAILOVER TIMEOUT should fail");
+        assert_eq!(err, CommandError::SyntaxError);
+    }
+
+    #[test]
+    fn failover_abort_with_extra_arguments_is_syntax_error() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[b"FAILOVER".to_vec(), b"ABORT".to_vec(), b"ABORT".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("extra FAILOVER ABORT arguments should fail");
+        assert_eq!(err, CommandError::SyntaxError);
     }
 
     #[test]
