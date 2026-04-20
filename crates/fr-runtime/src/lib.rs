@@ -443,13 +443,17 @@ impl AclUser {
         if self.nopass {
             return true;
         }
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(password);
+        let hash_hex = hex::encode(hasher.finalize()).into_bytes();
         self.passwords.iter().any(|p| {
             let p_slice = p.as_slice();
-            if p_slice.len() != password.len() {
+            if p_slice.len() != hash_hex.len() {
                 return false;
             }
             let mut diff = 0;
-            for (a, b) in p_slice.iter().zip(password.iter()) {
+            for (a, b) in p_slice.iter().zip(hash_hex.iter()) {
                 diff |= a ^ b;
             }
             diff == 0
@@ -763,10 +767,38 @@ impl AuthState {
                 user.denied_commands.insert(cmd_lower.clone());
                 user.allowed_commands.remove(&cmd_lower);
             } else if let Some(pass) = rule_str.strip_prefix('>') {
-                user.passwords.push(pass.as_bytes().to_vec());
+                use sha2::Digest;
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(pass.as_bytes());
+                let hash_hex = hex::encode(hasher.finalize()).into_bytes();
+                user.passwords.push(hash_hex);
                 user.nopass = false; // adding a password disables nopass
             } else if let Some(pass) = rule_str.strip_prefix('<') {
-                user.passwords.retain(|p| p.as_slice() != pass.as_bytes());
+                use sha2::Digest;
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(pass.as_bytes());
+                let hash_hex = hex::encode(hasher.finalize()).into_bytes();
+                user.passwords.retain(|p| p.as_slice() != hash_hex.as_slice());
+            } else if let Some(hash) = rule_str.strip_prefix('#') {
+                if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                    user.passwords.push(hash.to_ascii_lowercase().into_bytes());
+                    user.nopass = false;
+                } else {
+                    return Err(format!(
+                        "ERR Error in ACL SETUSER modifier '{}': Hash must be exactly 64 hex characters",
+                        rule_str
+                    ));
+                }
+            } else if let Some(hash) = rule_str.strip_prefix('!') {
+                if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                    let hash_hex = hash.to_ascii_lowercase().into_bytes();
+                    user.passwords.retain(|p| p.as_slice() != hash_hex.as_slice());
+                } else {
+                    return Err(format!(
+                        "ERR Error in ACL SETUSER modifier '{}': Hash must be exactly 64 hex characters",
+                        rule_str
+                    ));
+                }
             } else if rule_str.starts_with('~') {
                 // Key pattern (e.g., ~user:*) — for now, accept but only ~* grants full access.
                 if rule_str == "~*" {
