@@ -488,6 +488,94 @@
       }
     },
     {
+      "name": "script_load_repeat_same_hash",
+      "now_ms": 0,
+      "argv": [
+        "SCRIPT",
+        "LOAD",
+        "return 1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "e0e1f9fabfc9d4800c877a703b823ac0578ff8db"
+      }
+    },
+    {
+      "name": "script_load_newline_variant_hash",
+      "now_ms": 0,
+      "argv": [
+        "SCRIPT",
+        "LOAD",
+        "return 1\n"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "48df9b519ca145c867b895f740b37bd891e887af"
+      }
+    },
+    {
+      "name": "script_load_crlf_variant_hash",
+      "now_ms": 0,
+      "argv": [
+        "SCRIPT",
+        "LOAD",
+        "return 1\r\n"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "401a045800baceffe36d61556aacce1d0146ba27"
+      }
+    },
+    {
+      "name": "script_load_leading_space_variant_hash",
+      "now_ms": 0,
+      "argv": [
+        "SCRIPT",
+        "LOAD",
+        " return 1"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "375f62252042b7715db886c7d7fd682e04765f49"
+      }
+    },
+    {
+      "name": "script_load_trailing_space_variant_hash",
+      "now_ms": 0,
+      "argv": [
+        "SCRIPT",
+        "LOAD",
+        "return 1 "
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "90a2482bf05c35264ba010507ec8f88c2dd96f87"
+      }
+    },
+    {
+      "name": "script_exists_loaded_variants",
+      "now_ms": 0,
+      "argv": [
+        "SCRIPT",
+        "EXISTS",
+        "e0e1f9fabfc9d4800c877a703b823ac0578ff8db",
+        "48df9b519ca145c867b895f740b37bd891e887af",
+        "401a045800baceffe36d61556aacce1d0146ba27",
+        "375f62252042b7715db886c7d7fd682e04765f49",
+        "90a2482bf05c35264ba010507ec8f88c2dd96f87"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          { "kind": "integer", "value": 1 },
+          { "kind": "integer", "value": 1 },
+          { "kind": "integer", "value": 1 },
+          { "kind": "integer", "value": 1 },
+          { "kind": "integer", "value": 1 }
+        ]
+      }
+    },
+    {
       "name": "script_exists_loaded",
       "now_ms": 0,
       "argv": [

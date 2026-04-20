@@ -5806,7 +5806,7 @@ fn cluster_cmd(
             return Err(cluster_wrong_subcommand_arity(sub));
         }
         let slot = parse_i64_arg(&argv[2])?;
-        if slot < 0 || slot > 16383 {
+        if !(0..=16383).contains(&slot) {
             return Err(CommandError::Custom("ERR Invalid slot".to_string()));
         }
         let count = parse_i64_arg(&argv[3])?;
@@ -5814,7 +5814,10 @@ fn cluster_cmd(
             return Err(CommandError::InvalidInteger);
         }
         let keys = store.keys_in_slot(slot as u16, count as usize, now_ms);
-        let frames: Vec<RespFrame> = keys.into_iter().map(|k| RespFrame::BulkString(Some(k))).collect();
+        let frames: Vec<RespFrame> = keys
+            .into_iter()
+            .map(|k| RespFrame::BulkString(Some(k)))
+            .collect();
         return Ok(RespFrame::Array(Some(frames)));
     }
     if sub.eq_ignore_ascii_case("COUNTKEYSINSLOT") {
@@ -5822,7 +5825,7 @@ fn cluster_cmd(
             return Err(cluster_wrong_subcommand_arity(sub));
         }
         let slot = parse_i64_arg(&argv[2])?;
-        if slot < 0 || slot > 16383 {
+        if !(0..=16383).contains(&slot) {
             return Err(CommandError::Custom("ERR Invalid slot".to_string()));
         }
         let count = store.count_keys_in_slot(slot as u16, now_ms);
@@ -25455,6 +25458,40 @@ mod tests {
         assert_eq!(
             out,
             RespFrame::Array(Some(vec![RespFrame::Integer(0), RespFrame::Integer(0),]))
+        );
+    }
+
+    #[test]
+    fn script_load_hashes_exact_raw_bytes_and_repeat_is_stable() {
+        let mut store = Store::new();
+
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"return 1", b"e0e1f9fabfc9d4800c877a703b823ac0578ff8db"),
+            (b"return 1\n", b"48df9b519ca145c867b895f740b37bd891e887af"),
+            (b"return 1\r\n", b"401a045800baceffe36d61556aacce1d0146ba27"),
+            (b" return 1", b"375f62252042b7715db886c7d7fd682e04765f49"),
+            (b"return 1 ", b"90a2482bf05c35264ba010507ec8f88c2dd96f87"),
+        ];
+
+        for (script, expected_sha1) in cases {
+            let out = dispatch_argv(
+                &[b"SCRIPT".to_vec(), b"LOAD".to_vec(), script.to_vec()],
+                &mut store,
+                0,
+            )
+            .expect("script load");
+            assert_eq!(out, RespFrame::BulkString(Some(expected_sha1.to_vec())));
+        }
+
+        let repeat = dispatch_argv(
+            &[b"SCRIPT".to_vec(), b"LOAD".to_vec(), b"return 1".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("repeat script load");
+        assert_eq!(
+            repeat,
+            RespFrame::BulkString(Some(b"e0e1f9fabfc9d4800c877a703b823ac0578ff8db".to_vec()))
         );
     }
 
