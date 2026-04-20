@@ -27459,6 +27459,39 @@ mod tests {
             vec![b"CLUSTER".to_vec(), b"MYID".to_vec()],
             vec![b"CLUSTER".to_vec(), b"SLOTS".to_vec()],
             vec![b"CLUSTER".to_vec(), b"KEYSLOT".to_vec(), b"foo".to_vec()],
+            vec![
+                b"CLUSTER".to_vec(),
+                b"COUNTKEYSINSLOT".to_vec(),
+                b"0".to_vec(),
+            ],
+            vec![
+                b"CLUSTER".to_vec(),
+                b"COUNTKEYSINSLOT".to_vec(),
+                b"16384".to_vec(),
+            ],
+            vec![
+                b"CLUSTER".to_vec(),
+                b"COUNTKEYSINSLOT".to_vec(),
+                b"abc".to_vec(),
+            ],
+            vec![
+                b"CLUSTER".to_vec(),
+                b"GETKEYSINSLOT".to_vec(),
+                b"0".to_vec(),
+                b"10".to_vec(),
+            ],
+            vec![
+                b"CLUSTER".to_vec(),
+                b"GETKEYSINSLOT".to_vec(),
+                b"-1".to_vec(),
+                b"10".to_vec(),
+            ],
+            vec![
+                b"CLUSTER".to_vec(),
+                b"GETKEYSINSLOT".to_vec(),
+                b"abc".to_vec(),
+                b"10".to_vec(),
+            ],
         ] {
             let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
             assert_eq!(
