@@ -422,6 +422,7 @@ const CONFIG_STATIC_PARAMS: &[(&str, &str)] = &[
     ("enable-debug-command", "no"),
     ("enable-module-command", "no"),
     ("hide-user-data-from-log", "no"),
+    ("acl-pubsub-default", "resetchannels"),
 ];
 
 fn canonical_static_config_param(parameter: &str) -> Option<&'static str> {
@@ -462,6 +463,25 @@ struct AclUser {
     all_channels: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AclPubsubDefault {
+    AllChannels,
+    ResetChannels,
+}
+
+impl AclPubsubDefault {
+    fn as_config_value(self) -> &'static str {
+        match self {
+            Self::AllChannels => "allchannels",
+            Self::ResetChannels => "resetchannels",
+        }
+    }
+
+    fn grants_all_channels(self) -> bool {
+        matches!(self, Self::AllChannels)
+    }
+}
+
 impl AclUser {
     fn new_default() -> Self {
         Self {
@@ -483,7 +503,7 @@ impl AclUser {
     /// Restrictive starting state for users created via `ACL SETUSER <name> ...`.
     /// Redis creates new users disabled with no passwords, no commands, no keys,
     /// and no channels — the rules that follow build them up explicitly.
-    fn new_restricted() -> Self {
+    fn new_restricted(acl_pubsub_default: AclPubsubDefault) -> Self {
         Self {
             passwords: Vec::new(),
             enabled: false,
@@ -496,7 +516,7 @@ impl AclUser {
             denied_categories: HashSet::new(),
             key_patterns: Vec::new(),
             all_keys: false,
-            all_channels: false,
+            all_channels: acl_pubsub_default.grants_all_channels(),
         }
     }
 
@@ -780,21 +800,31 @@ impl AclUser {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AuthState {
     requirepass: Option<Vec<u8>>,
+    acl_pubsub_default: AclPubsubDefault,
     acl_users: BTreeMap<Vec<u8>, AclUser>,
 }
 
 impl Default for AuthState {
     fn default() -> Self {
-        let mut acl_users = BTreeMap::new();
-        acl_users.insert(DEFAULT_AUTH_USER.to_vec(), AclUser::new_default());
-        Self {
-            requirepass: None,
-            acl_users,
-        }
+        Self::with_acl_pubsub_default(AclPubsubDefault::ResetChannels)
     }
 }
 
 impl AuthState {
+    fn with_acl_pubsub_default(acl_pubsub_default: AclPubsubDefault) -> Self {
+        let mut acl_users = BTreeMap::new();
+        acl_users.insert(DEFAULT_AUTH_USER.to_vec(), AclUser::new_default());
+        Self {
+            requirepass: None,
+            acl_pubsub_default,
+            acl_users,
+        }
+    }
+
+    fn set_acl_pubsub_default(&mut self, acl_pubsub_default: AclPubsubDefault) {
+        self.acl_pubsub_default = acl_pubsub_default;
+    }
+
     fn set_requirepass(&mut self, requirepass: Option<Vec<u8>>) {
         self.requirepass = requirepass.clone();
         let default_user = self
@@ -848,7 +878,7 @@ impl AuthState {
     }
 
     fn load_acl_rules(&mut self, content: &str) -> Result<(), String> {
-        let mut loaded = Self::default();
+        let mut loaded = Self::with_acl_pubsub_default(self.acl_pubsub_default);
         for raw_line in content.lines() {
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -871,12 +901,13 @@ impl AuthState {
     }
 
     fn set_user(&mut self, username: Vec<u8>, rules: &[&[u8]]) -> Result<(), String> {
-        let is_default = username == DEFAULT_AUTH_USER.to_vec();
+        let is_default = username == DEFAULT_AUTH_USER;
+        let acl_pubsub_default = self.acl_pubsub_default;
         let user = self.acl_users.entry(username).or_insert_with(|| {
             if is_default {
                 AclUser::new_default()
             } else {
-                AclUser::new_restricted()
+                AclUser::new_restricted(acl_pubsub_default)
             }
         });
         for rule in rules {
@@ -1001,7 +1032,7 @@ impl AuthState {
                 user.denied_categories.clear();
                 user.all_keys = false;
                 user.key_patterns.clear();
-                user.all_channels = false;
+                user.all_channels = acl_pubsub_default.grants_all_channels();
             } else {
                 return Err(format!(
                     "ERR Error in ACL SETUSER modifier '{}': Syntax error",
@@ -6297,6 +6328,7 @@ impl Runtime {
         let mut next_command_time_budget: Option<u64> = None;
         let mut next_appendonly: Option<bool> = None;
         let mut next_appendfsync: Option<AppendFsyncMode> = None;
+        let mut next_acl_pubsub_default: Option<AclPubsubDefault> = None;
         let mut next_keyspace_events: Option<u32> = None;
         let mut next_list_max_listpack_size: Option<i64> = None;
         let mut next_rdb_path = self
@@ -6896,6 +6928,27 @@ impl Runtime {
                 ));
                 continue;
             }
+            if parameter.eq_ignore_ascii_case("acl-pubsub-default") {
+                let value_str = match std::str::from_utf8(&pair[1]) {
+                    Ok(value) => value,
+                    Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                };
+                let mode = if value_str.eq_ignore_ascii_case("allchannels") {
+                    AclPubsubDefault::AllChannels
+                } else if value_str.eq_ignore_ascii_case("resetchannels") {
+                    AclPubsubDefault::ResetChannels
+                } else {
+                    return RespFrame::Error(format!(
+                        "ERR Invalid argument '{value_str}' for CONFIG SET 'acl-pubsub-default'"
+                    ));
+                };
+                next_acl_pubsub_default = Some(mode);
+                static_override_updates.push((
+                    "acl-pubsub-default".to_string(),
+                    mode.as_config_value().to_string(),
+                ));
+                continue;
+            }
             if parameter.eq_ignore_ascii_case("appendfilename")
                 || parameter.eq_ignore_ascii_case("appenddirname")
                 || parameter.eq_ignore_ascii_case("always-show-logo")
@@ -7233,6 +7286,9 @@ impl Runtime {
         } else if self.server.local_waitaof_fsync_tracks_primary_offset() {
             self.server.replication_ack_state.local_fsync_offset =
                 self.server.replication_ack_state.primary_offset;
+        }
+        if let Some(mode) = next_acl_pubsub_default {
+            self.server.auth_state.set_acl_pubsub_default(mode);
         }
         if let Some(list_max_listpack_size) = next_list_max_listpack_size {
             self.server.store.list_max_listpack_size = list_max_listpack_size;
@@ -11860,6 +11916,8 @@ mod tests {
                 RespFrame::BulkString(Some(b"256".to_vec())),
                 RespFrame::BulkString(Some(b"aclfile".to_vec())),
                 RespFrame::BulkString(Some(Vec::new())),
+                RespFrame::BulkString(Some(b"acl-pubsub-default".to_vec())),
+                RespFrame::BulkString(Some(b"resetchannels".to_vec())),
             ]))
         );
 
@@ -17978,6 +18036,110 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&acl_path);
+    }
+
+    #[test]
+    fn acl_pubsub_default_drives_new_user_channel_defaults_without_mutating_existing_users() {
+        let mut rt = Runtime::default_strict();
+
+        let channels_for = |rt: &mut Runtime, username: &[u8], client_id: u64| -> Vec<u8> {
+            let argv: [&[u8]; 3] = [b"ACL", b"GETUSER", username];
+            let reply = rt.execute_frame(command(&argv), client_id);
+            assert!(
+                matches!(reply, RespFrame::Array(Some(_))),
+                "expected ACL GETUSER array, got {reply:?}"
+            );
+            let items = match reply {
+                RespFrame::Array(Some(items)) => items,
+                _ => Vec::new(),
+            };
+            items
+                .windows(2)
+                .find_map(|pair| match (&pair[0], &pair[1]) {
+                    (RespFrame::BulkString(Some(name)), RespFrame::BulkString(Some(value)))
+                        if name == b"channels" =>
+                    {
+                        Some(value.clone())
+                    }
+                    _ => None,
+                })
+                .expect("expected ACL GETUSER channels entry")
+        };
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"acl-pubsub-default", b"allchannels"]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"SETUSER", b"mydefault"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(channels_for(&mut rt, b"mydefault", 2), b"&*".to_vec());
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"acl-pubsub-default", b"resetchannels"]),
+                3,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(channels_for(&mut rt, b"mydefault", 4), b"&*".to_vec());
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"SETUSER", b"fresh"]), 5),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(channels_for(&mut rt, b"fresh", 6), Vec::new());
+    }
+
+    #[test]
+    fn acl_pubsub_default_drives_default_user_reset_channel_permissions() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"acl-pubsub-default", b"allchannels"]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"default", b"reset", b"on", b"nopass", b"~*", b"+@all",
+                ]),
+                1,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBLISH", b"hello", b"world"]), 2),
+            RespFrame::Integer(0)
+        );
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"acl-pubsub-default", b"resetchannels"]),
+                3,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"default", b"reset", b"on", b"nopass", b"~*", b"+@all",
+                ]),
+                4,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBLISH", b"hello", b"world"]), 5),
+            RespFrame::Error("NOPERM No permissions to access a channel".to_string())
+        );
     }
 
     #[test]
