@@ -9103,16 +9103,12 @@ slave_priority:{}\r\n",
         // Refresh replica ACK snapshots to get current state
         self.server.refresh_replica_ack_snapshots();
 
-        let required_local_offset = if required_local == 0 {
-            ReplOffset(0)
-        } else {
-            self.server.replication_ack_state.primary_offset
-        };
-        let required_replica_offset = if required_replicas == 0 {
-            ReplOffset(0)
-        } else {
-            self.server.replication_ack_state.primary_offset
-        };
+        // Redis reports the current local/replica AOF ACK state for the write
+        // offset associated with the issuing client, regardless of the requested
+        // minima. The minima only determine whether the command is allowed to
+        // proceed, not how the returned tuple is counted.
+        let required_local_offset = self.server.replication_ack_state.primary_offset;
+        let required_replica_offset = self.server.replication_ack_state.primary_offset;
 
         let outcome = evaluate_waitaof(
             self.server.replication_ack_state.local_fsync_offset,
@@ -12404,6 +12400,31 @@ mod tests {
                 "ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled."
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn waitaof_without_local_aof_can_still_report_replica_fsync_acks() {
+        let mut rt = Runtime::default_strict();
+        rt.set_replication_ack_state_for_tests(41, 0, &[41], &[41]);
+
+        let out = rt.execute_frame(command(&[b"WAITAOF", b"0", b"1", b"0"]), 0);
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![RespFrame::Integer(0), RespFrame::Integer(1)]))
+        );
+    }
+
+    #[test]
+    fn waitaof_without_replica_aof_can_still_report_local_ack() {
+        let mut rt = Runtime::default_strict();
+        rt.set_aof_path(std::path::PathBuf::from("appendonly.aof"));
+        rt.set_replication_ack_state_for_tests(41, 41, &[41], &[0]);
+
+        let out = rt.execute_frame(command(&[b"WAITAOF", b"1", b"0", b"0"]), 0);
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1), RespFrame::Integer(0)]))
         );
     }
 
