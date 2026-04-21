@@ -205,14 +205,14 @@ fn acl_log_age_seconds(now_ms: u64, timestamp_ms: u64) -> String {
 
 fn client_wrong_subcommand_arity(subcommand: &str) -> RespFrame {
     RespFrame::Error(format!(
-        "ERR wrong number of arguments for 'client|{}' command",
+        "ERR wrong number of arguments for 'client|{}' subcommand",
         subcommand.to_ascii_lowercase()
     ))
 }
 
 fn config_wrong_subcommand_arity(subcommand: &str) -> RespFrame {
     RespFrame::Error(format!(
-        "ERR wrong number of arguments for 'config|{}' command",
+        "ERR wrong number of arguments for 'config|{}' subcommand",
         subcommand.to_ascii_lowercase()
     ))
 }
@@ -7916,6 +7916,9 @@ impl Runtime {
             RespFrame::SimpleString("OK".to_string())
         } else if sub.eq_ignore_ascii_case("TRACKING") {
             // CLIENT TRACKING ON|OFF [REDIRECT id] [PREFIX prefix ...] [BCAST] [OPTIN] [OPTOUT] [NOLOOP]
+            if argv.len() < 3 {
+                return client_wrong_subcommand_arity(sub);
+            }
             let requested = match parse_client_tracking_state(argv) {
                 Ok(tracking) => tracking,
                 Err(err) => return err.to_resp(),
@@ -16312,30 +16315,32 @@ mod tests {
         let reply = rt.execute_frame(command(&[b"CONFIG", b"HELP", b"extra"]), 0);
         assert_eq!(
             reply,
-            RespFrame::Error("ERR wrong number of arguments for 'config|help' command".to_string())
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'config|help' subcommand".to_string()
+            )
         );
     }
 
     #[test]
-    fn config_subcommand_arity_matches_redis_command_wording() {
+    fn config_subcommand_arity_matches_redis_subcommand_wording() {
         let mut rt = Runtime::default_strict();
 
         for (argv, expected) in [
             (
                 command(&[b"CONFIG", b"GET"]),
-                "ERR wrong number of arguments for 'config|get' command",
+                "ERR wrong number of arguments for 'config|get' subcommand",
             ),
             (
                 command(&[b"CONFIG", b"SET", b"maxmemory"]),
-                "ERR wrong number of arguments for 'config|set' command",
+                "ERR wrong number of arguments for 'config|set' subcommand",
             ),
             (
                 command(&[b"CONFIG", b"RESETSTAT", b"extra"]),
-                "ERR wrong number of arguments for 'config|resetstat' command",
+                "ERR wrong number of arguments for 'config|resetstat' subcommand",
             ),
             (
                 command(&[b"CONFIG", b"REWRITE", b"extra"]),
-                "ERR wrong number of arguments for 'config|rewrite' command",
+                "ERR wrong number of arguments for 'config|rewrite' subcommand",
             ),
         ] {
             assert_eq!(
