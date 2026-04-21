@@ -14868,9 +14868,6 @@ mod tests {
             return Some(CommandId::Rpoplpush);
         }
         if eq_ascii_command(cmd, b"HINCRBYFLOAT") {
-            return Some(CommandId::Rpoplpush);
-        }
-        if eq_ascii_command(cmd, b"HINCRBYFLOAT") {
             return Some(CommandId::Hincrbyfloat);
         }
         if eq_ascii_command(cmd, b"HRANDFIELD") {
