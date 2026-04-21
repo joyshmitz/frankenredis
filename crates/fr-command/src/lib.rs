@@ -780,6 +780,9 @@ pub fn dispatch_argv(
     let Some(raw_cmd) = argv.first() else {
         return Err(CommandError::InvalidCommandFrame);
     };
+    if parse_client_reply_action(argv)?.is_some() && store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     apply_client_reply_state(argv, &mut store.dispatch_client_ctx.client_reply)?;
     if store.script_nesting_level >= 1
         && store.script_read_only
@@ -11090,6 +11093,37 @@ pub fn apply_client_caching_mode(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum ClientReplyAction {
+    On,
+    Off,
+    Skip,
+}
+
+fn parse_client_reply_action(argv: &[Vec<u8>]) -> Result<Option<ClientReplyAction>, CommandError> {
+    let is_client_reply = argv.len() >= 2
+        && argv[0].eq_ignore_ascii_case(b"CLIENT")
+        && argv[1].eq_ignore_ascii_case(b"REPLY");
+    if !is_client_reply {
+        return Ok(None);
+    }
+    if argv.len() != 3 {
+        return Err(client_wrong_subcommand_arity("REPLY"));
+    }
+
+    let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+    if mode.eq_ignore_ascii_case("ON") {
+        return Ok(Some(ClientReplyAction::On));
+    }
+    if mode.eq_ignore_ascii_case("OFF") {
+        return Ok(Some(ClientReplyAction::Off));
+    }
+    if mode.eq_ignore_ascii_case("SKIP") {
+        return Ok(Some(ClientReplyAction::Skip));
+    }
+    Err(CommandError::SyntaxError)
+}
+
 pub fn apply_client_reply_state(
     argv: &[Vec<u8>],
     state: &mut ClientReplyState,
@@ -11098,43 +11132,29 @@ pub fn apply_client_reply_state(
     let prior_skip_next = state.skip_next;
     state.suppress_current_response = false;
 
-    let is_client_reply = argv.len() >= 2
-        && argv[0].eq_ignore_ascii_case(b"CLIENT")
-        && argv[1].eq_ignore_ascii_case(b"REPLY");
-    if !is_client_reply {
+    let Some(action) = parse_client_reply_action(argv)? else {
         state.suppress_current_response = prior_off || prior_skip_next;
         state.skip_next = false;
         return Ok(());
-    }
+    };
 
-    if argv.len() != 3 {
-        state.suppress_current_response = prior_off || prior_skip_next;
-        state.skip_next = false;
-        return Err(client_wrong_subcommand_arity("REPLY"));
+    match action {
+        ClientReplyAction::On => {
+            state.off = false;
+            state.skip_next = false;
+        }
+        ClientReplyAction::Off => {
+            state.off = true;
+            state.skip_next = false;
+            state.suppress_current_response = true;
+        }
+        ClientReplyAction::Skip => {
+            state.off = prior_off;
+            state.skip_next = !prior_off;
+            state.suppress_current_response = true;
+        }
     }
-
-    let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-    if mode.eq_ignore_ascii_case("ON") {
-        state.off = false;
-        state.skip_next = false;
-        return Ok(());
-    }
-    if mode.eq_ignore_ascii_case("OFF") {
-        state.off = true;
-        state.skip_next = false;
-        state.suppress_current_response = true;
-        return Ok(());
-    }
-    if mode.eq_ignore_ascii_case("SKIP") {
-        state.off = prior_off;
-        state.skip_next = !prior_off;
-        state.suppress_current_response = true;
-        return Ok(());
-    }
-
-    state.suppress_current_response = prior_off || prior_skip_next;
-    state.skip_next = false;
-    Err(CommandError::SyntaxError)
+    Ok(())
 }
 
 fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
@@ -28926,6 +28946,51 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, client_wrong_subcommand_arity("REPLY"));
+    }
+
+    #[test]
+    fn client_reply_rejected_from_scripts_after_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let err = dispatch_argv(
+            &[b"CLIENT".to_vec(), b"REPLY".to_vec(), b"MAYBE".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::SyntaxError);
+
+        let err = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"REPLY".to_vec(),
+                b"ON".to_vec(),
+                b"NOW".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, client_wrong_subcommand_arity("REPLY"));
+
+        for mode in [b"ON".as_slice(), b"OFF".as_slice(), b"SKIP".as_slice()] {
+            let err = dispatch_argv(
+                &[b"CLIENT".to_vec(), b"REPLY".to_vec(), mode.to_vec()],
+                &mut store,
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+            assert!(!store.dispatch_client_ctx.client_reply.off);
+            assert!(!store.dispatch_client_ctx.client_reply.skip_next);
+            assert!(
+                !store
+                    .dispatch_client_ctx
+                    .client_reply
+                    .suppress_current_response
+            );
+        }
     }
 
     #[test]
