@@ -681,7 +681,7 @@ impl CommandError {
                 let cmd_lower = command.to_ascii_lowercase();
                 let sub_lower = subcommand.to_ascii_lowercase();
                 let kind = match cmd_lower.as_str() {
-                    "acl" | "config" | "object" | "xgroup" | "xinfo" => "subcommand",
+                    "acl" | "config" | "object" | "slowlog" | "xgroup" | "xinfo" => "subcommand",
                     _ => "command",
                 };
                 RespFrame::Error(format!(
@@ -29054,6 +29054,7 @@ mod tests {
             ("ACL", "SETUSER"),
             ("CONFIG", "RESETSTAT"),
             ("OBJECT", "ENCODING"),
+            ("SLOWLOG", "GET"),
             ("XGROUP", "CREATE"),
             ("XINFO", "STREAM"),
         ] {
