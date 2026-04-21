@@ -102,6 +102,13 @@ fn acl_setuser_allkeys_pattern_error(rule_str: &str) -> String {
     )
 }
 
+fn acl_setuser_allchannels_pattern_error(rule_str: &str) -> String {
+    format!(
+        "ERR Error in ACL SETUSER modifier '{}': Adding a pattern after the * pattern (or the 'allchannels' flag) is not valid and does not have any effect. Try 'resetchannels' to start with an empty list of channels",
+        rule_str
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AclCommandPermissionError {
     Command,
@@ -459,7 +466,9 @@ struct AclUser {
     key_patterns: Vec<Vec<u8>>,
     /// True when all keys are allowed regardless of `key_patterns`.
     all_keys: bool,
-    /// Channel permissions. False means no channels are allowed.
+    /// Explicitly allowed channel patterns, stored without the leading `&`.
+    channel_patterns: Vec<Vec<u8>>,
+    /// Channel permissions. False means only `channel_patterns` are allowed.
     all_channels: bool,
 }
 
@@ -496,6 +505,7 @@ impl AclUser {
             denied_categories: HashSet::new(),
             key_patterns: Vec::new(),
             all_keys: true,
+            channel_patterns: Vec::new(),
             all_channels: true,
         }
     }
@@ -516,6 +526,7 @@ impl AclUser {
             denied_categories: HashSet::new(),
             key_patterns: Vec::new(),
             all_keys: false,
+            channel_patterns: Vec::new(),
             all_channels: acl_pubsub_default.grants_all_channels(),
         }
     }
@@ -655,23 +666,57 @@ impl AclUser {
                 .any(|pattern| glob_match(pattern, key))
     }
 
-    fn acl_channel_permission_error_for_argv(&self, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
+    fn channels_string(&self) -> String {
         if self.all_channels {
-            return None;
+            return "&*".to_string();
         }
 
+        self.channel_patterns
+            .iter()
+            .map(|pattern| format!("&{}", String::from_utf8_lossy(pattern)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn is_channel_allowed(&self, channel: &[u8]) -> bool {
+        self.all_channels
+            || self
+                .channel_patterns
+                .iter()
+                .any(|pattern| glob_match(pattern, channel))
+    }
+
+    fn is_channel_pattern_allowed(&self, pattern: &[u8]) -> bool {
+        self.all_channels
+            || self
+                .channel_patterns
+                .iter()
+                .any(|allowed| allowed == pattern)
+    }
+
+    fn acl_channel_permission_error_for_argv(&self, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
         let command = argv.first()?;
 
         if eq_ascii_token(command, b"PUBLISH") || eq_ascii_token(command, b"SPUBLISH") {
-            return argv.get(1).cloned();
+            let channel = argv.get(1)?;
+            return (!self.is_channel_allowed(channel)).then(|| channel.clone());
         }
 
         if eq_ascii_token(command, b"SUBSCRIBE") || eq_ascii_token(command, b"SSUBSCRIBE") {
-            return argv.get(1).cloned();
+            for channel in argv.iter().skip(1) {
+                if !self.is_channel_allowed(channel) {
+                    return Some(channel.clone());
+                }
+            }
+            return None;
         }
 
         if eq_ascii_token(command, b"PSUBSCRIBE") {
-            return argv.get(1).cloned();
+            for pattern in argv.iter().skip(1) {
+                if !self.is_channel_pattern_allowed(pattern) {
+                    return Some(pattern.clone());
+                }
+            }
         }
 
         None
@@ -722,10 +767,10 @@ impl AclUser {
         } else {
             "off".to_string()
         });
+        parts.push(self.sanitize_payload_flag().to_string());
         if self.nopass {
             parts.push("nopass".to_string());
         }
-        parts.push(self.sanitize_payload_flag().to_string());
         if !self.nopass {
             parts.extend(self.passwords.iter().map(|_| "#<hidden>".to_string()));
         }
@@ -741,6 +786,13 @@ impl AclUser {
         }
         if self.all_channels {
             parts.push("&*".to_string());
+        } else {
+            parts.push("resetchannels".to_string());
+            parts.extend(
+                self.channel_patterns
+                    .iter()
+                    .map(|pattern| format!("&{}", String::from_utf8_lossy(pattern))),
+            );
         }
         parts.extend(
             self.commands_string()
@@ -762,10 +814,10 @@ impl AclUser {
         } else {
             "off".to_string()
         });
+        parts.push(self.sanitize_payload_flag().to_string());
         if self.nopass {
             parts.push("nopass".to_string());
         }
-        parts.push(self.sanitize_payload_flag().to_string());
         if !self.nopass {
             if self.passwords.is_empty() {
                 parts.push("resetpass".to_string());
@@ -787,6 +839,13 @@ impl AclUser {
         }
         if self.all_channels {
             parts.push("&*".to_string());
+        } else {
+            parts.push("resetchannels".to_string());
+            parts.extend(
+                self.channel_patterns
+                    .iter()
+                    .map(|pattern| format!("&{}", String::from_utf8_lossy(pattern))),
+            );
         }
         parts.extend(
             self.commands_string()
@@ -944,6 +1003,10 @@ impl AuthState {
                 user.key_patterns.clear();
             } else if rule_str.eq_ignore_ascii_case("allchannels") || rule_str == "&*" {
                 user.all_channels = true;
+                user.channel_patterns.clear();
+            } else if rule_str.eq_ignore_ascii_case("resetchannels") {
+                user.all_channels = false;
+                user.channel_patterns.clear();
             } else if rule_str == "-@all" || rule_str.eq_ignore_ascii_case("nocommands") {
                 user.all_commands = false;
                 user.allowed_commands.clear();
@@ -1017,9 +1080,17 @@ impl AuthState {
                 user.key_patterns.push(pattern);
                 user.all_keys = false;
             } else if rule_str.starts_with('&') {
-                if rule_str == "&*" {
-                    user.all_channels = true;
+                if user.all_channels {
+                    return Err(acl_setuser_allchannels_pattern_error(rule_str));
                 }
+                let pattern = rule_str
+                    .strip_prefix('&')
+                    .expect("ampersand-prefixed rule should strip");
+                let pattern = pattern.as_bytes().to_vec();
+                user.channel_patterns
+                    .retain(|existing| existing != &pattern);
+                user.channel_patterns.push(pattern);
+                user.all_channels = false;
             } else if rule_str.eq_ignore_ascii_case("reset") {
                 // Reset user to default state (no passwords, disabled, no commands).
                 user.passwords.clear();
@@ -1032,6 +1103,7 @@ impl AuthState {
                 user.denied_categories.clear();
                 user.all_keys = false;
                 user.key_patterns.clear();
+                user.channel_patterns.clear();
                 user.all_channels = acl_pubsub_default.grants_all_channels();
             } else {
                 return Err(format!(
@@ -2977,6 +3049,92 @@ impl Runtime {
             .filter(|(_, v)| !v.is_empty())
             .map(|(&id, _)| id)
             .collect()
+    }
+
+    fn session_has_pubsub_permissions_revoked(&self, session: &ClientSession) -> bool {
+        let has_pubsub_state = self
+            .server
+            .pubsub_client_channels
+            .get(&session.client_id)
+            .is_some_and(|channels| !channels.is_empty())
+            || self
+                .server
+                .pubsub_client_patterns
+                .get(&session.client_id)
+                .is_some_and(|patterns| !patterns.is_empty())
+            || self
+                .server
+                .pubsub_client_shard_channels
+                .get(&session.client_id)
+                .is_some_and(|channels| !channels.is_empty());
+        if !has_pubsub_state {
+            return false;
+        }
+
+        let Some(username) = session.authenticated_user.as_ref() else {
+            return false;
+        };
+        let Some(user) = self.server.auth_state.get_user(username) else {
+            return true;
+        };
+
+        self.server
+            .pubsub_client_channels
+            .get(&session.client_id)
+            .is_some_and(|channels| {
+                channels
+                    .iter()
+                    .any(|channel| !user.is_channel_allowed(channel))
+            })
+            || self
+                .server
+                .pubsub_client_patterns
+                .get(&session.client_id)
+                .is_some_and(|patterns| {
+                    patterns
+                        .iter()
+                        .any(|pattern| !user.is_channel_pattern_allowed(pattern))
+                })
+            || self
+                .server
+                .pubsub_client_shard_channels
+                .get(&session.client_id)
+                .is_some_and(|channels| {
+                    channels
+                        .iter()
+                        .any(|channel| !user.is_channel_allowed(channel))
+                })
+    }
+
+    fn queue_acl_pubsub_revocations_for_user(&mut self, username: &[u8]) {
+        let sessions = self.client_list_sessions();
+        for session in sessions.values() {
+            if session.authenticated_user.as_deref() != Some(username) {
+                continue;
+            }
+            if self.session_has_pubsub_permissions_revoked(session)
+                && !self
+                    .server
+                    .pending_client_kills
+                    .contains(&session.client_id)
+            {
+                self.server.pending_client_kills.push(session.client_id);
+            }
+        }
+    }
+
+    fn queue_acl_pubsub_revocations_for_all_users(&mut self) {
+        let sessions = self.client_list_sessions();
+        for session in sessions.values() {
+            if self.session_has_pubsub_permissions_revoked(session)
+                && !self
+                    .server
+                    .pending_client_kills
+                    .contains(&session.client_id)
+            {
+                self.server.pending_client_kills.push(session.client_id);
+            }
+        }
     }
 
     // ── Pub/Sub global registry operations ──────────────────────────
@@ -5299,7 +5457,10 @@ impl Runtime {
         let username = argv[2].clone();
         let rules: Vec<&[u8]> = argv[3..].iter().map(Vec::as_slice).collect();
         match self.server.auth_state.set_user(username, &rules) {
-            Ok(()) => RespFrame::SimpleString("OK".to_string()),
+            Ok(()) => {
+                self.queue_acl_pubsub_revocations_for_user(&argv[2]);
+                RespFrame::SimpleString("OK".to_string())
+            }
             Err(msg) => RespFrame::Error(msg),
         }
     }
@@ -5355,7 +5516,7 @@ impl Runtime {
 
         let commands_str = user.commands_string();
         let keys_str = user.keys_string();
-        let channels_str = if user.all_channels { "&*" } else { "" };
+        let channels_str = user.channels_string();
 
         RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"flags".to_vec())),
@@ -5592,6 +5753,7 @@ impl Runtime {
             Ok(()) => {
                 self.session
                     .refresh_authentication_for_server(&self.server.auth_state, true);
+                self.queue_acl_pubsub_revocations_for_all_users();
                 RespFrame::SimpleString("OK".to_string())
             }
             Err(err) => {
@@ -10320,10 +10482,10 @@ mod tests {
     use fr_store::sha1_hex_public;
 
     use super::{
-        AOF_DISK_ERROR_WRITE_DENIED, ClientSession, ClientUnblockMode, ClusterClientMode,
-        ClusterSubcommand, DEFAULT_AUTH_USER, RDB_DISK_ERROR_WRITE_DENIED, Runtime, ServerState,
-        acl_list_entries_from_rules, canonical_static_config_param, canonicalize_acl_rules,
-        classify_cluster_subcommand, classify_cluster_subcommand_linear,
+        AOF_DISK_ERROR_WRITE_DENIED, AclPubsubDefault, ClientSession, ClientUnblockMode,
+        ClusterClientMode, ClusterSubcommand, DEFAULT_AUTH_USER, RDB_DISK_ERROR_WRITE_DENIED,
+        Runtime, ServerState, acl_list_entries_from_rules, canonical_static_config_param,
+        canonicalize_acl_rules, classify_cluster_subcommand, classify_cluster_subcommand_linear,
         classify_runtime_special_command, classify_runtime_special_command_linear,
         client_wrong_subcommand_arity, sha256_hex_bytes, store_to_rdb_entries, wrong_arity_error,
     };
@@ -18102,7 +18264,10 @@ mod tests {
                 _ => None,
             })
             .expect("expected skippy in ACL LIST");
-        assert_eq!(skippy, "user skippy on nopass skip-sanitize-payload +@all");
+        assert_eq!(
+            skippy,
+            "user skippy on skip-sanitize-payload nopass resetchannels +@all"
+        );
 
         assert_eq!(
             rt.execute_frame(command(&[b"ACL", b"SAVE"]), 3),
@@ -18110,7 +18275,7 @@ mod tests {
         );
         let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
         assert!(
-            saved.contains("user skippy reset on nopass skip-sanitize-payload +@all"),
+            saved.contains("user skippy reset on skip-sanitize-payload nopass resetchannels +@all"),
             "saved ACL file should preserve skip-sanitize-payload, got: {saved}"
         );
 
@@ -18300,7 +18465,7 @@ mod tests {
             .expect("expected alice in ACL LIST");
         assert_eq!(
             alice,
-            "user alice on sanitize-payload #<hidden> resetkeys ~foo:* ~bar:* +get +set"
+            "user alice on sanitize-payload #<hidden> resetkeys ~foo:* ~bar:* resetchannels +get +set"
         );
 
         assert_eq!(
@@ -18310,7 +18475,7 @@ mod tests {
         let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
         assert!(
             saved.contains(
-                "user alice reset on sanitize-payload #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 resetkeys ~foo:* ~bar:* +get +set"
+                "user alice reset on sanitize-payload #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 resetkeys ~foo:* ~bar:* resetchannels +get +set"
             ),
             "saved ACL file should preserve key patterns, got: {saved}"
         );
@@ -18421,6 +18586,363 @@ mod tests {
                 RespFrame::BulkString(Some(b"selectors".to_vec())),
                 RespFrame::Array(Some(Vec::new())),
             ]))
+        );
+    }
+
+    #[test]
+    fn acl_channel_patterns_round_trip_through_getuser_list_and_save() {
+        let mut rt = Runtime::default_strict();
+        let acl_path = unique_temp_path("fr_runtime_acl_channel_patterns", "acl");
+        rt.set_acl_file_path(acl_path.clone());
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"alice",
+                    b"on",
+                    b">pass",
+                    b"+@all",
+                    b"~*",
+                    b"resetchannels",
+                    b"&foo:1",
+                    b"&bar:*",
+                    b"&orders",
+                ]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"GETUSER", b"alice"]), 1),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"passwords".to_vec())),
+                RespFrame::Array(Some(vec![RespFrame::BulkString(Some(
+                    b"d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1".to_vec(),
+                ))])),
+                RespFrame::BulkString(Some(b"commands".to_vec())),
+                RespFrame::BulkString(Some(b"+@all".to_vec())),
+                RespFrame::BulkString(Some(b"keys".to_vec())),
+                RespFrame::BulkString(Some(b"~*".to_vec())),
+                RespFrame::BulkString(Some(b"channels".to_vec())),
+                RespFrame::BulkString(Some(b"&foo:1 &bar:* &orders".to_vec())),
+                RespFrame::BulkString(Some(b"selectors".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+
+        let list = rt.execute_frame(command(&[b"ACL", b"LIST"]), 2);
+        let RespFrame::Array(Some(entries)) = list else {
+            unreachable!("expected ACL LIST to return an array");
+        };
+        let alice = entries
+            .iter()
+            .find_map(|entry| match entry {
+                RespFrame::BulkString(Some(line))
+                    if String::from_utf8_lossy(line).contains("alice") =>
+                {
+                    Some(String::from_utf8_lossy(line).into_owned())
+                }
+                _ => None,
+            })
+            .expect("expected alice in ACL LIST");
+        assert_eq!(
+            alice,
+            "user alice on sanitize-payload #<hidden> ~* resetchannels &foo:1 &bar:* &orders +@all"
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"SAVE"]), 3),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
+        assert!(
+            saved.contains(
+                "user alice reset on sanitize-payload #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 ~* resetchannels &foo:1 &bar:* &orders +@all"
+            ),
+            "saved ACL file should preserve channel patterns, got: {saved}"
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"DELUSER", b"alice"]), 4),
+            RespFrame::Integer(1)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"LOAD"]), 5),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"GETUSER", b"alice"]), 6),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
+                ])),
+                RespFrame::BulkString(Some(b"passwords".to_vec())),
+                RespFrame::Array(Some(vec![RespFrame::BulkString(Some(
+                    b"d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1".to_vec(),
+                ))])),
+                RespFrame::BulkString(Some(b"commands".to_vec())),
+                RespFrame::BulkString(Some(b"+@all".to_vec())),
+                RespFrame::BulkString(Some(b"keys".to_vec())),
+                RespFrame::BulkString(Some(b"~*".to_vec())),
+                RespFrame::BulkString(Some(b"channels".to_vec())),
+                RespFrame::BulkString(Some(b"&foo:1 &bar:* &orders".to_vec())),
+                RespFrame::BulkString(Some(b"selectors".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        );
+
+        let _ = std::fs::remove_file(&acl_path);
+    }
+
+    #[test]
+    fn acl_channel_patterns_gate_publish_and_subscribe_commands() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"psuser",
+                    b"on",
+                    b">pspass",
+                    b"-@all",
+                    b"+publish",
+                    b"+spublish",
+                    b"+subscribe",
+                    b"+psubscribe",
+                    b"+ssubscribe",
+                    b"resetchannels",
+                    b"&foo:1",
+                    b"&bar:*",
+                ]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"psuser", b"pspass"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBLISH", b"foo:1", b"hello"]), 2),
+            RespFrame::Integer(0)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBLISH", b"bar:2", b"hello"]), 3),
+            RespFrame::Integer(0)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PUBLISH", b"zap:3", b"hello"]), 4),
+            RespFrame::Error("NOPERM No permissions to access a channel".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SPUBLISH", b"foo:1", b"hello"]), 5),
+            RespFrame::Integer(0)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SPUBLISH", b"bar:2", b"hello"]), 6),
+            RespFrame::Integer(0)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SPUBLISH", b"zap:3", b"hello"]), 7),
+            RespFrame::Error("NOPERM No permissions to access a channel".to_string())
+        );
+
+        let subscriber = rt.new_session();
+        let previous = rt.swap_session(subscriber);
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"psuser", b"pspass"]), 8),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SUBSCRIBE", b"foo:1"]), 9),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                RespFrame::BulkString(Some(b"foo:1".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SUBSCRIBE", b"bar:2"]), 10),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                RespFrame::BulkString(Some(b"bar:2".to_vec())),
+                RespFrame::Integer(2),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SUBSCRIBE", b"zap:3"]), 11),
+            RespFrame::Error("NOPERM No permissions to access a channel".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PSUBSCRIBE", b"bar:*"]), 12),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"psubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"bar:*".to_vec())),
+                RespFrame::Integer(3),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PSUBSCRIBE", b"bar:baz"]), 13),
+            RespFrame::Error("NOPERM No permissions to access a channel".to_string())
+        );
+        let _subscriber = rt.swap_session(previous);
+
+        let shard_subscriber = rt.new_session();
+        let previous = rt.swap_session(shard_subscriber);
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"psuser", b"pspass"]), 15),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SSUBSCRIBE", b"foo:1"]), 16),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"ssubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"foo:1".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SSUBSCRIBE", b"bar:2"]), 17),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"ssubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"bar:2".to_vec())),
+                RespFrame::Integer(2),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SSUBSCRIBE", b"zap:3"]), 18),
+            RespFrame::Error("NOPERM No permissions to access a channel".to_string())
+        );
+        let _shard_subscriber = rt.swap_session(previous);
+    }
+
+    #[test]
+    fn acl_channel_pattern_revocations_queue_pubsub_clients_for_disconnect() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"psuser",
+                    b"on",
+                    b">pspass",
+                    b"-@all",
+                    b"+subscribe",
+                    b"+psubscribe",
+                    b"+ssubscribe",
+                    b"resetchannels",
+                    b"&foo:1",
+                    b"&bar:*",
+                    b"&orders",
+                ]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let mut subscriber = rt.new_session();
+        subscriber.client_name = Some(b"pardoned".to_vec());
+        let previous = rt.swap_session(subscriber);
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"psuser", b"pspass"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SUBSCRIBE", b"foo:1"]), 2),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"subscribe".to_vec())),
+                RespFrame::BulkString(Some(b"foo:1".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SSUBSCRIBE", b"orders"]), 3),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"ssubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"orders".to_vec())),
+                RespFrame::Integer(1),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"PSUBSCRIBE", b"bar:*"]), 4),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"psubscribe".to_vec())),
+                RespFrame::BulkString(Some(b"bar:*".to_vec())),
+                RespFrame::Integer(2),
+            ]))
+        );
+        let subscriber = rt.swap_session(previous);
+
+        rt.server.pending_client_kills.clear();
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"psuser",
+                    b"resetchannels",
+                    b"&foo:1",
+                    b"&bar:*",
+                    b"&orders",
+                    b"&baz:qaz",
+                    b"&zoo:*",
+                ]),
+                5,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert!(
+            rt.server.pending_client_kills.is_empty(),
+            "retaining existing channel grants should not queue disconnects"
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"SETUSER", b"psuser", b"allchannels"]), 6),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert!(
+            rt.server.pending_client_kills.is_empty(),
+            "broadening to allchannels should not queue disconnects"
+        );
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"SETUSER", b"psuser", b"resetchannels"]),
+                7,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(rt.server.pending_client_kills, vec![subscriber.client_id]);
+    }
+
+    #[test]
+    fn acl_setuser_rejects_channel_pattern_after_allchannels_without_resetchannels() {
+        let mut rt = Runtime::default_strict();
+        rt.server
+            .auth_state
+            .set_acl_pubsub_default(AclPubsubDefault::AllChannels);
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"SETUSER", b"onechannel", b"&test"]), 0),
+            RespFrame::Error(
+                "ERR Error in ACL SETUSER modifier '&test': Adding a pattern after the * pattern (or the 'allchannels' flag) is not valid and does not have any effect. Try 'resetchannels' to start with an empty list of channels"
+                    .to_string(),
+            )
         );
     }
 
