@@ -12071,6 +12071,9 @@ fn bgrewriteaof_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Co
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("BGREWRITEAOF"));
     }
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     store.request_bgrewriteaof();
     Ok(RespFrame::SimpleString(
         "Background append only file rewriting started".to_string(),
@@ -24692,6 +24695,25 @@ mod tests {
             RespFrame::SimpleString("Background append only file rewriting started".to_string())
         );
         assert!(store.take_bgrewriteaof_requested());
+    }
+
+    #[test]
+    fn bgrewriteaof_rejected_from_scripts_after_arity_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let err = dispatch_argv(
+            &[b"BGREWRITEAOF".to_vec(), b"EXTRA".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("bgrewriteaof arity");
+        assert_eq!(err, CommandError::WrongArity("BGREWRITEAOF"));
+
+        let err = dispatch_argv(&[b"BGREWRITEAOF".to_vec()], &mut store, 0)
+            .expect_err("bgrewriteaof noscript");
+        assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+        assert!(!store.take_bgrewriteaof_requested());
     }
 
     #[test]
