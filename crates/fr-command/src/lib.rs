@@ -1012,7 +1012,7 @@ pub fn dispatch_argv(
         Some(CommandId::Monitor) => return monitor_cmd(argv, store),
         Some(CommandId::Migrate) => return migrate_cmd(argv, store, now_ms),
         Some(CommandId::Failover) => return failover_cmd(argv, store),
-        Some(CommandId::Module) => return module_cmd(argv),
+        Some(CommandId::Module) => return module_cmd(argv, store),
         Some(CommandId::Sentinel) => return sentinel_cmd(argv),
         Some(CommandId::Pfdebug) => return pfdebug_cmd(argv, store, now_ms),
         Some(CommandId::Pfselftest) => return pfselftest_cmd(argv, store),
@@ -7814,7 +7814,7 @@ fn module_disabled_error() -> CommandError {
     )
 }
 
-fn module_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn module_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("MODULE"));
     }
@@ -7846,6 +7846,9 @@ fn module_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         if argv.len() != 2 {
             return Err(module_wrong_arity(&argv[1]));
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         return Ok(RespFrame::Array(Some(Vec::new())));
     }
 
@@ -7853,12 +7856,18 @@ fn module_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         if argv.len() != 3 {
             return Err(module_wrong_arity(&argv[1]));
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         return Err(module_disabled_error());
     }
 
     if argv[1].eq_ignore_ascii_case(b"LOAD") || argv[1].eq_ignore_ascii_case(b"LOADEX") {
         if argv.len() < 3 {
             return Err(module_wrong_arity(&argv[1]));
+        }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
         }
         return Err(module_disabled_error());
     }
@@ -23647,6 +23656,58 @@ mod tests {
                 "ERR wrong number of arguments for 'module|help' command".to_string()
             )
         );
+    }
+
+    #[test]
+    fn module_admin_subcommands_reject_scripts_after_arity_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let help = dispatch_argv(&[b"MODULE".to_vec(), b"HELP".to_vec()], &mut store, 0)
+            .expect("module help in script");
+        let RespFrame::Array(Some(_)) = help else {
+            panic!("expected module help array");
+        };
+
+        let list_arity = dispatch_argv(
+            &[b"MODULE".to_vec(), b"LIST".to_vec(), b"extra".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            list_arity,
+            CommandError::Custom(
+                "ERR wrong number of arguments for 'module|list' command".to_string()
+            )
+        );
+
+        let unload_arity =
+            dispatch_argv(&[b"MODULE".to_vec(), b"UNLOAD".to_vec()], &mut store, 0).unwrap_err();
+        assert_eq!(
+            unload_arity,
+            CommandError::Custom(
+                "ERR wrong number of arguments for 'module|unload' command".to_string()
+            )
+        );
+
+        for argv in [
+            vec![b"MODULE".to_vec(), b"LIST".to_vec()],
+            vec![
+                b"MODULE".to_vec(),
+                b"LOAD".to_vec(),
+                b"/tmp/mod.so".to_vec(),
+            ],
+            vec![
+                b"MODULE".to_vec(),
+                b"LOADEX".to_vec(),
+                b"/tmp/mod.so".to_vec(),
+            ],
+            vec![b"MODULE".to_vec(), b"UNLOAD".to_vec(), b"mymod".to_vec()],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+        }
     }
 
     #[test]
