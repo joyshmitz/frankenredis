@@ -17393,7 +17393,7 @@ mod tests {
     }
 
     #[test]
-    fn eval_bgrewriteaof_rewrites_aof_snapshot() {
+    fn eval_bgrewriteaof_rejects_from_scripts_and_leaves_aof_unrewritten() {
         let dir = std::env::temp_dir().join("fr_runtime_eval_bgrewriteaof_test");
         let _ = std::fs::create_dir_all(&dir);
         let aof_path = dir.join("eval_bgrewriteaof.aof");
@@ -17409,26 +17409,30 @@ mod tests {
             rt.execute_frame(command(&[b"SET", b"fresh", b"value"]), 0),
             RespFrame::SimpleString("OK".to_string())
         );
+        let script = b"return redis.call('BGREWRITEAOF')";
         assert_eq!(
-            rt.execute_frame(
-                command(&[b"EVAL", b"return redis.call('BGREWRITEAOF')", b"0"]),
-                1,
-            ),
-            RespFrame::SimpleString("Background append only file rewriting started".to_string())
+            rt.execute_frame(command(&[b"EVAL", script, b"0"]), 1),
+            RespFrame::Error(format!(
+                "ERR This Redis command is not allowed from script script: {}, on @user_script:1.",
+                sha1_hex_public(script)
+            ))
         );
 
         let mut restored = Runtime::default_strict();
         restored.set_aof_path(aof_path.clone());
-        let loaded = restored.load_aof(100).expect("load rewritten aof");
-        assert!(loaded > 0, "rewritten AOF should contain snapshot records");
+        let loaded = restored.load_aof(100).expect("load unchanged aof");
+        assert!(
+            loaded > 0,
+            "AOF should still contain the preseeded and appended records"
+        );
 
         assert_eq!(
             restored.execute_frame(command(&[b"GET", b"stale"]), 101),
-            RespFrame::BulkString(None)
+            RespFrame::BulkString(Some(b"old".to_vec()))
         );
         assert_eq!(
             restored.execute_frame(command(&[b"GET", b"fresh"]), 102),
-            RespFrame::BulkString(Some(b"value".to_vec()))
+            RespFrame::BulkString(None)
         );
 
         let _ = std::fs::remove_file(&aof_path);
