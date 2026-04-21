@@ -677,11 +677,21 @@ impl CommandError {
             CommandError::WrongSubcommandArity {
                 command,
                 subcommand,
-            } => RespFrame::Error(format!(
-                "ERR wrong number of arguments for '{}|{}' command",
-                command.to_ascii_lowercase(),
-                subcommand.to_ascii_lowercase()
-            )),
+            } => {
+                let cmd_lower = command.to_ascii_lowercase();
+                let sub_lower = subcommand.to_ascii_lowercase();
+                if cmd_lower == "acl" {
+                    RespFrame::Error(format!(
+                        "ERR wrong number of arguments for '{}|{}' subcommand",
+                        cmd_lower, sub_lower
+                    ))
+                } else {
+                    RespFrame::Error(format!(
+                        "ERR wrong number of arguments for '{}|{}' command",
+                        cmd_lower, sub_lower
+                    ))
+                }
+            }
             CommandError::UnknownSubcommand {
                 command,
                 subcommand,
