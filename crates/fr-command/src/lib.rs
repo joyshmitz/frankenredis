@@ -12849,6 +12849,9 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 subcommand: "LOAD".to_string(),
             });
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         let sha1 = store.script_load(&argv[2]);
         Ok(RespFrame::BulkString(Some(sha1.into_bytes())))
     } else if sub.eq_ignore_ascii_case("EXISTS") {
@@ -12857,6 +12860,9 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 command: "SCRIPT",
                 subcommand: "EXISTS".to_string(),
             });
+        }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
         }
         let sha1s: Vec<&[u8]> = argv[2..].iter().map(Vec::as_slice).collect();
         let results: Vec<RespFrame> = store
@@ -12881,6 +12887,9 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 ));
             }
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         store.script_flush();
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("DEBUG") {
@@ -12899,10 +12908,22 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 "ERR Use SCRIPT DEBUG YES, SYNC or NO".to_string(),
             ));
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         // FrankenRedis does not currently implement a step-by-step Lua debugger.
         // We accept the command for parity, but debugging mode won't actually trigger.
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("KILL") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongSubcommandArity {
+                command: "SCRIPT",
+                subcommand: "KILL".to_string(),
+            });
+        }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         Ok(RespFrame::Error(
             "NOTBUSY No scripts in execution right now.".to_string(),
         ))
@@ -26147,6 +26168,104 @@ mod tests {
         let out = dispatch_argv(&[b"SCRIPT".to_vec(), b"FLUSH".to_vec()], &mut store, 0)
             .expect("script flush");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn script_admin_subcommands_rejected_from_scripts_after_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let help = dispatch_argv(&[b"SCRIPT".to_vec(), b"HELP".to_vec()], &mut store, 0)
+            .expect("script help in script");
+        let RespFrame::Array(Some(_)) = help else {
+            panic!("expected script help array");
+        };
+
+        let arity_cases = [
+            (
+                vec![b"SCRIPT".to_vec(), b"LOAD".to_vec()],
+                CommandError::WrongSubcommandArity {
+                    command: "SCRIPT",
+                    subcommand: "LOAD".to_string(),
+                },
+            ),
+            (
+                vec![b"SCRIPT".to_vec(), b"EXISTS".to_vec()],
+                CommandError::WrongSubcommandArity {
+                    command: "SCRIPT",
+                    subcommand: "EXISTS".to_string(),
+                },
+            ),
+            (
+                vec![
+                    b"SCRIPT".to_vec(),
+                    b"FLUSH".to_vec(),
+                    b"SYNC".to_vec(),
+                    b"EXTRA".to_vec(),
+                ],
+                CommandError::WrongSubcommandArity {
+                    command: "SCRIPT",
+                    subcommand: "FLUSH".to_string(),
+                },
+            ),
+            (
+                vec![b"SCRIPT".to_vec(), b"DEBUG".to_vec()],
+                CommandError::WrongSubcommandArity {
+                    command: "SCRIPT",
+                    subcommand: "DEBUG".to_string(),
+                },
+            ),
+            (
+                vec![b"SCRIPT".to_vec(), b"KILL".to_vec(), b"EXTRA".to_vec()],
+                CommandError::WrongSubcommandArity {
+                    command: "SCRIPT",
+                    subcommand: "KILL".to_string(),
+                },
+            ),
+        ];
+        for (argv, expected) in arity_cases {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("script subcommand arity");
+            assert_eq!(err, expected, "argv: {argv:?}");
+        }
+
+        let invalid_flush = dispatch_argv(
+            &[b"SCRIPT".to_vec(), b"FLUSH".to_vec(), b"LATER".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("invalid script flush should return error frame");
+        assert_eq!(
+            invalid_flush,
+            RespFrame::Error("ERR SCRIPT FLUSH only support SYNC|ASYNC option".to_string())
+        );
+
+        let invalid_debug = dispatch_argv(
+            &[b"SCRIPT".to_vec(), b"DEBUG".to_vec(), b"MAYBE".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("invalid script debug mode");
+        assert_eq!(
+            invalid_debug,
+            CommandError::Custom("ERR Use SCRIPT DEBUG YES, SYNC or NO".to_string())
+        );
+
+        let noscript_cases = [
+            vec![b"SCRIPT".to_vec(), b"LOAD".to_vec(), b"return 1".to_vec()],
+            vec![b"SCRIPT".to_vec(), b"EXISTS".to_vec(), b"deadbeef".to_vec()],
+            vec![b"SCRIPT".to_vec(), b"FLUSH".to_vec()],
+            vec![b"SCRIPT".to_vec(), b"FLUSH".to_vec(), b"SYNC".to_vec()],
+            vec![b"SCRIPT".to_vec(), b"DEBUG".to_vec(), b"NO".to_vec()],
+            vec![b"SCRIPT".to_vec(), b"KILL".to_vec()],
+        ];
+        for argv in noscript_cases {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("script noscript");
+            assert_eq!(
+                err,
+                CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
+                "argv: {argv:?}"
+            );
+        }
     }
 
     #[test]
