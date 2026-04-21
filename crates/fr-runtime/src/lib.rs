@@ -14705,6 +14705,22 @@ mod tests {
     }
 
     #[test]
+    fn cluster_myshardid_returns_stable_shard_id_when_cluster_is_enabled() {
+        let mut rt = Runtime::default_strict();
+        rt.server.store.cluster_enabled = true;
+
+        let myshardid = rt.execute_frame(command(&[b"CLUSTER", b"MYSHARDID"]), 0);
+        assert_eq!(
+            myshardid,
+            RespFrame::BulkString(Some(rt.server.store.cluster_shard_id.as_bytes().to_vec()))
+        );
+
+        let myshardid_again = rt.execute_frame(command(&[b"CLUSTER", b"MYSHARDID"]), 1);
+        assert_eq!(myshardid_again, myshardid);
+        assert_eq!(rt.server.store.cluster_shard_id.len(), 40);
+    }
+
+    #[test]
     fn fr_p2c_007_u007_client_cluster_mode_flags_transition_cleanly() {
         let mut rt = Runtime::default_strict();
         assert!(!rt.is_cluster_read_only());

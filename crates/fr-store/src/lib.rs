@@ -1100,6 +1100,8 @@ pub struct Store {
     // ── Server-wide metadata and stats (updated by runtime, read by INFO) ──
     /// Unique 40-character hex run ID generated at startup.
     pub server_run_id: String,
+    /// Stable 40-character shard ID used by CLUSTER MYSHARDID when cluster mode is enabled.
+    pub cluster_shard_id: String,
     /// Server process ID.
     pub server_pid: u32,
     /// Server TCP port.
@@ -1293,6 +1295,7 @@ impl Default for Store {
             notify_keyspace_events: 0,
             keyspace_notifications: Vec::new(),
             server_run_id: generate_run_id(),
+            cluster_shard_id: generate_run_id(),
             server_pid: std::process::id(),
             server_port: 6379,
             stat_total_commands_processed: 0,

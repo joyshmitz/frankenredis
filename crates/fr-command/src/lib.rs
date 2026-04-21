@@ -5876,6 +5876,17 @@ fn cluster_cmd(
             store.server_run_id.as_bytes().to_vec(),
         )));
     }
+    if sub.eq_ignore_ascii_case("MYSHARDID") {
+        if argv.len() != 2 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        if !store.cluster_enabled {
+            return Err(cluster_disabled_error());
+        }
+        return Ok(RespFrame::BulkString(Some(
+            store.cluster_shard_id.as_bytes().to_vec(),
+        )));
+    }
     if sub.eq_ignore_ascii_case("KEYSLOT") {
         if argv.len() != 3 {
             return Err(cluster_wrong_subcommand_arity(sub));
@@ -5964,7 +5975,6 @@ fn cluster_cmd(
         || sub.eq_ignore_ascii_case("SAVECONFIG")
         || sub.eq_ignore_ascii_case("SET-CONFIG-EPOCH")
         || sub.eq_ignore_ascii_case("BUMPEPOCH")
-        || sub.eq_ignore_ascii_case("MYSHARDID")
         || sub.eq_ignore_ascii_case("SLOTSTATE")
     {
         return Err(cluster_disabled_error());
@@ -28747,6 +28757,40 @@ mod tests {
             out,
             RespFrame::BulkString(Some(store.server_run_id.as_bytes().to_vec()))
         );
+    }
+
+    #[test]
+    fn cluster_myshardid_returns_stable_shard_id_when_cluster_enabled() {
+        let mut store = Store::new();
+
+        let disabled = dispatch_argv(&[b"CLUSTER".to_vec(), b"MYSHARDID".to_vec()], &mut store, 0)
+            .unwrap_err();
+        assert_eq!(disabled, cluster_disabled_error());
+
+        let wrong_arity = dispatch_argv(
+            &[
+                b"CLUSTER".to_vec(),
+                b"MYSHARDID".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(wrong_arity, cluster_wrong_subcommand_arity("MYSHARDID"));
+
+        store.cluster_enabled = true;
+        let out =
+            dispatch_argv(&[b"CLUSTER".to_vec(), b"MYSHARDID".to_vec()], &mut store, 0).unwrap();
+        assert_eq!(
+            out,
+            RespFrame::BulkString(Some(store.cluster_shard_id.as_bytes().to_vec()))
+        );
+
+        let out_again =
+            dispatch_argv(&[b"CLUSTER".to_vec(), b"MYSHARDID".to_vec()], &mut store, 0).unwrap();
+        assert_eq!(out_again, out);
+        assert_eq!(store.cluster_shard_id.len(), 40);
     }
 
     #[test]
