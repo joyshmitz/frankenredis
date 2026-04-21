@@ -12798,6 +12798,9 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("DEBUG"));
     }
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("SLEEP") {
         if argv.len() != 3 {
@@ -12914,7 +12917,7 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     } else if sub.eq_ignore_ascii_case("OOM") {
         std::alloc::handle_alloc_error(std::alloc::Layout::new::<u8>());
     } else {
-        Err(CommandError::Custom(format!(
+        Ok(RespFrame::Error(format!(
             "ERR unknown subcommand or wrong number of arguments for '{}'. Try DEBUG HELP.",
             sub.to_ascii_uppercase()
         )))
@@ -25822,6 +25825,26 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn debug_rejected_from_scripts_after_top_level_arity_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let arity = dispatch_argv(&[b"DEBUG".to_vec()], &mut store, 0).expect_err("debug arity");
+        assert_eq!(arity, CommandError::WrongArity("DEBUG"));
+
+        for argv in [
+            vec![b"DEBUG".to_vec(), b"HELP".to_vec()],
+            vec![b"DEBUG".to_vec(), b"HELP".to_vec(), b"extra".to_vec()],
+            vec![b"DEBUG".to_vec(), b"NOSUCH".to_vec()],
+            vec![b"DEBUG".to_vec(), b"NOSUCH".to_vec(), b"arg".to_vec()],
+            vec![b"DEBUG".to_vec(), b"DIGEST".to_vec()],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("debug noscript");
+            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+        }
     }
 
     #[test]
