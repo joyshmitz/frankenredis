@@ -964,7 +964,7 @@ pub fn dispatch_argv(
         Some(CommandId::Script) => return script_cmd(argv, store),
         Some(CommandId::Debug) => return debug_cmd(argv, store, now_ms),
         Some(CommandId::Role) => return role_cmd(argv, store),
-        Some(CommandId::Shutdown) => return shutdown_cmd(argv),
+        Some(CommandId::Shutdown) => return shutdown_cmd(argv, store),
         Some(CommandId::Move) => return move_cmd(argv, store, now_ms),
         Some(CommandId::Latency) => return latency_cmd(argv, store),
         Some(CommandId::Bitfield) => return bitfield_cmd(argv, store, now_ms),
@@ -13031,7 +13031,7 @@ fn role_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandErr
     ])))
 }
 
-fn shutdown_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn shutdown_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
     let mut flags = 0u8;
     let mut abort = false;
     for arg in &argv[1..] {
@@ -13052,6 +13052,9 @@ fn shutdown_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
     }
     if (flags & 0b0001 != 0 && flags & 0b0010 != 0) || (abort && flags != 0) {
         return Err(CommandError::SyntaxError);
+    }
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
     }
     if abort {
         return Ok(RespFrame::Error("ERR No shutdown in progress.".to_string()));
@@ -26174,6 +26177,48 @@ mod tests {
         assert_eq!(
             err.to_resp(),
             RespFrame::Error("ERR syntax error".to_string())
+        );
+    }
+
+    #[test]
+    fn shutdown_rejected_from_scripts_after_option_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let err = dispatch_argv(
+            &[b"SHUTDOWN".to_vec(), b"ABORT".to_vec(), b"NOW".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("abort mixed with flags should still be syntax");
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+
+        let err = dispatch_argv(
+            &[b"SHUTDOWN".to_vec(), b"SAVE".to_vec(), b"NOSAVE".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("save and nosave together should still be syntax");
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+
+        let bare =
+            dispatch_argv(&[b"SHUTDOWN".to_vec()], &mut store, 0).expect_err("shutdown noscript");
+        assert_eq!(
+            bare,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
+        );
+
+        let abort = dispatch_argv(&[b"SHUTDOWN".to_vec(), b"ABORT".to_vec()], &mut store, 0)
+            .expect_err("shutdown abort noscript");
+        assert_eq!(
+            abort,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
         );
     }
 
