@@ -12,7 +12,7 @@ use std::rc::Rc;
 use fr_protocol::RespFrame;
 use fr_store::Store;
 
-use crate::{SCRIPT_NOSCRIPT_ERROR, dispatch_argv};
+use crate::{CommandError, SCRIPT_NOSCRIPT_ERROR, dispatch_argv, parse_i64_arg};
 
 // ── Value type ──────────────────────────────────────────────────────────
 
@@ -3553,8 +3553,8 @@ impl<'a> LuaState<'a> {
             argv.push(arg.to_redis_arg()?);
         }
 
-        let command_result = if let Some(err_msg) = transaction_control_script_error(&argv) {
-            Err(err_msg)
+        let command_result = if let Some(intercepted) = script_command_intercept(&argv) {
+            intercepted
         } else {
             match dispatch_argv(&argv, self.store, self.now_ms) {
                 Ok(frame) => Ok(frame),
@@ -3586,51 +3586,205 @@ impl<'a> LuaState<'a> {
     }
 }
 
-fn transaction_control_script_error(argv: &[Vec<u8>]) -> Option<String> {
+fn command_error_string(err: CommandError) -> String {
+    match err.to_resp() {
+        RespFrame::Error(msg) => msg,
+        other => format!("{other:?}"),
+    }
+}
+
+fn script_command_intercept(argv: &[Vec<u8>]) -> Option<Result<RespFrame, String>> {
+    transaction_control_script_result(argv).or_else(|| acl_script_result(argv))
+}
+
+fn transaction_control_script_result(argv: &[Vec<u8>]) -> Option<Result<RespFrame, String>> {
     let command = argv.first()?;
     let wrong_arity = |name: &str| {
-        Some(format!(
+        Some(Err(format!(
             "ERR wrong number of arguments for '{}' command",
             name.to_ascii_lowercase()
-        ))
+        )))
     };
 
     if command.eq_ignore_ascii_case(b"MULTI") {
         if argv.len() != 1 {
             return wrong_arity("MULTI");
         }
-        return Some(SCRIPT_NOSCRIPT_ERROR.to_string());
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
     }
 
     if command.eq_ignore_ascii_case(b"EXEC") {
         if argv.len() != 1 {
             return wrong_arity("EXEC");
         }
-        return Some(SCRIPT_NOSCRIPT_ERROR.to_string());
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
     }
 
     if command.eq_ignore_ascii_case(b"DISCARD") {
         if argv.len() != 1 {
             return wrong_arity("DISCARD");
         }
-        return Some(SCRIPT_NOSCRIPT_ERROR.to_string());
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
     }
 
     if command.eq_ignore_ascii_case(b"WATCH") {
         if argv.len() < 2 {
             return wrong_arity("WATCH");
         }
-        return Some(SCRIPT_NOSCRIPT_ERROR.to_string());
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
     }
 
     if command.eq_ignore_ascii_case(b"UNWATCH") {
         if argv.len() != 1 {
             return wrong_arity("UNWATCH");
         }
-        return Some(SCRIPT_NOSCRIPT_ERROR.to_string());
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
     }
 
     None
+}
+
+fn acl_script_result(argv: &[Vec<u8>]) -> Option<Result<RespFrame, String>> {
+    let command = argv.first()?;
+    if !command.eq_ignore_ascii_case(b"ACL") {
+        return None;
+    }
+
+    if argv.len() < 2 {
+        return Some(Err(command_error_string(CommandError::WrongArity("ACL"))));
+    }
+
+    let sub = match std::str::from_utf8(&argv[1]) {
+        Ok(sub) => sub,
+        Err(_) => return Some(Err(command_error_string(CommandError::InvalidUtf8Argument))),
+    };
+
+    let wrong_subcommand_arity = |subcommand: &str| {
+        Err(command_error_string(CommandError::WrongSubcommandArity {
+            command: "ACL",
+            subcommand: subcommand.to_string(),
+        }))
+    };
+
+    if sub.eq_ignore_ascii_case("WHOAMI")
+        || sub.eq_ignore_ascii_case("LIST")
+        || sub.eq_ignore_ascii_case("USERS")
+        || sub.eq_ignore_ascii_case("SAVE")
+        || sub.eq_ignore_ascii_case("LOAD")
+    {
+        if argv.len() != 2 {
+            return Some(wrong_subcommand_arity(sub));
+        }
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
+    }
+
+    if sub.eq_ignore_ascii_case("SETUSER") || sub.eq_ignore_ascii_case("DELUSER") {
+        if argv.len() < 3 {
+            return Some(wrong_subcommand_arity(sub));
+        }
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
+    }
+
+    if sub.eq_ignore_ascii_case("GETUSER") {
+        if argv.len() != 3 {
+            return Some(wrong_subcommand_arity("GETUSER"));
+        }
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
+    }
+
+    if sub.eq_ignore_ascii_case("CAT") {
+        if argv.len() != 2 && argv.len() != 3 {
+            return Some(wrong_subcommand_arity("CAT"));
+        }
+        if argv.len() == 3 && std::str::from_utf8(&argv[2]).is_err() {
+            return Some(Err(command_error_string(CommandError::InvalidUtf8Argument)));
+        }
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
+    }
+
+    if sub.eq_ignore_ascii_case("GENPASS") {
+        if argv.len() == 3 {
+            match parse_i64_arg(&argv[2]) {
+                Ok(bits) if bits > 0 && bits <= 4096 => {}
+                _ => {
+                    return Some(Err(
+                        "ERR ACL GENPASS argument must be the number of bits for the output password, a positive number up to 4096"
+                            .to_string(),
+                    ));
+                }
+            }
+        } else if argv.len() != 2 {
+            return Some(wrong_subcommand_arity("GENPASS"));
+        }
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
+    }
+
+    if sub.eq_ignore_ascii_case("LOG") {
+        if argv.len() == 3 {
+            if !argv[2].eq_ignore_ascii_case(b"RESET") {
+                match parse_i64_arg(&argv[2]) {
+                    Ok(count) if count >= 0 => {}
+                    _ => return Some(Err(command_error_string(CommandError::InvalidInteger))),
+                }
+            }
+        } else if argv.len() != 2 {
+            return Some(wrong_subcommand_arity("LOG"));
+        }
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
+    }
+
+    if sub.eq_ignore_ascii_case("DRYRUN") {
+        if argv.len() < 4 {
+            return Some(wrong_subcommand_arity("DRYRUN"));
+        }
+        return Some(Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
+    }
+
+    if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Some(wrong_subcommand_arity("HELP"));
+        }
+        return Some(Ok(acl_help_frame()));
+    }
+
+    Some(Err(command_error_string(CommandError::UnknownSubcommand {
+        command: "ACL",
+        subcommand: sub.to_string(),
+    })))
+}
+
+fn acl_help_frame() -> RespFrame {
+    let bulk = |s: &str| RespFrame::BulkString(Some(s.as_bytes().to_vec()));
+    RespFrame::Array(Some(vec![
+        bulk("ACL <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+        bulk("CAT [<category>]"),
+        bulk("    List all commands that belong to <category>, or all command categories"),
+        bulk("    when no category is specified."),
+        bulk("DELUSER <username> [<username> ...]"),
+        bulk("    Delete a list of users."),
+        bulk("DRYRUN <username> <command> [<arg> ...]"),
+        bulk("    Test if a command would be allowed for the given user."),
+        bulk("GENPASS [<bits>]"),
+        bulk("    Generate a secure password."),
+        bulk("GETUSER <username>"),
+        bulk("    Get the user's details."),
+        bulk("LIST"),
+        bulk("    List users access rules in the ACL format."),
+        bulk("LOAD"),
+        bulk("    Reload users from the ACL file."),
+        bulk("LOG [<count> | RESET]"),
+        bulk("    List latest events denied because of ACLs."),
+        bulk("SAVE"),
+        bulk("    Save the current ACL rules to the ACL file."),
+        bulk("SETUSER <username> <property> [<property> ...]"),
+        bulk("    Create or modify a user with the specified properties."),
+        bulk("USERS"),
+        bulk("    List all usernames."),
+        bulk("WHOAMI"),
+        bulk("    Return the current connection username."),
+        bulk("HELP"),
+        bulk("    Print this help."),
+    ]))
 }
 
 // ── Lua pattern matching engine ─────────────────────────────────────────
@@ -4735,6 +4889,113 @@ mod tests {
 
         let pcall = eval_script(
             b"local reply = redis.pcall('MULTI'); return reply.err",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+        assert_eq!(
+            pcall,
+            Ok(RespFrame::BulkString(Some(
+                SCRIPT_NOSCRIPT_ERROR.as_bytes().to_vec()
+            )))
+        );
+    }
+
+    #[test]
+    fn acl_admin_subcommands_reject_from_scripts_after_validation() {
+        let mut store = Store::new();
+
+        let acl_arity = eval_script(b"return redis.call('ACL')", &[], &[], &mut store, 0);
+        assert_eq!(
+            acl_arity,
+            Err("ERR wrong number of arguments for 'acl' command".to_string())
+        );
+
+        let whoami_arity = eval_script(
+            b"return redis.call('ACL', 'WHOAMI', 'extra')",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+        assert_eq!(
+            whoami_arity,
+            Err("ERR wrong number of arguments for 'acl|whoami' subcommand".to_string())
+        );
+
+        let genpass_bits = eval_script(
+            b"return redis.call('ACL', 'GENPASS', '0')",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+        assert_eq!(
+            genpass_bits,
+            Err("ERR ACL GENPASS argument must be the number of bits for the output password, a positive number up to 4096".to_string())
+        );
+
+        let log_count = eval_script(
+            b"return redis.call('ACL', 'LOG', 'foo')",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+        assert_eq!(
+            log_count,
+            Err("ERR value is not an integer or out of range".to_string())
+        );
+
+        let help = eval_script(
+            b"local reply = redis.call('ACL', 'HELP'); return reply[1]",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+        assert_eq!(
+            help,
+            Ok(RespFrame::BulkString(Some(
+                b"ACL <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_vec()
+            )))
+        );
+
+        let help_arity = eval_script(
+            b"return redis.call('ACL', 'HELP', 'extra')",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+        assert_eq!(
+            help_arity,
+            Err("ERR wrong number of arguments for 'acl|help' subcommand".to_string())
+        );
+
+        for script in [
+            b"return redis.call('ACL', 'WHOAMI')".as_slice(),
+            b"return redis.call('ACL', 'LIST')".as_slice(),
+            b"return redis.call('ACL', 'USERS')".as_slice(),
+            b"return redis.call('ACL', 'SETUSER', 'alice')".as_slice(),
+            b"return redis.call('ACL', 'DELUSER', 'alice')".as_slice(),
+            b"return redis.call('ACL', 'GETUSER', 'alice')".as_slice(),
+            b"return redis.call('ACL', 'CAT')".as_slice(),
+            b"return redis.call('ACL', 'CAT', 'read')".as_slice(),
+            b"return redis.call('ACL', 'GENPASS')".as_slice(),
+            b"return redis.call('ACL', 'LOG')".as_slice(),
+            b"return redis.call('ACL', 'LOG', 'RESET')".as_slice(),
+            b"return redis.call('ACL', 'SAVE')".as_slice(),
+            b"return redis.call('ACL', 'LOAD')".as_slice(),
+            b"return redis.call('ACL', 'DRYRUN', 'alice', 'GET', 'k')".as_slice(),
+        ] {
+            let err = eval_script(script, &[], &[], &mut store, 0);
+            assert_eq!(err, Err(SCRIPT_NOSCRIPT_ERROR.to_string()));
+        }
+
+        let pcall = eval_script(
+            b"local reply = redis.pcall('ACL', 'WHOAMI'); return reply.err",
             &[],
             &[],
             &mut store,
