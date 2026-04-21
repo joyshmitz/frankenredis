@@ -1045,6 +1045,8 @@ pub struct Store {
 
     /// Current recursion depth of Lua script execution.
     pub script_nesting_level: usize,
+    /// Whether the current script/function execution context forbids writes.
+    pub script_read_only: bool,
 
     /// Number of keys currently tracked in the expires set.
     pub expires_count: usize,
@@ -1247,6 +1249,7 @@ impl Default for Store {
             stat_aof_last_write_ok: true,
             aof_enabled: false,
             script_nesting_level: 0,
+            script_read_only: false,
             expires_count: 0,
             cached_memory_usage_bytes: std::cell::Cell::new(0),
             cached_memory_usage_dirty: std::cell::Cell::new(0),

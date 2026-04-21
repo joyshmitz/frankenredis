@@ -3262,16 +3262,16 @@
       }
     },
     {
-      "name": "eval_ro_redis_call",
+      "name": "eval_ro_may_replicate_command_rejected",
       "now_ms": 0,
       "argv": [
         "EVAL_RO",
-        "redis.call('SET','ero_k','ero_v') return redis.call('GET','ero_k')",
+        "local t = redis.pcall('PUBLISH','ch','msg') if t['err'] == 'ERR Write commands are not allowed from read-only scripts.' then return 1 else return 0 end",
         "0"
       ],
       "expect": {
-        "kind": "bulk",
-        "value": "ero_v"
+        "kind": "integer",
+        "value": 1
       }
     },
     {
@@ -3333,6 +3333,32 @@
       "expect": {
         "kind": "error",
         "value": "ERR wrong number of arguments for 'evalsha' command"
+      }
+    },
+    {
+      "name": "evalsha_ro_setup_write_reject_load",
+      "now_ms": 0,
+      "argv": [
+        "SCRIPT",
+        "LOAD",
+        "local t = redis.pcall('SET','esh_ro','1') if t['err'] == 'ERR Write commands are not allowed from read-only scripts.' then return 1 else return 0 end"
+      ],
+      "expect": {
+        "kind": "bulk",
+        "value": "33fc5847ff9db521f6e934c83a7212f6d14de6be"
+      }
+    },
+    {
+      "name": "evalsha_ro_write_command_rejected",
+      "now_ms": 0,
+      "argv": [
+        "EVALSHA_RO",
+        "33fc5847ff9db521f6e934c83a7212f6d14de6be",
+        "0"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 1
       }
     },
     {

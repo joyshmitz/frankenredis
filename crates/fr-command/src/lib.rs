@@ -774,6 +774,12 @@ pub fn dispatch_argv(
         return Err(CommandError::InvalidCommandFrame);
     };
     apply_client_reply_state(argv, &mut store.dispatch_client_ctx.client_reply)?;
+    if store.script_nesting_level >= 1
+        && store.script_read_only
+        && command_writes_or_may_replicate_in_readonly_script(argv)
+    {
+        return Err(read_only_script_write_command_error());
+    }
     match classify_command(raw_cmd) {
         Some(CommandId::Ping) => return ping(argv),
         Some(CommandId::Echo) => return echo(argv),
@@ -944,10 +950,10 @@ pub fn dispatch_argv(
         Some(CommandId::Zinter) => return zinter(argv, store, now_ms),
         Some(CommandId::Zunion) => return zunion_cmd(argv, store, now_ms),
         Some(CommandId::Zintercard) => return zintercard(argv, store, now_ms),
-        Some(CommandId::Eval) => return eval_cmd(argv, store, now_ms),
-        Some(CommandId::Evalsha) => return evalsha_cmd(argv, store, now_ms),
-        Some(CommandId::EvalRo) => return eval_cmd(argv, store, now_ms),
-        Some(CommandId::EvalshaRo) => return evalsha_cmd(argv, store, now_ms),
+        Some(CommandId::Eval) => return eval_cmd(argv, store, now_ms, false),
+        Some(CommandId::Evalsha) => return evalsha_cmd(argv, store, now_ms, false),
+        Some(CommandId::EvalRo) => return eval_cmd(argv, store, now_ms, true),
+        Some(CommandId::EvalshaRo) => return evalsha_cmd(argv, store, now_ms, true),
         Some(CommandId::Script) => return script_cmd(argv, store),
         Some(CommandId::Debug) => return debug_cmd(argv, store, now_ms),
         Some(CommandId::Role) => return role_cmd(argv),
@@ -6403,6 +6409,8 @@ fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
 
     let keys_vec: Vec<Vec<u8>> = keys.to_vec();
     let args_vec: Vec<Vec<u8>> = args.to_vec();
+    let previous_read_only = store.script_read_only;
+    store.script_read_only = is_ro || has_no_writes;
     store.script_nesting_level += 1;
     let result = match lua_eval::eval_script(
         wrapper_script.as_bytes(),
@@ -6415,6 +6423,7 @@ fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         Err(e) => Ok(RespFrame::Error(format!("ERR Error running function: {e}"))),
     };
     store.script_nesting_level -= 1;
+    store.script_read_only = previous_read_only;
     result
 }
 
@@ -9340,6 +9349,20 @@ pub fn get_command_flags(name: &[u8]) -> Option<&'static str> {
         .map(|&(_, _, flags, ..)| flags)
 }
 
+fn command_writes_or_may_replicate_in_readonly_script(argv: &[Vec<u8>]) -> bool {
+    let Some(raw_cmd) = argv.first() else {
+        return false;
+    };
+
+    if get_command_flags(raw_cmd)
+        .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "write"))
+    {
+        return true;
+    }
+
+    raw_cmd.eq_ignore_ascii_case(b"PUBLISH") || raw_cmd.eq_ignore_ascii_case(b"SPUBLISH")
+}
+
 const ACL_CATEGORIES: &[&str] = &[
     "keyspace",
     "read",
@@ -10667,6 +10690,8 @@ fn client_wrong_subcommand_arity(subcommand: &str) -> CommandError {
 }
 
 const SCRIPT_NOSCRIPT_ERROR: &str = "ERR This Redis command is not allowed from script";
+const READ_ONLY_SCRIPT_WRITE_ERROR: &str =
+    "ERR Write commands are not allowed from read-only scripts.";
 const CLIENT_TRACKING_REDIRECT_MISSING: &str =
     "ERR The client ID you want redirect to does not exist";
 const CLIENT_TRACKING_PREFIX_REQUIRES_BCAST: &str =
@@ -10690,6 +10715,10 @@ fn script_noscript_command_error() -> CommandError {
     CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
 }
 
+fn read_only_script_write_command_error() -> CommandError {
+    CommandError::Custom(READ_ONLY_SCRIPT_WRITE_ERROR.to_string())
+}
+
 fn format_eval_noscript_error(script: &[u8]) -> String {
     format!(
         "{SCRIPT_NOSCRIPT_ERROR} script: {}, on @user_script:1.",
@@ -10697,9 +10726,18 @@ fn format_eval_noscript_error(script: &[u8]) -> String {
     )
 }
 
+fn format_eval_read_only_script_error(script: &[u8]) -> String {
+    format!(
+        "{READ_ONLY_SCRIPT_WRITE_ERROR} script: {}, on @user_script:1.",
+        sha1_hex_public(script)
+    )
+}
+
 fn eval_script_error_reply(script: &[u8], error: String) -> RespFrame {
     if error == SCRIPT_NOSCRIPT_ERROR {
         RespFrame::Error(format_eval_noscript_error(script))
+    } else if error == READ_ONLY_SCRIPT_WRITE_ERROR {
+        RespFrame::Error(format_eval_read_only_script_error(script))
     } else {
         RespFrame::Error(format!("ERR Error running script: {error}"))
     }
@@ -12527,7 +12565,12 @@ fn parse_eval_args(argv: &[Vec<u8>]) -> Result<(usize, &[Vec<u8>], &[Vec<u8>]), 
     Ok((numkeys, keys, args))
 }
 
-fn eval_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
+fn eval_cmd(
+    argv: &[Vec<u8>],
+    store: &mut Store,
+    now_ms: u64,
+    read_only_script: bool,
+) -> Result<RespFrame, CommandError> {
     // EVAL script numkeys [key ...] [arg ...]
     if argv.len() < 3 {
         return Err(CommandError::WrongArity("EVAL"));
@@ -12546,12 +12589,15 @@ fn eval_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     // Execute
     let keys_vec: Vec<Vec<u8>> = keys.to_vec();
     let args_vec: Vec<Vec<u8>> = args.to_vec();
+    let previous_read_only = store.script_read_only;
+    store.script_read_only = read_only_script;
     store.script_nesting_level += 1;
     let result = match lua_eval::eval_script(script, &keys_vec, &args_vec, store, now_ms) {
         Ok(frame) => Ok(frame),
         Err(e) => Ok(eval_script_error_reply(script, e)),
     };
     store.script_nesting_level -= 1;
+    store.script_read_only = previous_read_only;
     result
 }
 
@@ -12559,6 +12605,7 @@ fn evalsha_cmd(
     argv: &[Vec<u8>],
     store: &mut Store,
     now_ms: u64,
+    read_only_script: bool,
 ) -> Result<RespFrame, CommandError> {
     // EVALSHA sha1 numkeys [key ...] [arg ...]
     if argv.len() < 3 {
@@ -12584,12 +12631,15 @@ fn evalsha_cmd(
 
     let keys_vec: Vec<Vec<u8>> = keys.to_vec();
     let args_vec: Vec<Vec<u8>> = args.to_vec();
+    let previous_read_only = store.script_read_only;
+    store.script_read_only = read_only_script;
     store.script_nesting_level += 1;
     let result = match lua_eval::eval_script(&script, &keys_vec, &args_vec, store, now_ms) {
         Ok(frame) => Ok(frame),
         Err(e) => Ok(eval_script_error_reply(&script, e)),
     };
     store.script_nesting_level -= 1;
+    store.script_read_only = previous_read_only;
     result
 }
 
@@ -14259,9 +14309,10 @@ mod tests {
         CLIENT_TRACKING_PREFIX_REQUIRES_BCAST, CLIENT_TRACKING_REDIRECT_MISSING,
         CLIENT_UNBLOCK_REASON_INVALID, COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec,
         SCRIPT_NOSCRIPT_ERROR, classify_command, client_wrong_subcommand_arity, dispatch_argv,
-        drain_pubsub_messages, eq_ascii_command, execute_migrate, frame_to_argv, hello_bulk,
-        hello_simple, is_write_command, parse_blocking_deadline_milliseconds,
-        parse_migrate_request, pubsub_message_to_frame,
+        drain_pubsub_messages, eq_ascii_command, execute_migrate,
+        format_eval_read_only_script_error, frame_to_argv, hello_bulk, hello_simple,
+        is_write_command, parse_blocking_deadline_milliseconds, parse_migrate_request,
+        pubsub_message_to_frame,
     };
 
     fn classify_command_linear(cmd: &[u8]) -> Option<CommandId> {
@@ -25467,6 +25518,91 @@ mod tests {
         )
         .expect("evalsha");
         assert!(matches!(out, RespFrame::Error(_)));
+    }
+
+    #[test]
+    fn eval_ro_rejects_write_and_may_replicate_commands_like_redis() {
+        let mut store = Store::new();
+
+        let write_script = b"return redis.call('SET','ero_k','ero_v')";
+        let write_out = dispatch_argv(
+            &[b"EVAL_RO".to_vec(), write_script.to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("eval_ro write rejection");
+        assert_eq!(
+            write_out,
+            RespFrame::Error(format_eval_read_only_script_error(write_script))
+        );
+
+        let publish_script = b"return redis.call('PUBLISH','ch','msg')";
+        let publish_out = dispatch_argv(
+            &[b"EVAL_RO".to_vec(), publish_script.to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("eval_ro publish rejection");
+        assert_eq!(
+            publish_out,
+            RespFrame::Error(format_eval_read_only_script_error(publish_script))
+        );
+
+        let pcall_out = dispatch_argv(
+            &[
+                b"EVAL_RO".to_vec(),
+                b"local t = redis.pcall('SET','ero_k','ero_v') if t['err'] == 'ERR Write commands are not allowed from read-only scripts.' then return 1 else return 0 end".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval_ro pcall write rejection");
+        assert_eq!(pcall_out, RespFrame::Integer(1));
+    }
+
+    #[test]
+    fn evalsha_ro_rejects_write_and_may_replicate_commands_like_redis() {
+        let mut store = Store::new();
+
+        let write_script = b"return redis.call('SET','esh_ro','1')";
+        let write_sha = dispatch_argv(
+            &[b"SCRIPT".to_vec(), b"LOAD".to_vec(), write_script.to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("load evalsha_ro write script");
+        let RespFrame::BulkString(Some(write_sha)) = write_sha else {
+            panic!("expected sha from SCRIPT LOAD");
+        };
+        let write_out = dispatch_argv(
+            &[b"EVALSHA_RO".to_vec(), write_sha, b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("evalsha_ro write rejection");
+        assert_eq!(
+            write_out,
+            RespFrame::Error(format_eval_read_only_script_error(write_script))
+        );
+
+        let pcall_script = b"local t = redis.pcall('PUBLISH','ch','msg') if t['err'] == 'ERR Write commands are not allowed from read-only scripts.' then return 1 else return 0 end";
+        let pcall_sha = dispatch_argv(
+            &[b"SCRIPT".to_vec(), b"LOAD".to_vec(), pcall_script.to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("load evalsha_ro pcall script");
+        let RespFrame::BulkString(Some(pcall_sha)) = pcall_sha else {
+            panic!("expected sha from SCRIPT LOAD");
+        };
+        let pcall_out = dispatch_argv(
+            &[b"EVALSHA_RO".to_vec(), pcall_sha, b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("evalsha_ro pcall publish rejection");
+        assert_eq!(pcall_out, RespFrame::Integer(1));
     }
 
     #[test]
