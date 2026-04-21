@@ -106,6 +106,7 @@ fn acl_setuser_allkeys_pattern_error(rule_str: &str) -> String {
 enum AclCommandPermissionError {
     Command,
     Key(Vec<u8>),
+    Channel(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
@@ -457,7 +458,7 @@ struct AclUser {
     key_patterns: Vec<Vec<u8>>,
     /// True when all keys are allowed regardless of `key_patterns`.
     all_keys: bool,
-    /// Channel patterns. Empty means no channels allowed unless all_channels is true.
+    /// Channel permissions. False means no channels are allowed.
     all_channels: bool,
 }
 
@@ -634,6 +635,28 @@ impl AclUser {
                 .any(|pattern| glob_match(pattern, key))
     }
 
+    fn acl_channel_permission_error_for_argv(&self, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
+        if self.all_channels {
+            return None;
+        }
+
+        let command = argv.first()?;
+
+        if eq_ascii_token(command, b"PUBLISH") || eq_ascii_token(command, b"SPUBLISH") {
+            return argv.get(1).cloned();
+        }
+
+        if eq_ascii_token(command, b"SUBSCRIBE") || eq_ascii_token(command, b"SSUBSCRIBE") {
+            return argv.get(1).cloned();
+        }
+
+        if eq_ascii_token(command, b"PSUBSCRIBE") {
+            return argv.get(1).cloned();
+        }
+
+        None
+    }
+
     fn acl_permission_error_for_argv(&self, argv: &[Vec<u8>]) -> Option<AclCommandPermissionError> {
         let Some(cmd) = argv.first() else {
             return Some(AclCommandPermissionError::Command);
@@ -654,6 +677,10 @@ impl AclUser {
             {
                 return Some(AclCommandPermissionError::Key(key.clone()));
             }
+        }
+
+        if let Some(channel) = self.acl_channel_permission_error_for_argv(argv) {
+            return Some(AclCommandPermissionError::Channel(channel));
         }
 
         None
@@ -959,7 +986,6 @@ impl AuthState {
                 user.key_patterns.push(pattern);
                 user.all_keys = false;
             } else if rule_str.starts_with('&') {
-                // Channel pattern (e.g., &channel:*).
                 if rule_str == "&*" {
                     user.all_channels = true;
                 }
@@ -3812,6 +3838,19 @@ impl Runtime {
                         RespFrame::Error("NOPERM No permissions to access a key".to_string()),
                     )
                 }
+                AclCommandPermissionError::Channel(channel) => {
+                    let channel_name = String::from_utf8_lossy(&channel).into_owned();
+                    (
+                        "channel",
+                        channel_name.clone(),
+                        "auth.noperm_channel_gate_violation",
+                        format!(
+                            "rejected '{}' prior to dispatch because channel '{}' is outside the user's ACL channel patterns",
+                            command_name, channel_name
+                        ),
+                        RespFrame::Error("NOPERM No permissions to access a channel".to_string()),
+                    )
+                }
             };
             self.apply_existing_client_reply_suppression_to_undispatched_reply();
             self.record_acl_log_event(
@@ -5118,6 +5157,20 @@ impl Runtime {
                                 "ERR User '{}' has no permissions to access the '{}' key",
                                 String::from_utf8_lossy(username),
                                 key_name
+                            ))
+                        }
+                        Some(AclCommandPermissionError::Channel(channel)) => {
+                            let channel_name = String::from_utf8_lossy(&channel).into_owned();
+                            self.record_acl_log_event(
+                                "channel",
+                                channel_name.clone(),
+                                username.clone(),
+                                now_ms,
+                            );
+                            RespFrame::Error(format!(
+                                "ERR User '{}' has no permissions to access the '{}' channel",
+                                String::from_utf8_lossy(username),
+                                channel_name
                             ))
                         }
                     }
@@ -17484,6 +17537,56 @@ mod tests {
             RespFrame::BulkString(Some(b"timestamp-last-updated".to_vec()))
         );
         assert_eq!(entry[19], RespFrame::Integer(1_000));
+    }
+
+    #[test]
+    fn acl_log_records_channel_access_violations_with_channel_name() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"LOG", b"RESET"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"SETUSER", b"antirez", b"on", b">foo", b"+publish"]),
+                1,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"antirez", b"foo"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"PUBLISH", b"somechannelnotallowed", b"nullmsg"]),
+                3
+            ),
+            RespFrame::Error("NOPERM No permissions to access a channel".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"default", b""]), 4),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let reply = rt.execute_frame(command(&[b"ACL", b"LOG"]), 5);
+        let RespFrame::Array(Some(entries)) = reply else {
+            unreachable!("expected ACL LOG array");
+        };
+        let RespFrame::Array(Some(entry)) = &entries[0] else {
+            unreachable!("expected ACL LOG entry array");
+        };
+
+        assert_eq!(entry[2], RespFrame::BulkString(Some(b"reason".to_vec())));
+        assert_eq!(entry[3], RespFrame::BulkString(Some(b"channel".to_vec())));
+        assert_eq!(entry[6], RespFrame::BulkString(Some(b"object".to_vec())));
+        assert_eq!(
+            entry[7],
+            RespFrame::BulkString(Some(b"somechannelnotallowed".to_vec()))
+        );
+        assert_eq!(entry[8], RespFrame::BulkString(Some(b"username".to_vec())));
+        assert_eq!(entry[9], RespFrame::BulkString(Some(b"antirez".to_vec())));
     }
 
     #[test]
