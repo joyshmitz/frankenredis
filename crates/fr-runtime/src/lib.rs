@@ -419,6 +419,8 @@ struct AclUser {
     enabled: bool,
     /// True when "nopass" rule is set (allow auth without password).
     nopass: bool,
+    /// Whether RESTORE payload sanitization remains enabled for this user.
+    sanitize_payload: bool,
     /// Per-command and per-category permission model.
     /// When `all_commands` is true, all commands are allowed unless individually denied.
     /// When `all_commands` is false, only individually allowed commands/categories are permitted.
@@ -443,6 +445,7 @@ impl AclUser {
             passwords: Vec::new(),
             enabled: true,
             nopass: true, // default user allows passwordless access
+            sanitize_payload: true,
             all_commands: true,
             allowed_commands: HashSet::new(),
             denied_commands: HashSet::new(),
@@ -461,6 +464,7 @@ impl AclUser {
             passwords: Vec::new(),
             enabled: false,
             nopass: false,
+            sanitize_payload: true,
             all_commands: false,
             allowed_commands: HashSet::new(),
             denied_commands: HashSet::new(),
@@ -586,21 +590,41 @@ impl AclUser {
         }
     }
 
+    fn sanitize_payload_flag(&self) -> &'static str {
+        if self.sanitize_payload {
+            "sanitize-payload"
+        } else {
+            "skip-sanitize-payload"
+        }
+    }
+
     fn acl_list_line(&self, username: &[u8]) -> String {
         let username_str = String::from_utf8_lossy(username);
-        let on_off = if self.enabled { "on" } else { "off" };
-        let pass_part = if self.nopass {
-            " nopass".to_string()
+        let mut parts = vec!["user".to_string(), username_str.into_owned()];
+        parts.push(if self.enabled {
+            "on".to_string()
         } else {
-            self.passwords
-                .iter()
-                .map(|_| " #<hidden>".to_string())
-                .collect::<String>()
-        };
-        let keys_part = if self.all_keys { " ~*" } else { "" };
-        let channels_part = if self.all_channels { " &*" } else { "" };
-        let commands_part = self.commands_string();
-        format!("user {username_str} {on_off}{pass_part}{keys_part}{channels_part} {commands_part}")
+            "off".to_string()
+        });
+        if self.nopass {
+            parts.push("nopass".to_string());
+        }
+        parts.push(self.sanitize_payload_flag().to_string());
+        if !self.nopass {
+            parts.extend(self.passwords.iter().map(|_| "#<hidden>".to_string()));
+        }
+        if self.all_keys {
+            parts.push("~*".to_string());
+        }
+        if self.all_channels {
+            parts.push("&*".to_string());
+        }
+        parts.extend(
+            self.commands_string()
+                .split_whitespace()
+                .map(str::to_string),
+        );
+        parts.join(" ")
     }
 
     fn acl_save_line(&self, username: &[u8]) -> String {
@@ -615,14 +639,17 @@ impl AclUser {
         } else {
             "off".to_string()
         });
-        parts.push("sanitize-payload".to_string());
         if self.nopass {
             parts.push("nopass".to_string());
-        } else if self.passwords.is_empty() {
-            parts.push("resetpass".to_string());
-        } else {
-            for password in &self.passwords {
-                parts.push(format!("#{}", String::from_utf8_lossy(password)));
+        }
+        parts.push(self.sanitize_payload_flag().to_string());
+        if !self.nopass {
+            if self.passwords.is_empty() {
+                parts.push("resetpass".to_string());
+            } else {
+                for password in &self.passwords {
+                    parts.push(format!("#{}", String::from_utf8_lossy(password)));
+                }
             }
         }
         if self.all_keys {
@@ -748,9 +775,10 @@ impl AuthState {
                 user.enabled = true;
             } else if rule_str.eq_ignore_ascii_case("off") {
                 user.enabled = false;
+            } else if rule_str.eq_ignore_ascii_case("skip-sanitize-payload") {
+                user.sanitize_payload = false;
             } else if rule_str.eq_ignore_ascii_case("sanitize-payload") {
-                // Redis persists this marker in ACL SAVE output and reports it in GETUSER flags.
-                // We always behave as if it is enabled, so parsing it is a no-op.
+                user.sanitize_payload = true;
             } else if rule_str.eq_ignore_ascii_case("nopass") {
                 user.passwords.clear();
                 user.nopass = true;
@@ -841,6 +869,7 @@ impl AuthState {
                 // Reset user to default state (no passwords, disabled, no commands).
                 user.passwords.clear();
                 user.nopass = false;
+                user.sanitize_payload = true;
                 user.all_commands = false;
                 user.allowed_commands.clear();
                 user.denied_commands.clear();
@@ -5078,6 +5107,9 @@ impl Runtime {
         if user.nopass {
             flags.push(RespFrame::BulkString(Some(b"nopass".to_vec())));
         }
+        flags.push(RespFrame::BulkString(Some(
+            user.sanitize_payload_flag().as_bytes().to_vec(),
+        )));
 
         let mut passwords = Vec::new();
         for p in &user.passwords {
@@ -17375,6 +17407,7 @@ mod tests {
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"on".to_vec())),
                     RespFrame::BulkString(Some(b"nopass".to_vec())),
+                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
                 ])),
                 RespFrame::BulkString(Some(b"passwords".to_vec())),
                 RespFrame::Array(Some(Vec::new())),
@@ -17412,6 +17445,7 @@ mod tests {
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"on".to_vec())),
                     RespFrame::BulkString(Some(b"nopass".to_vec())),
+                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
                 ])),
                 RespFrame::BulkString(Some(b"passwords".to_vec())),
                 RespFrame::Array(Some(Vec::new())),
@@ -17441,7 +17475,10 @@ mod tests {
             rt.execute_frame(command(&[b"ACL", b"GETUSER", b"alice"]), 1),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"flags".to_vec())),
-                RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"on".to_vec())),])),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"on".to_vec())),
+                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
+                ])),
                 RespFrame::BulkString(Some(b"passwords".to_vec())),
                 RespFrame::Array(Some(vec![RespFrame::BulkString(Some(
                     b"ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f".to_vec(),
@@ -17456,6 +17493,95 @@ mod tests {
                 RespFrame::Array(Some(Vec::new())),
             ]))
         );
+    }
+
+    #[test]
+    fn acl_skip_sanitize_payload_round_trips_through_getuser_list_and_save() {
+        let mut rt = Runtime::default_strict();
+        let acl_path = unique_temp_path("fr_runtime_acl_skip_sanitize", "acl");
+        rt.set_acl_file_path(acl_path.clone());
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"skippy",
+                    b"on",
+                    b"nopass",
+                    b"skip-sanitize-payload",
+                    b"+@all",
+                ]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let expected_getuser = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"flags".to_vec())),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"on".to_vec())),
+                RespFrame::BulkString(Some(b"nopass".to_vec())),
+                RespFrame::BulkString(Some(b"skip-sanitize-payload".to_vec())),
+            ])),
+            RespFrame::BulkString(Some(b"passwords".to_vec())),
+            RespFrame::Array(Some(Vec::new())),
+            RespFrame::BulkString(Some(b"commands".to_vec())),
+            RespFrame::BulkString(Some(b"+@all".to_vec())),
+            RespFrame::BulkString(Some(b"keys".to_vec())),
+            RespFrame::BulkString(Some(Vec::new())),
+            RespFrame::BulkString(Some(b"channels".to_vec())),
+            RespFrame::BulkString(Some(Vec::new())),
+            RespFrame::BulkString(Some(b"selectors".to_vec())),
+            RespFrame::Array(Some(Vec::new())),
+        ]));
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"GETUSER", b"skippy"]), 1),
+            expected_getuser
+        );
+
+        let list = rt.execute_frame(command(&[b"ACL", b"LIST"]), 2);
+        let RespFrame::Array(Some(entries)) = list else {
+            unreachable!("expected ACL LIST to return an array");
+        };
+        let skippy = entries
+            .iter()
+            .find_map(|entry| match entry {
+                RespFrame::BulkString(Some(line))
+                    if String::from_utf8_lossy(line).contains("skippy") =>
+                {
+                    Some(String::from_utf8_lossy(line).into_owned())
+                }
+                _ => None,
+            })
+            .expect("expected skippy in ACL LIST");
+        assert_eq!(skippy, "user skippy on nopass skip-sanitize-payload +@all");
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"SAVE"]), 3),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
+        assert!(
+            saved.contains("user skippy reset on nopass skip-sanitize-payload +@all"),
+            "saved ACL file should preserve skip-sanitize-payload, got: {saved}"
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"DELUSER", b"skippy"]), 4),
+            RespFrame::Integer(1)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"LOAD"]), 5),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"GETUSER", b"skippy"]), 6),
+            expected_getuser
+        );
+
+        let _ = std::fs::remove_file(&acl_path);
     }
 
     #[test]
