@@ -5867,6 +5867,12 @@ fn cluster_cmd(
     }
     if sub.eq_ignore_ascii_case("RESET") {
         if argv.len() > 3 {
+            if store.script_nesting_level >= 1 {
+                return Err(cluster_subcommand_syntax_error(sub));
+            }
+            if !store.cluster_enabled {
+                return Err(cluster_disabled_error());
+            }
             return Err(cluster_subcommand_syntax_error(sub));
         }
         if store.script_nesting_level >= 1 {
@@ -14465,10 +14471,11 @@ mod tests {
         CLIENT_TRACKING_PREFIX_REQUIRES_BCAST, CLIENT_TRACKING_REDIRECT_MISSING,
         CLIENT_UNBLOCK_REASON_INVALID, COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec,
         SCRIPT_NOSCRIPT_ERROR, classify_command, client_wrong_subcommand_arity,
-        cluster_reset_with_keys_error, dispatch_argv, drain_pubsub_messages, eq_ascii_command,
-        execute_migrate, format_eval_read_only_script_error, frame_to_argv, hello_bulk,
-        hello_simple, is_write_command, parse_blocking_deadline_milliseconds,
-        parse_migrate_request, pubsub_message_to_frame,
+        cluster_disabled_error, cluster_reset_with_keys_error, dispatch_argv,
+        drain_pubsub_messages, eq_ascii_command, execute_migrate,
+        format_eval_read_only_script_error, frame_to_argv, hello_bulk, hello_simple,
+        is_write_command, parse_blocking_deadline_milliseconds, parse_migrate_request,
+        pubsub_message_to_frame,
     };
 
     fn classify_command_linear(cmd: &[u8]) -> Option<CommandId> {
@@ -28190,6 +28197,24 @@ mod tests {
         let err =
             dispatch_argv(&[b"CLUSTER".to_vec(), b"RESET".to_vec()], &mut store, 0).unwrap_err();
         assert_eq!(err, cluster_reset_with_keys_error());
+    }
+
+    #[test]
+    fn cluster_reset_wrong_arity_still_reports_cluster_disabled_when_unreachable() {
+        let mut store = Store::new();
+
+        let err = dispatch_argv(
+            &[
+                b"CLUSTER".to_vec(),
+                b"RESET".to_vec(),
+                b"HARD".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, cluster_disabled_error());
     }
 
     #[test]
