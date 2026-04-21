@@ -615,6 +615,7 @@ impl AclUser {
         } else {
             "off".to_string()
         });
+        parts.push("sanitize-payload".to_string());
         if self.nopass {
             parts.push("nopass".to_string());
         } else if self.passwords.is_empty() {
@@ -1210,37 +1211,15 @@ fn classify_cluster_subcommand(cmd: &[u8]) -> Result<ClusterSubcommand, CommandE
     if cmd.len() == 4 && eq_ascii_token(cmd, b"HELP") {
         return Ok(ClusterSubcommand::Help);
     }
-    if (cmd.len() == 4
-        && (eq_ascii_token(cmd, b"INFO")
-            || eq_ascii_token(cmd, b"MYID")
-            || eq_ascii_token(cmd, b"MEET")))
+    if (cmd.len() == 4 && (eq_ascii_token(cmd, b"INFO") || eq_ascii_token(cmd, b"MYID")))
         || (cmd.len() == 5
             && (eq_ascii_token(cmd, b"SLOTS")
                 || eq_ascii_token(cmd, b"NODES")
-                || eq_ascii_token(cmd, b"RESET")
-                || eq_ascii_token(cmd, b"LINKS")))
-        || (cmd.len() == 6
-            && (eq_ascii_token(cmd, b"SHARDS")
-                || eq_ascii_token(cmd, b"FORGET")
-                || eq_ascii_token(cmd, b"REPLICAS")))
-        || (cmd.len() == 7 && (eq_ascii_token(cmd, b"KEYSLOT") || eq_ascii_token(cmd, b"KEYSLOT")))
-        || (cmd.len() == 8
-            && (eq_ascii_token(cmd, b"ADDSLOTS")
-                || eq_ascii_token(cmd, b"DELSLOTS")
-                || eq_ascii_token(cmd, b"FAILOVER")
-                || eq_ascii_token(cmd, b"BUMPEPOCH")))
-        || (cmd.len() == 9
-            && (eq_ascii_token(cmd, b"REPLICATE")
-                || eq_ascii_token(cmd, b"SLOTSTATE")
-                || eq_ascii_token(cmd, b"MYSHARDID")))
-        || (cmd.len() == 10
-            && (eq_ascii_token(cmd, b"FLUSHSLOTS") || eq_ascii_token(cmd, b"SAVECONFIG")))
-        || (cmd.len() == 13
-            && (eq_ascii_token(cmd, b"ADDSLOTSRANGE")
-                || eq_ascii_token(cmd, b"DELSLOTSRANGE")
-                || eq_ascii_token(cmd, b"GETKEYSINSLOT")))
+                || eq_ascii_token(cmd, b"RESET")))
+        || (cmd.len() == 6 && eq_ascii_token(cmd, b"SHARDS"))
+        || (cmd.len() == 7 && eq_ascii_token(cmd, b"KEYSLOT"))
+        || (cmd.len() == 13 && eq_ascii_token(cmd, b"GETKEYSINSLOT"))
         || (cmd.len() == 15 && eq_ascii_token(cmd, b"COUNTKEYSINSLOT"))
-        || (cmd.len() == 16 && eq_ascii_token(cmd, b"SET-CONFIG-EPOCH"))
     {
         return Ok(ClusterSubcommand::Dispatch);
     }
@@ -5099,7 +5078,6 @@ impl Runtime {
         if user.nopass {
             flags.push(RespFrame::BulkString(Some(b"nopass".to_vec())));
         }
-        flags.push(RespFrame::BulkString(Some(b"sanitize-payload".to_vec())));
 
         let mut passwords = Vec::new();
         for p in &user.passwords {
@@ -17397,7 +17375,6 @@ mod tests {
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"on".to_vec())),
                     RespFrame::BulkString(Some(b"nopass".to_vec())),
-                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
                 ])),
                 RespFrame::BulkString(Some(b"passwords".to_vec())),
                 RespFrame::Array(Some(Vec::new())),
@@ -17435,7 +17412,6 @@ mod tests {
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"on".to_vec())),
                     RespFrame::BulkString(Some(b"nopass".to_vec())),
-                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
                 ])),
                 RespFrame::BulkString(Some(b"passwords".to_vec())),
                 RespFrame::Array(Some(Vec::new())),
