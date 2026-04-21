@@ -11958,6 +11958,9 @@ fn bgsave_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             return Err(CommandError::SyntaxError);
         }
     }
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     store.record_save(now_ms, true);
     store.record_bgsave_status(true);
     // Optional SCHEDULE argument — accepted but ignored
@@ -24442,6 +24445,49 @@ mod tests {
             err.to_resp(),
             RespFrame::Error("ERR syntax error".to_string())
         );
+    }
+
+    #[test]
+    fn bgsave_rejected_from_scripts_after_syntax_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let invalid = dispatch_argv(&[b"BGSAVE".to_vec(), b"NOW".to_vec()], &mut store, 0)
+            .expect_err("invalid option should still be syntax");
+        assert_eq!(
+            invalid.to_resp(),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+
+        let too_many = dispatch_argv(
+            &[b"BGSAVE".to_vec(), b"SCHEDULE".to_vec(), b"EXTRA".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("too many args should still be syntax");
+        assert_eq!(
+            too_many.to_resp(),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+
+        let bare =
+            dispatch_argv(&[b"BGSAVE".to_vec()], &mut store, 84_000).expect_err("bgsave noscript");
+        assert_eq!(
+            bare,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
+        );
+
+        let scheduled = dispatch_argv(
+            &[b"BGSAVE".to_vec(), b"SCHEDULE".to_vec()],
+            &mut store,
+            91_000,
+        )
+        .expect_err("bgsave schedule noscript");
+        assert_eq!(
+            scheduled,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
+        );
+        assert_eq!(store.last_save_time_sec, 0);
     }
 
     #[test]
