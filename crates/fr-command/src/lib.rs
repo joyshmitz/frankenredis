@@ -1012,7 +1012,7 @@ pub fn dispatch_argv(
         Some(CommandId::Readonly) => return readonly_cmd(argv),
         Some(CommandId::Readwrite) => return readwrite_cmd(argv),
         Some(CommandId::Zrangestore) => return zrangestore_cmd(argv, store, now_ms),
-        Some(CommandId::Monitor) => return monitor_cmd(argv),
+        Some(CommandId::Monitor) => return monitor_cmd(argv, store),
         Some(CommandId::Migrate) => return migrate_cmd(argv, store, now_ms),
         Some(CommandId::Failover) => return failover_cmd(argv),
         Some(CommandId::Module) => return module_cmd(argv),
@@ -7401,9 +7401,12 @@ fn pfselftest_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandE
     Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
-fn monitor_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn monitor_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("MONITOR"));
+    }
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
     }
     // MONITOR returns OK immediately. The runtime/server handles the actual
     // streaming of commands to monitor clients. The client is flagged as a
@@ -25780,6 +25783,20 @@ mod tests {
         assert_eq!(arity, CommandError::WrongArity("ROLE"));
 
         let err = dispatch_argv(&[b"ROLE".to_vec()], &mut store, 0).expect_err("role noscript");
+        assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+    }
+
+    #[test]
+    fn monitor_rejected_from_scripts_after_arity_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let arity = dispatch_argv(&[b"MONITOR".to_vec(), b"extra".to_vec()], &mut store, 0)
+            .expect_err("monitor arity");
+        assert_eq!(arity, CommandError::WrongArity("MONITOR"));
+
+        let err =
+            dispatch_argv(&[b"MONITOR".to_vec()], &mut store, 0).expect_err("monitor noscript");
         assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
     }
 
