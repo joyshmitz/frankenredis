@@ -9385,6 +9385,8 @@ const ACL_CATEGORIES: &[&str] = &[
     "connection",
     "transaction",
     "scripting",
+    "server",
+    "generic",
 ];
 
 struct AclCategoryMaps {
