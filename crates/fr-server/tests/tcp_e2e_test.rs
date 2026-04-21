@@ -294,6 +294,33 @@ fn spawn_legacy_redis(port: u16) -> ManagedChild {
     spawn_legacy_redis_with_requirepass(port, None)
 }
 
+fn spawn_legacy_redis_with_aof(port: u16) -> ManagedChild {
+    let dir = unique_temp_dir("frankenredis-legacy-aof");
+    let mut command = Command::new(legacy_redis_server_path());
+    command
+        .arg("--bind")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--save")
+        .arg("")
+        .arg("--appendonly")
+        .arg("yes")
+        .arg("--repl-diskless-sync")
+        .arg("no")
+        .arg("--repl-diskless-sync-delay")
+        .arg("0")
+        .arg("--protected-mode")
+        .arg("no")
+        .arg("--dir")
+        .arg(dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = ManagedChild::spawn(command, None);
+    wait_for_port(port);
+    child
+}
+
 fn spawn_legacy_redis_with_requirepass(port: u16, requirepass: Option<&str>) -> ManagedChild {
     let dir = unique_temp_dir("frankenredis-legacy");
     let mut command = Command::new(legacy_redis_server_path());
@@ -355,6 +382,24 @@ fn spawn_legacy_redis_replica(port: u16, primary_port: u16) -> ManagedChild {
 
 fn spawn_frankenredis(port: u16, primary_port: Option<u16>) -> ManagedChild {
     spawn_frankenredis_opts(port, primary_port, None, None)
+}
+
+fn spawn_frankenredis_with_aof(port: u16) -> ManagedChild {
+    let temp_dir = unique_temp_dir("frankenredis-aof-server");
+    let config_path = temp_dir.join("frankenredis.conf");
+    std::fs::write(
+        &config_path,
+        format!(
+            "bind 127.0.0.1\n\
+             port {port}\n\
+             dir \"{}\"\n\
+             save \"\"\n\
+             appendonly yes\n",
+            temp_dir.to_string_lossy()
+        ),
+    )
+    .expect("write frankenredis config");
+    spawn_frankenredis_config_only(port, config_path.to_str().expect("config path"))
 }
 
 fn spawn_frankenredis_with_config(port: u16, config_path: &str) -> ManagedChild {
@@ -2839,6 +2884,51 @@ fn tcp_xreadgroup_block_zero_waits_indefinitely_and_matches_legacy_redis() {
     let franken = exercise_xreadgroup_block_unblocks_on_new_group_entry(
         |port| spawn_frankenredis(port, None),
         b"0",
+    );
+    assert_eq!(legacy, expected);
+    assert_eq!(franken, legacy);
+}
+
+fn exercise_waitaof_local_block_released_when_appendonly_is_disabled(
+    spawn: impl FnOnce(u16) -> ManagedChild,
+) -> RespFrame {
+    let port = reserve_port();
+    let _server = spawn(port);
+
+    let mut waiter = BufferedTcpClient::connect(port);
+    let mut control = BufferedTcpClient::connect(port);
+
+    assert_eq!(
+        control.send_command(&[b"CONFIG", b"SET", b"appendfsync", b"no"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        waiter.send_command(&[b"INCR", b"waitaof:local"]),
+        RespFrame::Integer(1)
+    );
+
+    waiter.write_all(&encode_command(&[b"WAITAOF", b"1", b"0", b"0"]));
+    thread::sleep(Duration::from_millis(150));
+
+    assert_eq!(
+        control.send_command(&[b"CONFIG", b"SET", b"appendonly", b"no"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    let reply = waiter.read_response();
+    send_shutdown_nosave(port);
+    reply
+}
+
+#[test]
+fn tcp_waitaof_local_block_is_released_as_error_when_appendonly_is_disabled() {
+    let expected = RespFrame::Error(
+        "ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled.".to_string(),
+    );
+    let legacy = exercise_waitaof_local_block_released_when_appendonly_is_disabled(
+        spawn_legacy_redis_with_aof,
+    );
+    let franken = exercise_waitaof_local_block_released_when_appendonly_is_disabled(
+        spawn_frankenredis_with_aof,
     );
     assert_eq!(legacy, expected);
     assert_eq!(franken, legacy);

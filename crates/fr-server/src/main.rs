@@ -70,6 +70,8 @@ enum BlockingOp {
     BXread { argv: Vec<Vec<u8>> },
     /// XREADGROUP BLOCK: read from stream consumer group, blocking.
     BXreadgroup { argv: Vec<Vec<u8>> },
+    /// WAITAOF: wait for local and/or replica fsync thresholds.
+    Waitaof { argv: Vec<Vec<u8>> },
 }
 
 impl BlockingOp {
@@ -102,6 +104,7 @@ impl BlockingOp {
                     Vec::new()
                 }
             }
+            BlockingOp::Waitaof { .. } => Vec::new(),
         }
     }
 }
@@ -1254,7 +1257,10 @@ fn process_buffered_frames(
 
                 // Check for blocking commands that returned nil — block the
                 // client instead of sending the nil response immediately.
-                if (response == RespFrame::Array(None) || response == RespFrame::BulkString(None))
+                let should_block = response == RespFrame::Array(None)
+                    || response == RespFrame::BulkString(None)
+                    || waitaof_should_block(&parsed_frame, &response);
+                if should_block
                     && let Some(blocked) = try_build_blocked_state(&parsed_frame, ts).and_then(
                         |BlockedState { op, deadline_ms }| {
                             Some(BlockedState {
@@ -2047,6 +2053,20 @@ fn parse_xread_block_deadline_argv(argv: &[Vec<u8>], now_ms: u64) -> Option<u64>
     None // BLOCK keyword not found
 }
 
+fn parse_waitaof_deadline_argv(argv: &[Vec<u8>], now_ms: u64) -> Option<u64> {
+    if argv.len() != 4 {
+        return None;
+    }
+    let timeout_ms: i64 = std::str::from_utf8(&argv[3]).ok()?.parse().ok()?;
+    if timeout_ms < 0 {
+        return None;
+    }
+    if timeout_ms == 0 {
+        return Some(u64::MAX);
+    }
+    now_ms.checked_add(timeout_ms as u64)
+}
+
 fn resolve_xread_block_argv(
     argv: &[Vec<u8>],
     runtime: &mut Runtime,
@@ -2175,8 +2195,73 @@ fn try_build_blocked_state(frame: &RespFrame, now_ms: u64) -> Option<BlockedStat
             BlockingOp::BXreadgroup { argv }
         };
         Some(BlockedState { op, deadline_ms })
+    } else if cmd.eq_ignore_ascii_case(b"WAITAOF") {
+        let deadline_ms = parse_waitaof_deadline_argv(&argv, now_ms)?;
+        Some(BlockedState {
+            op: BlockingOp::Waitaof { argv },
+            deadline_ms,
+        })
     } else {
         None
+    }
+}
+
+fn waitaof_response_satisfies(argv: &[Vec<u8>], response: &RespFrame) -> bool {
+    if argv.len() != 4 {
+        return false;
+    }
+    let required_local = match std::str::from_utf8(&argv[1])
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        Some(value) => value,
+        None => return false,
+    };
+    let required_replicas = match std::str::from_utf8(&argv[2])
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        Some(value) => value,
+        None => return false,
+    };
+    let RespFrame::Array(Some(items)) = response else {
+        return false;
+    };
+    if items.len() != 2 {
+        return false;
+    }
+    let (RespFrame::Integer(local_ack), RespFrame::Integer(replica_acks)) = (&items[0], &items[1])
+    else {
+        return false;
+    };
+    *local_ack >= required_local && *replica_acks >= required_replicas
+}
+
+fn waitaof_should_block(frame: &RespFrame, response: &RespFrame) -> bool {
+    let Ok(argv) = fr_command::frame_to_argv(frame) else {
+        return false;
+    };
+    let Some(command) = argv.first() else {
+        return false;
+    };
+    if !command.eq_ignore_ascii_case(b"WAITAOF") {
+        return false;
+    }
+    !waitaof_response_satisfies(&argv, response)
+}
+
+fn blocked_timeout_response(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> RespFrame {
+    match op {
+        BlockingOp::BLmove { .. } => RespFrame::BulkString(None),
+        BlockingOp::Waitaof { argv } => runtime.execute_frame(
+            RespFrame::Array(Some(
+                argv.iter()
+                    .map(|arg| RespFrame::BulkString(Some(arg.clone())))
+                    .collect(),
+            )),
+            now_ms,
+        ),
+        _ => RespFrame::Array(None),
     }
 }
 
@@ -2222,7 +2307,8 @@ fn check_blocked_clients(ctx: CheckBlockedClientsContext<'_>) {
             continue;
         };
 
-        let mut should_check = ts >= blocked.deadline_ms;
+        let mut should_check =
+            ts >= blocked.deadline_ms || matches!(&blocked.op, BlockingOp::Waitaof { .. });
         if !should_check {
             for key in blocked.op.keys() {
                 if ready_keys.contains(&key) {
@@ -2238,12 +2324,7 @@ fn check_blocked_clients(ctx: CheckBlockedClientsContext<'_>) {
 
         // Check timeout first.
         if ts >= blocked.deadline_ms {
-            // Timeout expired — send nil.
-            let nil_response = match &blocked.op {
-                BlockingOp::BLmove { .. } => RespFrame::BulkString(None),
-                _ => RespFrame::Array(None),
-            };
-            nil_response.encode_into(&mut conn.write_buf);
+            blocked_timeout_response(&blocked.op, runtime, ts).encode_into(&mut conn.write_buf);
             conn.blocked = None;
             blocked_tokens.remove(&token);
             runtime.mark_client_unblocked(conn.session.client_id);
@@ -2555,6 +2636,21 @@ fn try_fulfill_blocked(op: &BlockingOp, runtime: &mut Runtime, now_ms: u64) -> O
                 None
             } else {
                 Some(response)
+            }
+        }
+        BlockingOp::Waitaof { argv } => {
+            let frame = RespFrame::Array(Some(
+                argv.iter()
+                    .map(|arg| RespFrame::BulkString(Some(arg.clone())))
+                    .collect(),
+            ));
+            let response = runtime.execute_frame(frame, now_ms);
+            if matches!(response, RespFrame::Error(_))
+                || waitaof_response_satisfies(argv, &response)
+            {
+                Some(response)
+            } else {
+                None
             }
         }
     }

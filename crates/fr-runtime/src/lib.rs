@@ -57,6 +57,23 @@ const ACL_UNKNOWN_SUBCOMMAND_ERROR: &str =
     "ERR unknown subcommand or wrong number of arguments for 'ACL'. Try ACL HELP.";
 const DEFAULT_ACLLOG_MAX_LEN: i64 = 128;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppendFsyncMode {
+    No,
+    Everysec,
+    Always,
+}
+
+impl AppendFsyncMode {
+    fn as_config_value(self) -> &'static str {
+        match self {
+            Self::No => "no",
+            Self::Everysec => "everysec",
+            Self::Always => "always",
+        }
+    }
+}
+
 fn sha256_hex_bytes(input: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(input);
@@ -1534,6 +1551,8 @@ pub struct ServerState {
     aof_path: Option<std::path::PathBuf>,
     /// Configured AOF target path, preserved even when appendonly is disabled.
     aof_config_path: Option<std::path::PathBuf>,
+    /// CONFIG SET appendfsync policy used for WAITAOF local fsync visibility.
+    appendfsync_mode: AppendFsyncMode,
     /// Child PID for BGSAVE
     pub rdb_bgsave_pid: Option<i32>,
     /// Child PID for BGREWRITEAOF
@@ -1644,6 +1663,7 @@ impl Default for ServerState {
             latency_percentiles: vec![50.0, 99.0, 99.9],
             aof_path: None,
             aof_config_path: None,
+            appendfsync_mode: AppendFsyncMode::Everysec,
             rdb_bgsave_pid: None,
             aof_rewrite_pid: None,
             rdb_path: None,
@@ -1675,6 +1695,7 @@ impl ServerState {
     pub fn set_aof_path(&mut self, path: std::path::PathBuf) {
         self.aof_config_path = Some(path.clone());
         self.aof_path = Some(path);
+        self.replication_ack_state.local_fsync_offset = self.replication_ack_state.primary_offset;
         self.store.set_aof_enabled(true);
     }
 
@@ -1940,7 +1961,10 @@ impl ServerState {
             .primary_offset
             .0
             .saturating_add(encoded_len);
-        self.replication_ack_state.local_fsync_offset = self.replication_ack_state.primary_offset;
+        if self.aof_path.is_some() && self.appendfsync_mode != AppendFsyncMode::No {
+            self.replication_ack_state.local_fsync_offset =
+                self.replication_ack_state.primary_offset;
+        }
         self.replication_runtime_state.update_backlog_window(
             self.replication_ack_state.primary_offset,
             self.repl_backlog_size,
@@ -5076,7 +5100,6 @@ impl Runtime {
         if user.nopass {
             flags.push(RespFrame::BulkString(Some(b"nopass".to_vec())));
         }
-        flags.push(RespFrame::BulkString(Some(b"sanitize-payload".to_vec())));
 
         let mut passwords = Vec::new();
         for p in &user.passwords {
@@ -6057,6 +6080,7 @@ impl Runtime {
         let mut next_maxmemory_samples: Option<usize> = None;
         let mut next_command_time_budget: Option<u64> = None;
         let mut next_appendonly: Option<bool> = None;
+        let mut next_appendfsync: Option<AppendFsyncMode> = None;
         let mut next_keyspace_events: Option<u32> = None;
         let mut next_list_max_listpack_size: Option<i64> = None;
         let mut next_rdb_path = self
@@ -6633,6 +6657,29 @@ impl Runtime {
                 });
                 continue;
             }
+            if parameter.eq_ignore_ascii_case("appendfsync") {
+                let value_str = match std::str::from_utf8(&pair[1]) {
+                    Ok(value) => value,
+                    Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                };
+                let mode = if value_str.eq_ignore_ascii_case("no") {
+                    AppendFsyncMode::No
+                } else if value_str.eq_ignore_ascii_case("everysec") {
+                    AppendFsyncMode::Everysec
+                } else if value_str.eq_ignore_ascii_case("always") {
+                    AppendFsyncMode::Always
+                } else {
+                    return RespFrame::Error(format!(
+                        "ERR Invalid argument '{value_str}' for CONFIG SET 'appendfsync'"
+                    ));
+                };
+                next_appendfsync = Some(mode);
+                static_override_updates.push((
+                    "appendfsync".to_string(),
+                    mode.as_config_value().to_string(),
+                ));
+                continue;
+            }
             if parameter.eq_ignore_ascii_case("appendfilename")
                 || parameter.eq_ignore_ascii_case("appenddirname")
                 || parameter.eq_ignore_ascii_case("always-show-logo")
@@ -6953,6 +7000,13 @@ impl Runtime {
                 self.server.aof_path = None;
             }
             self.server.store.set_aof_enabled(appendonly);
+        }
+        if let Some(mode) = next_appendfsync {
+            self.server.appendfsync_mode = mode;
+        }
+        if self.server.aof_path.is_some() && self.server.appendfsync_mode != AppendFsyncMode::No {
+            self.server.replication_ack_state.local_fsync_offset =
+                self.server.replication_ack_state.primary_offset;
         }
         if let Some(list_max_listpack_size) = next_list_max_listpack_size {
             self.server.store.list_max_listpack_size = list_max_listpack_size;
@@ -12036,6 +12090,37 @@ mod tests {
                 "ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled."
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn config_set_appendfsync_no_keeps_local_waitaof_unsatisfied_until_fsync_resumes() {
+        let mut rt = Runtime::default_strict();
+        rt.set_aof_path(std::path::PathBuf::from("appendonly.aof"));
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"appendfsync", b"no"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"INCR", b"waitaof:no-fsync"]), 1),
+            RespFrame::Integer(1)
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"WAITAOF", b"1", b"0", b"50"]), 2),
+            RespFrame::Array(Some(vec![RespFrame::Integer(0), RespFrame::Integer(0)]))
+        );
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"appendfsync", b"everysec"]),
+                3
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"WAITAOF", b"1", b"0", b"0"]), 4),
+            RespFrame::Array(Some(vec![RespFrame::Integer(1), RespFrame::Integer(0)]))
         );
     }
 
