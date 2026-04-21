@@ -11087,6 +11087,9 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         if sub.eq_ignore_ascii_case("INFO") && argv.len() != 2 {
             return Err(client_wrong_subcommand_arity(sub));
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         let info_line = client_info_line(store, sub);
         if sub.eq_ignore_ascii_case("LIST") {
             let payload = if argv.len() == 2 {
@@ -30040,6 +30043,46 @@ mod tests {
             err,
             CommandError::Custom("ERR Invalid client ID".to_string())
         );
+    }
+
+    #[test]
+    fn client_list_and_info_rejected_from_scripts_after_info_arity_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let info_arity = dispatch_argv(
+            &[b"CLIENT".to_vec(), b"INFO".to_vec(), b"extra".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("client info arity");
+        assert_eq!(info_arity, client_wrong_subcommand_arity("INFO"));
+
+        for argv in [
+            vec![b"CLIENT".to_vec(), b"INFO".to_vec()],
+            vec![b"CLIENT".to_vec(), b"LIST".to_vec()],
+            vec![
+                b"CLIENT".to_vec(),
+                b"LIST".to_vec(),
+                b"TYPE".to_vec(),
+                b"NORMAL".to_vec(),
+            ],
+            vec![
+                b"CLIENT".to_vec(),
+                b"LIST".to_vec(),
+                b"TYPE".to_vec(),
+                b"BOGUS".to_vec(),
+            ],
+            vec![
+                b"CLIENT".to_vec(),
+                b"LIST".to_vec(),
+                b"ID".to_vec(),
+                b"0".to_vec(),
+            ],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("client list/info noscript");
+            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+        }
     }
 
     #[test]
