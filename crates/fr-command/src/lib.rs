@@ -10944,7 +10944,7 @@ pub fn apply_client_tracking_update(
                 CLIENT_TRACKING_BCAST_SWITCH_REQUIRES_DISABLE.to_string(),
             ));
         }
-        if current.optin != next.optin || current.optout != next.optout {
+        if (next.optin && current.optout) || (next.optout && current.optin) {
             return Err(CommandError::Custom(
                 CLIENT_TRACKING_OPT_SWITCH_REQUIRES_DISABLE.to_string(),
             ));
