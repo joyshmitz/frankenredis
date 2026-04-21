@@ -966,7 +966,7 @@ pub fn dispatch_argv(
         Some(CommandId::EvalshaRo) => return evalsha_cmd(argv, store, now_ms, true),
         Some(CommandId::Script) => return script_cmd(argv, store),
         Some(CommandId::Debug) => return debug_cmd(argv, store, now_ms),
-        Some(CommandId::Role) => return role_cmd(argv),
+        Some(CommandId::Role) => return role_cmd(argv, store),
         Some(CommandId::Shutdown) => return shutdown_cmd(argv),
         Some(CommandId::Move) => return move_cmd(argv, store, now_ms),
         Some(CommandId::Latency) => return latency_cmd(argv, store),
@@ -12956,9 +12956,12 @@ fn compute_debug_digest(store: &mut Store, now_ms: u64, keys: Option<&[&[u8]]>) 
     format!("{:016x}", hasher.finish())
 }
 
-fn role_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn role_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("ROLE"));
+    }
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
     }
     // Return master role with empty replica list
     Ok(RespFrame::Array(Some(vec![
@@ -25747,6 +25750,19 @@ mod tests {
         } else {
             panic!("expected array"); // ubs:ignore — AI triage
         }
+    }
+
+    #[test]
+    fn role_rejected_from_scripts_after_arity_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let arity = dispatch_argv(&[b"ROLE".to_vec(), b"extra".to_vec()], &mut store, 0)
+            .expect_err("role arity");
+        assert_eq!(arity, CommandError::WrongArity("ROLE"));
+
+        let err = dispatch_argv(&[b"ROLE".to_vec()], &mut store, 0).expect_err("role noscript");
+        assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
     }
 
     #[test]
