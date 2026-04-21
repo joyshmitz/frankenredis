@@ -386,20 +386,8 @@ fn spawn_frankenredis(port: u16, primary_port: Option<u16>) -> ManagedChild {
 
 fn spawn_frankenredis_with_aof(port: u16) -> ManagedChild {
     let temp_dir = unique_temp_dir("frankenredis-aof-server");
-    let config_path = temp_dir.join("frankenredis.conf");
-    std::fs::write(
-        &config_path,
-        format!(
-            "bind 127.0.0.1\n\
-             port {port}\n\
-             dir \"{}\"\n\
-             save \"\"\n\
-             appendonly yes\n",
-            temp_dir.to_string_lossy()
-        ),
-    )
-    .expect("write frankenredis config");
-    spawn_frankenredis_config_only(port, config_path.to_str().expect("config path"))
+    let aof_path = temp_dir.join("appendonly.aof");
+    spawn_frankenredis_opts(port, None, Some(aof_path.to_str().expect("aof path")), None)
 }
 
 fn spawn_frankenredis_with_config(port: u16, config_path: &str) -> ManagedChild {
@@ -2919,6 +2907,37 @@ fn exercise_waitaof_local_block_released_when_appendonly_is_disabled(
     reply
 }
 
+fn exercise_waitaof_appendfsync_no_keeps_local_ack_visible(
+    spawn: impl FnOnce(u16) -> ManagedChild,
+) -> (RespFrame, RespFrame) {
+    let port = reserve_port();
+    let _server = spawn(port);
+
+    let mut client = BufferedTcpClient::connect(port);
+
+    assert_eq!(
+        client.send_command(&[b"CONFIG", b"SET", b"appendfsync", b"no"]),
+        RespFrame::SimpleString("OK".to_string())
+    );
+    assert_eq!(
+        client.send_command(&[b"INCR", b"waitaof:appendfsync-no"]),
+        RespFrame::Integer(1)
+    );
+    let before_rewrite = client.send_command(&[b"WAITAOF", b"1", b"0", b"50"]);
+
+    assert!(
+        matches!(
+            client.send_command(&[b"BGREWRITEAOF"]),
+            RespFrame::SimpleString(_)
+        ),
+        "BGREWRITEAOF should start"
+    );
+    let after_rewrite = client.send_command(&[b"WAITAOF", b"1", b"0", b"50"]);
+
+    send_shutdown_nosave(port);
+    (before_rewrite, after_rewrite)
+}
+
 #[test]
 fn tcp_waitaof_local_block_is_released_as_error_when_appendonly_is_disabled() {
     let expected = RespFrame::Error(
@@ -2931,5 +2950,16 @@ fn tcp_waitaof_local_block_is_released_as_error_when_appendonly_is_disabled() {
         spawn_frankenredis_with_aof,
     );
     assert_eq!(legacy, expected);
+    assert_eq!(franken, legacy);
+}
+
+#[test]
+fn tcp_waitaof_appendfsync_no_keeps_local_ack_visible_across_bgrewriteaof() {
+    let expected = RespFrame::Array(Some(vec![RespFrame::Integer(1), RespFrame::Integer(0)]));
+    let legacy =
+        exercise_waitaof_appendfsync_no_keeps_local_ack_visible(spawn_legacy_redis_with_aof);
+    let franken =
+        exercise_waitaof_appendfsync_no_keeps_local_ack_visible(spawn_frankenredis_with_aof);
+    assert_eq!(legacy, (expected.clone(), expected.clone()));
     assert_eq!(franken, legacy);
 }

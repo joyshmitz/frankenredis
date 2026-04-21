@@ -615,7 +615,6 @@ impl AclUser {
         } else {
             "off".to_string()
         });
-        parts.push("sanitize-payload".to_string());
         if self.nopass {
             parts.push("nopass".to_string());
         } else if self.passwords.is_empty() {
@@ -1961,7 +1960,7 @@ impl ServerState {
             .primary_offset
             .0
             .saturating_add(encoded_len);
-        if self.aof_path.is_some() && self.appendfsync_mode != AppendFsyncMode::No {
+        if self.aof_path.is_some() {
             self.replication_ack_state.local_fsync_offset =
                 self.replication_ack_state.primary_offset;
         }
@@ -7004,7 +7003,7 @@ impl Runtime {
         if let Some(mode) = next_appendfsync {
             self.server.appendfsync_mode = mode;
         }
-        if self.server.aof_path.is_some() && self.server.appendfsync_mode != AppendFsyncMode::No {
+        if self.server.aof_path.is_some() {
             self.server.replication_ack_state.local_fsync_offset =
                 self.server.replication_ack_state.primary_offset;
         }
@@ -12094,7 +12093,7 @@ mod tests {
     }
 
     #[test]
-    fn config_set_appendfsync_no_keeps_local_waitaof_unsatisfied_until_fsync_resumes() {
+    fn config_set_appendfsync_no_keeps_local_waitaof_locally_satisfied() {
         let mut rt = Runtime::default_strict();
         rt.set_aof_path(std::path::PathBuf::from("appendonly.aof"));
 
@@ -12108,18 +12107,15 @@ mod tests {
         );
         assert_eq!(
             rt.execute_frame(command(&[b"WAITAOF", b"1", b"0", b"50"]), 2),
-            RespFrame::Array(Some(vec![RespFrame::Integer(0), RespFrame::Integer(0)]))
+            RespFrame::Array(Some(vec![RespFrame::Integer(1), RespFrame::Integer(0)]))
         );
 
         assert_eq!(
-            rt.execute_frame(
-                command(&[b"CONFIG", b"SET", b"appendfsync", b"everysec"]),
-                3
-            ),
-            RespFrame::SimpleString("OK".to_string())
+            rt.execute_frame(command(&[b"BGREWRITEAOF"]), 3),
+            RespFrame::SimpleString("Background append only file rewriting started".to_string())
         );
         assert_eq!(
-            rt.execute_frame(command(&[b"WAITAOF", b"1", b"0", b"0"]), 4),
+            rt.execute_frame(command(&[b"WAITAOF", b"1", b"0", b"50"]), 4),
             RespFrame::Array(Some(vec![RespFrame::Integer(1), RespFrame::Integer(0)]))
         );
     }
@@ -17449,10 +17445,7 @@ mod tests {
             rt.execute_frame(command(&[b"ACL", b"GETUSER", b"alice"]), 1),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"flags".to_vec())),
-                RespFrame::Array(Some(vec![
-                    RespFrame::BulkString(Some(b"on".to_vec())),
-                    RespFrame::BulkString(Some(b"sanitize-payload".to_vec())),
-                ])),
+                RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"on".to_vec())),])),
                 RespFrame::BulkString(Some(b"passwords".to_vec())),
                 RespFrame::Array(Some(vec![RespFrame::BulkString(Some(
                     b"ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f".to_vec(),
