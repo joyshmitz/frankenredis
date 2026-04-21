@@ -10376,6 +10376,9 @@ fn config_cmd(
                 subcommand: sub.to_string(),
             });
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         let mut entries = Vec::new();
         for arg in &argv[2..] {
             let raw_pattern =
@@ -10391,6 +10394,9 @@ fn config_cmd(
                 subcommand: sub.to_string(),
             });
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         config_apply_store_sets(&argv[2..], store)?;
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("RESETSTAT") {
@@ -10400,6 +10406,9 @@ fn config_cmd(
                 subcommand: sub.to_string(),
             });
         }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         store.reset_info_stats();
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("REWRITE") {
@@ -10408,6 +10417,9 @@ fn config_cmd(
                 command: "CONFIG",
                 subcommand: sub.to_string(),
             });
+        }
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("HELP") {
@@ -28362,6 +28374,79 @@ mod tests {
         assert_eq!(store.stat_expired_stale_perc, 0);
         assert_eq!(store.stat_expire_cycle_cpu_milliseconds, 0);
         assert_eq!(store.slowlog_len(), 0);
+    }
+
+    #[test]
+    fn config_subcommands_reject_scripts_after_arity_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let get_arity =
+            dispatch_argv(&[b"CONFIG".to_vec(), b"GET".to_vec()], &mut store, 0).unwrap_err();
+        assert_eq!(
+            get_arity,
+            CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: "GET".to_string(),
+            }
+        );
+
+        let set_arity = dispatch_argv(
+            &[b"CONFIG".to_vec(), b"SET".to_vec(), b"foo".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            set_arity,
+            CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: "SET".to_string(),
+            }
+        );
+
+        let resetstat_arity = dispatch_argv(
+            &[b"CONFIG".to_vec(), b"RESETSTAT".to_vec(), b"extra".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            resetstat_arity,
+            CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: "RESETSTAT".to_string(),
+            }
+        );
+
+        let rewrite_arity = dispatch_argv(
+            &[b"CONFIG".to_vec(), b"REWRITE".to_vec(), b"extra".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            rewrite_arity,
+            CommandError::WrongSubcommandArity {
+                command: "CONFIG",
+                subcommand: "REWRITE".to_string(),
+            }
+        );
+
+        for argv in [
+            vec![b"CONFIG".to_vec(), b"GET".to_vec(), b"*".to_vec()],
+            vec![
+                b"CONFIG".to_vec(),
+                b"SET".to_vec(),
+                b"list-max-ziplist-size".to_vec(),
+                b"1".to_vec(),
+            ],
+            vec![b"CONFIG".to_vec(), b"RESETSTAT".to_vec()],
+            vec![b"CONFIG".to_vec(), b"REWRITE".to_vec()],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+        }
     }
 
     #[test]
