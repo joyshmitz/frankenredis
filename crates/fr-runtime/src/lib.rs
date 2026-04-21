@@ -5126,6 +5126,8 @@ impl Runtime {
             "connection",
             "transaction",
             "scripting",
+            "server",
+            "generic",
         ];
 
         if argv.len() == 2 {
@@ -5148,7 +5150,7 @@ impl Runtime {
                         .collect(),
                 ))
             } else {
-                RespFrame::Error(format!("ERR Unknown category '{cat}'"))
+                RespFrame::Error(format!("ERR Unknown ACL cat category '{cat}'"))
             }
         } else {
             CommandError::WrongSubcommandArity {
