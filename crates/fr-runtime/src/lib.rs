@@ -9080,6 +9080,12 @@ slave_priority:{}\r\n",
                 self.server.replication_runtime_state.replicas.clear();
                 self.server.refresh_replica_ack_snapshots();
                 self.server.replica_reconfigure_requested = true;
+                
+                // Redis parity: WAITAOF on a promoted replica should return immediately for commands 
+                // executed on the old master. By advancing the local fsync offset to the primary offset, 
+                // we mark all inherited history as locally satisfied.
+                self.server.replication_ack_state.local_fsync_offset =
+                    self.server.replication_ack_state.primary_offset;
             }
             return RespFrame::SimpleString("OK".to_string());
         }
@@ -17671,6 +17677,37 @@ user bob reset off nopass +@all
             RespFrame::Error(
                 "ERR An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn fr_p2c_006_waitaof_promoted_replica_local_acknowledgment_semantics() {
+        let mut rt = Runtime::default_strict();
+        rt.set_aof_path(std::path::PathBuf::from("appendonly.aof"));
+
+        // Setup as a replica
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"6379"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Receive some replicated commands, advancing primary offset
+        rt.server.replication_ack_state.primary_offset = fr_repl::ReplOffset(100);
+        // But local fsync offset is lagging
+        rt.server.replication_ack_state.local_fsync_offset = fr_repl::ReplOffset(10);
+
+        // Promote to master
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLICAOF", b"NO", b"ONE"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // WAITAOF for offset 100 should immediately satisfy local threshold
+        // because it was promoted at offset 100
+        let waitaof_reply = rt.execute_frame(command(&[b"WAITAOF", b"1", b"0", b"0"]), 2);
+        assert_eq!(
+            waitaof_reply,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1), RespFrame::Integer(0)]))
         );
     }
 }
