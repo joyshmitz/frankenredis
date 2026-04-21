@@ -6183,7 +6183,7 @@ fn function_cmd(
                 RespFrame::BulkString(Some(b"library_name".to_vec())),
                 RespFrame::BulkString(Some(lib.name.as_bytes().to_vec())),
                 RespFrame::BulkString(Some(b"engine".to_vec())),
-                RespFrame::BulkString(Some(lib.engine.to_ascii_lowercase().into_bytes())),
+                RespFrame::BulkString(Some(lib.engine.as_bytes().to_vec())),
                 RespFrame::BulkString(Some(b"functions".to_vec())),
             ];
             let funcs: Vec<RespFrame> = lib
@@ -6227,7 +6227,7 @@ fn function_cmd(
         let (lib_count, func_count) = store.function_stats();
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"running_script".to_vec())),
-            RespFrame::Integer(0), // no script is currently running
+            RespFrame::BulkString(None),
             RespFrame::BulkString(Some(b"engines".to_vec())),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"LUA".to_vec())),
@@ -29166,6 +29166,61 @@ mod tests {
                 command: "FUNCTION",
                 subcommand: "STATS".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn function_list_and_stats_match_redis_reply_shapes() {
+        let mut store = Store::new();
+        let library = b"#!lua name=mylib\nredis.register_function('myfunc', function(keys, args) return args[1] end)";
+
+        let out = dispatch_argv(
+            &[b"FUNCTION".to_vec(), b"LOAD".to_vec(), library.to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::BulkString(Some(b"mylib".to_vec())));
+
+        let list = dispatch_argv(&[b"FUNCTION".to_vec(), b"LIST".to_vec()], &mut store, 0)
+            .expect("function list");
+        assert_eq!(
+            list,
+            RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"library_name".to_vec())),
+                RespFrame::BulkString(Some(b"mylib".to_vec())),
+                RespFrame::BulkString(Some(b"engine".to_vec())),
+                RespFrame::BulkString(Some(b"LUA".to_vec())),
+                RespFrame::BulkString(Some(b"functions".to_vec())),
+                RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"name".to_vec())),
+                    RespFrame::BulkString(Some(b"myfunc".to_vec())),
+                    RespFrame::BulkString(Some(b"description".to_vec())),
+                    RespFrame::BulkString(None),
+                    RespFrame::BulkString(Some(b"flags".to_vec())),
+                    RespFrame::Array(Some(Vec::new())),
+                ]))])),
+            ]))]))
+        );
+
+        let stats = dispatch_argv(&[b"FUNCTION".to_vec(), b"STATS".to_vec()], &mut store, 0)
+            .expect("function stats");
+        assert_eq!(
+            stats,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"running_script".to_vec())),
+                RespFrame::BulkString(None),
+                RespFrame::BulkString(Some(b"engines".to_vec())),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"LUA".to_vec())),
+                    RespFrame::Array(Some(vec![
+                        RespFrame::BulkString(Some(b"libraries_count".to_vec())),
+                        RespFrame::Integer(1),
+                        RespFrame::BulkString(Some(b"functions_count".to_vec())),
+                        RespFrame::Integer(1),
+                    ])),
+                ])),
+            ]))
         );
     }
 
