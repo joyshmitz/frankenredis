@@ -1660,6 +1660,7 @@ impl ReplicationRuntimeState {
 #[derive(Debug, Clone, Default)]
 struct TransactionState {
     in_transaction: bool,
+    executing_exec: bool,
     command_queue: Vec<Vec<Vec<u8>>>,
     /// (key, fingerprint, dirty_counter_at_watch_time)
     watched_keys: Vec<(Vec<u8>, u64, u64)>,
@@ -1948,6 +1949,7 @@ impl ServerState {
     fn record_acl_log_event(
         &mut self,
         reason: &'static str,
+        context: &'static str,
         object: String,
         username: Vec<u8>,
         client_info: String,
@@ -1965,6 +1967,7 @@ impl ServerState {
         // Search for an identical event and fold it into the newest entry.
         if let Some(existing) = self.acl_log.iter_mut().find(|e| {
             e.reason == reason
+                && e.context == context
                 && e.object == object
                 && e.username == username
                 && e.client_info == client_info
@@ -1975,6 +1978,7 @@ impl ServerState {
             let entry = existing.clone();
             self.acl_log.retain(|e| {
                 !(e.reason == reason
+                    && e.context == context
                     && e.object == object
                     && e.username == username
                     && e.client_info == client_info)
@@ -1988,7 +1992,7 @@ impl ServerState {
         self.acl_log.push_front(AclLogEntry {
             count: 1,
             reason,
-            context: "toplevel",
+            context,
             object,
             username,
             client_info,
@@ -5024,6 +5028,16 @@ impl Runtime {
             .to_string()
     }
 
+    fn current_acl_log_context(&self) -> &'static str {
+        if self.session.transaction_state.in_transaction
+            || self.session.transaction_state.executing_exec
+        {
+            "multi"
+        } else {
+            "toplevel"
+        }
+    }
+
     fn record_acl_log_event(
         &mut self,
         reason: &'static str,
@@ -5033,6 +5047,7 @@ impl Runtime {
     ) {
         self.server.record_acl_log_event(
             reason,
+            self.current_acl_log_context(),
             object,
             username,
             self.current_acl_log_client_info(now_ms),
@@ -9833,8 +9848,49 @@ slave_priority:{}\r\n",
         let mut results = Vec::with_capacity(queued.len());
         let mut transaction_dirty = false;
         let mut transaction_aof = Vec::new();
+        self.session.transaction_state.executing_exec = true;
 
         for argv in &queued {
+            if let Some(permission_error) = self.acl_permission_error(argv) {
+                let command_name = String::from_utf8_lossy(&argv[0]).into_owned();
+                let (log_reason, object, reply) = match permission_error {
+                    AclCommandPermissionError::Command => (
+                        "command",
+                        command_name.to_ascii_uppercase(),
+                        RespFrame::Error(format!(
+                            "NOPERM this user has no permissions to run the '{}' command",
+                            command_name
+                        )),
+                    ),
+                    AclCommandPermissionError::Key(key) => {
+                        let key_name = String::from_utf8_lossy(&key).into_owned();
+                        (
+                            "key",
+                            key_name,
+                            RespFrame::Error("NOPERM No permissions to access a key".to_string()),
+                        )
+                    }
+                    AclCommandPermissionError::Channel(channel) => {
+                        let channel_name = String::from_utf8_lossy(&channel).into_owned();
+                        (
+                            "channel",
+                            channel_name,
+                            RespFrame::Error(
+                                "NOPERM No permissions to access a channel".to_string(),
+                            ),
+                        )
+                    }
+                };
+                self.record_acl_log_event(
+                    log_reason,
+                    object,
+                    self.session.current_user_name().to_vec(),
+                    now_ms,
+                );
+                results.push(reply);
+                continue;
+            }
+
             if let Some(reply) = self.enforce_maxmemory_before_dispatch(argv, now_ms, packet_id) {
                 results.push(reply);
                 continue;
@@ -9880,6 +9936,7 @@ slave_priority:{}\r\n",
                 Err(err) => results.push(err.to_resp()),
             }
         }
+        self.session.transaction_state.executing_exec = false;
 
         if transaction_dirty {
             self.capture_aof_record(&[b"MULTI".to_vec()]);
@@ -18032,6 +18089,128 @@ mod tests {
         );
         assert_eq!(entry[8], RespFrame::BulkString(Some(b"username".to_vec())));
         assert_eq!(entry[9], RespFrame::BulkString(Some(b"antirez".to_vec())));
+    }
+
+    #[test]
+    fn acl_log_marks_transaction_queue_denials_as_multi() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"LOG", b"RESET"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"antirez", b"on", b">foo", b"+@all", b"allkeys", b"-incr",
+                ]),
+                1,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"antirez", b"foo"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"MULTI"]), 3),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"INCR", b"foo"]), 4),
+            RespFrame::Error(
+                "NOPERM this user has no permissions to run the 'INCR' command".to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"EXEC"]), 5),
+            RespFrame::Array(Some(vec![]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"default", b""]), 6),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let RespFrame::Array(Some(entries)) = rt.execute_frame(command(&[b"ACL", b"LOG"]), 7)
+        else {
+            unreachable!("expected ACL LOG array");
+        };
+        let RespFrame::Array(Some(entry)) = &entries[0] else {
+            unreachable!("expected ACL LOG entry array");
+        };
+
+        assert_eq!(entry[4], RespFrame::BulkString(Some(b"context".to_vec())));
+        assert_eq!(entry[5], RespFrame::BulkString(Some(b"multi".to_vec())));
+        assert_eq!(entry[6], RespFrame::BulkString(Some(b"object".to_vec())));
+        assert_eq!(entry[7], RespFrame::BulkString(Some(b"INCR".to_vec())));
+    }
+
+    #[test]
+    fn acl_log_marks_exec_time_denials_as_multi_with_cmd_exec() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"LOG", b"RESET"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL", b"SETUSER", b"antirez", b"on", b">foo", b"+@all", b"allkeys", b"+incr",
+                ]),
+                1,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"antirez", b"foo"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"MULTI"]), 3),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"INCR", b"object:1234"]), 4),
+            RespFrame::SimpleString("QUEUED".to_string())
+        );
+        assert!(
+            rt.server
+                .auth_state
+                .set_user(b"antirez".to_vec(), &[b"-incr"])
+                .is_ok()
+        );
+
+        let RespFrame::Array(Some(exec_results)) = rt.execute_frame(command(&[b"EXEC"]), 5) else {
+            unreachable!("expected EXEC array reply");
+        };
+        assert_eq!(
+            exec_results[0],
+            RespFrame::Error(
+                "NOPERM this user has no permissions to run the 'INCR' command".to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"default", b""]), 6),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let RespFrame::Array(Some(entries)) = rt.execute_frame(command(&[b"ACL", b"LOG"]), 7)
+        else {
+            unreachable!("expected ACL LOG array");
+        };
+        let RespFrame::Array(Some(entry)) = &entries[0] else {
+            unreachable!("expected ACL LOG entry array");
+        };
+
+        assert_eq!(entry[4], RespFrame::BulkString(Some(b"context".to_vec())));
+        assert_eq!(entry[5], RespFrame::BulkString(Some(b"multi".to_vec())));
+        assert_eq!(entry[6], RespFrame::BulkString(Some(b"object".to_vec())));
+        assert_eq!(entry[7], RespFrame::BulkString(Some(b"INCR".to_vec())));
+        let RespFrame::BulkString(Some(client_info)) = &entry[13] else {
+            unreachable!("expected ACL LOG client-info bulk string");
+        };
+        assert!(String::from_utf8_lossy(client_info).contains("cmd=exec"));
     }
 
     #[test]
