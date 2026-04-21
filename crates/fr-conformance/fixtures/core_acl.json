@@ -42,7 +42,7 @@
         "value": [
           {
             "kind": "bulk",
-            "value": "user default on nopass sanitize-payload ~* &* +@all"
+            "value": "user default on sanitize-payload nopass ~* &* +@all"
           }
         ]
       }
@@ -2113,7 +2113,7 @@
     {
       "name": "acl_percmd_setup_restricted_user",
       "now_ms": 200,
-      "argv": ["ACL", "SETUSER", "restricted", "on", ">secret", "-@all", "+get", "+set", "+auth", "+ping"],
+      "argv": ["ACL", "SETUSER", "restricted", "on", ">secret", "-@all", "+get", "+set", "+auth", "+ping", "allkeys"],
       "expect": { "kind": "simple", "value": "OK" }
     },
     {
@@ -2192,7 +2192,7 @@
     {
       "name": "acl_category_setup_readonly_user",
       "now_ms": 300,
-      "argv": ["ACL", "SETUSER", "reader", "on", ">rpass", "-@all", "+@read", "+@connection"],
+      "argv": ["ACL", "SETUSER", "reader", "on", ">rpass", "-@all", "+@read", "+@connection", "allkeys"],
       "expect": { "kind": "simple", "value": "OK" }
     },
     {
@@ -2235,7 +2235,7 @@
     {
       "name": "acl_deny_override_setup",
       "now_ms": 400,
-      "argv": ["ACL", "SETUSER", "nodanger", "on", ">ndpass", "+@all", "-flushdb", "-flushall"],
+      "argv": ["ACL", "SETUSER", "nodanger", "on", ">ndpass", "+@all", "-flushdb", "-flushall", "allkeys"],
       "expect": { "kind": "simple", "value": "OK" }
     },
     {
@@ -2346,7 +2346,7 @@
     {
       "name": "acl_allcommands_reset_granular",
       "now_ms": 700,
-      "argv": ["ACL", "SETUSER", "granreset", "on", ">grpass", "-@all", "+get"],
+      "argv": ["ACL", "SETUSER", "granreset", "on", ">grpass", "-@all", "+get", "allkeys"],
       "expect": { "kind": "simple", "value": "OK" }
     },
     {
