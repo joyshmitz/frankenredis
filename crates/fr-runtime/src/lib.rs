@@ -5099,6 +5099,7 @@ impl Runtime {
         if user.nopass {
             flags.push(RespFrame::BulkString(Some(b"nopass".to_vec())));
         }
+        flags.push(RespFrame::BulkString(Some(b"sanitize-payload".to_vec())));
 
         let mut passwords = Vec::new();
         for p in &user.passwords {
@@ -8799,7 +8800,7 @@ slave_priority:{}\r\n",
                 "ERR WAITAOF cannot be used with replica instances. Please also note that writes to replicas are just local and are not propagated.".to_string(),
             );
         }
-        if required_local > 0 && self.server.aof_path.is_none() {
+        if required_local > 0 && !self.server.store.aof_enabled {
             return RespFrame::Error(
                 "ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled."
                     .to_string(),
@@ -8829,7 +8830,7 @@ slave_priority:{}\r\n",
                 required_replicas,
             },
         );
-        let local_ack = if self.server.aof_path.is_some() && outcome.local_satisfied {
+        let local_ack = if self.server.store.aof_enabled && outcome.local_satisfied {
             1
         } else {
             0
@@ -9080,9 +9081,9 @@ slave_priority:{}\r\n",
                 self.server.replication_runtime_state.replicas.clear();
                 self.server.refresh_replica_ack_snapshots();
                 self.server.replica_reconfigure_requested = true;
-                
-                // Redis parity: WAITAOF on a promoted replica should return immediately for commands 
-                // executed on the old master. By advancing the local fsync offset to the primary offset, 
+
+                // Redis parity: WAITAOF on a promoted replica should return immediately for commands
+                // executed on the old master. By advancing the local fsync offset to the primary offset,
                 // we mark all inherited history as locally satisfied.
                 self.server.replication_ack_state.local_fsync_offset =
                     self.server.replication_ack_state.primary_offset;
@@ -12080,6 +12081,19 @@ mod tests {
         let unmet_replicas = rt.execute_frame(command(&[b"WAITAOF", b"0", b"5", b"1"]), 1);
         assert_eq!(
             unmet_replicas,
+            RespFrame::Array(Some(vec![RespFrame::Integer(0), RespFrame::Integer(0)]))
+        );
+
+        rt.set_aof_path(std::path::PathBuf::from("appendonly.aof"));
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"appendonly", b"no"]), 2),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let preserved_path_unmet_replicas =
+            rt.execute_frame(command(&[b"WAITAOF", b"0", b"5", b"1"]), 3);
+        assert_eq!(
+            preserved_path_unmet_replicas,
             RespFrame::Array(Some(vec![RespFrame::Integer(0), RespFrame::Integer(0)]))
         );
     }
@@ -17506,7 +17520,7 @@ mod tests {
         let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
         assert!(
             saved.contains(
-                "user alice reset on sanitize-payload #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 ~* &* +get"
+                "user alice reset on #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 ~* &* +get"
             ),
             "saved ACL file should contain serialized alice rules, got: {saved}"
         );
