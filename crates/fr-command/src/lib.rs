@@ -680,17 +680,14 @@ impl CommandError {
             } => {
                 let cmd_lower = command.to_ascii_lowercase();
                 let sub_lower = subcommand.to_ascii_lowercase();
-                if cmd_lower == "acl" {
-                    RespFrame::Error(format!(
-                        "ERR wrong number of arguments for '{}|{}' subcommand",
-                        cmd_lower, sub_lower
-                    ))
-                } else {
-                    RespFrame::Error(format!(
-                        "ERR wrong number of arguments for '{}|{}' command",
-                        cmd_lower, sub_lower
-                    ))
-                }
+                let kind = match cmd_lower.as_str() {
+                    "acl" | "config" | "object" | "xgroup" | "xinfo" => "subcommand",
+                    _ => "command",
+                };
+                RespFrame::Error(format!(
+                    "ERR wrong number of arguments for '{}|{}' {}",
+                    cmd_lower, sub_lower, kind
+                ))
             }
             CommandError::UnknownSubcommand {
                 command,
@@ -28589,6 +28586,42 @@ mod tests {
                 command: "CONFIG",
                 subcommand: "RESETSTAT".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn wrong_subcommand_arity_formats_xfamily_config_and_object_as_subcommands() {
+        for (command, subcommand) in [
+            ("ACL", "SETUSER"),
+            ("CONFIG", "RESETSTAT"),
+            ("OBJECT", "ENCODING"),
+            ("XGROUP", "CREATE"),
+            ("XINFO", "STREAM"),
+        ] {
+            let err = CommandError::WrongSubcommandArity {
+                command,
+                subcommand: subcommand.to_string(),
+            };
+            assert_eq!(
+                err.to_resp(),
+                RespFrame::Error(format!(
+                    "ERR wrong number of arguments for '{}|{}' subcommand",
+                    command.to_ascii_lowercase(),
+                    subcommand.to_ascii_lowercase()
+                )),
+                "command={command} subcommand={subcommand}"
+            );
+        }
+
+        let client_err = CommandError::WrongSubcommandArity {
+            command: "CLIENT",
+            subcommand: "PAUSE".to_string(),
+        };
+        assert_eq!(
+            client_err.to_resp(),
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'client|pause' command".to_string()
+            )
         );
     }
 
