@@ -11648,7 +11648,7 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             Ok(RespFrame::Error("ERR no such key".to_string()))
         }
     } else if sub.eq_ignore_ascii_case("IDLETIME") {
-        if argv.len() < 3 {
+        if argv.len() != 3 {
             return Err(CommandError::WrongSubcommandArity {
                 command: "OBJECT",
                 subcommand: sub.to_string(),
@@ -11667,7 +11667,7 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             None => Ok(RespFrame::BulkString(None)),
         }
     } else if sub.eq_ignore_ascii_case("FREQ") {
-        if argv.len() < 3 {
+        if argv.len() != 3 {
             return Err(CommandError::WrongSubcommandArity {
                 command: "OBJECT",
                 subcommand: sub.to_string(),
@@ -32399,6 +32399,59 @@ mod tests {
                 RespFrame::SimpleString("    Print this help.".to_string()),
             ]))
         );
+    }
+
+    #[test]
+    fn object_freq_and_idletime_require_exact_arity_before_other_paths() {
+        let mut store = Store::new();
+
+        for subcommand in ["FREQ", "IDLETIME"] {
+            let err = dispatch_argv(
+                &[
+                    b"OBJECT".to_vec(),
+                    subcommand.as_bytes().to_vec(),
+                    b"k".to_vec(),
+                    b"extra".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                CommandError::WrongSubcommandArity {
+                    command: "OBJECT",
+                    subcommand: subcommand.to_string(),
+                }
+            );
+            assert_eq!(
+                err.to_resp(),
+                RespFrame::Error(format!(
+                    "ERR wrong number of arguments for 'object|{}' subcommand",
+                    subcommand.to_ascii_lowercase()
+                ))
+            );
+        }
+
+        let missing_idletime = dispatch_argv(
+            &[
+                b"OBJECT".to_vec(),
+                b"IDLETIME".to_vec(),
+                b"missing".to_vec(),
+            ],
+            &mut store,
+            1,
+        )
+        .expect("missing idletime reply");
+        assert_eq!(missing_idletime, RespFrame::BulkString(None));
+
+        let missing_freq = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"FREQ".to_vec(), b"missing".to_vec()],
+            &mut store,
+            2,
+        )
+        .expect("missing freq reply");
+        assert_eq!(missing_freq, RespFrame::BulkString(None));
     }
 
     #[test]
