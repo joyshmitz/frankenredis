@@ -11907,6 +11907,9 @@ fn save_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("SAVE"));
     }
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     store.record_save(now_ms, false);
     Ok(RespFrame::SimpleString("OK".to_string()))
 }
@@ -24312,6 +24315,21 @@ mod tests {
         let out = dispatch_argv(&[b"SAVE".to_vec()], &mut store, 42_000).expect("save");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
         assert_eq!(store.last_save_time_sec, 42);
+    }
+
+    #[test]
+    fn save_rejected_from_scripts_after_arity_validation() {
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        let arity = dispatch_argv(&[b"SAVE".to_vec(), b"extra".to_vec()], &mut store, 0)
+            .expect_err("save arity");
+        assert_eq!(arity, CommandError::WrongArity("SAVE"));
+
+        let err =
+            dispatch_argv(&[b"SAVE".to_vec()], &mut store, 42_000).expect_err("save noscript");
+        assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+        assert_eq!(store.last_save_time_sec, 0);
     }
 
     #[test]
