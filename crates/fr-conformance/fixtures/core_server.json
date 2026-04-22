@@ -1167,16 +1167,16 @@
       }
     },
     {
-      "name": "object_refcount_existing",
-      "now_ms": 13013,
+      "name": "object_freq_existing",
+      "now_ms": 13015,
       "argv": [
         "OBJECT",
-        "REFCOUNT",
+        "FREQ",
         "obj_str"
       ],
       "expect": {
-        "kind": "integer",
-        "value": 1
+        "kind": "error",
+        "value": "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."
       }
     },
     {
@@ -1231,16 +1231,16 @@
     },
     {
       "name": "object_encoding_wrong_arity",
-      "now_ms": 13018,
+      "now_ms": 13020,
       "argv": [
         "OBJECT",
         "ENCODING"
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'object|encoding' subcommand"
+        "value": "ERR wrong number of arguments for 'object|encoding' command"
       }
-    },
+      },
     {
       "name": "object_unknown_subcommand",
       "now_ms": 13019,

@@ -316,6 +316,14 @@
           {
             "kind": "bulk",
             "value": ""
+          },
+          {
+            "kind": "bulk",
+            "value": "acl-pubsub-default"
+          },
+          {
+            "kind": "bulk",
+            "value": "resetchannels"
           }
         ]
       }
