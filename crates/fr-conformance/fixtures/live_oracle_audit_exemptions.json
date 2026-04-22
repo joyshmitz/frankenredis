@@ -1,0 +1,39 @@
+{
+  "schema_version": "live_oracle_audit_exemptions/v1",
+  "fixture_exemptions": [
+    {
+      "fixture": "core_blocking.json",
+      "reason": "Blocking command parity needs multi-client wakeup orchestration that the current single-connection live-oracle matrix does not model yet."
+    },
+    {
+      "fixture": "core_migrate.json",
+      "reason": "MIGRATE parity needs a second Redis endpoint and cross-instance orchestration before it can be promoted into the standard live-oracle matrix."
+    },
+    {
+      "fixture": "core_pubsub.json",
+      "reason": "Pub/Sub parity relies on dedicated subscriber connections and streaming replies that the command-oriented live-oracle matrix does not drive yet."
+    },
+    {
+      "fixture": "core_wait.json",
+      "reason": "WAIT/WAITAOF parity needs matrix-level appendonly and replica-topology variations that are still handled by dedicated conformance tests."
+    },
+    {
+      "fixture": "fr_p2c_006_replication_handshake.json",
+      "reason": "Replication handshake coverage runs through the specialized handshake harness rather than the generic live-oracle suite matrix."
+    },
+    {
+      "fixture": "persist_replay.json",
+      "reason": "Replay parity is covered by the dedicated replay differential path and is intentionally outside the live-oracle matrix."
+    },
+    {
+      "fixture": "smoke_case.json",
+      "reason": "The smoke fixture is a local harness sanity check, not a differential live-oracle suite."
+    }
+  ],
+  "planned_differential_hook_exemptions": [
+    {
+      "journey_id": "FR-P2C-009-J001",
+      "reason": "The TLS/config live-oracle differential stays planned until the matrix can provision a TLS-enabled Redis oracle plus certificate material inside the standard harness flow."
+    }
+  ]
+}

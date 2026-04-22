@@ -2427,7 +2427,7 @@ fn decision_action_label(decision_action: DecisionAction) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2495,6 +2495,72 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    fn live_oracle_matrix_fixture_names() -> BTreeSet<String> {
+        let matrix = load_fixture_json_value("live_oracle_matrix.json");
+        matrix["suites"]
+            .as_array()
+            .expect("live oracle suites array")
+            .iter()
+            .map(|suite| {
+                suite["fixture"]
+                    .as_str()
+                    .expect("live oracle suite fixture must be a string")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    fn suite_fixture_files_on_disk() -> BTreeSet<String> {
+        let fixture_root = HarnessConfig::default_paths().fixture_root;
+        let mut fixtures = BTreeSet::new();
+        for entry in fs::read_dir(&fixture_root).expect("read conformance fixture directory") {
+            let path = entry.expect("fixture directory entry").path();
+            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let fixture_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("fixture filename should be valid UTF-8")
+                .to_string();
+            let raw = fs::read_to_string(&path).expect("read conformance fixture");
+            let value: serde_json::Value =
+                serde_json::from_str(&raw).expect("parse conformance fixture JSON");
+            if value["suite"].as_str().is_some() {
+                fixtures.insert(fixture_name);
+            }
+        }
+        fixtures
+    }
+
+    fn live_oracle_audit_exemption_map(section: &str, key: &str) -> BTreeMap<String, String> {
+        let exemptions = load_fixture_json_value("live_oracle_audit_exemptions.json");
+        let mut entries = BTreeMap::new();
+        for entry in exemptions[section]
+            .as_array()
+            .expect("live oracle audit exemptions section")
+        {
+            let identifier = entry[key]
+                .as_str()
+                .expect("live oracle audit exemption identifier must be a string")
+                .to_string();
+            let reason = entry["reason"]
+                .as_str()
+                .expect("live oracle audit exemption reason must be a string")
+                .trim()
+                .to_string();
+            assert!(
+                !reason.is_empty(),
+                "live oracle audit exemption reason must not be blank for {identifier}"
+            );
+            assert!(
+                entries.insert(identifier.clone(), reason).is_none(),
+                "duplicate live oracle audit exemption entry for {identifier}"
+            );
+        }
+        entries
     }
 
     fn valid_tls_config() -> TlsConfig {
@@ -2963,6 +3029,110 @@ mod tests {
             .expect("core_replication live oracle matrix suite");
         assert_eq!(suite["fixture"].as_str(), Some("core_replication.json"));
         assert_eq!(suite["mode"].as_str(), Some("command"));
+    }
+
+    #[test]
+    fn live_oracle_audit_requires_matrix_coverage_or_exemptions_for_fixture_and_workflow_gaps() {
+        let suite_fixtures = suite_fixture_files_on_disk();
+        let matrix_fixtures = live_oracle_matrix_fixture_names();
+        let fixture_exemptions =
+            live_oracle_audit_exemption_map("fixture_exemptions", "fixture");
+        let planned_hook_exemptions = live_oracle_audit_exemption_map(
+            "planned_differential_hook_exemptions",
+            "journey_id",
+        );
+
+        let uncovered_suite_fixtures = suite_fixtures
+            .iter()
+            .filter(|fixture| {
+                !matrix_fixtures.contains(*fixture) && !fixture_exemptions.contains_key(*fixture)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            uncovered_suite_fixtures.is_empty(),
+            "suite-bearing fixtures on disk must be covered by the live oracle matrix or the explicit exemption manifest: {uncovered_suite_fixtures:?}"
+        );
+
+        let missing_matrix_fixtures = matrix_fixtures
+            .iter()
+            .filter(|fixture| !suite_fixtures.contains(*fixture))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            missing_matrix_fixtures.is_empty(),
+            "live oracle matrix fixtures must exist on disk as suite-bearing fixture files: {missing_matrix_fixtures:?}"
+        );
+
+        let stale_fixture_exemptions = fixture_exemptions
+            .keys()
+            .filter(|fixture| {
+                !suite_fixtures.contains(*fixture) || matrix_fixtures.contains(*fixture)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            stale_fixture_exemptions.is_empty(),
+            "fixture exemptions must only mention uncovered suite fixtures that still exist on disk: {stale_fixture_exemptions:?}"
+        );
+
+        let workflow = load_fixture_json_value("user_workflow_corpus_v1.json");
+        let mut planned_journey_ids = BTreeSet::new();
+        let mut referenced_json_fixtures = BTreeSet::new();
+
+        for journey in workflow["journeys"]
+            .as_array()
+            .expect("workflow journeys array")
+        {
+            let journey_id = journey["journey_id"]
+                .as_str()
+                .expect("workflow journey_id must be a string");
+            let differential = &journey["differential_hook"];
+            if differential["status"].as_str() == Some("planned") {
+                planned_journey_ids.insert(journey_id.to_string());
+            }
+            for fixture in differential["fixtures"]
+                .as_array()
+                .expect("workflow differential fixtures array")
+            {
+                let Some(fixture_name) = fixture.as_str() else {
+                    continue;
+                };
+                if fixture_name.ends_with(".json") {
+                    referenced_json_fixtures.insert(fixture_name.to_string());
+                }
+            }
+        }
+
+        let missing_workflow_json_fixtures = referenced_json_fixtures
+            .iter()
+            .filter(|fixture| !suite_fixtures.contains(*fixture))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            missing_workflow_json_fixtures.is_empty(),
+            "workflow differential hooks should only reference suite fixtures that exist on disk: {missing_workflow_json_fixtures:?}"
+        );
+
+        let unexplained_planned_journeys = planned_journey_ids
+            .iter()
+            .filter(|journey_id| !planned_hook_exemptions.contains_key(*journey_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            unexplained_planned_journeys.is_empty(),
+            "planned differential hooks need an explicit exemption until they are activated: {unexplained_planned_journeys:?}"
+        );
+
+        let stale_planned_hook_exemptions = planned_hook_exemptions
+            .keys()
+            .filter(|journey_id| !planned_journey_ids.contains(*journey_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            stale_planned_hook_exemptions.is_empty(),
+            "planned differential hook exemptions must be removed once the workflow hook is active: {stale_planned_hook_exemptions:?}"
+        );
     }
 
     #[test]
