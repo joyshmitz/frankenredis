@@ -21,6 +21,17 @@
 
 Result: **did not add `asupersync`**; documented here instead, per request.
 
+Specific assessment for the requested durability candidates:
+
+- `fr-persist` is a synchronous encoding/decoding crate with no async runtime
+  seam to replace, so `asupersync` would add dependency surface without helping
+  persistence correctness or throughput.
+- `fr-runtime` is already tied to FrankenRedis’s custom event-loop/runtime
+  contract rather than Tokio-style task orchestration. Swapping in
+  `asupersync = "0.3.1"` there would require redesigning how command dispatch,
+  persistence capture, and replica propagation are driven, which is far beyond
+  a dependency update.
+
 ## Inventory
 
 External dependencies (non-path) declared in `crates/*/Cargo.toml`:
@@ -112,6 +123,20 @@ failures.
 
 This unification pass changed dependency declaration layout only. It did not
 change the runtime/test failure surface.
+
+## 2026-04-22 explicit revalidation command
+
+- Re-ran the user-requested command exactly:
+  - `rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_frankenredis_cod cargo update --workspace`
+    - result: no-op, `Locking 0 packages to latest compatible versions`
+  - `rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_frankenredis_cod cargo check --workspace`
+    - result: currently blocked by an unrelated shared-worktree compile error in
+      [crates/fr-runtime/src/lib.rs](/data/projects/frankenredis/crates/fr-runtime/src/lib.rs:984):
+      `AclUser::new_default()` is being called without the required
+      `AclPubsubDefault` argument after another in-flight change to that API.
+
+This failure is not caused by the dependency normalization pass; it is a
+concurrent code change in `fr-runtime`.
 
 ## Updates
 
