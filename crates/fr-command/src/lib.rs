@@ -6314,7 +6314,7 @@ fn function_cmd(
                 RespFrame::BulkString(Some(b"library_name".to_vec())),
                 RespFrame::BulkString(Some(lib.name.as_bytes().to_vec())),
                 RespFrame::BulkString(Some(b"engine".to_vec())),
-                RespFrame::BulkString(Some(lib.engine.to_ascii_lowercase().into_bytes())),
+                RespFrame::BulkString(Some(lib.engine.as_bytes().to_vec())),
                 RespFrame::BulkString(Some(b"functions".to_vec())),
             ];
             let funcs: Vec<RespFrame> = lib
@@ -6361,7 +6361,7 @@ fn function_cmd(
         let (lib_count, func_count) = store.function_stats();
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"running_script".to_vec())),
-            RespFrame::Integer(0),
+            RespFrame::BulkString(None),
             RespFrame::BulkString(Some(b"engines".to_vec())),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"LUA".to_vec())),
@@ -30394,7 +30394,7 @@ mod tests {
             stats,
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"running_script".to_vec())),
-                RespFrame::Integer(0),
+                RespFrame::BulkString(None),
                 RespFrame::BulkString(Some(b"engines".to_vec())),
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"LUA".to_vec())),
@@ -34991,4 +34991,3 @@ mod tests {
 }
 #[cfg(test)]
 mod zadd_xx_test;
-test;
