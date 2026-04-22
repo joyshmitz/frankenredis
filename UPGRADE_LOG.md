@@ -43,7 +43,7 @@ External dependencies (non-path) declared in `crates/*/Cargo.toml`:
 - **Circuit breaker:** No — clean finish.
 
 First library-updater commit: `8006c7e` (libc alignment)
-Last library-updater commit:  `db7f076` (workspace lock refresh)
+Last library-updater commit:  `b8f3d08` (workspace lock refresh)
 
 ## Updates
 
