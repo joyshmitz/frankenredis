@@ -69,7 +69,7 @@ External dependencies (non-path) declared in `crates/*/Cargo.toml`:
 - **Circuit breaker:** No — clean finish.
 
 First library-updater commit: `8006c7e` (libc alignment)
-Latest library-updater commit: `pending`
+Latest library-updater commit: `9a377f2` (workspace dependency centralization)
 
 ## 2026-04-22 exhaustive exact-spec normalization
 
@@ -137,6 +137,17 @@ change the runtime/test failure surface.
 
 This failure is not caused by the dependency normalization pass; it is a
 concurrent code change in `fr-runtime`.
+
+## 2026-04-22 final dependency audit state
+
+- Remaining direct external dependency gaps: **none**.
+- Remaining non-centralized external version literals across `Cargo.toml`,
+  `crates/fr-*/Cargo.toml`, and `fuzz/Cargo.toml`: **none**.
+- `asupersync` is intentionally absent from `Cargo.lock` because it was
+  evaluated and rejected for both `fr-persist` and `fr-runtime`; no manifest
+  references it, so it should not appear in the lockfile.
+- The only blocker left on the exact user-requested verification command is the
+  unrelated shared-worktree `fr-runtime` compile error documented above.
 
 ## Updates
 
