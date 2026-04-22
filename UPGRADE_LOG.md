@@ -40,6 +40,14 @@ External dependencies (non-path) declared in `crates/*/Cargo.toml`:
 
 ## Updates
 
+### mio (fr-server): 1.0 → 1.2 (lock 1.1.1 → 1.2.0)
+- **Breaking:** None. 1.x series is SemVer-compatible; 1.0 → 1.2 adds APIs
+  (notably additional Unix-source fd handling) without removing any.
+- **Check:** `cargo check --workspace --all-targets` green.
+- **Tests:** `cargo test -p fr-server` – 56 pass, 1 pre-existing failure
+  (`replica_sync_clears_failed_connection_and_schedules_retry`,
+  Integer(-1) vs Integer(0) reconnect delta) confirmed to reproduce on HEAD.
+
 ### libc (fr-store): 0.2.184 → 0.2.185
 - **Reason:** Align with fr-runtime spec; latest stable 0.2.185
 - **Breaking:** None (patch version on 0.2.x track)
