@@ -2005,7 +2005,12 @@ impl<'a> LuaState<'a> {
         if names.len() < 2 {
             return Ok(());
         }
-        let root_name = &names[0];
+        let Some((root_name, tail)) = names.split_first() else {
+            return Ok(());
+        };
+        let Some((last_field, parent_fields)) = tail.split_last() else {
+            return Ok(());
+        };
         let mut current = self
             .globals
             .get(root_name)
@@ -2016,7 +2021,7 @@ impl<'a> LuaState<'a> {
         }
         // Navigate to the parent table
         let mut path: Vec<LuaValue> = vec![current.clone()];
-        for name in &names[1..names.len() - 1] {
+        for name in parent_fields {
             let next = match &current {
                 LuaValue::Table(t) => t.get(&LuaValue::Str(name.as_bytes().to_vec())),
                 other => {
@@ -2030,14 +2035,18 @@ impl<'a> LuaState<'a> {
             path.push(current.clone());
         }
         // Set the value in the innermost table
-        let last_field = names.last().unwrap();
-        if let LuaValue::Table(t) = path.last_mut().unwrap() {
+        let Some(last_entry) = path.last_mut() else {
+            return Err("attempt to index a nil value".to_string());
+        };
+        if let LuaValue::Table(t) = last_entry {
             t.set(LuaValue::Str(last_field.as_bytes().to_vec()), value);
             // Rebuild the chain
-            let mut val = path.pop().unwrap();
-            for i in (0..names.len() - 2).rev() {
-                if let LuaValue::Table(parent) = &mut path[i] {
-                    parent.set(LuaValue::Str(names[i + 1].as_bytes().to_vec()), val);
+            let mut val = path
+                .pop()
+                .ok_or_else(|| "attempt to index a nil value".to_string())?;
+            for i in (0..parent_fields.len()).rev() {
+                if let Some(LuaValue::Table(parent)) = path.get_mut(i) {
+                    parent.set(LuaValue::Str(parent_fields[i].as_bytes().to_vec()), val);
                     val = path[i].clone();
                 }
             }
@@ -4861,8 +4870,8 @@ mod tests {
     use fr_store::Store;
 
     use super::{
-        LuaTable, LuaValue, SCRIPT_NOSCRIPT_ERROR, eval_script, json_to_lua_value, lua_raw_equal,
-        lua_value_to_json,
+        LuaState, LuaTable, LuaValue, SCRIPT_NOSCRIPT_ERROR, eval_script, json_to_lua_value,
+        lua_raw_equal, lua_value_to_json,
     };
 
     #[test]
@@ -4873,6 +4882,56 @@ mod tests {
         assert!(
             err.contains("attempt to index a nil value"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn set_nested_field_ignores_degenerate_name_paths_without_panicking() {
+        let mut store = Store::new();
+        let mut state = LuaState::new(&mut store, 0);
+
+        state
+            .set_nested_field(&[], LuaValue::Number(1.0))
+            .expect("empty path should be ignored");
+        state
+            .set_nested_field(&["root".to_string()], LuaValue::Number(1.0))
+            .expect("single-name path should be ignored");
+    }
+
+    #[test]
+    fn set_nested_field_rebuilds_parent_chain_without_unwrap_shortcuts() {
+        let mut store = Store::new();
+        let mut state = LuaState::new(&mut store, 0);
+        let parent = LuaTable::new();
+        let child = LuaTable::new();
+        parent.set(
+            LuaValue::Str(b"child".to_vec()),
+            LuaValue::Table(child.clone()),
+        );
+        state
+            .globals
+            .insert("root".to_string(), LuaValue::Table(parent.clone()));
+
+        state
+            .set_nested_field(
+                &["root".to_string(), "child".to_string(), "leaf".to_string()],
+                LuaValue::Number(7.0),
+            )
+            .expect("nested assignment should succeed");
+
+        let root = state.globals.get("root").expect("root table");
+        let LuaValue::Table(root_table) = root else {
+            panic!("root should remain a table");
+        };
+        let LuaValue::Table(updated_child) = root_table.get(&LuaValue::Str(b"child".to_vec()))
+        else {
+            panic!("child should remain a table");
+        };
+        let leaf = updated_child.get(&LuaValue::Str(b"leaf".to_vec()));
+        assert!(
+            matches!(leaf, LuaValue::Number(n) if (n - 7.0).abs() < f64::EPSILON),
+            "leaf should be 7.0, got: {:?}",
+            leaf
         );
     }
 
