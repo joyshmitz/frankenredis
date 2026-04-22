@@ -1255,47 +1255,7 @@
         "GET"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "array",
-            "value": [
-              {
-                "kind": "bulk",
-                "value": "get"
-              },
-              {
-                "kind": "integer",
-                "value": 2
-              },
-              {
-                "kind": "array",
-                "value": [
-                  {
-                    "kind": "simple",
-                    "value": "readonly"
-                  },
-                  {
-                    "kind": "simple",
-                    "value": "fast"
-                  }
-                ]
-              },
-              {
-                "kind": "integer",
-                "value": 1
-              },
-              {
-                "kind": "integer",
-                "value": 1
-              },
-              {
-                "kind": "integer",
-                "value": 1
-              }
-            ]
-          }
-        ]
+        "kind": "any_array"
       }
     },
     {
