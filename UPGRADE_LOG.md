@@ -185,6 +185,18 @@ normalized; the remaining failure is outside the library-updater scope.
     and `:920`, but there is no workspace compile failure from the dependency
     state.
 
+## 2026-04-22 cod-redis cooling rerun
+
+- Re-ran the exact local maintenance command from the repo root:
+  - `cargo update --workspace`
+  - result: still a no-op, `Locking 0 packages to latest compatible versions`
+- Cargo produced no `Cargo.lock` delta, so there are still no remaining
+  compatible dependency bumps to land from the current manifests.
+- Shared unrelated worktree drift remains confined to:
+  - `crates/fr-runtime/src/lib.rs`
+  - `crates/fr-conformance/fixtures/core_acl.json`
+  and was left untouched during this rerun.
+
 ## Updates
 
 ### workspace lock-file refresh (cargo update)
