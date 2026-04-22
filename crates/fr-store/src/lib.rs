@@ -15197,12 +15197,13 @@ mod tests {
     // ── Metamorphic property tests ──────────────────────────────────────────
     mod metamorphic {
         use super::{
-            function_library_snapshot, sample_function_library_from_seed,
+            function_library_snapshot, group_read_options, sample_function_library_from_seed,
             sample_replacement_function_library_from_seed,
         };
         use crate::{
-            Store, StoreError, StreamRecord, decode_db_key, encode_db_key, eq_ascii_ci, glob_match,
-            keyspace_events_parse, keyspace_events_to_string,
+            Store, StoreError, StreamClaimOptions, StreamGroupReadCursor, StreamId, StreamRecord,
+            decode_db_key, encode_db_key, eq_ascii_ci, glob_match, keyspace_events_parse,
+            keyspace_events_to_string,
         };
         use proptest::prelude::*;
         use std::collections::{BTreeMap, BTreeSet};
@@ -16561,7 +16562,7 @@ mod tests {
                         &first_group_name,
                         &pending_seed_consumer,
                         group_read_options(StreamGroupReadCursor::NewEntries, false, Some(1)),
-                        METAMORPHIC_NOW_MS.saturating_add(1),
+                        METAMORPHIC_NOW_MS,
                     )
                     .expect("generated stream group must allow pending seeds")
                     .expect("generated stream group must exist");
@@ -16580,7 +16581,7 @@ mod tests {
                             justid: false,
                             last_id: None,
                         },
-                        METAMORPHIC_NOW_MS.saturating_add(2),
+                        METAMORPHIC_NOW_MS,
                     )
                     .expect("generated stream group must allow claim seeds");
 
