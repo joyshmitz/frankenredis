@@ -10661,9 +10661,6 @@ fn config_cmd(
                 subcommand: sub.to_string(),
             });
         }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
-        }
         let mut entries = Vec::new();
         for arg in &argv[2..] {
             let raw_pattern =
@@ -10678,9 +10675,6 @@ fn config_cmd(
                 command: "CONFIG",
                 subcommand: sub.to_string(),
             });
-        }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
         }
         config_apply_store_sets(&argv[2..], store)?;
         Ok(RespFrame::SimpleString("OK".to_string()))
@@ -11990,10 +11984,10 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             });
         }
         if !store.exists_no_touch(&argv[2], now_ms) {
-            return Ok(RespFrame::Error("ERR no such key".to_string()));
+            return Ok(RespFrame::BulkString(None));
         }
         match store.object_freq(&argv[2], now_ms) {
-            None => Ok(RespFrame::Error("ERR no such key".to_string())),
+            None => Ok(RespFrame::BulkString(None)),
             Some(freq) if store.maxmemory_policy.tracks_lfu() => Ok(RespFrame::Integer(freq.into())),
             Some(_) => Ok(RespFrame::Error(
                 "ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.".to_string(),
@@ -29732,13 +29726,6 @@ mod tests {
         );
 
         for argv in [
-            vec![b"CONFIG".to_vec(), b"GET".to_vec(), b"*".to_vec()],
-            vec![
-                b"CONFIG".to_vec(),
-                b"SET".to_vec(),
-                b"list-max-ziplist-size".to_vec(),
-                b"1".to_vec(),
-            ],
             vec![b"CONFIG".to_vec(), b"RESETSTAT".to_vec()],
             vec![b"CONFIG".to_vec(), b"REWRITE".to_vec()],
         ] {
