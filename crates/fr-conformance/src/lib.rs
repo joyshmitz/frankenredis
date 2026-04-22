@@ -2478,6 +2478,28 @@ mod tests {
         serde_json::from_str(&raw).expect("failed to parse conformance fixture JSON")
     }
 
+    fn live_oracle_matrix_case_names(suite_name: &str) -> Vec<String> {
+        let matrix = load_fixture_json_value("live_oracle_matrix.json");
+        let suites = matrix["suites"]
+            .as_array()
+            .expect("live oracle suites array");
+        let suite = suites
+            .iter()
+            .find(|suite| suite["name"].as_str() == Some(suite_name))
+            .expect("missing live oracle matrix suite");
+        suite["case_names"]
+            .as_array()
+            .expect("live oracle suite is missing case_names")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("live oracle suite case name must be a string")
+                    .to_string()
+            })
+            .collect()
+    }
+
     fn valid_tls_config() -> TlsConfig {
         TlsConfig {
             tls_port: Some(6380),
@@ -2853,6 +2875,40 @@ mod tests {
             .find(|suite| suite["fixture"].as_str() == Some("fr_p2c_001_eventloop_journey.json"))
             .expect("FR-P2C-001 live oracle matrix suite");
         assert_eq!(suite["name"].as_str(), Some("fr_p2c_001_eventloop_journey"));
+        assert_eq!(suite["mode"].as_str(), Some("command"));
+    }
+
+    #[test]
+    fn core_replication_live_oracle_suite_is_active_in_matrix() {
+        let fixture = load_fixture_json_value("core_replication.json");
+        let case_names = live_oracle_matrix_case_names("core_replication");
+        let fixture_cases = fixture["cases"]
+            .as_array()
+            .expect("core_replication cases array");
+
+        assert!(
+            !case_names.is_empty(),
+            "core_replication live oracle case list should stay populated"
+        );
+
+        for case_name in &case_names {
+            assert!(
+                fixture_cases
+                    .iter()
+                    .any(|case| case["name"].as_str() == Some(case_name.as_str())),
+                "core_replication live oracle case is missing from fixture: {case_name}"
+            );
+        }
+
+        let matrix = load_fixture_json_value("live_oracle_matrix.json");
+        let suites = matrix["suites"]
+            .as_array()
+            .expect("live oracle suites array");
+        let suite = suites
+            .iter()
+            .find(|suite| suite["name"].as_str() == Some("core_replication"))
+            .expect("core_replication live oracle matrix suite");
+        assert_eq!(suite["fixture"].as_str(), Some("core_replication.json"));
         assert_eq!(suite["mode"].as_str(), Some("command"));
     }
 
@@ -6995,6 +7051,30 @@ mod tests {
         let cfg = HarnessConfig::default_paths();
         let oracle = LiveOracleConfig::default();
         let report = run_live_redis_diff(&cfg, "core_errors.json", &oracle).expect("live diff");
+        assert_eq!(
+            report.total, report.passed,
+            "mismatches: {:?}",
+            report.failed
+        );
+    }
+
+    #[test]
+    #[ignore = "requires running redis-server on localhost:6379"]
+    fn live_redis_core_replication_stable_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let oracle = LiveOracleConfig::default();
+        let selected_cases = live_oracle_matrix_case_names("core_replication");
+        let selected_case_refs = selected_cases
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let report = crate::run_live_redis_diff_for_cases(
+            &cfg,
+            "core_replication.json",
+            &selected_case_refs,
+            &oracle,
+        )
+        .expect("live replication diff");
         assert_eq!(
             report.total, report.passed,
             "mismatches: {:?}",
