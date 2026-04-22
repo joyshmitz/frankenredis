@@ -224,3 +224,10 @@ path = "fuzz_targets/fuzz_store_stream_groups.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_store_bitops"
+path = "fuzz_targets/fuzz_store_bitops.rs"
+test = false
+doc = false
+bench = false
