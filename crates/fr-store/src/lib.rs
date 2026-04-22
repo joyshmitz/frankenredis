@@ -1010,6 +1010,16 @@ pub struct DispatchAclPermissions {
     pub all_channels: bool,
 }
 
+pub const SCRIPT_PROPAGATE_REPLICA: u8 = 0b0001;
+pub const SCRIPT_PROPAGATE_AOF: u8 = 0b0010;
+pub const SCRIPT_PROPAGATE_ALL: u8 = SCRIPT_PROPAGATE_REPLICA | SCRIPT_PROPAGATE_AOF;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptPropagationRecord {
+    pub argv: Vec<Vec<u8>>,
+    pub targets: u8,
+}
+
 #[derive(Debug)]
 pub struct Store {
     entries: HashMap<Vec<u8>, Entry>,
@@ -1082,6 +1092,10 @@ pub struct Store {
     pub script_nesting_level: usize,
     /// Whether the current script/function execution context forbids writes.
     pub script_read_only: bool,
+    /// Current propagation mask for commands emitted from the active Lua script.
+    pub script_propagation_mode: u8,
+    /// Commands emitted by the active Lua script together with their propagation masks.
+    pub script_propagation_records: Vec<ScriptPropagationRecord>,
 
     /// Number of keys currently tracked in the expires set.
     pub expires_count: usize,
@@ -1289,6 +1303,8 @@ impl Default for Store {
             aof_enabled: false,
             script_nesting_level: 0,
             script_read_only: false,
+            script_propagation_mode: SCRIPT_PROPAGATE_ALL,
+            script_propagation_records: Vec::new(),
             expires_count: 0,
             cached_memory_usage_bytes: std::cell::Cell::new(0),
             cached_memory_usage_dirty: std::cell::Cell::new(0),
@@ -1445,6 +1461,19 @@ impl Store {
 
     pub fn set_aof_enabled(&mut self, enabled: bool) {
         self.aof_enabled = enabled;
+    }
+
+    pub fn clear_script_propagation_state(&mut self) {
+        self.script_propagation_mode = SCRIPT_PROPAGATE_ALL;
+        self.script_propagation_records.clear();
+    }
+
+    pub fn record_script_propagation(&mut self, argv: &[Vec<u8>]) {
+        self.script_propagation_records
+            .push(ScriptPropagationRecord {
+                argv: argv.to_vec(),
+                targets: self.script_propagation_mode,
+            });
     }
 
     pub fn observe_memory_sample(&mut self, used_memory_rss: usize) {

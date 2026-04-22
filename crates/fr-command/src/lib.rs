@@ -14755,7 +14755,9 @@ mod tests {
     use std::time::Instant;
 
     use fr_protocol::RespFrame;
-    use fr_store::{Store, StoreError};
+    use fr_store::{
+        SCRIPT_PROPAGATE_ALL, SCRIPT_PROPAGATE_AOF, SCRIPT_PROPAGATE_REPLICA, Store, StoreError,
+    };
 
     use super::{
         CLIENT_CACHING_NO_REQUIRES_OPTOUT, CLIENT_CACHING_REQUIRES_TRACKING,
@@ -26282,6 +26284,90 @@ mod tests {
         )
         .expect("evalsha_ro pcall publish rejection");
         assert_eq!(pcall_out, RespFrame::Integer(1));
+    }
+
+    #[test]
+    fn eval_redis_set_repl_validates_arity_and_flags_like_redis() {
+        let mut store = Store::new();
+
+        let missing_arg = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"return redis.set_repl()".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval missing arg");
+        assert_eq!(
+            missing_arg,
+            RespFrame::Error(
+                "ERR Error running script: redis.set_repl() requires one argument.".to_string()
+            )
+        );
+
+        let invalid_flags = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"return redis.set_repl(12345)".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval invalid flags");
+        assert_eq!(
+            invalid_flags,
+            RespFrame::Error(
+                "ERR Error running script: Invalid replication flags. Use REPL_AOF, REPL_REPLICA, REPL_ALL or REPL_NONE.".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn eval_tracks_script_propagation_targets_across_set_repl_changes() {
+        let mut store = Store::new();
+        let reply = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"redis.call('SET','a','1')\nredis.set_repl(redis.REPL_NONE)\nredis.call('SET','b','2')\nredis.set_repl(redis.REPL_AOF)\nredis.call('SET','c','3')\nredis.set_repl(redis.REPL_REPLICA)\nredis.call('SET','d','4')\nredis.set_repl(redis.REPL_ALL)\nredis.call('SET','e','5')\nreturn redis.REPL_REPLICA + redis.REPL_SLAVE"
+                    .to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval should succeed");
+        assert_eq!(reply, RespFrame::Integer(2));
+
+        let actual: Vec<(Vec<Vec<u8>>, u8)> = store
+            .script_propagation_records
+            .iter()
+            .map(|record| (record.argv.clone(), record.targets))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    vec![b"SET".to_vec(), b"a".to_vec(), b"1".to_vec()],
+                    SCRIPT_PROPAGATE_ALL,
+                ),
+                (vec![b"SET".to_vec(), b"b".to_vec(), b"2".to_vec()], 0,),
+                (
+                    vec![b"SET".to_vec(), b"c".to_vec(), b"3".to_vec()],
+                    SCRIPT_PROPAGATE_AOF,
+                ),
+                (
+                    vec![b"SET".to_vec(), b"d".to_vec(), b"4".to_vec()],
+                    SCRIPT_PROPAGATE_REPLICA,
+                ),
+                (
+                    vec![b"SET".to_vec(), b"e".to_vec(), b"5".to_vec()],
+                    SCRIPT_PROPAGATE_ALL,
+                ),
+            ]
+        );
     }
 
     #[test]

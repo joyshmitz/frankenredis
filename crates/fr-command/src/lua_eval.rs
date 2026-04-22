@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use fr_protocol::RespFrame;
-use fr_store::Store;
+use fr_store::{SCRIPT_PROPAGATE_ALL, SCRIPT_PROPAGATE_AOF, SCRIPT_PROPAGATE_REPLICA, Store};
 
 use crate::{CommandError, SCRIPT_NOSCRIPT_ERROR, dispatch_argv, parse_i64_arg};
 
@@ -1737,6 +1737,10 @@ impl<'a> LuaState<'a> {
         // Replication mode constants
         redis_table.set(LuaValue::Str(b"REPL_NONE".to_vec()), LuaValue::Number(0.0));
         redis_table.set(LuaValue::Str(b"REPL_SLAVE".to_vec()), LuaValue::Number(1.0));
+        redis_table.set(
+            LuaValue::Str(b"REPL_REPLICA".to_vec()),
+            LuaValue::Number(1.0),
+        );
         redis_table.set(LuaValue::Str(b"REPL_AOF".to_vec()), LuaValue::Number(2.0));
         redis_table.set(LuaValue::Str(b"REPL_ALL".to_vec()), LuaValue::Number(3.0));
         self.globals
@@ -2489,7 +2493,20 @@ impl<'a> LuaState<'a> {
                 Ok(vec![LuaValue::Bool(true)])
             }
             "redis.set_repl" => {
-                // No-op: replication control stub
+                if args.len() != 1 {
+                    return Err("redis.set_repl() requires one argument.".to_string());
+                }
+                let Some(flags) = args[0].to_number() else {
+                    return Err("Invalid replication flags. Use REPL_AOF, REPL_REPLICA, REPL_ALL or REPL_NONE.".to_string());
+                };
+                if !flags.is_finite() || flags.fract() != 0.0 {
+                    return Err("Invalid replication flags. Use REPL_AOF, REPL_REPLICA, REPL_ALL or REPL_NONE.".to_string());
+                }
+                let flags = flags as i64;
+                if flags & !(SCRIPT_PROPAGATE_AOF as i64 | SCRIPT_PROPAGATE_REPLICA as i64) != 0 {
+                    return Err("Invalid replication flags. Use REPL_AOF, REPL_REPLICA, REPL_ALL or REPL_NONE.".to_string());
+                }
+                self.store.script_propagation_mode = flags as u8;
                 Ok(vec![LuaValue::Nil])
             }
             "redis.breakpoint" => {
@@ -3563,6 +3580,7 @@ impl<'a> LuaState<'a> {
             argv.push(arg.to_redis_arg()?);
         }
 
+        let dirty_before = self.store.dirty;
         let command_result = if let Some(intercepted) = script_command_intercept(&argv) {
             intercepted
         } else {
@@ -3579,7 +3597,13 @@ impl<'a> LuaState<'a> {
         };
 
         match command_result {
-            Ok(frame) => Ok(vec![resp_to_lua_command_result(&argv, &frame)]),
+            Ok(frame) => {
+                let dirty_after = self.store.dirty;
+                if dirty_after > dirty_before || command_may_propagate_from_script(&argv) {
+                    self.store.record_script_propagation(&argv);
+                }
+                Ok(vec![resp_to_lua_command_result(&argv, &frame)])
+            }
             Err(err_msg) => {
                 if is_pcall {
                     let t = LuaTable::new();
@@ -3656,6 +3680,13 @@ fn transaction_control_script_result(argv: &[Vec<u8>]) -> Option<Result<RespFram
     }
 
     None
+}
+
+fn command_may_propagate_from_script(argv: &[Vec<u8>]) -> bool {
+    let Some(command) = argv.first() else {
+        return false;
+    };
+    command.eq_ignore_ascii_case(b"PUBLISH") || command.eq_ignore_ascii_case(b"SPUBLISH")
 }
 
 fn acl_script_result(argv: &[Vec<u8>]) -> Option<Result<RespFrame, String>> {
@@ -4854,6 +4885,8 @@ pub fn eval_script(
     store: &mut Store,
     now_ms: u64,
 ) -> Result<RespFrame, String> {
+    store.clear_script_propagation_state();
+    store.script_propagation_mode = SCRIPT_PROPAGATE_ALL;
     let mut state = LuaState::new(store, now_ms);
 
     let keys_vals: Vec<LuaValue> = keys.iter().map(|k| LuaValue::Str(k.clone())).collect();
