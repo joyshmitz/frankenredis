@@ -1060,8 +1060,8 @@
         "REWRITE"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR The server is running without a config file"
       }
     },
     {
@@ -1731,8 +1731,8 @@
         "rewrite"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR The server is running without a config file"
       }
     },
     {

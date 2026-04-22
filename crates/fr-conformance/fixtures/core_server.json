@@ -947,7 +947,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'config|get' subcommand"
+        "value": "ERR wrong number of arguments for 'config|get' command"
       }
     },
     {
