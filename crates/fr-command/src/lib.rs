@@ -679,11 +679,18 @@ impl CommandError {
             CommandError::WrongSubcommandArity {
                 command,
                 subcommand,
-            } => RespFrame::Error(format!(
-                "ERR wrong number of arguments for '{}|{}' command",
-                command.to_ascii_lowercase(),
-                subcommand.to_ascii_lowercase()
-            )),
+            } => {
+                let cmd_lower = command.to_ascii_lowercase();
+                let sub_lower = subcommand.to_ascii_lowercase();
+                let kind = match cmd_lower.as_str() {
+                    "acl" | "slowlog" | "xgroup" | "xinfo" => "subcommand",
+                    _ => "command",
+                };
+                RespFrame::Error(format!(
+                    "ERR wrong number of arguments for '{}|{}' {}",
+                    cmd_lower, sub_lower, kind
+                ))
+            },
             CommandError::UnknownSubcommand {
                 command,
                 subcommand,
@@ -6307,7 +6314,7 @@ fn function_cmd(
                 RespFrame::BulkString(Some(b"library_name".to_vec())),
                 RespFrame::BulkString(Some(lib.name.as_bytes().to_vec())),
                 RespFrame::BulkString(Some(b"engine".to_vec())),
-                RespFrame::BulkString(Some(lib.engine.as_bytes().to_vec())),
+                RespFrame::BulkString(Some(lib.engine.to_ascii_lowercase().into_bytes())),
                 RespFrame::BulkString(Some(b"functions".to_vec())),
             ];
             let funcs: Vec<RespFrame> = lib
@@ -6354,7 +6361,7 @@ fn function_cmd(
         let (lib_count, func_count) = store.function_stats();
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"running_script".to_vec())),
-            RespFrame::BulkString(None),
+            RespFrame::Integer(0),
             RespFrame::BulkString(Some(b"engines".to_vec())),
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"LUA".to_vec())),
@@ -30387,7 +30394,7 @@ mod tests {
             stats,
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"running_script".to_vec())),
-                RespFrame::BulkString(None),
+                RespFrame::Integer(0),
                 RespFrame::BulkString(Some(b"engines".to_vec())),
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"LUA".to_vec())),
@@ -34984,3 +34991,4 @@ mod tests {
 }
 #[cfg(test)]
 mod zadd_xx_test;
+test;
