@@ -19811,7 +19811,8 @@ mod tests {
             )
         );
 
-        // Integer BLOCK values are accepted (non-blocking stub) — verify it doesn't error.
+        // Integer BLOCK values are accepted here; blocking wakeups are exercised
+        // in fr-server integration coverage.
         let block_result = dispatch_argv(
             &[
                 b"XREAD".to_vec(),
