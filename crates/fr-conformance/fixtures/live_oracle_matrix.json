@@ -16,6 +16,13 @@
       "profiles": ["baseline", "parity"]
     },
     {
+      "name": "fr_p2c_006_replication_journey",
+      "mode": "command",
+      "fixture": "fr_p2c_006_replication_journey.json",
+      "scenario_class": "golden",
+      "profiles": ["baseline", "parity"]
+    },
+    {
       "name": "fr_p2c_003_dispatch_journey",
       "mode": "command",
       "fixture": "fr_p2c_003_dispatch_journey.json",

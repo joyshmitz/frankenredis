@@ -85,10 +85,7 @@ fn runtime_for_harness_config(config: &HarnessConfig) -> Runtime {
 }
 
 fn configure_runtime_for_fixture(runtime: &mut Runtime, fixture_name: &str) {
-    if matches!(
-        fixture_name,
-        "core_wait.json" | "fr_p2c_006_replication_journey.json"
-    ) {
+    if fixture_name == "core_wait.json" {
         runtime.set_aof_path(PathBuf::from("/dev/null"));
     }
     if fixture_name == "core_acl.json" {
@@ -2794,6 +2791,21 @@ mod tests {
     }
 
     #[test]
+    fn fr_p2c_006_f_differential_fixture_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report =
+            run_fixture(&cfg, "fr_p2c_006_replication_journey.json").expect("packet-006 fixture");
+        assert_eq!(report.fixture, "fr_p2c_006_replication_journey.json");
+        assert_eq!(report.suite, "fr_p2c_006_replication_journey");
+        assert_eq!(
+            report.total, report.passed,
+            "packet-006 fixture mismatches: {:?}",
+            report.failed
+        );
+        assert!(report.failed.is_empty());
+    }
+
+    #[test]
     fn fr_p2c_001_f_metamorphic_repeated_fixture_runs_are_deterministic() {
         let cfg = HarnessConfig::default_paths();
         let first =
@@ -2875,6 +2887,47 @@ mod tests {
             .find(|suite| suite["fixture"].as_str() == Some("fr_p2c_001_eventloop_journey.json"))
             .expect("FR-P2C-001 live oracle matrix suite");
         assert_eq!(suite["name"].as_str(), Some("fr_p2c_001_eventloop_journey"));
+        assert_eq!(suite["mode"].as_str(), Some("command"));
+    }
+
+    #[test]
+    fn fr_p2c_006_workflow_hook_is_active_in_live_oracle_matrix() {
+        let workflow = load_fixture_json_value("user_workflow_corpus_v1.json");
+        let matrix = load_fixture_json_value("live_oracle_matrix.json");
+
+        let journey = workflow["journeys"]
+            .as_array()
+            .expect("workflow journeys array")
+            .iter()
+            .find(|journey| journey["journey_id"].as_str() == Some("FR-P2C-006-J001"))
+            .expect("FR-P2C-006 workflow journey");
+        let differential = &journey["differential_hook"];
+        assert_eq!(
+            differential["status"].as_str(),
+            Some("active"),
+            "FR-P2C-006 differential hook should stay active once wired"
+        );
+        let workflow_fixtures = differential["fixtures"]
+            .as_array()
+            .expect("workflow differential fixtures array");
+        assert!(
+            workflow_fixtures
+                .iter()
+                .any(|fixture| fixture.as_str() == Some("fr_p2c_006_replication_journey.json")),
+            "FR-P2C-006 workflow hook should reference the replication journey fixture"
+        );
+
+        let suites = matrix["suites"]
+            .as_array()
+            .expect("live oracle suites array");
+        let suite = suites
+            .iter()
+            .find(|suite| suite["fixture"].as_str() == Some("fr_p2c_006_replication_journey.json"))
+            .expect("FR-P2C-006 live oracle matrix suite");
+        assert_eq!(
+            suite["name"].as_str(),
+            Some("fr_p2c_006_replication_journey")
+        );
         assert_eq!(suite["mode"].as_str(), Some("command"));
     }
 
@@ -7075,6 +7128,20 @@ mod tests {
             &oracle,
         )
         .expect("live replication diff");
+        assert_eq!(
+            report.total, report.passed,
+            "mismatches: {:?}",
+            report.failed
+        );
+    }
+
+    #[test]
+    #[ignore = "requires running redis-server on localhost:6379"]
+    fn live_redis_fr_p2c_006_replication_journey_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let oracle = LiveOracleConfig::default();
+        let report = run_live_redis_diff(&cfg, "fr_p2c_006_replication_journey.json", &oracle)
+            .expect("live packet-006 diff");
         assert_eq!(
             report.total, report.passed,
             "mismatches: {:?}",

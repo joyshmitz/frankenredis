@@ -178,14 +178,14 @@
         "owner_bead": "bd-2wb.17.5"
       },
       "differential_hook": {
-        "status": "planned",
+        "status": "active",
         "hook_mode": "command",
         "fixtures": [
           "fr_p2c_006_replication_journey.json"
         ],
         "command": "rch exec -- cargo run -p fr-conformance --bin live_oracle_diff -- command fr_p2c_006_replication_journey.json 127.0.0.1 6379",
         "owner_bead": "bd-2wb.17.6",
-        "notes": "Mapped and tracked for packet differential harness expansion."
+        "notes": "Active live-oracle differential hook for the stable replication journey fixture."
       },
       "e2e_hook": {
         "suite_id": "e2e::fr-p2c-006",

@@ -120,7 +120,7 @@
       }
     },
     {
-      "name": "waitaof_reports_local_and_replica_ack_tuple",
+      "name": "waitaof_rejects_local_threshold_when_appendonly_disabled",
       "now_ms": 9,
       "argv": [
         "WAITAOF",
@@ -129,17 +129,8 @@
         "0"
       ],
       "expect": {
-        "kind": "array",
-        "value": [
-          {
-            "kind": "integer",
-            "value": 1
-          },
-          {
-            "kind": "integer",
-            "value": 0
-          }
-        ]
+        "kind": "error",
+        "value": "ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled."
       }
     },
     {
