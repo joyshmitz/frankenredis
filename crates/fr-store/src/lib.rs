@@ -15003,10 +15003,12 @@ mod tests {
     // ── Metamorphic property tests ──────────────────────────────────────────
     mod metamorphic {
         use crate::{
-            decode_db_key, encode_db_key, glob_match, keyspace_events_parse,
+            Store, StoreError, decode_db_key, encode_db_key, glob_match, keyspace_events_parse,
             keyspace_events_to_string,
         };
         use proptest::prelude::*;
+
+        const METAMORPHIC_NOW_MS: u64 = 1_000;
 
         fn valid_keyspace_char() -> impl Strategy<Value = char> {
             prop_oneof![
@@ -15042,6 +15044,51 @@ mod tests {
                 Just('m'),
                 Just('n'),
             ]
+        }
+
+        fn small_key() -> impl Strategy<Value = Vec<u8>> {
+            prop::collection::vec(any::<u8>(), 1..16)
+        }
+
+        fn small_blob() -> impl Strategy<Value = Vec<u8>> {
+            prop::collection::vec(any::<u8>(), 0..32)
+        }
+
+        fn optional_ttl_ms() -> impl Strategy<Value = Option<u64>> {
+            prop::option::of(1u16..512).prop_map(|ttl| ttl.map(u64::from))
+        }
+
+        fn normalized_blob(mut bytes: Vec<u8>, fallback: &[u8]) -> Vec<u8> {
+            bytes.truncate(32);
+            if bytes.is_empty() {
+                fallback.to_vec()
+            } else {
+                bytes
+            }
+        }
+
+        fn normalized_list(mut values: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+            values.truncate(8);
+            let mut values: Vec<Vec<u8>> = values
+                .into_iter()
+                .map(|value| normalized_blob(value, b"item"))
+                .collect();
+            if values.is_empty() {
+                values.push(b"item".to_vec());
+            }
+            values
+        }
+
+        fn dump_payload_ttl_ms(payload: &[u8]) -> u64 {
+            let ttl_offset = payload
+                .len()
+                .checked_sub(17)
+                .expect("self-generated DUMP payload must include ttl/version/crc trailer");
+            u64::from_le_bytes(
+                payload[ttl_offset..ttl_offset + 8]
+                    .try_into()
+                    .expect("self-generated DUMP payload ttl trailer must be complete"),
+            )
         }
 
         proptest! {
@@ -15179,6 +15226,103 @@ mod tests {
 
                 prop_assert_eq!(reparsed, flags);
                 prop_assert_eq!(recanonical, canonical);
+            }
+
+            #[test]
+            fn mr_dump_restore_string_payload_roundtrip_is_stable(
+                key in small_key(),
+                value in small_blob(),
+                ttl_ms in optional_ttl_ms(),
+            ) {
+                let value = normalized_blob(value, b"value");
+                let mut original = Store::new();
+                original.set(key.clone(), value.clone(), ttl_ms, METAMORPHIC_NOW_MS);
+
+                let payload = original
+                    .dump_key(&key, METAMORPHIC_NOW_MS)
+                    .expect("installed string key must dump");
+                let ttl_ms = dump_payload_ttl_ms(&payload);
+
+                let mut restored = Store::new();
+                restored
+                    .restore_key(&key, ttl_ms, &payload, false, METAMORPHIC_NOW_MS)
+                    .expect("self-generated string dump must restore");
+                prop_assert_eq!(
+                    restored.get(&key, METAMORPHIC_NOW_MS).unwrap(),
+                    Some(value.clone()),
+                );
+
+                let reencoded = restored
+                    .dump_key(&key, METAMORPHIC_NOW_MS)
+                    .expect("restored string key must dump");
+                prop_assert_eq!(payload, reencoded);
+            }
+
+            #[test]
+            fn mr_dump_restore_list_payload_roundtrip_is_stable(
+                key in small_key(),
+                values in prop::collection::vec(small_blob(), 0..8),
+                ttl_ms in optional_ttl_ms(),
+            ) {
+                let values = normalized_list(values);
+                let mut original = Store::new();
+                original
+                    .rpush(&key, &values, METAMORPHIC_NOW_MS)
+                    .expect("valid fuzz list setup must succeed");
+                if let Some(ttl_ms) = ttl_ms {
+                    prop_assert!(
+                        original.expire_milliseconds(&key, ttl_ms as i64, METAMORPHIC_NOW_MS),
+                        "freshly installed list must accept ttl"
+                    );
+                }
+
+                let payload = original
+                    .dump_key(&key, METAMORPHIC_NOW_MS)
+                    .expect("installed list key must dump");
+                let ttl_ms = dump_payload_ttl_ms(&payload);
+
+                let mut restored = Store::new();
+                restored
+                    .restore_key(&key, ttl_ms, &payload, false, METAMORPHIC_NOW_MS)
+                    .expect("self-generated list dump must restore");
+                prop_assert_eq!(restored.lrange(&key, 0, -1, METAMORPHIC_NOW_MS).unwrap(), values);
+
+                let reencoded = restored
+                    .dump_key(&key, METAMORPHIC_NOW_MS)
+                    .expect("restored list key must dump");
+                prop_assert_eq!(payload, reencoded);
+            }
+
+            #[test]
+            fn mr_dump_restore_busykey_without_replace_is_atomic(
+                source_key in small_key(),
+                target_key in small_key(),
+                value in small_blob(),
+                sentinel in small_blob(),
+            ) {
+                let value = normalized_blob(value, b"value");
+                let sentinel = normalized_blob(sentinel, b"sentinel");
+
+                let mut source = Store::new();
+                source.set(source_key.clone(), value, None, METAMORPHIC_NOW_MS);
+                let payload = source
+                    .dump_key(&source_key, METAMORPHIC_NOW_MS)
+                    .expect("installed source key must dump");
+
+                let mut target = Store::new();
+                target.set(target_key.clone(), sentinel, None, METAMORPHIC_NOW_MS);
+                let before = target
+                    .dump_key(&target_key, METAMORPHIC_NOW_MS)
+                    .expect("occupied key must dump");
+
+                let result =
+                    target.restore_key(&target_key, 0, &payload, false, METAMORPHIC_NOW_MS);
+                prop_assert_eq!(result, Err(StoreError::BusyKey));
+
+                let after = target
+                    .dump_key(&target_key, METAMORPHIC_NOW_MS)
+                    .expect("busy-key failure must preserve original value");
+                prop_assert_eq!(before, after);
             }
         }
     }
