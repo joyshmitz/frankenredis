@@ -15061,6 +15061,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn function_restore_append_empty_dump_preserves_existing_libraries() {
+        let empty_dump = Store::new().function_dump();
+        let mut restored = Store::new();
+        restored
+            .function_load(&sample_function_library("seedlib", "alpha", "beta"), false)
+            .expect("seed library must load");
+        let before_snapshot = function_library_snapshot(&restored);
+        let before_dump = restored.function_dump();
+
+        restored
+            .function_restore(&empty_dump, "APPEND")
+            .expect("APPEND with empty FUNCTION DUMP must be a no-op");
+
+        assert_eq!(function_library_snapshot(&restored), before_snapshot);
+        assert_eq!(restored.function_dump(), before_dump);
+    }
+
+    #[test]
+    fn function_restore_replace_empty_dump_preserves_existing_libraries() {
+        let empty_dump = Store::new().function_dump();
+        let mut restored = Store::new();
+        restored
+            .function_load(&sample_function_library("seedlib", "alpha", "beta"), false)
+            .expect("seed library must load");
+        restored
+            .function_load(&sample_function_library("stale", "gamma", "delta"), false)
+            .expect("stale library must load");
+        let before_snapshot = function_library_snapshot(&restored);
+        let before_dump = restored.function_dump();
+
+        restored
+            .function_restore(&empty_dump, "REPLACE")
+            .expect("REPLACE with empty FUNCTION DUMP must keep disjoint libraries");
+
+        assert_eq!(function_library_snapshot(&restored), before_snapshot);
+        assert_eq!(restored.function_dump(), before_dump);
+    }
+
+    #[test]
+    fn function_restore_flush_empty_dump_clears_existing_libraries() {
+        let empty_dump = Store::new().function_dump();
+        let mut restored = Store::new();
+        restored
+            .function_load(&sample_function_library("seedlib", "alpha", "beta"), false)
+            .expect("seed library must load");
+        restored
+            .function_load(&sample_function_library("stale", "gamma", "delta"), false)
+            .expect("stale library must load");
+
+        restored
+            .function_restore(&empty_dump, "FLUSH")
+            .expect("FLUSH with empty FUNCTION DUMP must clear existing libraries");
+
+        assert!(function_library_snapshot(&restored).is_empty());
+        assert_eq!(restored.function_dump(), empty_dump);
+    }
+
     // ── Golden artifact tests ──────────────────────────────────────────
     mod golden {
         use crate::{
@@ -16478,6 +16536,61 @@ mod tests {
                     function_library_snapshot(&expected)
                 );
                 prop_assert_eq!(restored.function_dump(), expected.function_dump());
+            }
+
+            #[test]
+            fn mr_function_restore_empty_dump_append_is_identity(
+                seeds in prop::collection::vec(0u16..4096, 0..6),
+            ) {
+                let libraries = normalized_function_library_payloads(seeds);
+                let empty_dump = Store::new().function_dump();
+                let mut restored = Store::new();
+                install_function_libraries(&mut restored, &libraries);
+                let before_snapshot = function_library_snapshot(&restored);
+                let before_dump = restored.function_dump();
+
+                restored
+                    .function_restore(&empty_dump, "APPEND")
+                    .expect("APPEND with empty FUNCTION DUMP must be a no-op");
+
+                prop_assert_eq!(function_library_snapshot(&restored), before_snapshot);
+                prop_assert_eq!(restored.function_dump(), before_dump);
+            }
+
+            #[test]
+            fn mr_function_restore_empty_dump_replace_is_identity(
+                seeds in prop::collection::vec(0u16..4096, 0..6),
+            ) {
+                let libraries = normalized_function_library_payloads(seeds);
+                let empty_dump = Store::new().function_dump();
+                let mut restored = Store::new();
+                install_function_libraries(&mut restored, &libraries);
+                let before_snapshot = function_library_snapshot(&restored);
+                let before_dump = restored.function_dump();
+
+                restored
+                    .function_restore(&empty_dump, "REPLACE")
+                    .expect("REPLACE with empty FUNCTION DUMP must preserve libraries");
+
+                prop_assert_eq!(function_library_snapshot(&restored), before_snapshot);
+                prop_assert_eq!(restored.function_dump(), before_dump);
+            }
+
+            #[test]
+            fn mr_function_restore_empty_dump_flush_clears_snapshot(
+                seeds in prop::collection::vec(0u16..4096, 0..6),
+            ) {
+                let libraries = normalized_function_library_payloads(seeds);
+                let empty_dump = Store::new().function_dump();
+                let mut restored = Store::new();
+                install_function_libraries(&mut restored, &libraries);
+
+                restored
+                    .function_restore(&empty_dump, "FLUSH")
+                    .expect("FLUSH with empty FUNCTION DUMP must clear libraries");
+
+                prop_assert!(function_library_snapshot(&restored).is_empty());
+                prop_assert_eq!(restored.function_dump(), empty_dump);
             }
 
             #[test]
