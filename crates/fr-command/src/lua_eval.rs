@@ -2484,11 +2484,12 @@ impl<'a> LuaState<'a> {
                 Ok(vec![LuaValue::Nil])
             }
             "redis.breakpoint" => {
-                // No-op: debugging stub
-                Ok(vec![LuaValue::Nil])
+                // Redis returns false when the Lua debugger is inactive.
+                Ok(vec![LuaValue::Bool(false)])
             }
             "redis.debug" => {
-                // No-op: debugging stub
+                // Redis emits debugger console output only when the Lua debugger is active.
+                // Outside that mode the call is a no-op.
                 Ok(vec![LuaValue::Nil])
             }
             "redis.sha1hex" => {
@@ -4873,6 +4874,34 @@ mod tests {
             err.contains("attempt to index a nil value"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn redis_breakpoint_returns_false_without_debugger() {
+        let mut store = Store::new();
+        let result = eval_script(
+            b"if redis.breakpoint() then return 1 else return 0 end",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+
+        assert_eq!(result, Ok(RespFrame::Integer(0)));
+    }
+
+    #[test]
+    fn redis_debug_is_a_noop_without_debugger() {
+        let mut store = Store::new();
+        let result = eval_script(
+            b"redis.debug('hello', 42, true) return 1",
+            &[],
+            &[],
+            &mut store,
+            0,
+        );
+
+        assert_eq!(result, Ok(RespFrame::Integer(1)));
     }
 
     #[test]
