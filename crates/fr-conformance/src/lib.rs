@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fr_config::{DecisionAction, DriftSeverity, ThreatClass};
 use fr_persist::{AofRecord, decode_aof_stream, encode_aof_stream};
@@ -97,6 +97,19 @@ fn configure_runtime_for_fixture(runtime: &mut Runtime, fixture_name: &str) {
     if matches!(fixture_name, "core_config.json" | "core_server.json") {
         runtime.set_config_file_path(Some(runtime_fixture_config_path(fixture_name)));
     }
+}
+
+fn runtime_fixture_config_path(fixture_name: &str) -> PathBuf {
+    let timestamp_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_nanos();
+    let fixture_stem = fixture_name.strip_suffix(".json").unwrap_or(fixture_name);
+    std::env::temp_dir().join(format!(
+        "fr_conformance_{fixture_stem}_{}_{}.conf",
+        std::process::id(),
+        timestamp_nanos
+    ))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2458,6 +2471,13 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}_{nonce}"))
     }
 
+    fn load_fixture_json_value(fixture_name: &str) -> serde_json::Value {
+        let cfg = HarnessConfig::default_paths();
+        let path = cfg.fixture_root.join(fixture_name);
+        let raw = fs::read_to_string(&path).expect("failed to read conformance fixture JSON");
+        serde_json::from_str(&raw).expect("failed to parse conformance fixture JSON")
+    }
+
     fn valid_tls_config() -> TlsConfig {
         TlsConfig {
             tls_port: Some(6380),
@@ -2796,6 +2816,44 @@ mod tests {
             write_err.reason_code(),
             "eventloop.write.flush_order_violation"
         );
+    }
+
+    #[test]
+    fn fr_p2c_001_workflow_hook_is_active_in_live_oracle_matrix() {
+        let workflow = load_fixture_json_value("user_workflow_corpus_v1.json");
+        let matrix = load_fixture_json_value("live_oracle_matrix.json");
+
+        let journey = workflow["journeys"]
+            .as_array()
+            .expect("workflow journeys array")
+            .iter()
+            .find(|journey| journey["journey_id"].as_str() == Some("FR-P2C-001-J001"))
+            .expect("FR-P2C-001 workflow journey");
+        let differential = &journey["differential_hook"];
+        assert_eq!(
+            differential["status"].as_str(),
+            Some("active"),
+            "FR-P2C-001 differential hook should stay active once wired"
+        );
+        let workflow_fixtures = differential["fixtures"]
+            .as_array()
+            .expect("workflow differential fixtures array");
+        assert!(
+            workflow_fixtures
+                .iter()
+                .any(|fixture| fixture.as_str() == Some("fr_p2c_001_eventloop_journey.json")),
+            "FR-P2C-001 workflow hook should reference the eventloop journey fixture"
+        );
+
+        let suites = matrix["suites"]
+            .as_array()
+            .expect("live oracle suites array");
+        let suite = suites
+            .iter()
+            .find(|suite| suite["fixture"].as_str() == Some("fr_p2c_001_eventloop_journey.json"))
+            .expect("FR-P2C-001 live oracle matrix suite");
+        assert_eq!(suite["name"].as_str(), Some("fr_p2c_001_eventloop_journey"));
+        assert_eq!(suite["mode"].as_str(), Some("command"));
     }
 
     #[test]
