@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use fr_config::{DecisionAction, DriftSeverity, ThreatClass};
 use fr_persist::{AofRecord, decode_aof_stream, encode_aof_stream};
@@ -94,19 +94,6 @@ fn configure_runtime_for_fixture(runtime: &mut Runtime, fixture_name: &str) {
     if fixture_name == "core_acl.json" {
         runtime.set_acl_file_path(std::env::temp_dir().join("fr_acl_fixture_dummy.conf"));
     }
-}
-
-fn runtime_fixture_config_path(fixture_name: &str) -> PathBuf {
-    let timestamp_nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_nanos();
-    let fixture_stem = fixture_name.strip_suffix(".json").unwrap_or(fixture_name);
-    std::env::temp_dir().join(format!(
-        "fr_conformance_{fixture_stem}_{}_{}.conf",
-        std::process::id(),
-        timestamp_nanos
-    ))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
