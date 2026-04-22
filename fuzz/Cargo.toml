@@ -10,8 +10,8 @@ cargo-fuzz = true
 [workspace]
 
 [dependencies]
-libfuzzer-sys.workspace = true
-arbitrary.workspace = true
+libfuzzer-sys = "0.4.12"
+arbitrary = { version = "1.4.2", features = ["derive"] }
 
 [dependencies.fr-protocol]
 path = "../crates/fr-protocol"
@@ -214,6 +214,13 @@ bench = false
 [[bin]]
 name = "fuzz_command_parse_advanced"
 path = "fuzz_targets/fuzz_command_parse_advanced.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_store_stream_groups"
+path = "fuzz_targets/fuzz_store_stream_groups.rs"
 test = false
 doc = false
 bench = false
