@@ -1,33 +1,61 @@
 {
-  "schema_version": "live_oracle_audit_exemptions/v1",
+  "schema_version": "live_oracle_audit_exemptions/v2",
   "fixture_exemptions": [
     {
       "fixture": "core_blocking.json",
-      "reason": "Blocking command parity needs multi-client wakeup orchestration that the current single-connection live-oracle matrix does not model yet."
+      "reason": "Blocking command parity needs multi-client wakeup orchestration that the current single-connection live-oracle matrix does not model yet.",
+      "coverage": {
+        "kind": "replacement_fixture",
+        "fixture": "core_blocking_multi_client.json"
+      }
     },
     {
       "fixture": "core_migrate.json",
-      "reason": "MIGRATE parity needs a second Redis endpoint and cross-instance orchestration before it can be promoted into the standard live-oracle matrix."
+      "reason": "MIGRATE parity needs a second Redis endpoint and cross-instance orchestration before it can be promoted into the standard live-oracle matrix.",
+      "coverage": {
+        "kind": "dedicated_fixture",
+        "fixture": "core_migrate.json"
+      }
     },
     {
       "fixture": "core_pubsub.json",
-      "reason": "Pub/Sub parity relies on dedicated subscriber connections and streaming replies that the command-oriented live-oracle matrix does not drive yet."
+      "reason": "Pub/Sub parity relies on dedicated subscriber connections and streaming replies that the command-oriented live-oracle matrix does not drive yet.",
+      "coverage": {
+        "kind": "replacement_fixture",
+        "fixture": "core_pubsub_multi_client.json"
+      }
     },
     {
       "fixture": "core_wait.json",
-      "reason": "WAIT/WAITAOF parity needs matrix-level appendonly and replica-topology variations that are still handled by dedicated conformance tests."
+      "reason": "WAIT/WAITAOF parity needs matrix-level appendonly and replica-topology variations that are still handled by dedicated conformance tests.",
+      "coverage": {
+        "kind": "dedicated_fixture",
+        "fixture": "core_wait.json"
+      }
     },
     {
       "fixture": "fr_p2c_006_replication_handshake.json",
-      "reason": "Replication handshake coverage runs through the specialized handshake harness rather than the generic live-oracle suite matrix."
+      "reason": "Replication handshake coverage runs through the specialized handshake harness rather than the generic live-oracle suite matrix.",
+      "coverage": {
+        "kind": "specialized_harness",
+        "harness": "replication_handshake"
+      }
     },
     {
       "fixture": "persist_replay.json",
-      "reason": "Replay parity is covered by the dedicated replay differential path and is intentionally outside the live-oracle matrix."
+      "reason": "Replay parity is covered by the dedicated replay differential path and is intentionally outside the live-oracle matrix.",
+      "coverage": {
+        "kind": "specialized_harness",
+        "harness": "persist_replay"
+      }
     },
     {
       "fixture": "smoke_case.json",
-      "reason": "The smoke fixture is a local harness sanity check, not a differential live-oracle suite."
+      "reason": "The smoke fixture is a local harness sanity check, not a differential live-oracle suite.",
+      "coverage": {
+        "kind": "specialized_harness",
+        "harness": "smoke"
+      }
     }
   ],
   "planned_differential_hook_exemptions": [

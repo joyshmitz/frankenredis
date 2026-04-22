@@ -2535,6 +2535,138 @@ mod tests {
         fixtures
     }
 
+    #[derive(Debug, serde::Deserialize)]
+    struct LiveOracleFixtureExemption {
+        fixture: String,
+        reason: String,
+        coverage: LiveOracleFixtureCoverage,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum LiveOracleFixtureCoverage {
+        ReplacementFixture { fixture: String },
+        DedicatedFixture { fixture: String },
+        SpecializedHarness { harness: String },
+    }
+
+    fn load_live_oracle_fixture_exemptions() -> Vec<LiveOracleFixtureExemption> {
+        let exemptions = load_fixture_json_value("live_oracle_audit_exemptions.json");
+        let entries: Vec<LiveOracleFixtureExemption> =
+            serde_json::from_value(exemptions["fixture_exemptions"].clone())
+                .expect("live oracle fixture exemptions should parse");
+        let mut seen_fixtures = BTreeSet::new();
+
+        for entry in &entries {
+            assert!(
+                !entry.reason.trim().is_empty(),
+                "live oracle fixture exemption reason must not be blank for {}",
+                entry.fixture
+            );
+            assert!(
+                seen_fixtures.insert(entry.fixture.clone()),
+                "duplicate live oracle fixture exemption entry for {}",
+                entry.fixture
+            );
+            match &entry.coverage {
+                LiveOracleFixtureCoverage::ReplacementFixture { fixture }
+                | LiveOracleFixtureCoverage::DedicatedFixture { fixture } => {
+                    assert!(
+                        !fixture.trim().is_empty(),
+                        "live oracle fixture exemption coverage fixture must not be blank for {}",
+                        entry.fixture
+                    );
+                }
+                LiveOracleFixtureCoverage::SpecializedHarness { harness } => {
+                    assert!(
+                        !harness.trim().is_empty(),
+                        "live oracle fixture exemption coverage harness must not be blank for {}",
+                        entry.fixture
+                    );
+                }
+            }
+        }
+
+        entries
+    }
+
+    fn live_oracle_fixture_exemption_reason_map(
+        entries: &[LiveOracleFixtureExemption],
+    ) -> BTreeMap<String, String> {
+        entries
+            .iter()
+            .map(|entry| (entry.fixture.clone(), entry.reason.trim().to_string()))
+            .collect()
+    }
+
+    fn validate_live_oracle_fixture_exemption_coverage(
+        entry: &LiveOracleFixtureExemption,
+        suite_fixtures: &BTreeSet<String>,
+        matrix_fixtures: &BTreeSet<String>,
+    ) -> Result<(), String> {
+        match &entry.coverage {
+            LiveOracleFixtureCoverage::ReplacementFixture { fixture } => {
+                if fixture == &entry.fixture {
+                    return Err(format!(
+                        "{} replacement fixture must differ from the exempt suite fixture",
+                        entry.fixture
+                    ));
+                }
+                if !suite_fixtures.contains(fixture) {
+                    return Err(format!(
+                        "{} replacement fixture is missing on disk: {}",
+                        entry.fixture, fixture
+                    ));
+                }
+                if !matrix_fixtures.contains(fixture) {
+                    return Err(format!(
+                        "{} replacement fixture must stay active in the live-oracle matrix: {}",
+                        entry.fixture, fixture
+                    ));
+                }
+            }
+            LiveOracleFixtureCoverage::DedicatedFixture { fixture } => {
+                if fixture != &entry.fixture {
+                    return Err(format!(
+                        "{} dedicated fixture coverage must point back to itself, got {}",
+                        entry.fixture, fixture
+                    ));
+                }
+                if !suite_fixtures.contains(fixture) {
+                    return Err(format!(
+                        "{} dedicated fixture coverage is missing on disk",
+                        entry.fixture
+                    ));
+                }
+                if matrix_fixtures.contains(fixture) {
+                    return Err(format!(
+                        "{} dedicated fixture coverage should not also be listed in the live-oracle matrix",
+                        entry.fixture
+                    ));
+                }
+            }
+            LiveOracleFixtureCoverage::SpecializedHarness { harness } => {
+                let expected_harness = match entry.fixture.as_str() {
+                    "fr_p2c_006_replication_handshake.json" => "replication_handshake",
+                    "persist_replay.json" => "persist_replay",
+                    "smoke_case.json" => "smoke",
+                    other => {
+                        return Err(format!(
+                            "{other} declares unsupported specialized harness coverage: {harness}"
+                        ));
+                    }
+                };
+                if harness != expected_harness {
+                    return Err(format!(
+                        "{} specialized harness coverage drifted: expected {}, found {}",
+                        entry.fixture, expected_harness, harness
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn live_oracle_audit_exemption_map(section: &str, key: &str) -> BTreeMap<String, String> {
         let exemptions = load_fixture_json_value("live_oracle_audit_exemptions.json");
         let mut entries = BTreeMap::new();
@@ -3035,7 +3167,9 @@ mod tests {
     fn live_oracle_audit_requires_matrix_coverage_or_exemptions_for_fixture_and_workflow_gaps() {
         let suite_fixtures = suite_fixture_files_on_disk();
         let matrix_fixtures = live_oracle_matrix_fixture_names();
-        let fixture_exemptions = live_oracle_audit_exemption_map("fixture_exemptions", "fixture");
+        let fixture_exemption_entries = load_live_oracle_fixture_exemptions();
+        let fixture_exemptions =
+            live_oracle_fixture_exemption_reason_map(&fixture_exemption_entries);
         let planned_hook_exemptions =
             live_oracle_audit_exemption_map("planned_differential_hook_exemptions", "journey_id");
 
@@ -3071,6 +3205,22 @@ mod tests {
         assert!(
             stale_fixture_exemptions.is_empty(),
             "fixture exemptions must only mention uncovered suite fixtures that still exist on disk: {stale_fixture_exemptions:?}"
+        );
+
+        let invalid_fixture_exemption_coverage = fixture_exemption_entries
+            .iter()
+            .filter_map(|entry| {
+                validate_live_oracle_fixture_exemption_coverage(
+                    entry,
+                    &suite_fixtures,
+                    &matrix_fixtures,
+                )
+                .err()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            invalid_fixture_exemption_coverage.is_empty(),
+            "fixture exemptions must declare a valid alternate coverage path: {invalid_fixture_exemption_coverage:?}"
         );
 
         let workflow = load_fixture_json_value("user_workflow_corpus_v1.json");
