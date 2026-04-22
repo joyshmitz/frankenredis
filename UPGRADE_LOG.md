@@ -163,6 +163,28 @@ concurrent code change in `fr-runtime`.
 No additional dependency bumps remain to apply. The dependency state is fully
 normalized; the remaining failure is outside the library-updater scope.
 
+## 2026-04-22 cod-redis rerun: local update + fr-persist asupersync check
+
+- Re-ran the requested local command again at `/data/projects/frankenredis`:
+  - `cargo update --workspace`
+  - result: still a no-op, `Locking 0 packages to latest compatible versions`
+- Re-evaluated `asupersync = "0.3.1"` specifically for `fr-persist`:
+  - `asupersync` remains intentionally absent from `Cargo.lock`
+  - `crates/fr-persist` is synchronous AOF/RDB encode-decode logic, not a
+    Tokio-style async runtime boundary
+  - adding `asupersync` there would increase dependency surface without
+    changing durability behavior, because there is no async scheduling seam for
+    it to replace
+- Result: **did not add `asupersync` to `fr-persist`**. The skip is deliberate,
+  not an omission.
+- Re-ran the requested remote verification command:
+  - `rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_frankenredis_cod cargo check --workspace`
+  - result: **passed**
+  - note: shared worktree still emits two unrelated `fr-runtime` warnings for
+    unused `acl_pubsub_default` locals at `crates/fr-runtime/src/lib.rs:904`
+    and `:920`, but there is no workspace compile failure from the dependency
+    state.
+
 ## Updates
 
 ### workspace lock-file refresh (cargo update)
