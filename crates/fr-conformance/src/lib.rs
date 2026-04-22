@@ -3035,12 +3035,9 @@ mod tests {
     fn live_oracle_audit_requires_matrix_coverage_or_exemptions_for_fixture_and_workflow_gaps() {
         let suite_fixtures = suite_fixture_files_on_disk();
         let matrix_fixtures = live_oracle_matrix_fixture_names();
-        let fixture_exemptions =
-            live_oracle_audit_exemption_map("fixture_exemptions", "fixture");
-        let planned_hook_exemptions = live_oracle_audit_exemption_map(
-            "planned_differential_hook_exemptions",
-            "journey_id",
-        );
+        let fixture_exemptions = live_oracle_audit_exemption_map("fixture_exemptions", "fixture");
+        let planned_hook_exemptions =
+            live_oracle_audit_exemption_map("planned_differential_hook_exemptions", "journey_id");
 
         let uncovered_suite_fixtures = suite_fixtures
             .iter()
