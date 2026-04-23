@@ -891,6 +891,8 @@ pub fn dispatch_argv(
         Some(CommandId::Hexpiretime) => return httl_cmd(argv, store, now_ms, HashFieldTtlUnit::Seconds, true),
         Some(CommandId::Hpexpiretime) => return httl_cmd(argv, store, now_ms, HashFieldTtlUnit::Milliseconds, true),
         Some(CommandId::Hpersist) => return hpersist_cmd(argv, store, now_ms),
+        Some(CommandId::Hgetex) => return hgetex_cmd(argv, store, now_ms),
+        Some(CommandId::Hgetdel) => return hgetdel_cmd(argv, store, now_ms),
         Some(CommandId::Lpush) => return lpush(argv, store, now_ms),
         Some(CommandId::Rpush) => return rpush(argv, store, now_ms),
         Some(CommandId::Lpop) => return lpop(argv, store, now_ms),
@@ -1121,6 +1123,8 @@ pub fn is_write_command(cmd: &[u8]) -> bool {
             | CommandId::Hexpireat
             | CommandId::Hpexpireat
             | CommandId::Hpersist
+            | CommandId::Hgetex
+            | CommandId::Hgetdel
             | CommandId::Lpush
             | CommandId::Rpush
             | CommandId::Lpop
@@ -1254,6 +1258,8 @@ pub enum CommandId {
     Hexpiretime,
     Hpexpiretime,
     Hpersist,
+    Hgetex,
+    Hgetdel,
     Lpush,
     Rpush,
     Lpop,
@@ -1645,6 +1651,8 @@ fn classify_command(cmd: &[u8]) -> Option<CommandId> {
                 Some(CommandId::Append)
             } else if eq_ascii_command(cmd, b"HSETNX") {
                 Some(CommandId::Hsetnx)
+            } else if eq_ascii_command(cmd, b"HGETEX") {
+                Some(CommandId::Hgetex)
             } else if eq_ascii_command(cmd, b"LRANGE") {
                 Some(CommandId::Lrange)
             } else if eq_ascii_command(cmd, b"LINDEX") {
@@ -1744,6 +1752,8 @@ fn classify_command(cmd: &[u8]) -> Option<CommandId> {
                 Some(CommandId::Hstrlen)
             } else if eq_ascii_command(cmd, b"HEXPIRE") {
                 Some(CommandId::Hexpire)
+            } else if eq_ascii_command(cmd, b"HGETDEL") {
+                Some(CommandId::Hgetdel)
             } else if eq_ascii_command(cmd, b"ZINCRBY") {
                 Some(CommandId::Zincrby)
             } else if eq_ascii_command(cmd, b"ZPOPMIN") {
@@ -2881,6 +2891,183 @@ fn httl_cmd(
             HashFieldTtl::Expired => -2,
         };
         replies.push(RespFrame::Integer(code));
+    }
+    Ok(RespFrame::Array(Some(replies)))
+}
+
+/// HGETEX key [EX sec | PX ms | EXAT unix-s | PXAT unix-ms | PERSIST] FIELDS n ...
+///
+/// Returns an array of bulk strings: the value of each requested field (or
+/// nil for missing / just-reaped fields). When a TTL-modifying flag is
+/// present, also updates the per-field TTL for each requested field using
+/// the upstream-matching semantics (set to the provided deadline, or drop
+/// with PERSIST).
+fn hgetex_cmd(
+    argv: &[Vec<u8>],
+    store: &mut Store,
+    now_ms: u64,
+) -> Result<RespFrame, CommandError> {
+    // Minimum: HGETEX key FIELDS n f1 → 5 args. No TTL flag is allowed too.
+    if argv.len() < 5 {
+        return Err(CommandError::WrongArity("HGETEX"));
+    }
+    let key = argv[1].as_slice();
+
+    // Optional TTL modifier at argv[2..]. One of:
+    //   EX sec   PX ms   EXAT unix-s   PXAT unix-ms   PERSIST
+    #[derive(Clone, Copy)]
+    enum TtlAction {
+        None,
+        SetAbsMs(u64),
+        Persist,
+    }
+    let (ttl_action, fields_token_idx) = {
+        if argv.len() >= 5 {
+            let tok = std::str::from_utf8(&argv[2])
+                .map_err(|_| CommandError::InvalidUtf8Argument)?;
+            if tok.eq_ignore_ascii_case("FIELDS") {
+                (TtlAction::None, 2)
+            } else if tok.eq_ignore_ascii_case("PERSIST") {
+                (TtlAction::Persist, 3)
+            } else if tok.eq_ignore_ascii_case("EX")
+                || tok.eq_ignore_ascii_case("PX")
+                || tok.eq_ignore_ascii_case("EXAT")
+                || tok.eq_ignore_ascii_case("PXAT")
+            {
+                if argv.len() < 7 {
+                    return Err(CommandError::WrongArity("HGETEX"));
+                }
+                let raw = parse_i64_arg(&argv[3])?;
+                if raw < 0 {
+                    return Err(CommandError::Custom(
+                        "ERR invalid expire time in 'hgetex' command".to_string(),
+                    ));
+                }
+                let deadline = if tok.eq_ignore_ascii_case("EX") {
+                    now_ms.saturating_add((raw as u64).saturating_mul(1000))
+                } else if tok.eq_ignore_ascii_case("PX") {
+                    now_ms.saturating_add(raw as u64)
+                } else if tok.eq_ignore_ascii_case("EXAT") {
+                    (raw as u64).saturating_mul(1000)
+                } else {
+                    raw as u64
+                };
+                (TtlAction::SetAbsMs(deadline), 4)
+            } else {
+                return Err(CommandError::SyntaxError);
+            }
+        } else {
+            return Err(CommandError::WrongArity("HGETEX"));
+        }
+    };
+
+    // Parse the mandatory FIELDS numfields header.
+    if fields_token_idx >= argv.len() {
+        return Err(CommandError::WrongArity("HGETEX"));
+    }
+    let tok = std::str::from_utf8(&argv[fields_token_idx])
+        .map_err(|_| CommandError::InvalidUtf8Argument)?;
+    if !tok.eq_ignore_ascii_case("FIELDS") {
+        return Err(CommandError::SyntaxError);
+    }
+    let num_idx = fields_token_idx + 1;
+    if num_idx >= argv.len() {
+        return Err(CommandError::WrongArity("HGETEX"));
+    }
+    let numfields = parse_i64_arg(&argv[num_idx])?;
+    if numfields < 1 {
+        return Err(CommandError::Custom(
+            "ERR Parameter `numFields` should be greater than 0".to_string(),
+        ));
+    }
+    let numfields = usize::try_from(numfields).map_err(|_| CommandError::InvalidInteger)?;
+    let fields_start = num_idx + 1;
+    let remaining = argv.len().saturating_sub(fields_start);
+    if remaining != numfields {
+        return Err(CommandError::Custom(
+            "ERR Parameter `numFields` is more than number of arguments".to_string(),
+        ));
+    }
+
+    // Read each field's value first (before mutating TTL) so the returned
+    // vector reflects the pre-modification state per upstream semantics.
+    let mut replies = Vec::with_capacity(numfields);
+    for f_idx in 0..numfields {
+        let field = argv[fields_start + f_idx].as_slice();
+        match store.hget(key, field, now_ms) {
+            Ok(Some(v)) => replies.push(RespFrame::BulkString(Some(v))),
+            Ok(None) => replies.push(RespFrame::BulkString(None)),
+            Err(StoreError::WrongType) => {
+                return Err(CommandError::Custom(
+                    "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                ));
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    // Apply the TTL action for every field that still exists (hget above
+    // may have reaped expired fields; only live ones get the new TTL).
+    match ttl_action {
+        TtlAction::None => {}
+        TtlAction::SetAbsMs(deadline) => {
+            for f_idx in 0..numfields {
+                let field = argv[fields_start + f_idx].as_slice();
+                let _ = store.hash_field_set_abs_expiry_with_event(
+                    key,
+                    field,
+                    deadline,
+                    HashFieldTtlCondition::None,
+                    now_ms,
+                    "hexpire",
+                );
+            }
+        }
+        TtlAction::Persist => {
+            for f_idx in 0..numfields {
+                let field = argv[fields_start + f_idx].as_slice();
+                let _ = store.hash_field_persist_with_event(key, field);
+            }
+        }
+    }
+
+    Ok(RespFrame::Array(Some(replies)))
+}
+
+/// HGETDEL key FIELDS n field ...
+///
+/// Returns an array of bulk strings with the value of each field (or nil
+/// for missing fields), then deletes each specified field from the hash.
+/// Equivalent to atomic HMGET + HDEL over the same field set.
+fn hgetdel_cmd(
+    argv: &[Vec<u8>],
+    store: &mut Store,
+    now_ms: u64,
+) -> Result<RespFrame, CommandError> {
+    let (fields_start, numfields) =
+        parse_hash_field_ttl_fields_only_header(argv, "HGETDEL")?;
+    let key = argv[1].as_slice();
+
+    let mut replies = Vec::with_capacity(numfields);
+    let mut owned_fields: Vec<Vec<u8>> = Vec::with_capacity(numfields);
+    for f_idx in 0..numfields {
+        let field = argv[fields_start + f_idx].as_slice();
+        match store.hget(key, field, now_ms) {
+            Ok(Some(v)) => replies.push(RespFrame::BulkString(Some(v))),
+            Ok(None) => replies.push(RespFrame::BulkString(None)),
+            Err(StoreError::WrongType) => {
+                return Err(CommandError::Custom(
+                    "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                ));
+            }
+            Err(err) => return Err(err.into()),
+        }
+        owned_fields.push(field.to_vec());
+    }
+    let refs: Vec<&[u8]> = owned_fields.iter().map(Vec::as_slice).collect();
+    match store.hdel(key, &refs, now_ms) {
+        Ok(_) | Err(StoreError::WrongType) => {}
+        Err(err) => return Err(err.into()),
     }
     Ok(RespFrame::Array(Some(replies)))
 }
@@ -15452,6 +15639,12 @@ mod tests {
         if eq_ascii_command(cmd, b"HEXPIRE") {
             return Some(CommandId::Hexpire);
         }
+        if eq_ascii_command(cmd, b"HGETEX") {
+            return Some(CommandId::Hgetex);
+        }
+        if eq_ascii_command(cmd, b"HGETDEL") {
+            return Some(CommandId::Hgetdel);
+        }
         if eq_ascii_command(cmd, b"HPEXPIRE") {
             return Some(CommandId::Hpexpire);
         }
@@ -18149,6 +18342,253 @@ mod tests {
                 b"HEXPIRE".to_vec(),
                 b"s".to_vec(),
                 b"60".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom(
+                "WRONGTYPE Operation against a key holding the wrong kind of value".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn hgetex_plain_returns_values_without_modifying_ttls() {
+        let mut store = seed_hash_field_ttl_store();
+        dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"60".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire");
+
+        let out = dispatch_argv(
+            &[
+                b"HGETEX".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"2".to_vec(),
+                b"f1".to_vec(),
+                b"nope".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hgetex plain");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"v1".to_vec())),
+                RespFrame::BulkString(None),
+            ]))
+        );
+        // TTL unchanged.
+        let ttl = dispatch_argv(
+            &[
+                b"HTTL".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("httl");
+        assert_eq!(ttl, RespFrame::Array(Some(vec![RespFrame::Integer(60)])));
+    }
+
+    #[test]
+    fn hgetex_ex_sets_field_ttl_while_reading() {
+        let mut store = seed_hash_field_ttl_store();
+        let out = dispatch_argv(
+            &[
+                b"HGETEX".to_vec(),
+                b"h".to_vec(),
+                b"EX".to_vec(),
+                b"120".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hgetex ex");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"v1".to_vec()))]))
+        );
+        let ttl = dispatch_argv(
+            &[
+                b"HTTL".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("httl");
+        assert_eq!(ttl, RespFrame::Array(Some(vec![RespFrame::Integer(120)])));
+    }
+
+    #[test]
+    fn hgetex_persist_drops_existing_ttl() {
+        let mut store = seed_hash_field_ttl_store();
+        dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"60".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire");
+
+        let out = dispatch_argv(
+            &[
+                b"HGETEX".to_vec(),
+                b"h".to_vec(),
+                b"PERSIST".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hgetex persist");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![RespFrame::BulkString(Some(b"v1".to_vec()))]))
+        );
+        let ttl = dispatch_argv(
+            &[
+                b"HTTL".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("httl");
+        assert_eq!(ttl, RespFrame::Array(Some(vec![RespFrame::Integer(-1)])));
+    }
+
+    #[test]
+    fn hgetdel_returns_values_and_removes_fields() {
+        let mut store = seed_hash_field_ttl_store();
+        dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"60".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire");
+
+        let out = dispatch_argv(
+            &[
+                b"HGETDEL".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"2".to_vec(),
+                b"f1".to_vec(),
+                b"nope".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hgetdel");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"v1".to_vec())),
+                RespFrame::BulkString(None),
+            ]))
+        );
+        // f1 is gone, its per-field TTL entry cleared too.
+        let exists = dispatch_argv(
+            &[b"HEXISTS".to_vec(), b"h".to_vec(), b"f1".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("hexists");
+        assert_eq!(exists, RespFrame::Integer(0));
+        let ttl = dispatch_argv(
+            &[
+                b"HTTL".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("httl after hgetdel");
+        // f1 is missing post-HGETDEL → code -2.
+        assert_eq!(ttl, RespFrame::Array(Some(vec![RespFrame::Integer(-2)])));
+    }
+
+    #[test]
+    fn hgetex_rejects_unknown_modifier() {
+        let mut store = seed_hash_field_ttl_store();
+        let err = dispatch_argv(
+            &[
+                b"HGETEX".to_vec(),
+                b"h".to_vec(),
+                b"GARBAGE".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::SyntaxError);
+    }
+
+    #[test]
+    fn hgetdel_wrongtype_surfaces_upstream_error() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"s".to_vec(), b"x".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set");
+        let err = dispatch_argv(
+            &[
+                b"HGETDEL".to_vec(),
+                b"s".to_vec(),
                 b"FIELDS".to_vec(),
                 b"1".to_vec(),
                 b"f".to_vec(),
