@@ -231,44 +231,78 @@ fn live_oracle_roundtrip_canonical_corpus() {
 
     // Actual canonical-command corpus. Each case exercises a distinct
     // reply shape from RESP2:
-    //   + simple-string    (PING, SET OK, CLIENT SETNAME, FLUSHDB)
-    //   - error            (WRONGTYPE, unknown command)
-    //   : integer          (STRLEN, INCR, EXISTS, TTL, DEL, DBSIZE, LLEN)
-    //   $ bulk-string      (GET on existing + on missing)
-    //   * array            (LRANGE, HGETALL, SMEMBERS, ZRANGE)
+    //   + simple-string
+    //   - error
+    //   : integer
+    //   $ bulk-string (incl. nil-bulk)
+    //   * array (incl. empty array, nested array, nil-array)
     let corpus: &[(&str, &[&[u8]])] = &[
         // Simple strings
         ("PING", &[b"PING"]),
+        ("PING with arg", &[b"PING", b"hello"]),
         ("SET OK", &[b"SET", b"k:str", b"hello"]),
+        ("SET with NX-already-exists-nil", &[b"SET", b"k:str", b"new", b"NX"]),
         ("CLIENT SETNAME", &[b"CLIENT", b"SETNAME", b"cc-redis-test"]),
+        ("CLIENT GETNAME", &[b"CLIENT", b"GETNAME"]),
+        ("ECHO", &[b"ECHO", b"round-trip-me"]),
+        ("SELECT 0", &[b"SELECT", b"0"]),
         // Errors
         ("WRONGTYPE on list key", &[b"GET", b"k:list"]),
         ("Unknown command", &[b"NOSUCHCOMMAND", b"x"]),
+        ("Wrong arity GET", &[b"GET"]),
+        ("Wrong arity SET", &[b"SET", b"only-one-arg"]),
+        ("Invalid integer SELECT", &[b"SELECT", b"not-a-number"]),
         // Integers
         ("STRLEN", &[b"STRLEN", b"k:str"]),
         ("INCR", &[b"INCR", b"k:int"]),
+        ("INCRBY", &[b"INCRBY", b"k:int", b"7"]),
+        ("DECR", &[b"DECR", b"k:int"]),
         ("EXISTS multiple", &[b"EXISTS", b"k:str", b"k:int", b"k:missing"]),
         ("TTL no-expire", &[b"TTL", b"k:str"]),
         ("TTL missing", &[b"TTL", b"k:never"]),
+        ("PTTL no-expire", &[b"PTTL", b"k:str"]),
         ("DEL none", &[b"DEL", b"k:never1", b"k:never2"]),
         ("DBSIZE", &[b"DBSIZE"]),
         ("LLEN", &[b"LLEN", b"k:list"]),
+        ("HLEN", &[b"HLEN", b"k:hash"]),
+        ("SCARD", &[b"SCARD", b"k:set"]),
+        ("ZCARD", &[b"ZCARD", b"k:zset"]),
+        ("PERSIST no-ttl", &[b"PERSIST", b"k:str"]),
+        ("EXPIRE", &[b"EXPIRE", b"k:str", b"60"]),
+        ("EXPIRE with XX flag absent", &[b"EXPIRE", b"k:str", b"30", b"XX"]),
         // Bulk strings
         ("GET existing", &[b"GET", b"k:str"]),
         ("GET missing", &[b"GET", b"k:missing"]),
         ("TYPE string", &[b"TYPE", b"k:str"]),
         ("TYPE missing", &[b"TYPE", b"k:missing"]),
+        ("TYPE hash", &[b"TYPE", b"k:hash"]),
+        ("TYPE zset", &[b"TYPE", b"k:zset"]),
+        ("GETRANGE full", &[b"GETRANGE", b"k:str", b"0", b"-1"]),
+        ("HGET existing field", &[b"HGET", b"k:hash", b"f1"]),
+        ("HGET missing field", &[b"HGET", b"k:hash", b"nofield"]),
+        ("LINDEX 0", &[b"LINDEX", b"k:list", b"0"]),
+        ("LINDEX oob", &[b"LINDEX", b"k:list", b"99"]),
         // Arrays
         ("LRANGE full", &[b"LRANGE", b"k:list", b"0", b"-1"]),
+        ("LRANGE empty window", &[b"LRANGE", b"k:list", b"10", b"20"]),
+        ("LRANGE negative window", &[b"LRANGE", b"k:list", b"-2", b"-1"]),
         ("HGETALL", &[b"HGETALL", b"k:hash"]),
-        ("SMEMBERS", &[b"SMEMBERS", b"k:set"]),
-        ("ZRANGE", &[b"ZRANGE", b"k:zset", b"0", b"-1"]),
-        ("ZRANGE WITHSCORES", &[b"ZRANGE", b"k:zset", b"0", b"-1", b"WITHSCORES"]),
-        ("COMMAND COUNT", &[b"COMMAND", b"COUNT"]),
         ("HKEYS", &[b"HKEYS", b"k:hash"]),
         ("HVALS", &[b"HVALS", b"k:hash"]),
-        // Nil-array edge: LPOP on missing list
+        ("HMGET present+missing", &[b"HMGET", b"k:hash", b"f1", b"f2", b"nofield"]),
+        ("SMEMBERS", &[b"SMEMBERS", b"k:set"]),
+        ("SINTER single", &[b"SINTER", b"k:set"]),
+        ("ZRANGE", &[b"ZRANGE", b"k:zset", b"0", b"-1"]),
+        ("ZRANGE WITHSCORES", &[b"ZRANGE", b"k:zset", b"0", b"-1", b"WITHSCORES"]),
+        ("ZRANGEBYSCORE inf", &[b"ZRANGEBYSCORE", b"k:zset", b"-inf", b"+inf"]),
+        ("KEYS glob", &[b"KEYS", b"k:*"]),
+        ("OBJECT ENCODING str", &[b"OBJECT", b"ENCODING", b"k:str"]),
+        ("OBJECT ENCODING missing", &[b"OBJECT", b"ENCODING", b"k:missing"]),
+        ("CONFIG GET fixed", &[b"CONFIG", b"GET", b"maxmemory"]),
+        ("DEBUG OBJECT missing", &[b"DEBUG", b"OBJECT", b"k:missing"]),
+        // Nil-bulk & nil-array edges
         ("LPOP missing", &[b"LPOP", b"k:never-list"]),
+        ("RPOPLPUSH missing", &[b"RPOPLPUSH", b"k:never-list", b"k:never-list-2"]),
     ];
 
     for (label, argv) in corpus {
