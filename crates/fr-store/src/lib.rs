@@ -587,6 +587,86 @@ pub enum ExpireTimeValue {
     ExpiresAt(u64),
 }
 
+/// Conditional flag for `HEXPIRE` / `HPEXPIRE` / `HEXPIREAT` /
+/// `HPEXPIREAT` — matches the upstream NX/XX/GT/LT semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashFieldTtlCondition {
+    /// Apply unconditionally (no flag on the wire).
+    None,
+    /// Apply only if the field currently has no TTL.
+    Nx,
+    /// Apply only if the field currently has a TTL.
+    Xx,
+    /// Apply only if the new deadline is strictly greater than the
+    /// existing one; no-op if there's no existing TTL.
+    Gt,
+    /// Apply only if the new deadline is strictly less than the
+    /// existing one; always applies when there's no existing TTL.
+    Lt,
+}
+
+/// Outcome of `Store::hash_field_set_abs_expiry`, using upstream reply
+/// codes:
+/// - `Applied` → 1 (TTL set or updated)
+/// - `AppliedAlreadyExpired` → 2 (deadline was past; caller should reap)
+/// - `ConditionNotMet` → 0 (NX/XX/GT/LT blocked the update)
+/// - `FieldMissing` → -2 (field not in the hash)
+/// - `KeyMissing` → -2 (hash itself not found)
+/// - `WrongType` → surfaced as an error reply at the command layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashFieldTtlSet {
+    Applied,
+    AppliedAlreadyExpired,
+    ConditionNotMet,
+    FieldMissing,
+    KeyMissing,
+    WrongType,
+}
+
+/// Result of `Store::hash_field_ttl` (HTTL/HPTTL/HEXPIRETIME/HPEXPIRETIME).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashFieldTtl {
+    /// Time remaining (or absolute expiry, per `absolute`) in the
+    /// requested unit.
+    Remaining(u64),
+    /// Field exists but has no TTL (reply code -1).
+    NoTtl,
+    /// Field does not exist on the hash (reply code -2).
+    FieldMissing,
+    /// The hash key itself does not exist (reply code -2).
+    KeyMissing,
+    /// Key exists but isn't a hash — WRONGTYPE on the wire.
+    WrongType,
+    /// Field has a TTL that has already elapsed; the caller must reap it
+    /// before reporting to the client. Not currently emitted by the
+    /// Store API (fields are reaped eagerly in set_abs_expiry); reserved
+    /// for part 3 lazy-expiry hooks.
+    Expired,
+}
+
+/// Unit selector for `Store::hash_field_ttl` — seconds for
+/// HTTL/HEXPIRETIME, milliseconds for HPTTL/HPEXPIRETIME.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashFieldTtlUnit {
+    Seconds,
+    Milliseconds,
+}
+
+/// Outcome of `Store::hash_field_persist` (HPERSIST):
+/// - `Persisted` → 1 (TTL was present and has been cleared).
+/// - `NoTtl` → -1 (field existed but had no TTL).
+/// - `FieldMissing` → -2 (field not in the hash).
+/// - `KeyMissing` → -2 (hash itself not found).
+/// - `WrongType` → WRONGTYPE at the command layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashFieldPersistResult {
+    Persisted,
+    NoTtl,
+    FieldMissing,
+    KeyMissing,
+    WrongType,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueType {
     String,
@@ -1050,6 +1130,15 @@ pub struct Store {
     /// Function libraries: library_name → FunctionLibrary.
     function_libraries: HashMap<String, FunctionLibrary>,
 
+    /// Per-field hash TTLs (Redis 7.4 HEXPIRE family). Keyed on
+    /// (hash-key-bytes, field-bytes) → absolute expiry in ms-since-epoch.
+    /// Read/write paths treat this as additive: a missing entry means
+    /// "no TTL" (the field persists indefinitely with its hash); a past
+    /// entry means "expired" and the field should be hidden/reaped on next
+    /// access. Part 1 (br-frankenredis-wwz3) only wires storage +
+    /// primitives; hash-read-path lazy expiry is part 3 (b8ut).
+    pub hash_field_expires: BTreeMap<(Vec<u8>, Vec<u8>), u64>,
+
     // Eviction policy — configurable via CONFIG SET maxmemory-policy.
     pub maxmemory_policy: MaxmemoryPolicy,
     pub lfu_decay_time: u64,
@@ -1280,6 +1369,7 @@ impl Default for Store {
             subscribed_shard_channels: HashSet::new(),
             pubsub_pending: Vec::new(),
             function_libraries: HashMap::new(),
+            hash_field_expires: BTreeMap::new(),
             maxmemory_policy: MaxmemoryPolicy::default(),
             lfu_decay_time: 1,
             hash_max_listpack_entries: 128,
@@ -7948,6 +8038,190 @@ impl Store {
             };
             self.notify_keyspace_event(NOTIFY_EXPIRED, "expired", logical_key, db);
         }
+    }
+
+    // ── Hash field TTL primitives (Redis 7.4 HEXPIRE family) ────────
+    //
+    // Part 1 (br-frankenredis-wwz3): storage + flag-aware setters, TTL
+    // readers, and the lazy expiry helper. No hook into hash reads yet —
+    // that's part 3 (br-frankenredis-b8ut). No command-level dispatch —
+    // part 2 (br-frankenredis-c0z9).
+
+    /// Set or update the absolute expiry (ms-since-epoch) for a single
+    /// hash field. Returns the applied-or-rejected outcome using the
+    /// upstream reply codes: 0 = condition (NX/XX/GT/LT) blocked the
+    /// update, 1 = applied, 2 = applied and the expiry was already in the
+    /// past so the field must be reaped, -2 = hash key or field missing.
+    pub fn hash_field_set_abs_expiry(
+        &mut self,
+        key: &[u8],
+        field: &[u8],
+        expires_at_ms: u64,
+        cond: HashFieldTtlCondition,
+        now_ms: u64,
+    ) -> HashFieldTtlSet {
+        // Key + field existence check. We only look at the hash value —
+        // expired FIELDS (per field_expires map) don't affect the "field
+        // present on the hash" semantic until part 3 wires lazy expiry.
+        match self.entries.get(key).map(|e| &e.value) {
+            Some(Value::Hash(map)) => {
+                if !map.contains_key(field) {
+                    return HashFieldTtlSet::FieldMissing;
+                }
+            }
+            Some(_) => return HashFieldTtlSet::WrongType,
+            None => return HashFieldTtlSet::KeyMissing,
+        }
+
+        let composite = (key.to_vec(), field.to_vec());
+        let current = self.hash_field_expires.get(&composite).copied();
+
+        let allow = match (cond, current) {
+            (HashFieldTtlCondition::None, _) => true,
+            (HashFieldTtlCondition::Nx, None) => true,
+            (HashFieldTtlCondition::Nx, Some(_)) => false,
+            (HashFieldTtlCondition::Xx, Some(_)) => true,
+            (HashFieldTtlCondition::Xx, None) => false,
+            (HashFieldTtlCondition::Gt, Some(existing)) => expires_at_ms > existing,
+            // Upstream: GT with no existing TTL is a no-op (not satisfied).
+            (HashFieldTtlCondition::Gt, None) => false,
+            (HashFieldTtlCondition::Lt, Some(existing)) => expires_at_ms < existing,
+            // Upstream: LT with no existing TTL applies (anything < infinity).
+            (HashFieldTtlCondition::Lt, None) => true,
+        };
+        if !allow {
+            return HashFieldTtlSet::ConditionNotMet;
+        }
+
+        self.hash_field_expires.insert(composite, expires_at_ms);
+        self.dirty = self.dirty.saturating_add(1);
+
+        if expires_at_ms <= now_ms {
+            HashFieldTtlSet::AppliedAlreadyExpired
+        } else {
+            HashFieldTtlSet::Applied
+        }
+    }
+
+    /// Look up the TTL state for a single hash field.
+    ///
+    /// `unit` selects whether `HashFieldTtl::Remaining` is expressed in
+    /// milliseconds (for HPTTL/HPEXPIRETIME callers) or whole seconds
+    /// rounded up (for HTTL/HEXPIRETIME). `absolute` toggles between
+    /// remaining-time and absolute-expiry semantics.
+    #[must_use]
+    pub fn hash_field_ttl(
+        &self,
+        key: &[u8],
+        field: &[u8],
+        now_ms: u64,
+        unit: HashFieldTtlUnit,
+        absolute: bool,
+    ) -> HashFieldTtl {
+        match self.entries.get(key).map(|e| &e.value) {
+            Some(Value::Hash(map)) => {
+                if !map.contains_key(field) {
+                    return HashFieldTtl::FieldMissing;
+                }
+            }
+            Some(_) => return HashFieldTtl::WrongType,
+            None => return HashFieldTtl::KeyMissing,
+        }
+
+        let Some(&expires_at_ms) = self.hash_field_expires.get(&(key.to_vec(), field.to_vec()))
+        else {
+            return HashFieldTtl::NoTtl;
+        };
+        if expires_at_ms <= now_ms {
+            return HashFieldTtl::Expired;
+        }
+        let ms = if absolute {
+            expires_at_ms
+        } else {
+            expires_at_ms.saturating_sub(now_ms)
+        };
+        let value = match unit {
+            HashFieldTtlUnit::Milliseconds => ms,
+            HashFieldTtlUnit::Seconds => {
+                if absolute {
+                    // For HEXPIRETIME: truncate (upstream reports the
+                    // integer-second floor of the epoch).
+                    ms / 1000
+                } else {
+                    // HTTL rounds up so "600 ms remaining" reports 1 not 0.
+                    ms.div_ceil(1000)
+                }
+            }
+        };
+        HashFieldTtl::Remaining(value)
+    }
+
+    /// Drop the TTL for a single hash field; the field persists with its
+    /// hash indefinitely after this call.
+    pub fn hash_field_persist(&mut self, key: &[u8], field: &[u8]) -> HashFieldPersistResult {
+        match self.entries.get(key).map(|e| &e.value) {
+            Some(Value::Hash(map)) => {
+                if !map.contains_key(field) {
+                    return HashFieldPersistResult::FieldMissing;
+                }
+            }
+            Some(_) => return HashFieldPersistResult::WrongType,
+            None => return HashFieldPersistResult::KeyMissing,
+        }
+        let composite = (key.to_vec(), field.to_vec());
+        match self.hash_field_expires.remove(&composite) {
+            Some(_) => {
+                self.dirty = self.dirty.saturating_add(1);
+                HashFieldPersistResult::Persisted
+            }
+            None => HashFieldPersistResult::NoTtl,
+        }
+    }
+
+    /// True if `field` on `key` is expired (past deadline) per the
+    /// per-field TTL map. False for fields with no TTL, for missing
+    /// hashes, or for non-hash keys.
+    #[must_use]
+    pub fn hash_field_is_expired(&self, key: &[u8], field: &[u8], now_ms: u64) -> bool {
+        self.hash_field_expires
+            .get(&(key.to_vec(), field.to_vec()))
+            .is_some_and(|&at| at <= now_ms)
+    }
+
+    /// Number of hash keys carrying at least one per-field TTL. Used by
+    /// OBJECT ENCODING (to flip to listpack_ex/hashtable_ex) once part 4
+    /// lands; also exposed for tests.
+    #[must_use]
+    pub fn hash_field_ttl_carrier_count(&self) -> usize {
+        let mut seen: HashSet<&[u8]> = HashSet::new();
+        for (key, _) in self.hash_field_expires.keys() {
+            seen.insert(key.as_slice());
+        }
+        seen.len()
+    }
+
+    /// Remove every per-field TTL entry for `key`. Called when the whole
+    /// hash key is deleted (DEL / expired / FLUSH*) so the field-TTL map
+    /// doesn't accumulate orphan entries. Public so the whole-key
+    /// eviction paths in fr-store (and higher layers) can invoke it.
+    pub fn hash_field_ttl_clear_for_key(&mut self, key: &[u8]) {
+        // BTreeMap range over (key, _) prefix to enumerate + retain.
+        let victims: Vec<(Vec<u8>, Vec<u8>)> = self
+            .hash_field_expires
+            .range((key.to_vec(), Vec::new())..)
+            .take_while(|((k, _), _)| k.as_slice() == key)
+            .map(|((k, f), _)| (k.clone(), f.clone()))
+            .collect();
+        for composite in victims {
+            self.hash_field_expires.remove(&composite);
+        }
+    }
+
+    /// Remove the per-field TTL for (`key`, `field`). Called from HDEL
+    /// once part 3 lands so stale TTLs don't shadow re-added fields.
+    pub fn hash_field_ttl_clear_for_field(&mut self, key: &[u8], field: &[u8]) {
+        self.hash_field_expires
+            .remove(&(key.to_vec(), field.to_vec()));
     }
 
     /// GETEX: get string value and optionally set/remove expiration.
