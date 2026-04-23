@@ -15094,6 +15094,90 @@ mod tests {
     }
 
     #[test]
+    fn function_restore_append_collision_is_atomic() {
+        let mut payload_store = Store::new();
+        payload_store
+            .function_load(&sample_function_library("seedlib", "gamma", "delta"), false)
+            .expect("replacement seed library must load");
+        payload_store
+            .function_load(&sample_function_library("addon", "epsilon", "zeta"), false)
+            .expect("addon library must load");
+        let payload_dump = payload_store.function_dump();
+
+        let mut restored = Store::new();
+        restored
+            .function_load(&sample_function_library("seedlib", "alpha", "beta"), false)
+            .expect("original seed library must load");
+        restored
+            .function_load(&sample_function_library("keepme", "theta", "iota"), false)
+            .expect("disjoint existing library must load");
+        let before_snapshot = function_library_snapshot(&restored);
+        let before_dump = restored.function_dump();
+
+        let err = restored
+            .function_restore(&payload_dump, "APPEND")
+            .expect_err("APPEND with colliding library must fail atomically");
+        assert!(
+            matches!(err, StoreError::GenericError(ref message) if message.contains("already exists")),
+            "unexpected append collision error: {err:?}"
+        );
+        assert_eq!(function_library_snapshot(&restored), before_snapshot);
+        assert_eq!(restored.function_dump(), before_dump);
+    }
+
+    #[test]
+    fn function_restore_replace_overwrites_collisions_and_keeps_disjoint_existing() {
+        let mut payload_store = Store::new();
+        payload_store
+            .function_load(&sample_function_library("seedlib", "gamma", "delta"), false)
+            .expect("replacement seed library must load");
+        let payload_dump = payload_store.function_dump();
+
+        let mut restored = Store::new();
+        restored
+            .function_load(&sample_function_library("seedlib", "alpha", "beta"), false)
+            .expect("original seed library must load");
+        restored
+            .function_load(&sample_function_library("keepme", "theta", "iota"), false)
+            .expect("disjoint existing library must load");
+
+        restored
+            .function_restore(&payload_dump, "REPLACE")
+            .expect("REPLACE must overwrite colliding libraries");
+
+        let restored_snapshot = function_library_snapshot(&restored);
+        assert_eq!(restored_snapshot.len(), 2);
+
+        let keepme = restored_snapshot
+            .iter()
+            .find(|(name, _, _, _)| name == "keepme")
+            .expect("disjoint existing library must remain");
+        assert_eq!(keepme.1, "LUA");
+        let mut keepme_functions = keepme.3.clone();
+        keepme_functions.sort();
+        assert_eq!(
+            keepme_functions,
+            vec!["iota".to_string(), "theta".to_string()]
+        );
+
+        let seedlib = restored_snapshot
+            .iter()
+            .find(|(name, _, _, _)| name == "seedlib")
+            .expect("colliding library must remain after replacement");
+        assert_eq!(seedlib.1, "LUA");
+        let mut seedlib_functions = seedlib.3.clone();
+        seedlib_functions.sort();
+        assert_eq!(
+            seedlib_functions,
+            vec!["delta".to_string(), "gamma".to_string()]
+        );
+        assert_eq!(
+            seedlib.2,
+            sample_function_library("seedlib", "gamma", "delta")
+        );
+    }
+
+    #[test]
     fn function_restore_append_empty_dump_preserves_existing_libraries() {
         let empty_dump = Store::new().function_dump();
         let mut restored = Store::new();
