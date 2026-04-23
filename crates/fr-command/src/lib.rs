@@ -1054,8 +1054,8 @@ pub fn dispatch_argv(
         Some(CommandId::Sunsubscribe) => return sunsubscribe_cmd(argv, store),
         Some(CommandId::Spublish) => return spublish_cmd(argv, store),
         Some(CommandId::SortRo) => return sort_ro_cmd(argv, store, now_ms),
-        Some(CommandId::Readonly) => return readonly_cmd(argv),
-        Some(CommandId::Readwrite) => return readwrite_cmd(argv),
+        Some(CommandId::Readonly) => return readonly_cmd(argv, store),
+        Some(CommandId::Readwrite) => return readwrite_cmd(argv, store),
         Some(CommandId::Zrangestore) => return zrangestore_cmd(argv, store, now_ms),
         Some(CommandId::Monitor) => return monitor_cmd(argv, store),
         Some(CommandId::Migrate) => return migrate_cmd(argv, store, now_ms),
@@ -6116,22 +6116,35 @@ fn replicaof_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandEr
 
 // ── READONLY / READWRITE ────────────────────────────────────────────
 
-fn readonly_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn readonly_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("READONLY"));
     }
-    Err(CommandError::Custom(
-        "ERR This instance has cluster support disabled".to_string(),
-    ))
+    // Upstream cluster.c::readonlyCommand: returns OK when cluster_enabled,
+    // errors with "This instance has cluster support disabled" otherwise.
+    // The actual per-client CLIENT_READONLY bit-flag is a cluster-routing
+    // concern we don't yet honor; returning OK unblocks clients that use
+    // READONLY as a preamble to replica-routed reads. (br-frankenredis-jsr7)
+    if !store.cluster_enabled {
+        return Err(CommandError::Custom(
+            "ERR This instance has cluster support disabled".to_string(),
+        ));
+    }
+    Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
-fn readwrite_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn readwrite_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("READWRITE"));
     }
-    Err(CommandError::Custom(
-        "ERR This instance has cluster support disabled".to_string(),
-    ))
+    // Upstream cluster.c::readwriteCommand: mirror of readonly — OK when
+    // cluster_enabled, disabled-error otherwise.
+    if !store.cluster_enabled {
+        return Err(CommandError::Custom(
+            "ERR This instance has cluster support disabled".to_string(),
+        ));
+    }
+    Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
 // ── ZRANGESTORE ────────────────────────────────────────────────────
