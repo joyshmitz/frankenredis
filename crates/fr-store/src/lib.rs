@@ -14830,6 +14830,49 @@ mod tests {
     }
 
     #[test]
+    fn aof_commands_function_libraries_precede_multidb_selects_and_keys() {
+        let alpha = sample_function_library("alpha", "afn1", "afn2");
+        let beta = sample_function_library("beta", "bfn1", "bfn2");
+        let mut store = Store::new();
+        store
+            .function_load(&beta, false)
+            .expect("beta library must load");
+        store
+            .function_load(&alpha, false)
+            .expect("alpha library must load");
+        store.set(b"db0".to_vec(), b"v0".to_vec(), None, 100);
+        store.set(encode_db_key(1, b"db1"), b"v1".to_vec(), None, 100);
+
+        let cmds = store.to_aof_commands(100);
+        assert_eq!(
+            cmds,
+            vec![
+                vec![
+                    b"FUNCTION".to_vec(),
+                    b"LOAD".to_vec(),
+                    b"REPLACE".to_vec(),
+                    alpha,
+                ],
+                vec![
+                    b"FUNCTION".to_vec(),
+                    b"LOAD".to_vec(),
+                    b"REPLACE".to_vec(),
+                    beta,
+                ],
+                vec![b"SET".to_vec(), b"db0".to_vec(), b"v0".to_vec()],
+                vec![b"SELECT".to_vec(), b"1".to_vec()],
+                vec![b"SET".to_vec(), b"db1".to_vec(), b"v1".to_vec()],
+            ]
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|argv| argv.len() == 2 && argv[0] == b"SELECT" && argv[1] == b"0"),
+            "DB 0 must remain implicit even when function libraries precede multi-DB keys"
+        );
+    }
+
+    #[test]
     fn aof_commands_multidb_select_boundaries_are_minimal_and_stable() {
         let mut store = Store::new();
         store.set(b"z0".to_vec(), b"vz0".to_vec(), None, 100);
