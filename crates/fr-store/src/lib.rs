@@ -15546,8 +15546,8 @@ mod tests {
     // ── Metamorphic property tests ──────────────────────────────────────────
     mod metamorphic {
         use super::{
-            function_library_snapshot, group_read_options, sample_function_library_from_seed,
-            sample_replacement_function_library_from_seed,
+            function_library_snapshot, group_read_options, sample_function_library,
+            sample_function_library_from_seed, sample_replacement_function_library_from_seed,
         };
         use crate::{
             Store, StoreError, StreamClaimOptions, StreamGroupReadCursor, StreamId, StreamRecord,
@@ -16323,6 +16323,79 @@ mod tests {
             let commands = original.to_aof_commands(METAMORPHIC_NOW_MS);
             let expected_snapshot = snapshot_aof_replay_state(&original);
 
+            let mut replayed = replay_aof_commands(&commands);
+            assert_eq!(snapshot_aof_replay_state(&replayed), expected_snapshot);
+            assert_eq!(replayed.to_aof_commands(METAMORPHIC_NOW_MS), commands);
+        }
+
+        #[test]
+        fn aof_rewrite_replay_preserves_function_libraries_and_noncontiguous_db_selects() {
+            let alpha = sample_function_library("alpha", "afn1", "afn2");
+            let beta = sample_function_library("beta", "bfn1", "bfn2");
+            let mut original = Store::new();
+            original
+                .function_load(&beta, false)
+                .expect("beta library must load");
+            original
+                .function_load(&alpha, false)
+                .expect("alpha library must load");
+            original.set(
+                b"a0".to_vec(),
+                b"va0".to_vec(),
+                Some(7000),
+                METAMORPHIC_NOW_MS,
+            );
+            original.set(
+                encode_db_key(2, b"c2"),
+                b"vc2".to_vec(),
+                None,
+                METAMORPHIC_NOW_MS,
+            );
+            original.set(
+                encode_db_key(2, b"b2"),
+                b"vb2".to_vec(),
+                Some(6500),
+                METAMORPHIC_NOW_MS,
+            );
+
+            let commands = original.to_aof_commands(METAMORPHIC_NOW_MS);
+            assert_eq!(
+                commands,
+                vec![
+                    vec![
+                        b"FUNCTION".to_vec(),
+                        b"LOAD".to_vec(),
+                        b"REPLACE".to_vec(),
+                        alpha,
+                    ],
+                    vec![
+                        b"FUNCTION".to_vec(),
+                        b"LOAD".to_vec(),
+                        b"REPLACE".to_vec(),
+                        beta,
+                    ],
+                    vec![b"SET".to_vec(), b"a0".to_vec(), b"va0".to_vec()],
+                    vec![b"PEXPIREAT".to_vec(), b"a0".to_vec(), b"8000".to_vec()],
+                    vec![b"SELECT".to_vec(), b"2".to_vec()],
+                    vec![b"SET".to_vec(), b"b2".to_vec(), b"vb2".to_vec()],
+                    vec![b"PEXPIREAT".to_vec(), b"b2".to_vec(), b"7500".to_vec()],
+                    vec![b"SET".to_vec(), b"c2".to_vec(), b"vc2".to_vec()],
+                ]
+            );
+            assert!(
+                !commands
+                    .iter()
+                    .any(|argv| argv.len() == 2 && argv[0] == b"SELECT" && argv[1] == b"0"),
+                "DB 0 must remain implicit across noncontiguous DB replay output"
+            );
+            assert!(
+                !commands
+                    .iter()
+                    .any(|argv| argv.len() == 2 && argv[0] == b"SELECT" && argv[1] == b"1"),
+                "noncontiguous DB replay output must not synthesize missing DB 1 selects"
+            );
+
+            let expected_snapshot = snapshot_aof_replay_state(&original);
             let mut replayed = replay_aof_commands(&commands);
             assert_eq!(snapshot_aof_replay_state(&replayed), expected_snapshot);
             assert_eq!(replayed.to_aof_commands(METAMORPHIC_NOW_MS), commands);
