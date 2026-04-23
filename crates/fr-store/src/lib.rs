@@ -16297,6 +16297,37 @@ mod tests {
             )
         }
 
+        #[test]
+        fn aof_rewrite_replay_preserves_function_libraries_and_multidb_expiries() {
+            let mut original = Store::new();
+            install_function_libraries(
+                &mut original,
+                &[
+                    sample_function_library_from_seed(7),
+                    sample_function_library_from_seed(3),
+                ],
+            );
+            original.set(
+                b"a0".to_vec(),
+                b"va0".to_vec(),
+                Some(7000),
+                METAMORPHIC_NOW_MS,
+            );
+            original.set(
+                encode_db_key(1, b"b1"),
+                b"vb1".to_vec(),
+                Some(6000),
+                METAMORPHIC_NOW_MS,
+            );
+
+            let commands = original.to_aof_commands(METAMORPHIC_NOW_MS);
+            let expected_snapshot = snapshot_aof_replay_state(&original);
+
+            let mut replayed = replay_aof_commands(&commands);
+            assert_eq!(snapshot_aof_replay_state(&replayed), expected_snapshot);
+            assert_eq!(replayed.to_aof_commands(METAMORPHIC_NOW_MS), commands);
+        }
+
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(200))]
 
