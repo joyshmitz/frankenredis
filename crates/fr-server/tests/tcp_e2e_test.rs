@@ -428,6 +428,16 @@ fn spawn_frankenredis_opts(
     aof_path: Option<&str>,
     rdb_path: Option<&str>,
 ) -> ManagedChild {
+    spawn_frankenredis_opts_with_config(port, primary_port, aof_path, rdb_path, false)
+}
+
+fn spawn_frankenredis_opts_with_config(
+    port: u16,
+    primary_port: Option<u16>,
+    aof_path: Option<&str>,
+    rdb_path: Option<&str>,
+    enable_config_file: bool,
+) -> ManagedChild {
     let log_dir = unique_temp_dir("frankenredis-server-log");
     let log_path = log_dir.join("stderr.log");
     let log_file = std::fs::File::create(&log_path).expect("create replica log file");
@@ -453,9 +463,24 @@ fn spawn_frankenredis_opts(
     if let Some(path) = rdb_path {
         command.arg("--rdb").arg(path);
     }
+    if enable_config_file {
+        // Minimal stand-in config so CONFIG REWRITE has a target file.
+        // Upstream Redis returns "ERR The server is running without a config
+        // file" when REWRITE is called on a server booted without --config;
+        // tests that assert REWRITE returns OK need this. (br-frankenredis-oayf)
+        let config_dir = unique_temp_dir("frankenredis-server-config");
+        let config_path = config_dir.join("redis.conf");
+        std::fs::write(&config_path, b"bind 127.0.0.1\nappendonly no\n")
+            .expect("write stub redis.conf");
+        command.arg("--config").arg(&config_path);
+    }
     let child = ManagedChild::spawn(command, Some(log_path));
     wait_for_port(port);
     child
+}
+
+fn spawn_frankenredis_with_config_file(port: u16, primary_port: Option<u16>) -> ManagedChild {
+    spawn_frankenredis_opts_with_config(port, primary_port, None, None, true)
 }
 
 fn fetch_info_replication(port: u16) -> Option<String> {
@@ -2343,9 +2368,11 @@ fn tcp_sentinel_failover_integration() {
     let replica1_port = reserve_port();
     let replica2_port = reserve_port();
 
-    let _original_master = spawn_frankenredis(original_master_port, None);
-    let _replica1 = spawn_frankenredis(replica1_port, Some(original_master_port));
-    let _replica2 = spawn_frankenredis(replica2_port, Some(original_master_port));
+    let _original_master = spawn_frankenredis_with_config_file(original_master_port, None);
+    let _replica1 =
+        spawn_frankenredis_with_config_file(replica1_port, Some(original_master_port));
+    let _replica2 =
+        spawn_frankenredis_with_config_file(replica2_port, Some(original_master_port));
 
     // Wait for replicas to connect and sync
     let deadline = Instant::now() + Duration::from_secs(5);
