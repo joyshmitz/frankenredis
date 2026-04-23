@@ -6078,9 +6078,12 @@ fn psync_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError>
     if store.script_nesting_level >= 1 {
         return Err(script_noscript_command_error());
     }
-    // In standalone mode, always respond with FULLRESYNC
-    // Generate a deterministic replid for conformance testing
-    let replid = "0000000000000000000000000000000000000000";
+    // In standalone mode, FULLRESYNC with the server's own run_id so
+    // subsequent PSYNC retries that echo this replid can be matched. The
+    // offset stays at 0 here (a full replication backlog is not yet
+    // tracked at this layer — see frankenredis-fcjh for the real
+    // handshake pipeline). (br-frankenredis-fcjh, partial)
+    let replid = store.server_run_id.clone();
     let offset = 0;
     Ok(RespFrame::SimpleString(format!(
         "FULLRESYNC {replid} {offset}"
