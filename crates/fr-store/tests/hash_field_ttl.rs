@@ -376,6 +376,162 @@ fn hash_field_ttl_clear_for_field_is_targeted() {
 
 // ── Carrier count ───────────────────────────────────────────────────
 
+// ── Lazy-expiry hook (part 3: br-frankenredis-b8ut) ────────────────
+//
+// Once a per-field TTL lapses, every hash-read surface must act as if
+// the field is gone, and the entries map + hash_field_expires must both
+// be cleaned up. A hash with no remaining fields after reaping is
+// removed entirely.
+
+#[test]
+fn hget_reaps_expired_field_returning_none() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"alive", b"v"), (b"doomed", b"v")]);
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"doomed",
+        NOW - 1,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    // Past-deadline write already marked the field as reaped in the
+    // field_expires map; the first read (via hget on the doomed field)
+    // must drop it from the hash too.
+    let v = store.hget(b"h", b"doomed", NOW).expect("hget");
+    assert_eq!(v, None);
+    // Subsequent hget on a non-expired field still returns its value.
+    let alive = store.hget(b"h", b"alive", NOW).expect("hget alive");
+    assert_eq!(alive, Some(b"v".to_vec()));
+}
+
+#[test]
+fn hgetall_hkeys_hvals_hide_expired_fields() {
+    let mut store = Store::new();
+    seed_hash(
+        &mut store,
+        b"h",
+        &[(b"keep", b"k"), (b"drop1", b"d"), (b"drop2", b"d")],
+    );
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"drop1",
+        NOW - 1,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"drop2",
+        NOW - 5,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+
+    let all = store.hgetall(b"h", NOW).expect("hgetall");
+    assert_eq!(all, vec![(b"keep".to_vec(), b"k".to_vec())]);
+
+    let keys = store.hkeys(b"h", NOW).expect("hkeys");
+    assert_eq!(keys, vec![b"keep".to_vec()]);
+
+    let vals = store.hvals(b"h", NOW).expect("hvals");
+    assert_eq!(vals, vec![b"k".to_vec()]);
+
+    assert_eq!(store.hlen(b"h", NOW).expect("hlen"), 1);
+}
+
+#[test]
+fn hmget_returns_none_for_fields_that_have_just_expired() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"alive", b"v"), (b"dead", b"v")]);
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"dead",
+        NOW - 1,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    let got = store
+        .hmget(b"h", &[b"alive", b"dead", b"nope"], NOW)
+        .expect("hmget");
+    assert_eq!(got, vec![Some(b"v".to_vec()), None, None]);
+}
+
+#[test]
+fn hexists_treats_expired_field_as_missing() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"dead", b"v")]);
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"dead",
+        NOW - 1,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    assert!(!store.hexists(b"h", b"dead", NOW).expect("hexists"));
+}
+
+#[test]
+fn reaping_last_field_deletes_the_whole_hash_key() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"only", b"v")]);
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"only",
+        NOW - 1,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    // HLEN triggers a sweep that reaps the only field and should also
+    // drop the hash key itself.
+    let len = store.hlen(b"h", NOW).expect("hlen");
+    assert_eq!(len, 0);
+    // Directly asserting the key vanished — no raw getter for this so
+    // use key_type which returns None for missing keys.
+    let ty = store.key_type(b"h", NOW);
+    assert_eq!(ty, None);
+}
+
+#[test]
+fn hdel_clears_the_per_field_ttl_entry() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"f", b"v")]);
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"f",
+        NOW + 60_000,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    assert_eq!(store.hash_field_ttl_carrier_count(), 1);
+    // HDEL drops the field AND its TTL entry.
+    let removed = store.hdel(b"h", &[&b"f"[..]], NOW).expect("hdel");
+    assert_eq!(removed, 1);
+    assert_eq!(store.hash_field_ttl_carrier_count(), 0);
+}
+
+#[test]
+fn whole_key_removal_clears_all_field_ttls() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"f1", b"v"), (b"f2", b"v")]);
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"f1",
+        NOW + 60_000,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"f2",
+        NOW + 60_000,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    assert_eq!(store.hash_field_ttl_carrier_count(), 1);
+    assert_eq!(store.del(&[b"h".to_vec()], NOW), 1);
+    assert_eq!(store.hash_field_ttl_carrier_count(), 0);
+}
+
 #[test]
 fn hash_field_ttl_carrier_count_tracks_distinct_keys() {
     let mut store = Store::new();

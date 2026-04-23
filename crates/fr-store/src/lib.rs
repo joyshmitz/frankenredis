@@ -3057,10 +3057,93 @@ impl Store {
                 }
             }
             self.update_digest_hashes(Some(Self::entry_state_digest(key, &entry)), None);
+            // Whole-key removal drops any per-field hash TTL entries so the
+            // field_expires map doesn't accumulate orphan rows.
+            // (br-frankenredis-b8ut)
+            self.hash_field_ttl_clear_for_key(key);
             Some(entry)
         } else {
             None
         }
+    }
+
+    /// Drop every expired per-field TTL entry on `key` from the hash and
+    /// from the hash_field_expires map. Called by the hash-read surface
+    /// so expired fields are invisible to clients (Redis 7.4 semantic).
+    /// Returns the count of fields that were reaped.
+    /// (br-frankenredis-b8ut)
+    fn drop_expired_hash_fields(&mut self, key: &[u8], now_ms: u64) -> usize {
+        // Collect expired (key, field) pairs via the BTreeMap prefix range.
+        let expired_fields: Vec<Vec<u8>> = self
+            .hash_field_expires
+            .range((key.to_vec(), Vec::new())..)
+            .take_while(|((k, _), _)| k.as_slice() == key)
+            .filter(|&(_, &at)| at <= now_ms)
+            .map(|((_, f), _)| f.clone())
+            .collect();
+        if expired_fields.is_empty() {
+            return 0;
+        }
+
+        let mut reaped = 0usize;
+        let mut became_empty = false;
+        if let Some(entry) = self.entries.get_mut(key)
+            && let Value::Hash(map) = &mut entry.value
+        {
+            for field in &expired_fields {
+                if map.remove(field.as_slice()).is_some() {
+                    reaped += 1;
+                }
+            }
+            became_empty = map.is_empty();
+        }
+        for field in &expired_fields {
+            self.hash_field_expires
+                .remove(&(key.to_vec(), field.clone()));
+        }
+        if reaped > 0 {
+            self.dirty = self.dirty.saturating_add(reaped as u64);
+            self.stat_expired_keys = self.stat_expired_keys.saturating_add(reaped as u64);
+        }
+        if became_empty {
+            // Upstream behavior: a hash with no fields is removed entirely.
+            self.internal_entries_remove(key);
+            self.stream_groups.remove(key);
+            self.stream_last_ids.remove(key);
+        }
+        reaped
+    }
+
+    /// Drop a single per-field TTL entry on `key`/`field` if its deadline
+    /// has passed. Returns true if the field was reaped.
+    /// (br-frankenredis-b8ut)
+    fn drop_hash_field_if_expired(&mut self, key: &[u8], field: &[u8], now_ms: u64) -> bool {
+        if !self.hash_field_is_expired(key, field, now_ms) {
+            return false;
+        }
+        let composite = (key.to_vec(), field.to_vec());
+        self.hash_field_expires.remove(&composite);
+
+        let mut became_empty = false;
+        let mut removed = false;
+        if let Some(entry) = self.entries.get_mut(key)
+            && let Value::Hash(map) = &mut entry.value
+        {
+            if map.remove(field).is_some() {
+                removed = true;
+            }
+            became_empty = map.is_empty();
+        }
+        if removed {
+            self.dirty = self.dirty.saturating_add(1);
+            self.stat_expired_keys = self.stat_expired_keys.saturating_add(1);
+        }
+        if became_empty {
+            self.internal_entries_remove(key);
+            self.stream_groups.remove(key);
+            self.stream_last_ids.remove(key);
+        }
+        removed
     }
 
     #[must_use]
@@ -3524,6 +3607,10 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(None);
         }
+        // Reap the specific field if its per-field TTL lapsed so expired
+        // fields are invisible at the hash-read layer (Redis 7.4
+        // br-frankenredis-b8ut).
+        self.drop_hash_field_if_expired(key, field, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
@@ -3560,6 +3647,12 @@ impl Store {
         let (removed, is_empty) = result?;
         if removed > 0 {
             self.dirty = self.dirty.saturating_add(removed);
+            // Clear any per-field TTL entries for the removed fields so
+            // re-added fields of the same name don't inherit stale TTLs.
+            // (br-frankenredis-b8ut)
+            for field in fields {
+                self.hash_field_ttl_clear_for_field(key, field);
+            }
         }
         if is_empty {
             self.internal_entries_remove(key);
@@ -3573,6 +3666,7 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(false);
         }
+        self.drop_hash_field_if_expired(key, field, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
@@ -3590,6 +3684,7 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(0);
         }
+        self.drop_expired_hash_fields(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
@@ -3612,6 +3707,7 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(Vec::new());
         }
+        self.drop_expired_hash_fields(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
@@ -3630,6 +3726,7 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(Vec::new());
         }
+        self.drop_expired_hash_fields(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
@@ -3647,6 +3744,7 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(Vec::new());
         }
+        self.drop_expired_hash_fields(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
@@ -3668,6 +3766,9 @@ impl Store {
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(fields.iter().map(|_| None).collect());
+        }
+        for field in fields {
+            self.drop_hash_field_if_expired(key, field, now_ms);
         }
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
@@ -3762,6 +3863,7 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return Ok(0);
         }
+        self.drop_hash_field_if_expired(key, field, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(m) => {
@@ -3826,6 +3928,7 @@ impl Store {
 
     pub fn hrandfield(&mut self, key: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, StoreError> {
         self.drop_if_expired(key, now_ms);
+        self.drop_expired_hash_fields(key, now_ms);
         let rand_val = self.next_rand();
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
@@ -3855,6 +3958,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
         self.drop_if_expired(key, now_ms);
+        self.drop_expired_hash_fields(key, now_ms);
         // Pre-generate some random values if we need many (for negative count).
         // For positive count, we'll need many for the shuffle.
         // Actually, it's easier to just pick the random values we need inside the match if we can.
@@ -8751,6 +8855,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<(u64, Vec<(Vec<u8>, Vec<u8>)>), StoreError> {
         self.drop_if_expired(key, now_ms);
+        self.drop_expired_hash_fields(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Hash(h) => {
