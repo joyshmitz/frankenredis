@@ -30428,11 +30428,20 @@ mod tests {
 
         let stats = dispatch_argv(&[b"FUNCTION".to_vec(), b"STATS".to_vec()], &mut store, 0)
             .expect("function stats");
+        // PINNED 2026-04-23 — running_script is RESP2 nil (BulkString(None))
+        // when no script is running, matching the implementation at
+        // lib.rs:6394 and the stock redis:7.4 / redis:7.2.4 live-oracle
+        // probe (redis-cli --no-raw FUNCTION STATS returns "(nil)" in the
+        // running_script slot on an idle server). An earlier commit
+        // (fd17b66) self-contradictorily flipped this test to Integer(0)
+        // while the impl and its PINNED comment still asserted nil; this
+        // resolves the drift by realigning the test with both. See
+        // br-frankenredis-j4vq.
         assert_eq!(
             stats,
             RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"running_script".to_vec())),
-                RespFrame::Integer(0),
+                RespFrame::BulkString(None),
                 RespFrame::BulkString(Some(b"engines".to_vec())),
                 RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"LUA".to_vec())),
