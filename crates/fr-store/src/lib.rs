@@ -8184,6 +8184,11 @@ impl Store {
     /// upstream reply codes: 0 = condition (NX/XX/GT/LT) blocked the
     /// update, 1 = applied, 2 = applied and the expiry was already in the
     /// past so the field must be reaped, -2 = hash key or field missing.
+    ///
+    /// Does not emit a keyspace event. Callers that want the
+    /// upstream-matching `hexpire` / `hpexpire` / `hexpireat` / `hpexpireat`
+    /// event should use [`hash_field_set_abs_expiry_with_event`] which
+    /// threads the event name + NOTIFY_HASH emission.
     pub fn hash_field_set_abs_expiry(
         &mut self,
         key: &[u8],
@@ -8233,6 +8238,36 @@ impl Store {
         } else {
             HashFieldTtlSet::Applied
         }
+    }
+
+    /// Wrapper around [`hash_field_set_abs_expiry`] that emits the
+    /// upstream-matching NOTIFY_HASH keyspace event ("hexpire" /
+    /// "hpexpire" / "hexpireat" / "hpexpireat") on success. The Applied
+    /// and AppliedAlreadyExpired outcomes both fire the event; blocked
+    /// (NX/XX/GT/LT) and missing/wrong-type do not.
+    /// (br-frankenredis-7jhg)
+    pub fn hash_field_set_abs_expiry_with_event(
+        &mut self,
+        key: &[u8],
+        field: &[u8],
+        expires_at_ms: u64,
+        cond: HashFieldTtlCondition,
+        now_ms: u64,
+        event: &str,
+    ) -> HashFieldTtlSet {
+        let outcome = self.hash_field_set_abs_expiry(key, field, expires_at_ms, cond, now_ms);
+        if matches!(
+            outcome,
+            HashFieldTtlSet::Applied | HashFieldTtlSet::AppliedAlreadyExpired
+        ) && self.notify_keyspace_events != 0
+        {
+            let (db, logical_key) = match decode_db_key(key) {
+                Some((db, lk)) => (db, lk.to_vec()),
+                None => (0, key.to_vec()),
+            };
+            self.notify_keyspace_event(NOTIFY_HASH, event, &logical_key, db);
+        }
+        outcome
     }
 
     /// Look up the TTL state for a single hash field.
@@ -8308,6 +8343,26 @@ impl Store {
             }
             None => HashFieldPersistResult::NoTtl,
         }
+    }
+
+    /// Wrapper around [`hash_field_persist`] that emits the
+    /// upstream-matching NOTIFY_HASH "hpersist" keyspace event on the
+    /// Persisted outcome. (br-frankenredis-7jhg)
+    pub fn hash_field_persist_with_event(
+        &mut self,
+        key: &[u8],
+        field: &[u8],
+    ) -> HashFieldPersistResult {
+        let outcome = self.hash_field_persist(key, field);
+        if matches!(outcome, HashFieldPersistResult::Persisted) && self.notify_keyspace_events != 0
+        {
+            let (db, logical_key) = match decode_db_key(key) {
+                Some((db, lk)) => (db, lk.to_vec()),
+                None => (0, key.to_vec()),
+            };
+            self.notify_keyspace_event(NOTIFY_HASH, "hpersist", &logical_key, db);
+        }
+        outcome
     }
 
     /// True if `field` on `key` is expired (past deadline) per the

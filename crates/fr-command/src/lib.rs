@@ -2793,10 +2793,20 @@ fn hexpire_cmd(
     let (cond, fields_start, numfields) =
         parse_hash_field_ttl_flags_and_fields_header(argv, 3, cmd_name)?;
 
+    // Upstream emits "hexpire"/"hpexpire"/"hexpireat"/"hpexpireat" events on
+    // every successful (including already-expired) per-field TTL set.
+    // (br-frankenredis-7jhg)
+    let event = match (form, absolute) {
+        (HExpireForm::Seconds, false) => "hexpire",
+        (HExpireForm::Milliseconds, false) => "hpexpire",
+        (HExpireForm::Seconds, true) => "hexpireat",
+        (HExpireForm::Milliseconds, true) => "hpexpireat",
+    };
     let mut replies = Vec::with_capacity(numfields);
     for f_idx in 0..numfields {
         let field = argv[fields_start + f_idx].as_slice();
-        let outcome = store.hash_field_set_abs_expiry(key, field, deadline_ms, cond, now_ms);
+        let outcome =
+            store.hash_field_set_abs_expiry_with_event(key, field, deadline_ms, cond, now_ms, event);
         let code = match outcome {
             HashFieldTtlSet::Applied => 1,
             HashFieldTtlSet::AppliedAlreadyExpired => 2,
@@ -2887,7 +2897,9 @@ fn hpersist_cmd(
     let mut replies = Vec::with_capacity(numfields);
     for f_idx in 0..numfields {
         let field = argv[fields_start + f_idx].as_slice();
-        let outcome = store.hash_field_persist(key, field);
+        // hash_field_persist_with_event emits "hpersist" NOTIFY_HASH on
+        // the Persisted branch. (br-frankenredis-7jhg)
+        let outcome = store.hash_field_persist_with_event(key, field);
         let code: i64 = match outcome {
             HashFieldPersistResult::Persisted => 1,
             HashFieldPersistResult::NoTtl => -1,

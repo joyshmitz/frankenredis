@@ -376,6 +376,123 @@ fn hash_field_ttl_clear_for_field_is_targeted() {
 
 // ── Carrier count ───────────────────────────────────────────────────
 
+// ── Keyspace events (part 4b: br-frankenredis-7jhg) ────────────────
+
+fn enable_all_keyspace_events(store: &mut Store) {
+    // K + E + g + h + x bits → covers hset / hexpire / hexpired streams.
+    store.notify_keyspace_events = 0xFFFF;
+    let _ = store.drain_keyspace_notifications();
+}
+
+fn collect_event_pairs(store: &mut Store) -> Vec<(String, String)> {
+    store
+        .drain_keyspace_notifications()
+        .into_iter()
+        .map(|(chan, key)| {
+            (
+                String::from_utf8_lossy(&chan).into_owned(),
+                String::from_utf8_lossy(&key).into_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn hash_field_set_with_event_emits_hexpire_on_applied() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"f", b"v")]);
+    enable_all_keyspace_events(&mut store);
+
+    let outcome = store.hash_field_set_abs_expiry_with_event(
+        b"h",
+        b"f",
+        NOW + 60_000,
+        HashFieldTtlCondition::None,
+        NOW,
+        "hexpire",
+    );
+    assert_eq!(outcome, HashFieldTtlSet::Applied);
+
+    let events = collect_event_pairs(&mut store);
+    // Expect both __keyspace@0__:h → hexpire and __keyevent@0__:hexpire → h.
+    assert!(events.iter().any(|(c, k)| c == "__keyspace@0__:h" && k == "hexpire"));
+    assert!(events.iter().any(|(c, k)| c == "__keyevent@0__:hexpire" && k == "h"));
+}
+
+#[test]
+fn hash_field_set_with_event_emits_on_already_expired() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"f", b"v")]);
+    enable_all_keyspace_events(&mut store);
+
+    let outcome = store.hash_field_set_abs_expiry_with_event(
+        b"h",
+        b"f",
+        NOW - 1,
+        HashFieldTtlCondition::None,
+        NOW,
+        "hpexpireat",
+    );
+    assert_eq!(outcome, HashFieldTtlSet::AppliedAlreadyExpired);
+    let events = collect_event_pairs(&mut store);
+    assert!(events.iter().any(|(_, k)| k == "hpexpireat"));
+}
+
+#[test]
+fn hash_field_set_with_event_suppresses_event_on_condition_miss() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"f", b"v")]);
+    // Set initial TTL so an NX attempt blocks.
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"f",
+        NOW + 60_000,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    enable_all_keyspace_events(&mut store);
+    let outcome = store.hash_field_set_abs_expiry_with_event(
+        b"h",
+        b"f",
+        NOW + 120_000,
+        HashFieldTtlCondition::Nx,
+        NOW,
+        "hexpire",
+    );
+    assert_eq!(outcome, HashFieldTtlSet::ConditionNotMet);
+    let events = collect_event_pairs(&mut store);
+    assert!(events.is_empty(), "no event on blocked condition: {events:?}");
+}
+
+#[test]
+fn hash_field_persist_with_event_emits_hpersist_on_clear() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"f", b"v")]);
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"f",
+        NOW + 60_000,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    enable_all_keyspace_events(&mut store);
+    let outcome = store.hash_field_persist_with_event(b"h", b"f");
+    assert_eq!(outcome, HashFieldPersistResult::Persisted);
+    let events = collect_event_pairs(&mut store);
+    assert!(events.iter().any(|(_, k)| k == "hpersist"));
+}
+
+#[test]
+fn hash_field_persist_with_event_suppresses_event_when_no_ttl() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"f", b"v")]);
+    enable_all_keyspace_events(&mut store);
+    let outcome = store.hash_field_persist_with_event(b"h", b"f");
+    assert_eq!(outcome, HashFieldPersistResult::NoTtl);
+    let events = collect_event_pairs(&mut store);
+    assert!(events.is_empty(), "no event on no-op persist: {events:?}");
+}
+
 // ── OBJECT ENCODING / listpack_ex / hashtable_ex (part 4a) ─────────
 
 #[test]
