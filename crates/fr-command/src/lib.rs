@@ -680,15 +680,19 @@ impl CommandError {
                 command,
                 subcommand,
             } => {
-                let cmd_lower = command.to_ascii_lowercase();
-                let sub_lower = subcommand.to_ascii_lowercase();
-                let kind = match cmd_lower.as_str() {
-                    "acl" | "slowlog" | "xgroup" | "xinfo" => "subcommand",
-                    _ => "command",
-                };
+                // Upstream Redis uses the unconditional "command" suffix for
+                // every subcommand family. Verified via live probe against
+                // redis_version 7.2.4 (vendored legacy_redis_code/redis):
+                //   ACL WHOAMI extra     -> ERR ... 'acl|whoami' command
+                //   XGROUP CREATE        -> ERR ... 'xgroup|create' command
+                //   XINFO STREAM         -> ERR ... 'xinfo|stream' command
+                // Upstream source: server.c:3792 and acl.c:3033 both print
+                // "wrong number of arguments for '%s' command" with fullname.
+                // (br-frankenredis-v4x3)
                 RespFrame::Error(format!(
-                    "ERR wrong number of arguments for '{}|{}' {}",
-                    cmd_lower, sub_lower, kind
+                    "ERR wrong number of arguments for '{}|{}' command",
+                    command.to_ascii_lowercase(),
+                    subcommand.to_ascii_lowercase()
                 ))
             },
             CommandError::UnknownSubcommand {
