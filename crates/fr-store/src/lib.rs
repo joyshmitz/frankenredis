@@ -2678,6 +2678,14 @@ impl Store {
         if !self.record_keyspace_lookup(key, now_ms) {
             return None;
         }
+        // Redis 7.4: any hash carrying a per-field TTL flips its encoding
+        // from listpack/hashtable to the listpack_ex / hashtable_ex variant.
+        // (br-frankenredis-omff)
+        let hash_has_field_ttl = self
+            .hash_field_expires
+            .range((key.to_vec(), Vec::new())..)
+            .next()
+            .is_some_and(|((k, _), _)| k.as_slice() == key);
         let entry = self.entries.get(key)?;
         Some(match &entry.value {
             Value::String(v) => {
@@ -2695,15 +2703,16 @@ impl Store {
                 }
             }
             Value::Hash(m) => {
-                if m.len() <= self.hash_max_listpack_entries
+                let fits_listpack = m.len() <= self.hash_max_listpack_entries
                     && m.iter().all(|(k, v)| {
                         k.len() <= self.hash_max_listpack_value
                             && v.len() <= self.hash_max_listpack_value
-                    })
-                {
-                    "listpack"
-                } else {
-                    "hashtable"
+                    });
+                match (fits_listpack, hash_has_field_ttl) {
+                    (true, false) => "listpack",
+                    (false, false) => "hashtable",
+                    (true, true) => "listpack_ex",
+                    (false, true) => "hashtable_ex",
                 }
             }
             Value::List(l) => {
@@ -3067,6 +3076,21 @@ impl Store {
         }
     }
 
+    /// Emit the upstream-matching `hexpired` keyspace notification for a
+    /// single reaped field. The event lives on the key (not the field —
+    /// upstream keyspace events are key-scoped), same convention as the
+    /// whole-key `expired` notification. (br-frankenredis-omff)
+    fn notify_hash_field_expired(&mut self, key: &[u8]) {
+        if self.notify_keyspace_events == 0 {
+            return;
+        }
+        let (db, logical_key) = match decode_db_key(key) {
+            Some((db, lk)) => (db, lk.to_vec()),
+            None => (0, key.to_vec()),
+        };
+        self.notify_keyspace_event(NOTIFY_EXPIRED, "hexpired", &logical_key, db);
+    }
+
     /// Drop every expired per-field TTL entry on `key` from the hash and
     /// from the hash_field_expires map. Called by the hash-read surface
     /// so expired fields are invisible to clients (Redis 7.4 semantic).
@@ -3104,6 +3128,9 @@ impl Store {
         if reaped > 0 {
             self.dirty = self.dirty.saturating_add(reaped as u64);
             self.stat_expired_keys = self.stat_expired_keys.saturating_add(reaped as u64);
+            for _ in 0..reaped {
+                self.notify_hash_field_expired(key);
+            }
         }
         if became_empty {
             // Upstream behavior: a hash with no fields is removed entirely.
@@ -3137,6 +3164,7 @@ impl Store {
         if removed {
             self.dirty = self.dirty.saturating_add(1);
             self.stat_expired_keys = self.stat_expired_keys.saturating_add(1);
+            self.notify_hash_field_expired(key);
         }
         if became_empty {
             self.internal_entries_remove(key);

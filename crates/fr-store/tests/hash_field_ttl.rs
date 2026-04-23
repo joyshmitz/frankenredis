@@ -376,6 +376,49 @@ fn hash_field_ttl_clear_for_field_is_targeted() {
 
 // ── Carrier count ───────────────────────────────────────────────────
 
+// ── OBJECT ENCODING / listpack_ex / hashtable_ex (part 4a) ─────────
+
+#[test]
+fn object_encoding_reports_listpack_ex_for_hash_with_any_field_ttl() {
+    let mut store = Store::new();
+    seed_hash(&mut store, b"h", &[(b"f", b"v")]);
+    // No TTL yet → plain listpack.
+    assert_eq!(store.object_encoding(b"h", NOW), Some("listpack"));
+
+    store.hash_field_set_abs_expiry(
+        b"h",
+        b"f",
+        NOW + 60_000,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    assert_eq!(store.object_encoding(b"h", NOW), Some("listpack_ex"));
+}
+
+#[test]
+fn object_encoding_reports_hashtable_ex_when_big_hash_has_field_ttl() {
+    let mut store = Store::new();
+    // Seed >128 entries to push over the listpack threshold.
+    let fields: Vec<Vec<u8>> = (0..140_u32)
+        .map(|i| format!("f{i}").into_bytes())
+        .collect();
+    for f in &fields {
+        store
+            .hset(b"h", f.clone(), b"v".to_vec(), NOW)
+            .expect("hset");
+    }
+    assert_eq!(store.object_encoding(b"h", NOW), Some("hashtable"));
+
+    store.hash_field_set_abs_expiry(
+        b"h",
+        &fields[0],
+        NOW + 60_000,
+        HashFieldTtlCondition::None,
+        NOW,
+    );
+    assert_eq!(store.object_encoding(b"h", NOW), Some("hashtable_ex"));
+}
+
 // ── Lazy-expiry hook (part 3: br-frankenredis-b8ut) ────────────────
 //
 // Once a per-field TTL lapses, every hash-read surface must act as if
