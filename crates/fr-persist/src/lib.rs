@@ -763,6 +763,17 @@ const RDB_TYPE_LIST: u8 = 1;
 const RDB_TYPE_SET: u8 = 2;
 const RDB_TYPE_ZSET_2: u8 = 5; // Binary LE double scores (our encoding)
 const RDB_TYPE_HASH: u8 = 4;
+/// FrankenRedis-private type tag for hashes that carry at least one
+/// per-field TTL. Uses upstream's RDB_TYPE_HASH_METADATA number (21)
+/// for name alignment even though our on-the-wire layout is simpler —
+/// there's no upstream interop here; that lives under frankenredis-s5su
+/// / frankenredis-v8s5. Layout on disk:
+///   [u8 type=21][key:string][u32 len][(field:string, value:string,
+///                                      expires_ms:u64)]×len
+/// The 0-sentinel convention: expires_ms == u64::MAX means "no TTL for
+/// this field"; any other value is the absolute ms-since-epoch deadline.
+/// (br-frankenredis-th7q)
+const RDB_TYPE_HASH_WITH_TTLS: u8 = 21;
 const RDB_TYPE_STREAM: u8 = 15; // FrankenRedis stream encoding
 const RDB_CHECKSUM_LEN: usize = 8;
 const CRC64_REDIS_POLY: u64 = 0xAD93_D235_94C9_35A9;
@@ -814,6 +825,11 @@ pub enum RdbValue {
     List(Vec<Vec<u8>>),
     Set(Vec<Vec<u8>>),
     Hash(Vec<(Vec<u8>, Vec<u8>)>),
+    /// Redis 7.4 hash with per-field TTLs. Each tuple is
+    /// (field, value, Some(abs_deadline_ms)) for a TTL'd field or
+    /// (field, value, None) for a field without a TTL. Encoded via
+    /// RDB_TYPE_HASH_WITH_TTLS (21). (br-frankenredis-th7q)
+    HashWithTtls(Vec<(Vec<u8>, Vec<u8>, Option<u64>)>),
     SortedSet(Vec<(Vec<u8>, f64)>),
     /// Stream: entries + optional watermark + consumer groups.
     Stream(
@@ -964,6 +980,19 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
                 for (field, value) in fields {
                     rdb_encode_string(&mut buf, field);
                     rdb_encode_string(&mut buf, value);
+                }
+            }
+            RdbValue::HashWithTtls(fields) => {
+                buf.push(RDB_TYPE_HASH_WITH_TTLS);
+                rdb_encode_string(&mut buf, &entry.key);
+                rdb_encode_length(&mut buf, fields.len());
+                for (field, value, expires_ms) in fields {
+                    rdb_encode_string(&mut buf, field);
+                    rdb_encode_string(&mut buf, value);
+                    // u64::MAX sentinel = "no TTL". Any other value is
+                    // the absolute ms-since-epoch deadline.
+                    let encoded = expires_ms.unwrap_or(u64::MAX);
+                    buf.extend_from_slice(&encoded.to_le_bytes());
                 }
             }
             RdbValue::SortedSet(members) => {
@@ -1193,6 +1222,7 @@ pub fn decode_rdb_prefix(data: &[u8]) -> Result<RdbDecodeResult, PersistError> {
                 | RDB_TYPE_LIST
                 | RDB_TYPE_SET
                 | RDB_TYPE_HASH
+                | RDB_TYPE_HASH_WITH_TTLS
                 | RDB_TYPE_ZSET_2
                 | RDB_TYPE_STREAM
         );
@@ -1293,7 +1323,7 @@ pub fn decode_rdb_prefix(data: &[u8]) -> Result<RdbDecodeResult, PersistError> {
                 cursor += 1;
             }
             type_byte @ (RDB_TYPE_STRING | RDB_TYPE_LIST | RDB_TYPE_SET | RDB_TYPE_HASH
-            | RDB_TYPE_ZSET_2 | RDB_TYPE_STREAM) => {
+            | RDB_TYPE_HASH_WITH_TTLS | RDB_TYPE_ZSET_2 | RDB_TYPE_STREAM) => {
                 let (key, consumed) =
                     rdb_decode_string(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                 cursor += consumed;
@@ -1346,6 +1376,30 @@ pub fn decode_rdb_prefix(data: &[u8]) -> Result<RdbDecodeResult, PersistError> {
                             fields.push((f, v));
                         }
                         RdbValue::Hash(fields)
+                    }
+                    RDB_TYPE_HASH_WITH_TTLS => {
+                        let (count, c) =
+                            rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
+                        cursor += c;
+                        let mut fields = Vec::with_capacity(count.min(1024));
+                        for _ in 0..count {
+                            let (f, c1) = rdb_decode_string(&data[cursor..])
+                                .ok_or(PersistError::InvalidFrame)?;
+                            cursor += c1;
+                            let (v, c2) = rdb_decode_string(&data[cursor..])
+                                .ok_or(PersistError::InvalidFrame)?;
+                            cursor += c2;
+                            if cursor + 8 > data.len() {
+                                return Err(PersistError::InvalidFrame);
+                            }
+                            let mut deadline_buf = [0u8; 8];
+                            deadline_buf.copy_from_slice(&data[cursor..cursor + 8]);
+                            cursor += 8;
+                            let raw = u64::from_le_bytes(deadline_buf);
+                            let expires = if raw == u64::MAX { None } else { Some(raw) };
+                            fields.push((f, v, expires));
+                        }
+                        RdbValue::HashWithTtls(fields)
                     }
                     RDB_TYPE_ZSET_2 => {
                         let (count, c) =

@@ -10406,10 +10406,36 @@ fn store_to_rdb_entries(store: &mut Store, now_ms: u64) -> Vec<RdbEntry> {
                 RdbValue::Set(members)
             }
             Value::Hash(h) => {
-                let mut fields: Vec<(Vec<u8>, Vec<u8>)> =
-                    h.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                fields.sort_by(|a, b| a.0.cmp(&b.0));
-                RdbValue::Hash(fields)
+                // Probe the per-field TTL map with a (physical_key, _) prefix
+                // range. If any field carries a TTL we emit HashWithTtls,
+                // otherwise keep the legacy plain Hash encoding so older RDB
+                // files and types that never use per-field TTLs stay bit-
+                // identical. (br-frankenredis-th7q)
+                let physical = key.clone();
+                let has_any_ttl = store
+                    .hash_field_expires
+                    .range((physical.clone(), Vec::new())..)
+                    .next()
+                    .is_some_and(|((k, _), _)| k == &physical);
+                if has_any_ttl {
+                    let mut fields: Vec<(Vec<u8>, Vec<u8>, Option<u64>)> = h
+                        .iter()
+                        .map(|(k_, v_)| {
+                            let ttl = store
+                                .hash_field_expires
+                                .get(&(physical.clone(), k_.clone()))
+                                .copied();
+                            (k_.clone(), v_.clone(), ttl)
+                        })
+                        .collect();
+                    fields.sort_by(|a, b| a.0.cmp(&b.0));
+                    RdbValue::HashWithTtls(fields)
+                } else {
+                    let mut fields: Vec<(Vec<u8>, Vec<u8>)> =
+                        h.iter().map(|(k_, v_)| (k_.clone(), v_.clone())).collect();
+                    fields.sort_by(|a, b| a.0.cmp(&b.0));
+                    RdbValue::Hash(fields)
+                }
             }
             Value::SortedSet(zs) => {
                 let members: Vec<(Vec<u8>, f64)> =
@@ -10503,6 +10529,30 @@ fn apply_rdb_entries_to_store(
                     store
                         .hset(&key, field.clone(), value.clone(), now_ms)
                         .map_err(|_| PersistError::InvalidFrame)?;
+                }
+                if let Some(expires_at_ms) = entry.expire_ms {
+                    store.expire_at_milliseconds(
+                        &key,
+                        i64::try_from(expires_at_ms).unwrap_or(i64::MAX),
+                        now_ms,
+                    );
+                }
+            }
+            RdbValue::HashWithTtls(fields) => {
+                // Seed the hash with every field, then reinstate per-field
+                // deadlines via hash_field_expires directly so the persist
+                // state round-trips. (br-frankenredis-th7q)
+                for (field, value, _) in fields {
+                    store
+                        .hset(&key, field.clone(), value.clone(), now_ms)
+                        .map_err(|_| PersistError::InvalidFrame)?;
+                }
+                for (field, _, deadline) in fields {
+                    if let Some(abs_ms) = deadline {
+                        store
+                            .hash_field_expires
+                            .insert((key.clone(), field.clone()), *abs_ms);
+                    }
                 }
                 if let Some(expires_at_ms) = entry.expire_ms {
                     store.expire_at_milliseconds(
@@ -12196,6 +12246,96 @@ mod tests {
         assert!(entries.iter().any(|entry| {
             entry.db == 4 && entry.key == b"four" && entry.value == RdbValue::String(b"4".to_vec())
         }));
+    }
+
+    #[test]
+    fn rdb_roundtrip_preserves_hash_field_ttls_via_hashwithttls_variant() {
+        // (br-frankenredis-th7q) Seed a hash with per-field TTLs, serialize
+        // to an RDB byte stream, load into a fresh Runtime, and verify
+        // every per-field deadline round-tripped through type 21.
+        let mut rt = Runtime::default_strict();
+        rt.execute_frame(
+            command(&[b"HSET", b"h", b"alive", b"a", b"doomed", b"b", b"keep", b"c"]),
+            0,
+        );
+        rt.execute_frame(
+            command(&[b"HPEXPIREAT", b"h", b"1700000500500", b"FIELDS", b"1", b"alive"]),
+            0,
+        );
+        rt.execute_frame(
+            command(&[b"HPEXPIREAT", b"h", b"1800000000000", b"FIELDS", b"1", b"doomed"]),
+            0,
+        );
+
+        let entries = store_to_rdb_entries(&mut rt.server.store, 0);
+        let hash_entry = entries
+            .iter()
+            .find(|e| e.key == b"h")
+            .expect("hash entry");
+        match &hash_entry.value {
+            RdbValue::HashWithTtls(fields) => {
+                let map: std::collections::BTreeMap<Vec<u8>, Option<u64>> = fields
+                    .iter()
+                    .map(|(f, _, ttl)| (f.clone(), *ttl))
+                    .collect();
+                assert_eq!(map.get(b"alive".as_slice()), Some(&Some(1_700_000_500_500)));
+                assert_eq!(map.get(b"doomed".as_slice()), Some(&Some(1_800_000_000_000)));
+                assert_eq!(map.get(b"keep".as_slice()), Some(&None));
+            }
+            other => panic!("expected HashWithTtls, got {other:?}"),
+        }
+
+        let bytes = fr_persist::encode_rdb(&entries, &[]);
+        let (decoded_entries, _aux) = fr_persist::decode_rdb(&bytes).expect("decode");
+
+        let mut rt2 = Runtime::default_strict();
+        super::apply_rdb_entries_to_store(&mut rt2.server.store, &decoded_entries, 0)
+            .expect("apply rdb");
+
+        // Verify the hash + TTLs reconstruct byte-for-byte.
+        let hlen = rt2.execute_frame(command(&[b"HLEN", b"h"]), 0);
+        assert_eq!(hlen, RespFrame::Integer(3));
+        let httl_alive = rt2.execute_frame(
+            command(&[b"HPEXPIRETIME", b"h", b"FIELDS", b"1", b"alive"]),
+            0,
+        );
+        assert_eq!(
+            httl_alive,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1_700_000_500_500)]))
+        );
+        let httl_doomed = rt2.execute_frame(
+            command(&[b"HPEXPIRETIME", b"h", b"FIELDS", b"1", b"doomed"]),
+            0,
+        );
+        assert_eq!(
+            httl_doomed,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1_800_000_000_000)]))
+        );
+        // `keep` has no TTL — HTTL returns -1.
+        let httl_keep = rt2.execute_frame(
+            command(&[b"HTTL", b"h", b"FIELDS", b"1", b"keep"]),
+            0,
+        );
+        assert_eq!(httl_keep, RespFrame::Array(Some(vec![RespFrame::Integer(-1)])));
+    }
+
+    #[test]
+    fn rdb_roundtrip_hash_without_ttls_keeps_plain_type_tag() {
+        // Hashes without per-field TTLs must keep emitting the classic
+        // RDB_TYPE_HASH (4) encoding, so older RDB readers continue
+        // working. (br-frankenredis-th7q)
+        let mut rt = Runtime::default_strict();
+        rt.execute_frame(
+            command(&[b"HSET", b"plain", b"f1", b"v1", b"f2", b"v2"]),
+            0,
+        );
+        let entries = store_to_rdb_entries(&mut rt.server.store, 0);
+        let entry = entries.iter().find(|e| e.key == b"plain").unwrap();
+        assert!(
+            matches!(entry.value, RdbValue::Hash(_)),
+            "expected plain Hash, got {:?}",
+            entry.value
+        );
     }
 
     #[test]
