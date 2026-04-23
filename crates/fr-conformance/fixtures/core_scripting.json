@@ -809,7 +809,7 @@
               },
               {
                 "kind": "bulk",
-                "value": "lua"
+                "value": "LUA"
               },
               {
                 "kind": "bulk",
