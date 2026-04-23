@@ -6316,17 +6316,28 @@ fn function_cmd(
                 RespFrame::BulkString(Some(b"engine".to_vec())),
                 // PINNED 2026-04-22 — do NOT lowercase this.
                 //
-                // Verified against stock `redis:7.4` (version 7.4.8) via a
-                // one-shot `FUNCTION LOAD "#!lua name=mylib ..."` + `FUNCTION
-                // LIST` probe: the engine field is emitted in its stored case
-                // (`"LUA"`), matching the hardcoded `b"LUA"` in the
-                // FUNCTION STATS engines map below. Prior agents have flipped
-                // this line to `lib.engine.to_ascii_lowercase().into_bytes()`
-                // multiple times in a row — please stop. Upstream Redis keeps
-                // the stored case; `to_ascii_lowercase` introduces a parity
-                // divergence. If a future Redis release changes this, update
-                // both the live-oracle fixture and this comment in the same
-                // commit.
+                // Verified against the vendored Redis 7.2.4 source
+                // (legacy_redis_code/redis/src/function_lua.c:48 defines
+                // `#define LUA_ENGINE_NAME "LUA"` and line 505 registers the
+                // Lua engine as `functionsRegisterEngine(LUA_ENGINE_NAME, ...)`).
+                // functions.c:551-552 then emits the engine field via
+                // `addReplyBulkCBuffer(c, li->ei->name, ...)`, which is the
+                // registered `"LUA"` string — i.e. upstream Redis 7.2.4 emits
+                // the engine name in its stored case (`"LUA"`, uppercase).
+                // The matching pin in the FUNCTION STATS engines map below
+                // hardcodes `b"LUA"` for the same reason.
+                //
+                // Prior agents have flipped this line to
+                // `lib.engine.to_ascii_lowercase().into_bytes()` at least
+                // four times. The empirical record on the vendored Redis
+                // 7.2.4 tree is unambiguous — `to_ascii_lowercase` introduces
+                // a parity divergence. The root cause of the repeated flip
+                // was that the `function_list_basic` fixture in
+                // crates/fr-conformance/fixtures/core_scripting.json briefly
+                // expected `"lua"`; that fixture has been corrected to
+                // `"LUA"` so the fixture and the code now agree.
+                // If a future Redis release changes this, update both the
+                // live-oracle fixture and this comment in the same commit.
                 RespFrame::BulkString(Some(lib.engine.as_bytes().to_vec())),
                 RespFrame::BulkString(Some(b"functions".to_vec())),
             ];
@@ -35014,10 +35025,4 @@ mod tests {
 }
 #[cfg(test)]
 mod zadd_xx_test;
-
-est;
-
-add_xx_test;
-
-add_xx_test;
 
