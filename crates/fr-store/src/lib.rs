@@ -1139,6 +1139,13 @@ pub struct Store {
     /// primitives; hash-read-path lazy expiry is part 3 (b8ut).
     pub hash_field_expires: BTreeMap<(Vec<u8>, Vec<u8>), u64>,
 
+    /// Cumulative count of per-field TTL reaps observed per hash key.
+    /// Surfaced via DEBUG OBJECT's `hexpired_fields:<n>` suffix
+    /// (br-frankenredis-25re). Cleared when the whole hash key is
+    /// removed, so the counter is always scoped to the *current*
+    /// incarnation of the key.
+    pub hash_field_expired_counts: BTreeMap<Vec<u8>, u64>,
+
     // Eviction policy — configurable via CONFIG SET maxmemory-policy.
     pub maxmemory_policy: MaxmemoryPolicy,
     pub lfu_decay_time: u64,
@@ -1370,6 +1377,7 @@ impl Default for Store {
             pubsub_pending: Vec::new(),
             function_libraries: HashMap::new(),
             hash_field_expires: BTreeMap::new(),
+            hash_field_expired_counts: BTreeMap::new(),
             maxmemory_policy: MaxmemoryPolicy::default(),
             lfu_decay_time: 1,
             hash_max_listpack_entries: 128,
@@ -3128,6 +3136,15 @@ impl Store {
         if reaped > 0 {
             self.dirty = self.dirty.saturating_add(reaped as u64);
             self.stat_expired_keys = self.stat_expired_keys.saturating_add(reaped as u64);
+            *self
+                .hash_field_expired_counts
+                .entry(key.to_vec())
+                .or_insert(0) = self
+                .hash_field_expired_counts
+                .get(key)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(reaped as u64);
             for _ in 0..reaped {
                 self.notify_hash_field_expired(key);
             }
@@ -3164,6 +3181,11 @@ impl Store {
         if removed {
             self.dirty = self.dirty.saturating_add(1);
             self.stat_expired_keys = self.stat_expired_keys.saturating_add(1);
+            let entry = self
+                .hash_field_expired_counts
+                .entry(key.to_vec())
+                .or_insert(0);
+            *entry = entry.saturating_add(1);
             self.notify_hash_field_expired(key);
         }
         if became_empty {
@@ -8389,8 +8411,9 @@ impl Store {
 
     /// Remove every per-field TTL entry for `key`. Called when the whole
     /// hash key is deleted (DEL / expired / FLUSH*) so the field-TTL map
-    /// doesn't accumulate orphan entries. Public so the whole-key
-    /// eviction paths in fr-store (and higher layers) can invoke it.
+    /// doesn't accumulate orphan entries. Also clears the DEBUG OBJECT
+    /// expired-fields counter — a new incarnation of the same key
+    /// name starts counting from zero (br-frankenredis-25re).
     pub fn hash_field_ttl_clear_for_key(&mut self, key: &[u8]) {
         // BTreeMap range over (key, _) prefix to enumerate + retain.
         let victims: Vec<(Vec<u8>, Vec<u8>)> = self
@@ -8402,6 +8425,18 @@ impl Store {
         for composite in victims {
             self.hash_field_expires.remove(&composite);
         }
+        self.hash_field_expired_counts.remove(key);
+    }
+
+    /// Cumulative count of per-field TTL reaps for `key` since the
+    /// current incarnation of the key was created. Used by DEBUG OBJECT
+    /// to report `hexpired_fields:<n>`. (br-frankenredis-25re)
+    #[must_use]
+    pub fn hash_field_expired_count(&self, key: &[u8]) -> u64 {
+        self.hash_field_expired_counts
+            .get(key)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Remove the per-field TTL for (`key`, `field`). Called from HDEL

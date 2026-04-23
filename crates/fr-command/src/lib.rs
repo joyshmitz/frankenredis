@@ -13948,8 +13948,13 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         };
         let serialized_len = store.memory_usage_for_key(key, now_ms).unwrap_or(0);
         let idle_secs = store.object_idletime(key, now_ms).unwrap_or(0);
+        // Redis 7.4 extends DEBUG OBJECT for hashes with the
+        // hexpired_fields:<n> counter (br-frankenredis-25re). Emit it
+        // unconditionally for every value — non-hash types always show
+        // 0 because they never accumulate the counter.
+        let hexpired_fields = store.hash_field_expired_count(key);
         let debug_info = format!(
-            "Value at:0x0 refcount:1 encoding:{encoding} serializedlength:{serialized_len} lru:{idle_secs} lru_seconds_idle:{idle_secs}"
+            "Value at:0x0 refcount:1 encoding:{encoding} serializedlength:{serialized_len} lru:{idle_secs} lru_seconds_idle:{idle_secs} hexpired_fields:{hexpired_fields}"
         );
         Ok(RespFrame::BulkString(Some(debug_info.into_bytes())))
     } else if sub.eq_ignore_ascii_case("DIGEST") {
@@ -18356,6 +18361,58 @@ mod tests {
                 "WRONGTYPE Operation against a key holding the wrong kind of value".to_string()
             )
         );
+    }
+
+    #[test]
+    fn debug_object_reports_hexpired_fields_counter() {
+        let mut store = seed_hash_field_ttl_store();
+        // Fresh hash: counter starts at 0.
+        let out = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"OBJECT".to_vec(), b"h".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("debug object");
+        if let RespFrame::BulkString(Some(bytes)) = out {
+            let s = String::from_utf8(bytes).unwrap();
+            assert!(s.contains("hexpired_fields:0"), "initial: {s}");
+        } else {
+            panic!("expected bulk string");
+        }
+
+        // Set a past TTL; the next HGET reaps the field.
+        dispatch_argv(
+            &[
+                b"HPEXPIREAT".to_vec(),
+                b"h".to_vec(),
+                b"1".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            100,
+        )
+        .expect("hpexpireat past");
+        dispatch_argv(
+            &[b"HGET".to_vec(), b"h".to_vec(), b"f1".to_vec()],
+            &mut store,
+            200,
+        )
+        .expect("hget triggers reap");
+
+        let after = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"OBJECT".to_vec(), b"h".to_vec()],
+            &mut store,
+            200,
+        )
+        .expect("debug object after reap");
+        if let RespFrame::BulkString(Some(bytes)) = after {
+            let s = String::from_utf8(bytes).unwrap();
+            assert!(s.contains("hexpired_fields:1"), "after reap: {s}");
+        } else {
+            panic!("expected bulk string");
+        }
     }
 
     #[test]
