@@ -9071,6 +9071,60 @@ mod tests {
         });
     }
 
+    /// Wire the `core_object.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers OBJECT
+    /// ENCODING / FREQ / IDLETIME / REFCOUNT / HELP. OBJECT IDLETIME
+    /// / FREQ are wall-clock-sensitive so any drift is the shared
+    /// 7rp6 TTL-accounting gap. (br-frankenredis-d1z2)
+    #[test]
+    fn live_redis_core_object_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_object", || {
+            run_live_redis_diff(&cfg, "core_object.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_pfdebug.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers PFDEBUG
+    /// GETREG / DECODE / TODENSE / TOSPARSE / ENCODING.
+    /// (br-frankenredis-fj0e)
+    #[test]
+    fn live_redis_core_pfdebug_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_pfdebug", || {
+            run_live_redis_diff(&cfg, "core_pfdebug.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_migrate.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers MIGRATE DUMP / RESTORE /
+    /// REPLACE / KEYS / COPY / AUTH. MIGRATE to a real target still
+    /// needs a second spawned redis-server and can't be driven from
+    /// the single-oracle harness without destructive setup, so
+    /// connection-level error cases (bad host, bad port, bad key)
+    /// fold in naturally while full copy-flow cases will XFAIL as
+    /// follow-ups surface.
+    /// (br-frankenredis-ifvn)
+    #[test]
+    fn live_redis_core_migrate_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_migrate", || {
+            run_live_redis_diff(&cfg, "core_migrate.json", &oracle)
+        });
+    }
+
     #[test]
     fn live_redis_core_replication_stable_matches_runtime() {
         let cfg = HarnessConfig::default_paths();
