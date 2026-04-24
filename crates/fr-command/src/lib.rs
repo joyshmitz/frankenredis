@@ -14065,7 +14065,14 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("OBJECT") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongArity("DEBUG"));
+            // Upstream debug.c::debugCommand emits
+            // "ERR unknown subcommand or wrong number of arguments
+            // for 'OBJECT'. Try DEBUG HELP." (br-frankenredis-1pe7)
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'OBJECT'. Try DEBUG HELP."
+                    .to_string(),
+            ));
         }
         let key = &argv[2];
         let Some(encoding) = store.object_encoding(key, now_ms) else {
