@@ -7407,7 +7407,12 @@ impl Runtime {
                 static_override_updates.push((canonical.to_string(), value));
                 continue;
             }
-            return RespFrame::Error(format!("ERR Unsupported CONFIG parameter '{parameter}'"));
+            // Upstream config.c::configSetCommand emits "ERR Unknown
+            // option or number of arguments for CONFIG SET - 'name'"
+            // for any unknown parameter. (br-frankenredis-2di1)
+            return RespFrame::Error(format!(
+                "ERR Unknown option or number of arguments for CONFIG SET - '{parameter}'"
+            ));
         }
 
         if let Some(requirepass) = next_requirepass {

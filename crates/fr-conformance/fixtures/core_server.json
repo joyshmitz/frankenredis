@@ -1240,7 +1240,7 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'object|encoding' command"
       }
-      },
+    },
     {
       "name": "object_unknown_subcommand",
       "now_ms": 13019,
@@ -1601,10 +1601,19 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "bulk", "value": "command" },
-              { "kind": "any_integer" },
-              { "kind": "any_integer" },
-              { "kind": "any_integer" }
+              {
+                "kind": "bulk",
+                "value": "command"
+              },
+              {
+                "kind": "any_integer"
+              },
+              {
+                "kind": "any_integer"
+              },
+              {
+                "kind": "any_integer"
+              }
             ]
           }
         ]
@@ -1624,8 +1633,12 @@
           {
             "kind": "array",
             "value": [
-              { "kind": "any_integer" },
-              { "kind": "any_integer" }
+              {
+                "kind": "any_integer"
+              },
+              {
+                "kind": "any_integer"
+              }
             ]
           }
         ]
@@ -1919,7 +1932,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR Unsupported CONFIG parameter 'totally_unknown_param'"
+        "value": "ERR Unknown option or number of arguments for CONFIG SET - 'totally_unknown_param'"
       }
     },
     {
