@@ -7897,6 +7897,16 @@ fn getbit(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
 }
 
 fn bitcount(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
+    // Upstream bitcountCommand (t_string.c) short-circuits to Integer(0)
+    // when the key doesn't exist — BEFORE argv-shape validation — so a
+    // nonexistent key with too many args returns 0 instead of a syntax
+    // error. Match that precedence. (br-frankenredis-ugkf)
+    if argv.len() < 2 {
+        return Err(CommandError::WrongArity("BITCOUNT"));
+    }
+    if !store.exists(&argv[1], now_ms) {
+        return Ok(RespFrame::Integer(0));
+    }
     let (start, end, unit) = match argv.len() {
         2 => (None, None, BitRangeUnit::Byte),
         4 => (
@@ -7918,13 +7928,7 @@ fn bitcount(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
                 unit,
             )
         }
-        _ => {
-            return Err(if argv.len() < 2 {
-                CommandError::WrongArity("BITCOUNT")
-            } else {
-                CommandError::SyntaxError
-            });
-        }
+        _ => return Err(CommandError::SyntaxError),
     };
     let count = store.bitcount(&argv[1], start, end, unit, now_ms)?;
     Ok(RespFrame::Integer(i64::try_from(count).unwrap_or(i64::MAX)))
@@ -12756,7 +12760,7 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         if store.exists_no_touch(&argv[2], now_ms) {
             Ok(RespFrame::Integer(1))
         } else {
-            Ok(RespFrame::Error("ERR no such key".to_string()))
+            Ok(RespFrame::BulkString(None))
         }
     } else if sub.eq_ignore_ascii_case("IDLETIME") {
         if argv.len() != 3 {
@@ -14579,7 +14583,10 @@ fn bitfield_cmd(
                 overflow_mode = BitfieldOverflow::Fail;
             } else {
                 return Ok(RespFrame::Error(
-                    "ERR Invalid OVERFLOW type (should be one of WRAP, SAT, FAIL)".to_string(),
+                    // Upstream t_string.c bitfieldCommand: plain
+                    // "ERR Invalid OVERFLOW type specified".
+                    // (br-frankenredis-ugkf)
+                    "ERR Invalid OVERFLOW type specified".to_string(),
                 ));
             }
             i += 2;
@@ -24655,7 +24662,16 @@ mod tests {
 
     #[test]
     fn bitcount_three_arg_form_is_syntax_error() {
+        // Upstream bitcountCommand short-circuits to Integer(0) on a
+        // missing key — so seed the key first to force the argv-shape
+        // check. (br-frankenredis-ugkf)
         let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed key");
         let err = dispatch_argv(
             &[b"BITCOUNT".to_vec(), b"k".to_vec(), b"0".to_vec()],
             &mut store,
@@ -24667,7 +24683,14 @@ mod tests {
 
     #[test]
     fn bitcount_invalid_unit_is_syntax_error() {
+        // Same precedence note as bitcount_three_arg_form_is_syntax_error.
         let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed key");
         let err = dispatch_argv(
             &[
                 b"BITCOUNT".to_vec(),
@@ -36530,6 +36553,37 @@ mod tests {
         )
         .expect("missing freq reply");
         assert_eq!(missing_freq, RespFrame::BulkString(None));
+    }
+
+    #[test]
+    fn object_refcount_missing_key_returns_null_bulk() {
+        let mut store = Store::new();
+
+        let missing_refcount = dispatch_argv(
+            &[
+                b"OBJECT".to_vec(),
+                b"REFCOUNT".to_vec(),
+                b"missing".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("missing refcount reply");
+        assert_eq!(missing_refcount, RespFrame::BulkString(None));
+
+        dispatch_argv(
+            &[b"SET".to_vec(), b"obj".to_vec(), b"v".to_vec()],
+            &mut store,
+            1,
+        )
+        .expect("seed key");
+        let existing_refcount = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"REFCOUNT".to_vec(), b"obj".to_vec()],
+            &mut store,
+            2,
+        )
+        .expect("existing refcount reply");
+        assert_eq!(existing_refcount, RespFrame::Integer(1));
     }
 
     #[test]
