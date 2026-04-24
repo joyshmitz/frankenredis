@@ -7971,6 +7971,82 @@ mod tests {
         });
     }
 
+    /// Wire the `core_scripting.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers
+    /// EVAL/EVALSHA/SCRIPT LOAD/SCRIPT EXISTS/SCRIPT FLUSH plus
+    /// FUNCTION CREATE/LOAD/LIST/CALL. (br-frankenredis-rdeg)
+    #[test]
+    fn live_redis_core_scripting_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        let fixture = match load_conformance_fixture(&cfg, "core_scripting.json") {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!("[live-oracle:core_scripting] fixture load error: {err}");
+                return;
+            }
+        };
+        const XFAIL_CASES: &[&str] = &[
+            "eval_ipairs_rejects_non_table_argument",
+            "eval_next_rejects_invalid_key",
+            "eval_next_rejects_non_table_argument",
+            "eval_os_clock_non_negative",
+            "eval_os_clock_returns_number",
+            "eval_pairs_rejects_non_table_argument",
+            "eval_rawget_rejects_non_table_argument",
+            "eval_rawlen_table",
+            "eval_rawset_rejects_non_table_argument",
+            "eval_redis_call_config_get_appendfsync_static",
+            "eval_redis_call_config_get_databases_static",
+            "eval_redis_call_config_get_hash_max_listpack_entries",
+            "eval_redis_call_config_get_maxmemory_policy",
+            "eval_redis_call_config_get_nonexistent_returns_empty",
+            "eval_redis_call_config_get_wildcard_pattern",
+            "eval_redis_call_config_set_and_get_encoding_threshold",
+            "eval_redis_call_xread_block_rejected_from_scripts",
+            "eval_redis_call_xreadgroup_block_rejected_from_scripts",
+            "eval_ro_wrong_arity",
+            "eval_select_zero_index_errors",
+            "eval_table_concat_rejects_non_numeric_end",
+            "eval_table_concat_rejects_non_numeric_start",
+            "eval_table_concat_rejects_non_table_argument",
+            "eval_table_insert_rejects_non_numeric_position",
+            "eval_table_insert_rejects_non_table_argument",
+            "eval_table_insert_rejects_out_of_bounds_position",
+            "eval_table_remove_rejects_non_numeric_position",
+            "eval_table_remove_rejects_non_table_argument",
+            "eval_unpack_rejects_non_numeric_end",
+            "eval_unpack_rejects_non_numeric_start",
+            "eval_unpack_rejects_non_table_argument",
+            "eval_xpcall_error_with_handler",
+            "eval_xpcall_with_handler",
+            "evalsha_ro_wrong_arity",
+        ];
+        let xfails = XFAIL_CASES.iter().copied().collect::<BTreeSet<_>>();
+        let missing_xfails = xfails
+            .iter()
+            .copied()
+            .filter(|name| !fixture.cases.iter().any(|case| case.name == *name))
+            .collect::<Vec<_>>();
+        assert!(
+            missing_xfails.is_empty(),
+            "core_scripting XFAIL entries missing from fixture: {missing_xfails:?}"
+        );
+        let stable_names: Vec<String> = fixture
+            .cases
+            .iter()
+            .map(|case| case.name.clone())
+            .filter(|name| !xfails.contains(name.as_str()))
+            .collect();
+        let stable_refs: Vec<&str> = stable_names.iter().map(String::as_str).collect();
+        run_live_diff_tolerant("core_scripting", || {
+            run_live_redis_diff_for_cases(&cfg, "core_scripting.json", &stable_refs, &oracle)
+        });
+    }
+
     #[test]
     fn live_redis_core_replication_stable_matches_runtime() {
         let cfg = HarnessConfig::default_paths();
