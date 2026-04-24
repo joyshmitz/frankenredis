@@ -9066,20 +9066,6 @@ mod tests {
             "config_rewrite",
             "config_rewrite_ok",
             "config_subcommand_case_insensitive_rewrite",
-            // CONFIG SET numeric-range errors: upstream emits the
-            // long-form "CONFIG SET failed (possibly related to
-            // argument '...') - argument must be a memory value /
-            // between 0 and ... inclusive / couldn't be parsed" while
-            // ours emits the generic "value is not an integer" or the
-            // per-parameter custom message. Fix in fr-runtime
-            // CONFIG SET numeric validator.
-            "config_set_maxmemory_negative_error",
-            "config_set_maxmemory_non_integer_error",
-            "config_set_maxmemory_float_error",
-            "config_set_acllog_negative_error",
-            "config_set_acllog_non_integer_error",
-            "config_set_slowlog_max_len_negative_error",
-            "config_set_maxmemory_policy_invalid",
             // active-defrag-enabled is a feature we don't model;
             // upstream accepts the parameter. Silent-accept vs
             // reject semantic mismatch.
