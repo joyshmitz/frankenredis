@@ -1319,8 +1319,8 @@
         "nokey"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {
@@ -1508,8 +1508,8 @@
         "nosuchkey"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {
@@ -2166,8 +2166,8 @@
         "nosuch_obj"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {
@@ -2779,7 +2779,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR DUMP payload version or checksum are wrong"
+        "value": "BUSYKEY Target key name already exists."
       }
     }
   ]

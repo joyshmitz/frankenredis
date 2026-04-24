@@ -1134,7 +1134,7 @@ const CORE_GENERIC_LIVE_STABLE_CASES: &[&str] = &[
     "object_encoding_intset_setup",
     "object_encoding_intset",
     "object_encoding_nonexistent",
-    // OBJECT REFCOUNT (skipped: live Redis returns error for missing keys)
+    // OBJECT REFCOUNT
     "object_refcount",
     // TOUCH
     "touch_existing",

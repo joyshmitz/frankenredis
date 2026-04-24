@@ -158,8 +158,8 @@
       "now_ms": 6001,
       "argv": ["OBJECT", "REFCOUNT", "no_such_key_obj"],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
 
@@ -528,8 +528,8 @@
       "now_ms": 38002,
       "argv": ["OBJECT", "REFCOUNT", "obj_exp_key"],
       "expect": {
-        "kind": "error",
-        "value": "ERR no such key"
+        "kind": "bulk",
+        "value": null
       }
     },
     {

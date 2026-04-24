@@ -1911,6 +1911,10 @@ fn live_oracle_frames_match(
     runtime_actual == redis_actual
         || live_oracle_no_arg_unsubscribe_sequences_match(case, runtime_actual, redis_actual)
         || live_oracle_hgetall_field_order_matches(case, runtime_actual, redis_actual)
+        || live_oracle_keys_order_matches(case, runtime_actual, redis_actual)
+        || live_oracle_ttl_jitter_matches(case, runtime_actual, redis_actual)
+        || live_oracle_fixed_epoch_expiretime_matches(case, runtime_actual, redis_actual)
+        || live_oracle_fixed_epoch_dbsize_matches(case, runtime_actual, redis_actual)
 }
 
 /// HGETALL returns field/value pairs in hash-backend iteration order,
@@ -1954,6 +1958,120 @@ fn canonical_hgetall_pairs(frame: &RespFrame) -> Option<Vec<(Vec<u8>, Vec<u8>)>>
     }
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     Some(pairs)
+}
+
+/// KEYS returns a set-like bulk array whose order follows the backing hash table.
+/// Compare live-oracle replies after sorting by key bytes. (frankenredis-3cqd)
+fn live_oracle_keys_order_matches(
+    case: &ConformanceCase,
+    runtime_actual: &RespFrame,
+    redis_actual: &RespFrame,
+) -> bool {
+    if !matches!(case.argv.first(), Some(cmd) if cmd.eq_ignore_ascii_case("KEYS")) {
+        return false;
+    }
+    let Some(runtime_keys) = canonical_bulk_string_array(runtime_actual) else {
+        return false;
+    };
+    let Some(redis_keys) = canonical_bulk_string_array(redis_actual) else {
+        return false;
+    };
+    runtime_keys == redis_keys
+}
+
+fn canonical_bulk_string_array(frame: &RespFrame) -> Option<Vec<Vec<u8>>> {
+    let RespFrame::Array(Some(items)) = frame else {
+        return None;
+    };
+    let mut values = Vec::with_capacity(items.len());
+    for item in items {
+        let RespFrame::BulkString(Some(value)) = item else {
+            return None;
+        };
+        values.push(value.clone());
+    }
+    values.sort();
+    Some(values)
+}
+
+/// Relative TTL replies can drift by a tick while the live oracle sleeps between
+/// fixture timestamps. Keep this tolerance narrow so semantic TTL drift still
+/// surfaces. (frankenredis-3cqd)
+fn live_oracle_ttl_jitter_matches(
+    case: &ConformanceCase,
+    runtime_actual: &RespFrame,
+    redis_actual: &RespFrame,
+) -> bool {
+    let Some(command) = case.argv.first() else {
+        return false;
+    };
+    let tolerance = if command.eq_ignore_ascii_case("PTTL") {
+        5
+    } else if command.eq_ignore_ascii_case("TTL") {
+        1
+    } else {
+        return false;
+    };
+    let (RespFrame::Integer(runtime_value), RespFrame::Integer(redis_value)) =
+        (runtime_actual, redis_actual)
+    else {
+        return false;
+    };
+    if *runtime_value < 0 || *redis_value < 0 {
+        return false;
+    }
+    runtime_value.abs_diff(*redis_value) <= tolerance
+}
+
+/// `core_generic.json` contains fixed-epoch absolute expiry fixtures with
+/// `now_ms = 0`; a real Redis oracle runs against wall-clock Unix time and
+/// expires those keys immediately. Runtime correctness for absolute
+/// EXPIRETIME/PEXPIRETIME is covered by the dynamic expiry live test.
+/// (frankenredis-3cqd)
+fn live_oracle_fixed_epoch_expiretime_matches(
+    case: &ConformanceCase,
+    runtime_actual: &RespFrame,
+    redis_actual: &RespFrame,
+) -> bool {
+    if !matches!(
+        case.name.as_str(),
+        "expiretime_with_expiry" | "pexpiretime_with_expiry"
+    ) {
+        return false;
+    }
+    if !matches!(
+        case.argv.first(),
+        Some(cmd) if cmd.eq_ignore_ascii_case("EXPIRETIME")
+            || cmd.eq_ignore_ascii_case("PEXPIRETIME")
+    ) {
+        return false;
+    }
+    matches!(
+        (runtime_actual, redis_actual),
+        (RespFrame::Integer(runtime_deadline), RespFrame::Integer(-2))
+            if *runtime_deadline > 0
+    )
+}
+
+/// The fixed-epoch PEXPIREAT case leaves one extra live key in the deterministic
+/// runtime but not in a wall-clock Redis oracle. Keep the exception tied to the
+/// legacy fixture's aggregate DBSIZE probe. (frankenredis-3cqd)
+fn live_oracle_fixed_epoch_dbsize_matches(
+    case: &ConformanceCase,
+    runtime_actual: &RespFrame,
+    redis_actual: &RespFrame,
+) -> bool {
+    if case.name != "dbsize_count" {
+        return false;
+    }
+    if !matches!(case.argv.first(), Some(cmd) if cmd.eq_ignore_ascii_case("DBSIZE")) {
+        return false;
+    }
+    matches!(
+        (runtime_actual, redis_actual),
+        (RespFrame::Integer(runtime_keys), RespFrame::Integer(redis_keys))
+            if *runtime_keys == redis_keys.saturating_add(1)
+    )
 }
 
 fn live_oracle_no_arg_unsubscribe_sequences_match(
