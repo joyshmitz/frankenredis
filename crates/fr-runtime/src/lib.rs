@@ -5464,6 +5464,14 @@ impl Runtime {
                 Some(u) => {
                     let dryrun_argv = &argv[3..];
                     let cmd_name = String::from_utf8_lossy(&dryrun_argv[0]);
+                    // Upstream acl.c::aclCommand DRYRUN returns the denial
+                    // message as a BulkString via addReplyBulkSds, not an
+                    // Error. The phrasing comes from getAclErrorMessage:
+                    // `User <name> has no permissions to ...` (no quotes
+                    // around the user name) and the command name is the
+                    // canonical lowercase `cmd->fullname`. On success
+                    // upstream replies `+OK\r\n`. (br-frankenredis-faqe)
+                    let user_name_str = String::from_utf8_lossy(username);
                     match u.acl_permission_error_for_argv(dryrun_argv) {
                         None => RespFrame::SimpleString("OK".to_string()),
                         Some(AclCommandPermissionError::Command) => {
@@ -5473,11 +5481,12 @@ impl Runtime {
                                 username.clone(),
                                 now_ms,
                             );
-                            RespFrame::Error(format!(
-                                "ERR User '{}' has no permissions to run the '{}' command",
-                                String::from_utf8_lossy(username),
-                                cmd_name
-                            ))
+                            let msg = format!(
+                                "User {} has no permissions to run the '{}' command",
+                                user_name_str,
+                                cmd_name.to_ascii_lowercase()
+                            );
+                            RespFrame::BulkString(Some(msg.into_bytes()))
                         }
                         Some(AclCommandPermissionError::Key(key)) => {
                             let key_name = String::from_utf8_lossy(&key).into_owned();
@@ -5487,11 +5496,11 @@ impl Runtime {
                                 username.clone(),
                                 now_ms,
                             );
-                            RespFrame::Error(format!(
-                                "ERR User '{}' has no permissions to access the '{}' key",
-                                String::from_utf8_lossy(username),
-                                key_name
-                            ))
+                            let msg = format!(
+                                "User {} has no permissions to access the '{}' key",
+                                user_name_str, key_name
+                            );
+                            RespFrame::BulkString(Some(msg.into_bytes()))
                         }
                         Some(AclCommandPermissionError::Channel(channel)) => {
                             let channel_name = String::from_utf8_lossy(&channel).into_owned();
@@ -5501,11 +5510,11 @@ impl Runtime {
                                 username.clone(),
                                 now_ms,
                             );
-                            RespFrame::Error(format!(
-                                "ERR User '{}' has no permissions to access the '{}' channel",
-                                String::from_utf8_lossy(username),
-                                channel_name
-                            ))
+                            let msg = format!(
+                                "User {} has no permissions to access the '{}' channel",
+                                user_name_str, channel_name
+                            );
+                            RespFrame::BulkString(Some(msg.into_bytes()))
                         }
                     }
                 }
@@ -17959,9 +17968,9 @@ mod tests {
         );
         assert_eq!(
             reply,
-            RespFrame::Error(
-                "ERR User 'alice' has no permissions to run the 'SET' command".to_string()
-            )
+            RespFrame::BulkString(Some(
+                b"User alice has no permissions to run the 'set' command".to_vec()
+            ))
         );
     }
 
@@ -18167,7 +18176,7 @@ mod tests {
         // Dryrun: FLUSHALL is in dangerous category
         let reply = rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"safe", b"FLUSHALL"]), 2);
         assert!(
-            matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
+            matches!(&reply, RespFrame::BulkString(Some(b)) if std::str::from_utf8(b).map(|s| s.contains("no permissions")).unwrap_or(false)),
             "FLUSHALL should be denied for -@dangerous user, got: {reply:?}"
         );
     }
@@ -18205,7 +18214,7 @@ mod tests {
         // Dryrun: DEL should be denied (not in +@read, not explicitly allowed)
         let reply = rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"mixed", b"DEL", b"k"]), 3);
         assert!(
-            matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
+            matches!(&reply, RespFrame::BulkString(Some(b)) if std::str::from_utf8(b).map(|s| s.contains("no permissions")).unwrap_or(false)),
             "DEL should be denied, got: {reply:?}"
         );
     }
@@ -18343,7 +18352,7 @@ mod tests {
             command(&[b"ACL", b"DRYRUN", b"reset_test", b"DEL", b"k"]),
             1,
         );
-        assert!(matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")));
+        assert!(matches!(&reply, RespFrame::BulkString(Some(b)) if std::str::from_utf8(b).map(|s| s.contains("no permissions")).unwrap_or(false)));
 
         // Apply allcommands
         assert_eq!(
@@ -18394,7 +18403,7 @@ mod tests {
         // DEL denied
         let reply = rt.execute_frame(command(&[b"ACL", b"DRYRUN", b"deny_test", b"DEL", b"k"]), 2);
         assert!(
-            matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
+            matches!(&reply, RespFrame::BulkString(Some(b)) if std::str::from_utf8(b).map(|s| s.contains("no permissions")).unwrap_or(false)),
             "DEL should be denied despite +@all, got: {reply:?}"
         );
     }
@@ -18737,7 +18746,7 @@ mod tests {
             2,
         );
         assert!(
-            matches!(&reply, RespFrame::Error(e) if e.contains("no permissions")),
+            matches!(&reply, RespFrame::BulkString(Some(b)) if std::str::from_utf8(b).map(|s| s.contains("no permissions")).unwrap_or(false)),
             "GET should be denied after reset, got: {reply:?}"
         );
     }
@@ -19244,9 +19253,9 @@ mod tests {
                 command(&[b"ACL", b"DRYRUN", b"alice", b"SET", b"zap:3", b"v"]),
                 2,
             ),
-            RespFrame::Error(
-                "ERR User 'alice' has no permissions to access the 'zap:3' key".to_string(),
-            )
+            RespFrame::BulkString(Some(
+                b"User alice has no permissions to access the 'zap:3' key".to_vec(),
+            ))
         );
 
         assert_eq!(

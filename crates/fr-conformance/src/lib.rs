@@ -9277,10 +9277,11 @@ mod tests {
     ///
     /// Every AUTH-after-SETUSER case XFAIL'd because fr-runtime
     /// rejects AUTH against SETUSER-configured passwords (treats
-    /// default as nopass-locked). ACL CAT reply ordering, DRYRUN
-    /// reply shape, SAVE/LOAD config-file awareness, LOG entries,
-    /// and GENPASS arity wording are likewise XFAIL'd. All tracked
-    /// under br-frankenredis-faqe. (br-frankenredis-q5bb, faqe)
+    /// default as nopass-locked). SAVE/LOAD config-file awareness
+    /// and DELUSER/USERS stale-leakage remain XFAIL'd. ACL CAT
+    /// reply ordering and DRYRUN reply shape have been fixed;
+    /// tracked under br-frankenredis-faqe.
+    /// (br-frankenredis-q5bb, faqe)
     #[test]
     fn live_redis_core_acl_matches_runtime() {
         let cfg = HarnessConfig::default_paths();
@@ -9301,18 +9302,13 @@ mod tests {
             // every AUTH-after-SETUSER case returns our lockout error
             // instead of matching upstream. Tracked on faqe as the
             // substantive AUTH-flow fix.
-            "acl_allcommands_before_dryrun_del_denied",
             "acl_category_auth_reader",
             "acl_category_reauth_default2",
             "acl_deny_override_auth",
             "acl_deny_override_reauth_default3",
-            "acl_dryrun_category_deny",
-            "acl_dryrun_denied_cmd",
-            "acl_dryrun_explicit_deny_override",
             "acl_log_shows_recent_failed_auth_attempts",
             "acl_percmd_auth_as_restricted",
             "acl_percmd_reauth_default",
-            "acl_reset_rule_dryrun_denied",
             "auth_correct_user_pass",
             "auth_disabled_user_rejected",
             "auth_nonexistent_user",

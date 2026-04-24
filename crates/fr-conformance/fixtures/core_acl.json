@@ -2502,8 +2502,8 @@
         "k"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR User 'restricted' has no permissions to run the 'DEL' command"
+        "kind": "bulk",
+        "value": "User restricted has no permissions to run the 'del' command"
       }
     },
     {
@@ -2533,8 +2533,8 @@
         "v"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR User 'reader' has no permissions to run the 'SET' command"
+        "kind": "bulk",
+        "value": "User reader has no permissions to run the 'set' command"
       }
     },
     {
@@ -2547,8 +2547,8 @@
         "FLUSHDB"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR User 'nodanger' has no permissions to run the 'FLUSHDB' command"
+        "kind": "bulk",
+        "value": "User nodanger has no permissions to run the 'flushdb' command"
       }
     },
     {
@@ -2592,8 +2592,8 @@
         "k"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR User 'resetme' has no permissions to run the 'GET' command"
+        "kind": "bulk",
+        "value": "User resetme has no permissions to run the 'get' command"
       }
     },
     {
@@ -2625,8 +2625,8 @@
         "k"
       ],
       "expect": {
-        "kind": "error",
-        "value": "ERR User 'granreset' has no permissions to run the 'DEL' command"
+        "kind": "bulk",
+        "value": "User granreset has no permissions to run the 'del' command"
       }
     },
     {
