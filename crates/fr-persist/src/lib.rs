@@ -6,6 +6,8 @@ use std::path::Path;
 
 use fr_protocol::{RespFrame, RespParseError};
 
+pub mod listpack;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AofRecord {
     pub argv: Vec<Vec<u8>>,
