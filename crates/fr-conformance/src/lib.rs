@@ -7697,6 +7697,67 @@ mod tests {
         });
     }
 
+    /// Wire the `core_zset.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers
+    /// ZADD/ZRANGE/ZRANGEBYSCORE/ZINCRBY/ZSCORE/ZREM/ZCARD/ZRANK/
+    /// ZPOPMIN/ZRANGESTORE. Blocking bzpop-style cases are filtered
+    /// via is_blocking_case_name. (br-frankenredis-eud6)
+    #[test]
+    fn live_redis_core_zset_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        let fixture = match load_conformance_fixture(&cfg, "core_zset.json") {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!("[live-oracle:core_zset] fixture load error: {err}");
+                return;
+            }
+        };
+        let non_blocking: Vec<String> = fixture
+            .cases
+            .iter()
+            .map(|case| case.name.clone())
+            .filter(|name| !is_blocking_case_name(name))
+            .collect();
+        let refs: Vec<&str> = non_blocking.iter().map(String::as_str).collect();
+        run_live_diff_tolerant("core_zset", || {
+            run_live_redis_diff_for_cases(&cfg, "core_zset.json", &refs, &oracle)
+        });
+    }
+
+    /// Wire the `core_stream.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers
+    /// XADD/XREAD/XLEN/XACK/XGROUP/XRANGE/XINFO/XPENDING/XCLAIM/XDEL.
+    /// Blocking XREAD BLOCK cases are filtered. (br-frankenredis-1b89)
+    #[test]
+    fn live_redis_core_stream_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        let fixture = match load_conformance_fixture(&cfg, "core_stream.json") {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!("[live-oracle:core_stream] fixture load error: {err}");
+                return;
+            }
+        };
+        let non_blocking: Vec<String> = fixture
+            .cases
+            .iter()
+            .map(|case| case.name.clone())
+            .filter(|name| !is_blocking_case_name(name))
+            .collect();
+        let refs: Vec<&str> = non_blocking.iter().map(String::as_str).collect();
+        run_live_diff_tolerant("core_stream", || {
+            run_live_redis_diff_for_cases(&cfg, "core_stream.json", &refs, &oracle)
+        });
+    }
+
     #[test]
     fn live_redis_core_replication_stable_matches_runtime() {
         let cfg = HarnessConfig::default_paths();
