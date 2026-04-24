@@ -8151,6 +8151,55 @@ mod tests {
         });
     }
 
+    /// Wire the `core_copy.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers COPY / COPY REPLACE /
+    /// COPY DB across all value types. (br-frankenredis-cmn3)
+    #[test]
+    fn live_redis_core_copy_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_copy", || {
+            run_live_redis_diff(&cfg, "core_copy.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_sort.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers SORT / SORT_RO with
+    /// BY/GET/LIMIT/ASC/DESC/ALPHA/STORE. (br-frankenredis-ulw1)
+    #[test]
+    fn live_redis_core_sort_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_sort", || {
+            run_live_redis_diff(&cfg, "core_sort.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_scan.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers SCAN / HSCAN / SSCAN /
+    /// ZSCAN with MATCH / COUNT / TYPE. SCAN cursor semantics allow
+    /// implementation-specific cursor values, so the harness
+    /// canonicalizer must tolerate cursor drift — the fixtures have
+    /// historically been captured to test reachability, not cursor
+    /// bit-for-bit parity. (br-frankenredis-h2dv)
+    #[test]
+    fn live_redis_core_scan_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_scan", || {
+            run_live_redis_diff(&cfg, "core_scan.json", &oracle)
+        });
+    }
+
     /// Wire the `core_pubsub.json` fixture through the self-spawning
     /// vendored redis-server oracle. Covers the single-client
     /// PUB/SUB surface: PUBLISH without subscribers, PUBSUB
