@@ -9,6 +9,7 @@ use std::ops::Bound::{Excluded, Included, Unbounded};
 pub const REDIS_COMPAT_VERSION: &str = "7.2.0";
 
 const RDB_DUMP_VERSION: u16 = 11;
+const RDB_TYPE_STRING: u8 = 0;
 const RDB_TYPE_LIST: u8 = 1;
 const RDB_TYPE_SET: u8 = 2;
 const RDB_TYPE_HASH: u8 = 4;
@@ -21,6 +22,12 @@ const RDB_TYPE_SET_LISTPACK: u8 = 20;
 const DUMP_VERSION_LEN: usize = 2;
 const DUMP_CRC64_LEN: usize = 8;
 const DUMP_TRAILER_LEN: usize = DUMP_VERSION_LEN + DUMP_CRC64_LEN;
+const RDB_ENCVAL: u8 = 0xC0;
+const RDB_ENC_INT8: u8 = 0;
+const RDB_ENC_INT16: u8 = 1;
+const RDB_ENC_INT32: u8 = 2;
+const RDB_ENC_LZF: u8 = 3;
+const RDB_STRING_MAX_ALLOC: usize = 536_870_912;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitRangeUnit {
@@ -9949,9 +9956,8 @@ impl Store {
         let mut buf = Vec::new();
         match &entry.value {
             Value::String(v) => {
-                buf.push(0); // type 0 = string
-                encode_length(&mut buf, v.len());
-                buf.extend_from_slice(v);
+                buf.push(RDB_TYPE_STRING);
+                encode_rdb_string(&mut buf, v);
             }
             Value::List(l) => {
                 buf.push(RDB_TYPE_LIST_QUICKLIST_2);
@@ -10108,15 +10114,9 @@ impl Store {
         // Data boundary: exclude trailer (2-byte version + 8-byte CRC64).
         let data_end = payload.len() - DUMP_TRAILER_LEN;
         let value = match type_byte {
-            0 => {
-                // String
-                let (len, consumed) = decode_length(payload, cursor)?;
+            RDB_TYPE_STRING => {
+                let (v, consumed) = decode_rdb_string(payload, cursor, data_end)?;
                 cursor += consumed;
-                if cursor + len > data_end {
-                    return Err(StoreError::InvalidDumpPayload);
-                }
-                let v = payload[cursor..cursor + len].to_vec();
-                cursor += len;
                 Value::String(v)
             }
             RDB_TYPE_LIST => {
@@ -10602,6 +10602,36 @@ fn encode_length(buf: &mut Vec<u8>, len: usize) {
     }
 }
 
+fn encode_rdb_string(buf: &mut Vec<u8>, data: &[u8]) {
+    if let Some(encoded) = encode_integer_rdb_string(data) {
+        buf.extend_from_slice(&encoded);
+    } else {
+        encode_length(buf, data.len());
+        buf.extend_from_slice(data);
+    }
+}
+
+fn encode_integer_rdb_string(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() > 11 {
+        return None;
+    }
+
+    let value = parse_i64(data).ok()?;
+    if let Ok(value) = i8::try_from(value) {
+        Some(vec![RDB_ENCVAL | RDB_ENC_INT8, value as u8])
+    } else if let Ok(value) = i16::try_from(value) {
+        let mut encoded = vec![RDB_ENCVAL | RDB_ENC_INT16];
+        encoded.extend_from_slice(&value.to_le_bytes());
+        Some(encoded)
+    } else if let Ok(value) = i32::try_from(value) {
+        let mut encoded = vec![RDB_ENCVAL | RDB_ENC_INT32];
+        encoded.extend_from_slice(&value.to_le_bytes());
+        Some(encoded)
+    } else {
+        None
+    }
+}
+
 /// Decode a Redis RDB length.
 fn decode_length(data: &[u8], offset: usize) -> Result<(usize, usize), StoreError> {
     if offset >= data.len() {
@@ -10636,6 +10666,134 @@ fn decode_length(data: &[u8], offset: usize) -> Result<(usize, usize), StoreErro
             Ok((len, 9))
         }
         _ => Err(StoreError::InvalidDumpPayload),
+    }
+}
+
+fn decode_rdb_string(
+    data: &[u8],
+    offset: usize,
+    data_end: usize,
+) -> Result<(Vec<u8>, usize), StoreError> {
+    if offset >= data_end {
+        return Err(StoreError::InvalidDumpPayload);
+    }
+
+    let first = data[offset];
+    if (first & RDB_ENCVAL) == RDB_ENCVAL {
+        return decode_encoded_rdb_string(data, offset, data_end);
+    }
+
+    decode_dump_bulk(data, offset, data_end)
+}
+
+fn decode_encoded_rdb_string(
+    data: &[u8],
+    offset: usize,
+    data_end: usize,
+) -> Result<(Vec<u8>, usize), StoreError> {
+    let encoding = data[offset] & 0x3F;
+    match encoding {
+        RDB_ENC_INT8 => {
+            let raw = *data
+                .get(offset + 1)
+                .filter(|_| offset + 2 <= data_end)
+                .ok_or(StoreError::InvalidDumpPayload)?;
+            let value = i8::from_le_bytes([raw]);
+            Ok((value.to_string().into_bytes(), 2))
+        }
+        RDB_ENC_INT16 => {
+            if offset + 3 > data_end {
+                return Err(StoreError::InvalidDumpPayload);
+            }
+            let value = i16::from_le_bytes([data[offset + 1], data[offset + 2]]);
+            Ok((value.to_string().into_bytes(), 3))
+        }
+        RDB_ENC_INT32 => {
+            if offset + 5 > data_end {
+                return Err(StoreError::InvalidDumpPayload);
+            }
+            let value = i32::from_le_bytes([
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+                data[offset + 4],
+            ]);
+            Ok((value.to_string().into_bytes(), 5))
+        }
+        RDB_ENC_LZF => decode_lzf_rdb_string(data, offset, data_end),
+        _ => Err(StoreError::InvalidDumpPayload),
+    }
+}
+
+fn decode_lzf_rdb_string(
+    data: &[u8],
+    offset: usize,
+    data_end: usize,
+) -> Result<(Vec<u8>, usize), StoreError> {
+    let (compressed_len, compressed_len_bytes) = decode_length(data, offset + 1)?;
+    let uncompressed_len_offset = offset
+        .checked_add(1)
+        .and_then(|pos| pos.checked_add(compressed_len_bytes))
+        .ok_or(StoreError::InvalidDumpPayload)?;
+    let (uncompressed_len, uncompressed_len_bytes) = decode_length(data, uncompressed_len_offset)?;
+    let payload_start = uncompressed_len_offset
+        .checked_add(uncompressed_len_bytes)
+        .ok_or(StoreError::InvalidDumpPayload)?;
+    let payload_end = payload_start
+        .checked_add(compressed_len)
+        .ok_or(StoreError::InvalidDumpPayload)?;
+    if payload_end > data_end {
+        return Err(StoreError::InvalidDumpPayload);
+    }
+    let decompressed = lzf_decompress_string(&data[payload_start..payload_end], uncompressed_len)
+        .ok_or(StoreError::InvalidDumpPayload)?;
+    Ok((decompressed, payload_end - offset))
+}
+
+fn lzf_decompress_string(input: &[u8], expected_len: usize) -> Option<Vec<u8>> {
+    if expected_len > RDB_STRING_MAX_ALLOC {
+        return None;
+    }
+
+    let mut output = Vec::with_capacity(expected_len.min(8192));
+    let mut cursor = 0usize;
+
+    while cursor < input.len() && output.len() < expected_len {
+        let ctrl = usize::from(*input.get(cursor)?);
+        cursor += 1;
+
+        if ctrl < 32 {
+            let literal_len = ctrl + 1;
+            let end = cursor.checked_add(literal_len)?;
+            output.extend_from_slice(input.get(cursor..end)?);
+            cursor = end;
+            continue;
+        }
+
+        let mut copy_len = (ctrl >> 5) + 2;
+        if copy_len == 9 {
+            copy_len = copy_len.checked_add(usize::from(*input.get(cursor)?))?;
+            cursor += 1;
+        }
+
+        let backref_low = usize::from(*input.get(cursor)?);
+        cursor += 1;
+        let backref = (((ctrl & 0x1F) << 8) | backref_low) + 1;
+        if backref > output.len() {
+            return None;
+        }
+
+        let copy_start = output.len() - backref;
+        for idx in 0..copy_len {
+            let byte = *output.get(copy_start + idx)?;
+            output.push(byte);
+        }
+    }
+
+    if cursor == input.len() && output.len() == expected_len {
+        Some(output)
+    } else {
+        None
     }
 }
 
@@ -11668,10 +11826,10 @@ mod tests {
         MaxmemoryPolicy, MaxmemoryPressureLevel, NOTIFY_EVICTED, NOTIFY_EXPIRED, NOTIFY_GENERIC,
         NOTIFY_KEYEVENT, PttlValue, RDB_DUMP_VERSION, RDB_TYPE_HASH, RDB_TYPE_HASH_LISTPACK,
         RDB_TYPE_LIST_QUICKLIST_2, RDB_TYPE_SET, RDB_TYPE_SET_INTSET, RDB_TYPE_SET_LISTPACK,
-        RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_LISTPACK, ScoreBound, ScoreMember, Store, StoreError,
-        StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply,
-        StreamGroupReadCursor, StreamGroupReadOptions, StreamPendingEntry, Value, ValueType,
-        encode_db_key, encode_length, hll_sparse_decode,
+        RDB_TYPE_STRING, RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_LISTPACK, ScoreBound, ScoreMember, Store,
+        StoreError, StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions,
+        StreamClaimReply, StreamGroupReadCursor, StreamGroupReadOptions, StreamPendingEntry, Value,
+        ValueType, encode_db_key, encode_length, hll_sparse_decode,
     };
 
     fn group_read_options(
@@ -15268,6 +15426,83 @@ mod tests {
         let crc = fr_persist::crc64_redis(&body);
         body.extend_from_slice(&crc.to_le_bytes());
         body
+    }
+
+    #[test]
+    fn dump_string_uses_upstream_integer_string_encoding() {
+        let mut store = Store::new();
+        store.set(b"i8".to_vec(), b"123".to_vec(), None, 100);
+        store.set(b"i16".to_vec(), b"-129".to_vec(), None, 100);
+        store.set(b"i32".to_vec(), b"2147483647".to_vec(), None, 100);
+        store.set(b"raw".to_vec(), b"00123".to_vec(), None, 100);
+
+        let i8_payload = store.dump_key(b"i8", 100).unwrap();
+        assert_eq!(&i8_payload[..3], &[RDB_TYPE_STRING, 0xC0, 123]);
+
+        let i16_payload = store.dump_key(b"i16", 100).unwrap();
+        assert_eq!(i16_payload[0], RDB_TYPE_STRING);
+        assert_eq!(i16_payload[1], 0xC1);
+        assert_eq!(
+            &i16_payload[2..4],
+            &i16::try_from(-129).unwrap().to_le_bytes()
+        );
+
+        let i32_payload = store.dump_key(b"i32", 100).unwrap();
+        assert_eq!(i32_payload[0], RDB_TYPE_STRING);
+        assert_eq!(i32_payload[1], 0xC2);
+        assert_eq!(&i32_payload[2..6], &2147483647i32.to_le_bytes());
+
+        let raw_payload = store.dump_key(b"raw", 100).unwrap();
+        assert_eq!(
+            &raw_payload[..7],
+            &[RDB_TYPE_STRING, 5, b'0', b'0', b'1', b'2', b'3']
+        );
+    }
+
+    #[test]
+    fn restore_accepts_upstream_integer_encoded_strings() {
+        let int8_payload = append_dump_footer(vec![RDB_TYPE_STRING, 0xC0, 42]);
+
+        let mut int16_body = vec![RDB_TYPE_STRING, 0xC1];
+        int16_body.extend_from_slice(&(-129i16).to_le_bytes());
+        let int16_payload = append_dump_footer(int16_body);
+
+        let mut int32_body = vec![RDB_TYPE_STRING, 0xC2];
+        int32_body.extend_from_slice(&2147483647i32.to_le_bytes());
+        let int32_payload = append_dump_footer(int32_body);
+
+        let mut store = Store::new();
+        store
+            .restore_key(b"i8", 0, &int8_payload, false, 100)
+            .unwrap();
+        store
+            .restore_key(b"i16", 0, &int16_payload, false, 100)
+            .unwrap();
+        store
+            .restore_key(b"i32", 0, &int32_payload, false, 100)
+            .unwrap();
+
+        assert_eq!(store.get(b"i8", 100).unwrap(), Some(b"42".to_vec()));
+        assert_eq!(store.get(b"i16", 100).unwrap(), Some(b"-129".to_vec()));
+        assert_eq!(
+            store.get(b"i32", 100).unwrap(),
+            Some(b"2147483647".to_vec())
+        );
+    }
+
+    #[test]
+    fn restore_accepts_upstream_lzf_encoded_string() {
+        let compressed_hello = [4, b'h', b'e', b'l', b'l', b'o'];
+        let mut body = vec![RDB_TYPE_STRING, 0xC3];
+        encode_length(&mut body, compressed_hello.len());
+        encode_length(&mut body, 5);
+        body.extend_from_slice(&compressed_hello);
+        let payload = append_dump_footer(body);
+
+        let mut store = Store::new();
+        store.restore_key(b"lzf", 0, &payload, false, 100).unwrap();
+
+        assert_eq!(store.get(b"lzf", 100).unwrap(), Some(b"hello".to_vec()));
     }
 
     fn append_raw_dump_bulk(buf: &mut Vec<u8>, data: &[u8]) {
