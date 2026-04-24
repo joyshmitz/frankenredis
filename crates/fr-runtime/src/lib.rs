@@ -782,13 +782,17 @@ impl AclUser {
         } else {
             "off".to_string()
         });
-        parts.push(self.sanitize_payload_flag().to_string());
+        // Upstream acl.c::ACLDescribeUser emits
+        // `on nopass|#<hash>… <sanitize-payload>` — nopass / password
+        // hashes appear before the sanitize-payload flag.
+        // (br-frankenredis-faqe)
         if self.nopass {
             parts.push("nopass".to_string());
         }
         if !self.nopass {
             parts.extend(self.passwords.iter().map(|_| "#<hidden>".to_string()));
         }
+        parts.push(self.sanitize_payload_flag().to_string());
         if self.all_keys {
             parts.push("~*".to_string());
         } else if !self.key_patterns.is_empty() {
@@ -829,7 +833,10 @@ impl AclUser {
         } else {
             "off".to_string()
         });
-        parts.push(self.sanitize_payload_flag().to_string());
+        // Upstream ACL SAVE / ACLDescribeUser emits
+        // `reset on nopass|#<hash>… <sanitize-payload>` — nopass /
+        // password hashes appear before the sanitize-payload flag.
+        // (br-frankenredis-faqe)
         if self.nopass {
             parts.push("nopass".to_string());
         }
@@ -842,6 +849,7 @@ impl AclUser {
                 }
             }
         }
+        parts.push(self.sanitize_payload_flag().to_string());
         if self.all_keys {
             parts.push("~*".to_string());
         } else if !self.key_patterns.is_empty() {
@@ -5695,7 +5703,10 @@ impl Runtime {
                         .collect(),
                 ))
             } else {
-                RespFrame::Error(format!("ERR Unknown ACL cat category '{cat}'"))
+                // Upstream acl.c::aclCommand / aclCatCommand emits
+                // the shorter "ERR Unknown category '<cat>'" reply.
+                // (br-frankenredis-faqe)
+                RespFrame::Error(format!("ERR Unknown category '{cat}'"))
             }
         } else {
             CommandError::WrongSubcommandArity {
@@ -5720,11 +5731,15 @@ impl Runtime {
         } else if argv.len() == 2 {
             256
         } else {
-            return CommandError::WrongSubcommandArity {
-                command: "ACL",
-                subcommand: "GENPASS".to_string(),
-            }
-            .to_resp();
+            // Upstream acl.c::aclCommand emits the ACL-subcommand
+            // invalid-arity reply: "ERR unknown subcommand or wrong
+            // number of arguments for 'GENPASS'. Try ACL HELP."
+            // (br-frankenredis-faqe)
+            return RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'GENPASS'. Try ACL HELP."
+                    .to_string(),
+            );
         };
 
         let hex_chars = bits.div_ceil(4);
@@ -13323,10 +13338,12 @@ mod tests {
     #[test]
     fn client_caching_requires_tracking_modes_matching_redis() {
         let mut rt = Runtime::default_strict();
+        // Upstream emits the mode-specific reply even when tracking
+        // is disabled outright. (br-frankenredis-w579)
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"CACHING", b"YES"]), 1),
             RespFrame::Error(
-                "ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled".to_string()
+                "ERR CLIENT CACHING YES is only valid when tracking is enabled in OPTIN mode.".to_string()
             )
         );
         assert_eq!(
@@ -18976,7 +18993,7 @@ mod tests {
             .expect("expected skippy in ACL LIST");
         assert_eq!(
             skippy,
-            "user skippy on skip-sanitize-payload nopass resetchannels +@all"
+            "user skippy on nopass skip-sanitize-payload resetchannels +@all"
         );
 
         assert_eq!(
@@ -18985,7 +19002,7 @@ mod tests {
         );
         let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
         assert!(
-            saved.contains("user skippy reset on skip-sanitize-payload nopass resetchannels +@all"),
+            saved.contains("user skippy reset on nopass skip-sanitize-payload resetchannels +@all"),
             "saved ACL file should preserve skip-sanitize-payload, got: {saved}"
         );
 
@@ -19175,7 +19192,7 @@ mod tests {
             .expect("expected alice in ACL LIST");
         assert_eq!(
             alice,
-            "user alice on sanitize-payload #<hidden> resetkeys ~foo:* ~bar:* resetchannels +get +set"
+            "user alice on #<hidden> sanitize-payload resetkeys ~foo:* ~bar:* resetchannels +get +set"
         );
 
         assert_eq!(
@@ -19185,7 +19202,7 @@ mod tests {
         let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
         assert!(
             saved.contains(
-                "user alice reset on sanitize-payload #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 resetkeys ~foo:* ~bar:* resetchannels +get +set"
+                "user alice reset on #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 sanitize-payload resetkeys ~foo:* ~bar:* resetchannels +get +set"
             ),
             "saved ACL file should preserve key patterns, got: {saved}"
         );
@@ -19365,7 +19382,7 @@ mod tests {
             .expect("expected alice in ACL LIST");
         assert_eq!(
             alice,
-            "user alice on sanitize-payload #<hidden> ~* resetchannels &foo:1 &bar:* &orders +@all"
+            "user alice on #<hidden> sanitize-payload ~* resetchannels &foo:1 &bar:* &orders +@all"
         );
 
         assert_eq!(
@@ -19375,7 +19392,7 @@ mod tests {
         let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
         assert!(
             saved.contains(
-                "user alice reset on sanitize-payload #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 ~* resetchannels &foo:1 &bar:* &orders +@all"
+                "user alice reset on #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 sanitize-payload ~* resetchannels &foo:1 &bar:* &orders +@all"
             ),
             "saved ACL file should preserve channel patterns, got: {saved}"
         );
@@ -19757,7 +19774,7 @@ mod tests {
         let saved = std::fs::read_to_string(&acl_path).expect("ACL SAVE should write acl file");
         assert!(
             saved.contains(
-                "user alice reset on sanitize-payload #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 ~* &* +get"
+                "user alice reset on #d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1 sanitize-payload ~* &* +get"
             ),
             "saved ACL file should contain serialized alice rules, got: {saved}"
         );
@@ -19810,7 +19827,7 @@ mod tests {
                 _ => None,
             })
             .expect("expected alice in ACL LIST after ACL LOAD");
-        assert_eq!(alice, "user alice on sanitize-payload #<hidden> ~* &* +get");
+        assert_eq!(alice, "user alice on #<hidden> sanitize-payload ~* &* +get");
 
         let _ = std::fs::remove_file(&acl_path);
     }

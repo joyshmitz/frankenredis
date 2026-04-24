@@ -9243,41 +9243,45 @@ mod tests {
             }
         };
         const XFAIL: &[&str] = &[
+            // AUTH against SETUSER-configured passwords: fr-runtime's
+            // default ACL state treats default as nopass-locked, so
+            // every AUTH-after-SETUSER case returns our lockout error
+            // instead of matching upstream. Tracked on faqe as the
+            // substantive AUTH-flow fix.
             "acl_allcommands_before_dryrun_del_denied",
-            "acl_cat_bitmap_returns_commands",
-            "acl_cat_hyperloglog_returns_commands",
-            "acl_cat_string_returns_commands",
-            "acl_cat_transaction_returns_commands",
-            "acl_cat_unknown_category_is_rejected",
-            "acl_cat_unknown_returns_error",
             "acl_category_auth_reader",
             "acl_category_reauth_default2",
-            "acl_deluser_cleanup_bob",
             "acl_deny_override_auth",
             "acl_deny_override_reauth_default3",
             "acl_dryrun_category_deny",
             "acl_dryrun_denied_cmd",
             "acl_dryrun_explicit_deny_override",
-            "acl_genpass_extra_args_error",
-            "acl_list_returns_default_user_rule",
-            "acl_load_returns_ok",
             "acl_log_shows_recent_failed_auth_attempts",
             "acl_percmd_auth_as_restricted",
             "acl_percmd_reauth_default",
             "acl_reset_rule_dryrun_denied",
-            "acl_save_load_roundtrip_load",
-            "acl_save_load_roundtrip_save",
-            "acl_save_load_roundtrip_user_restored",
-            "acl_save_returns_ok",
             "auth_correct_user_pass",
             "auth_disabled_user_rejected",
             "auth_nonexistent_user",
             "auth_wrong_arity_too_many",
             "auth_wrong_password",
-            // ACL USERS stale-user leakage: our runtime leaks `bob`
-            // from an earlier case after DELUSER because harness
-            // FLUSHALL doesn't reset the ACL subsystem. Tracked on
-            // the same faqe bead.
+            // ACL CAT <category> entry order: upstream uses dict
+            // iteration order, ours registers deterministically —
+            // compare would need per-category sort. Keep as XFAIL.
+            "acl_cat_bitmap_returns_commands",
+            "acl_cat_hyperloglog_returns_commands",
+            "acl_cat_string_returns_commands",
+            "acl_cat_transaction_returns_commands",
+            // ACL SAVE/LOAD config-file awareness — our runtime lets
+            // SAVE succeed without an ACL file, upstream rejects.
+            "acl_load_returns_ok",
+            "acl_save_load_roundtrip_load",
+            "acl_save_load_roundtrip_save",
+            "acl_save_load_roundtrip_user_restored",
+            "acl_save_returns_ok",
+            // ACL DELUSER cleanup + USERS stale-leakage: harness
+            // FLUSHALL doesn't reset the ACL subsystem.
+            "acl_deluser_cleanup_bob",
             "acl_users_only_default_after_cleanup",
             "acl_users_lowercase",
         ];
