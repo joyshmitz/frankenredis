@@ -8104,6 +8104,53 @@ mod tests {
         });
     }
 
+    /// Wire the `core_bitmap.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers
+    /// SETBIT/GETBIT/BITCOUNT/BITOP/BITFIELD/BITFIELD_RO/BITPOS.
+    /// (br-frankenredis-nkdh)
+    #[test]
+    fn live_redis_core_bitmap_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_bitmap", || {
+            run_live_redis_diff(&cfg, "core_bitmap.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_generic.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers TYPE/KEYS/EXISTS/
+    /// RANDOMKEY/RENAME/RENAMENX/DEL/UNLINK/TOUCH and friends.
+    /// (br-frankenredis-532q)
+    #[test]
+    fn live_redis_core_generic_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_generic", || {
+            run_live_redis_diff(&cfg, "core_generic.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_transaction.json` fixture through the
+    /// self-spawning vendored redis-server oracle. Covers
+    /// MULTI/EXEC/DISCARD/WATCH/UNWATCH. (br-frankenredis-hh0k)
+    #[test]
+    fn live_redis_core_transaction_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_transaction", || {
+            run_live_redis_diff(&cfg, "core_transaction.json", &oracle)
+        });
+    }
+
     /// Wire the `core_pubsub.json` fixture through the self-spawning
     /// vendored redis-server oracle. Covers the single-client
     /// PUB/SUB surface: PUBLISH without subscribers, PUBSUB
