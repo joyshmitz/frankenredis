@@ -3833,10 +3833,7 @@ fn parse_zrangebyscore_opts(
             if i + 2 >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            limit_offset = Some(
-                usize::try_from(parse_u64_arg(&argv[i + 1])?)
-                    .map_err(|_| CommandError::InvalidInteger)?,
-            );
+            limit_offset = Some(parse_limit_offset_arg(&argv[i + 1])?);
             limit_count = parse_limit_count_arg(&argv[i + 2])?;
             i += 3;
         } else {
@@ -8830,6 +8827,14 @@ fn parse_limit_count_arg(arg: &[u8]) -> Result<Option<usize>, CommandError> {
         .map_err(|_| CommandError::InvalidInteger)
 }
 
+fn parse_limit_offset_arg(arg: &[u8]) -> Result<usize, CommandError> {
+    let val = parse_i64_arg(arg)?;
+    if val < 0 {
+        return Ok(usize::MAX);
+    }
+    usize::try_from(val).map_err(|_| CommandError::InvalidInteger)
+}
+
 fn parse_expire_options(extra_args: &[Vec<u8>]) -> Result<ExpireOptions, CommandError> {
     let mut options = ExpireOptions::default();
     for arg in extra_args {
@@ -9366,7 +9371,7 @@ fn zmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     let numkeys_val = parse_i64_arg(&argv[1])?;
     if numkeys_val <= 0 {
         return Ok(RespFrame::Error(
-            "ERR numkeys can't be non-positive value".to_string(),
+            "ERR numkeys should be greater than 0".to_string(),
         ));
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
@@ -13623,7 +13628,7 @@ fn zintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     let numkeys_val = parse_i64_arg(&argv[1])?;
     if numkeys_val <= 0 {
         return Ok(RespFrame::Error(
-            "ERR numkeys can't be non-positive value".to_string(),
+            "ERR at least 1 input key is needed for 'zintercard' command".to_string(),
         ));
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
@@ -14982,7 +14987,7 @@ fn bzmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     let numkeys_val = parse_i64_arg(&argv[2])?;
     if numkeys_val <= 0 {
         return Ok(RespFrame::Error(
-            "ERR numkeys can't be non-positive value".to_string(),
+            "ERR numkeys should be greater than 0".to_string(),
         ));
     }
     let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
@@ -19727,6 +19732,42 @@ mod tests {
                 RespFrame::BulkString(Some(b"b".to_vec())),
             ]))
         );
+    }
+
+    #[test]
+    fn zrangebyscore_negative_limit_offset_returns_empty_array() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"zlimit".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+                b"2".to_vec(),
+                b"b".to_vec(),
+                b"3".to_vec(),
+                b"c".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zadd");
+
+        let out = dispatch_argv(
+            &[
+                b"ZRANGEBYSCORE".to_vec(),
+                b"zlimit".to_vec(),
+                b"-inf".to_vec(),
+                b"+inf".to_vec(),
+                b"LIMIT".to_vec(),
+                b"-1".to_vec(),
+                b"10".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zrangebyscore negative offset");
+        assert_eq!(out, RespFrame::Array(Some(Vec::new())));
     }
 
     #[test]
@@ -26264,6 +26305,28 @@ mod tests {
     }
 
     #[test]
+    fn zmpop_non_positive_numkeys_match_redis_error() {
+        let mut store = Store::new();
+        for numkeys in [b"-1".as_slice(), b"0".as_slice()] {
+            let out = dispatch_argv(
+                &[
+                    b"ZMPOP".to_vec(),
+                    numkeys.to_vec(),
+                    b"z1".to_vec(),
+                    b"MIN".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("zmpop error frame");
+            assert_eq!(
+                out,
+                RespFrame::Error("ERR numkeys should be greater than 0".to_string())
+            );
+        }
+    }
+
+    #[test]
     fn memory_usage_string() {
         let mut store = Store::new();
         store.set(b"hello".to_vec(), b"world".to_vec(), None, 0);
@@ -26899,6 +26962,29 @@ mod tests {
         )
         .expect("bzmpop empty");
         assert_eq!(out, RespFrame::Array(None));
+    }
+
+    #[test]
+    fn bzmpop_non_positive_numkeys_match_redis_error() {
+        let mut store = Store::new();
+        for numkeys in [b"-1".as_slice(), b"0".as_slice()] {
+            let out = dispatch_argv(
+                &[
+                    b"BZMPOP".to_vec(),
+                    b"0".to_vec(),
+                    numkeys.to_vec(),
+                    b"z1".to_vec(),
+                    b"MIN".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("bzmpop error frame");
+            assert_eq!(
+                out,
+                RespFrame::Error("ERR numkeys should be greater than 0".to_string())
+            );
+        }
     }
 
     #[test]
@@ -27710,6 +27796,29 @@ mod tests {
         )
         .expect("zintercard");
         assert_eq!(out, RespFrame::Integer(1));
+    }
+
+    #[test]
+    fn zintercard_non_positive_numkeys_match_redis_error() {
+        let mut store = Store::new();
+        for numkeys in [b"-1".as_slice(), b"0".as_slice()] {
+            let out = dispatch_argv(
+                &[
+                    b"ZINTERCARD".to_vec(),
+                    numkeys.to_vec(),
+                    b"z1".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("zintercard error frame");
+            assert_eq!(
+                out,
+                RespFrame::Error(
+                    "ERR at least 1 input key is needed for 'zintercard' command".to_string(),
+                )
+            );
+        }
     }
 
     #[test]
