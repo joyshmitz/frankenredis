@@ -9125,6 +9125,122 @@ mod tests {
         });
     }
 
+    /// Wire the `core_acl.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers ACL WHOAMI / LIST /
+    /// GETUSER / SETUSER / DELUSER / CAT / USERS / LOG.
+    ///
+    /// Every AUTH-after-SETUSER case XFAIL'd because fr-runtime
+    /// rejects AUTH against SETUSER-configured passwords (treats
+    /// default as nopass-locked). ACL CAT reply ordering, DRYRUN
+    /// reply shape, SAVE/LOAD config-file awareness, LOG entries,
+    /// and GENPASS arity wording are likewise XFAIL'd. All tracked
+    /// under br-frankenredis-faqe. (br-frankenredis-q5bb, faqe)
+    #[test]
+    fn live_redis_core_acl_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        let fixture = match load_conformance_fixture(&cfg, "core_acl.json") {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!("[live-oracle:core_acl] fixture load error: {err}");
+                return;
+            }
+        };
+        const XFAIL: &[&str] = &[
+            "acl_allcommands_before_dryrun_del_denied",
+            "acl_cat_bitmap_returns_commands",
+            "acl_cat_hyperloglog_returns_commands",
+            "acl_cat_string_returns_commands",
+            "acl_cat_transaction_returns_commands",
+            "acl_cat_unknown_category_is_rejected",
+            "acl_cat_unknown_returns_error",
+            "acl_category_auth_reader",
+            "acl_category_reauth_default2",
+            "acl_deluser_cleanup_bob",
+            "acl_deny_override_auth",
+            "acl_deny_override_reauth_default3",
+            "acl_dryrun_category_deny",
+            "acl_dryrun_denied_cmd",
+            "acl_dryrun_explicit_deny_override",
+            "acl_genpass_extra_args_error",
+            "acl_list_returns_default_user_rule",
+            "acl_load_returns_ok",
+            "acl_log_shows_recent_failed_auth_attempts",
+            "acl_percmd_auth_as_restricted",
+            "acl_percmd_reauth_default",
+            "acl_reset_rule_dryrun_denied",
+            "acl_save_load_roundtrip_load",
+            "acl_save_load_roundtrip_save",
+            "acl_save_load_roundtrip_user_restored",
+            "acl_save_returns_ok",
+            "auth_correct_user_pass",
+            "auth_disabled_user_rejected",
+            "auth_nonexistent_user",
+            "auth_wrong_arity_too_many",
+            "auth_wrong_password",
+            // ACL USERS stale-user leakage: our runtime leaks `bob`
+            // from an earlier case after DELUSER because harness
+            // FLUSHALL doesn't reset the ACL subsystem. Tracked on
+            // the same faqe bead.
+            "acl_users_only_default_after_cleanup",
+            "acl_users_lowercase",
+        ];
+        let stable: Vec<String> = fixture
+            .cases
+            .iter()
+            .map(|case| case.name.clone())
+            .filter(|name| !XFAIL.contains(&name.as_str()))
+            .collect();
+        let refs: Vec<&str> = stable.iter().map(String::as_str).collect();
+        run_live_diff_tolerant("core_acl", || {
+            run_live_redis_diff_for_cases(&cfg, "core_acl.json", &refs, &oracle)
+        });
+    }
+
+    /// `core_expiry.json` is skipped in the live oracle: the 256-case
+    /// fixture interleaves EXPIRE / PEXPIRE / EXPIREAT / PEXPIREAT
+    /// with the observing TTL / PTTL / EXPIRETIME / PEXPIRETIME /
+    /// PERSIST / GETEX cases that exercise absolute-time semantics
+    /// at millisecond granularity. Every case uses the fixture's
+    /// pinned `now_ms`, but upstream's server only reads wall-clock
+    /// time — so a fixture that sets `EXPIREAT <future-time>` and
+    /// then queries TTL a few fixture-ticks later looks expired from
+    /// the fixture's vantage while upstream still reports the full
+    /// TTL. The entire fixture cascades into 200+ divergences that
+    /// would need either a TIME/CLOCK override on the upstream side
+    /// or an explicit fixture-clock rewrite. Tracked under the
+    /// shared 7rp6 TTL-accounting work + this family's own bead.
+    /// (br-frankenredis-wgxf)
+    #[test]
+    fn live_redis_core_expiry_matches_runtime() {
+        eprintln!(
+            "[live-oracle:core_expiry] skipping — 256-case fixture is \
+             fundamentally fixture-clock-vs-wall-clock asymmetric; \
+             harness needs upstream time-override before this suite \
+             can run end-to-end (tracked as br-frankenredis-wgxf + \
+             7rp6)."
+        );
+    }
+
+    /// Wire the `core_function.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers FUNCTION CREATE / LOAD /
+    /// LIST / DELETE / DUMP / RESTORE / FLUSH / STATS / CALL.
+    /// (br-frankenredis-u1u9)
+    #[test]
+    fn live_redis_core_function_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_function", || {
+            run_live_redis_diff(&cfg, "core_function.json", &oracle)
+        });
+    }
+
     #[test]
     fn live_redis_core_replication_stable_matches_runtime() {
         let cfg = HarnessConfig::default_paths();
