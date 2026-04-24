@@ -9275,6 +9275,13 @@ mod tests {
                 return;
             }
         };
+        // DEBUG DIGEST / DIGEST-VALUE: we don't implement upstream's
+        // xor-SHA1 per-key digest algorithm. DEBUG OBJECT: our reply
+        // omits upstream's `Value at:0x... lru:... serializedlength:N
+        // lru_seconds_idle:N` fields. Case-insensitive RELOAD / DEBUG
+        // dispatch is an independent wording drift. SET-ACTIVE-EXPIRE
+        // cases pass now that the vendored oracle is spawned with
+        // --enable-debug-command yes. (br-frankenredis-1pe7)
         const XFAIL: &[&str] = &[
             "debug_case_insensitive_digest",
             "debug_case_insensitive_digest_value",
@@ -9319,11 +9326,6 @@ mod tests {
             "debug_object_wrong_arity_missing_key",
             "debug_object_wrong_arity_no_key",
             "debug_object_zset",
-            "debug_set_active_expire_float_value",
-            "debug_set_active_expire_invalid_value",
-            "debug_set_active_expire_large_value",
-            "debug_set_active_expire_negative_value",
-            "debug_set_active_expire_wrong_arity",
         ];
         let stable: Vec<String> = fixture
             .cases

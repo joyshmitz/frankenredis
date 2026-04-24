@@ -14026,13 +14026,31 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("SET-ACTIVE-EXPIRE") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongArity("DEBUG"));
+            // Upstream networking.c::debugCommand emits
+            // "ERR unknown subcommand or wrong number of arguments
+            // for 'SET-ACTIVE-EXPIRE'. Try DEBUG HELP."
+            // (br-frankenredis-1pe7)
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'SET-ACTIVE-EXPIRE'. Try DEBUG HELP."
+                    .to_string(),
+            ));
         }
-        let value = parse_i64_arg(&argv[2])?;
-        if value != 0 && value != 1 {
-            return Err(CommandError::SyntaxError);
-        }
-        store.active_expire_enabled = value == 1;
+        // Upstream debug.c::debugCommand parses the argument with a
+        // permissive atoi-style path and treats any non-zero integer
+        // as "enable" — including decimals that C's atoi truncates
+        // at the first non-digit (e.g. "0.5" → 0). Emulate that: any
+        // argument parseable as a (possibly float-prefixed) integer
+        // is accepted. (br-frankenredis-1pe7)
+        let text = std::str::from_utf8(&argv[2]).unwrap_or("");
+        let digits_end = text
+            .char_indices()
+            .find(|(_, c)| !c.is_ascii_digit() && *c != '-' && *c != '+')
+            .map(|(idx, _)| idx)
+            .unwrap_or(text.len());
+        let trimmed = &text[..digits_end];
+        let value: i64 = trimmed.parse().unwrap_or(0);
+        store.active_expire_enabled = value != 0;
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("JMAP") {
         if argv.len() != 2 {
