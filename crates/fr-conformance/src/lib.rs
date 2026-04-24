@@ -7758,6 +7758,37 @@ mod tests {
         });
     }
 
+    /// Wire the `core_hyperloglog.json` fixture through the
+    /// self-spawning vendored redis-server oracle. Covers
+    /// PFADD/PFCOUNT/PFMERGE. (br-frankenredis-gz9f)
+    #[test]
+    fn live_redis_core_hyperloglog_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_hyperloglog", || {
+            run_live_redis_diff(&cfg, "core_hyperloglog.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_geo.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers
+    /// GEOADD/GEODIST/GEORADIUS/GEOSEARCH/GEOPOS/GEOHASH.
+    /// (br-frankenredis-ufar)
+    #[test]
+    fn live_redis_core_geo_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_geo", || {
+            run_live_redis_diff(&cfg, "core_geo.json", &oracle)
+        });
+    }
+
     #[test]
     fn live_redis_core_replication_stable_matches_runtime() {
         let cfg = HarnessConfig::default_paths();
