@@ -395,9 +395,10 @@ fn run_live_redis_diff_with_fixture(
                     }
                 }
             } else {
-                redis_actual = read_resp_frame_from_stream(&mut dedicated_stream)
-                    .map_err(|err| format!("{}: {err}", case.name))?;
-                frame_ok = runtime_actual == redis_actual;
+                redis_actual =
+                    read_resp_frame_matching_runtime_from_stream(&mut dedicated_stream, &runtime_actual)
+                        .map_err(|err| format!("{}: {err}", case.name))?;
+                frame_ok = live_oracle_frames_match(&case, &runtime_actual, &redis_actual);
             }
         } else {
             send_frame(&mut stream, &frame)?;
@@ -418,9 +419,10 @@ fn run_live_redis_diff_with_fixture(
                     }
                 }
             } else {
-                redis_actual = read_resp_frame_from_stream(&mut stream)
-                    .map_err(|err| format!("{}: {err}", case.name))?;
-                frame_ok = runtime_actual == redis_actual;
+                redis_actual =
+                    read_resp_frame_matching_runtime_from_stream(&mut stream, &runtime_actual)
+                        .map_err(|err| format!("{}: {err}", case.name))?;
+                frame_ok = live_oracle_frames_match(&case, &runtime_actual, &redis_actual);
             }
         }
         let new_events = match dedicated_runtime.as_ref() {
@@ -1700,6 +1702,75 @@ fn read_resp_frame_from_stream(stream: &mut TcpStream) -> Result<RespFrame, Stri
     }
 }
 
+fn read_resp_frame_matching_runtime_from_stream(
+    stream: &mut TcpStream,
+    runtime_actual: &RespFrame,
+) -> Result<RespFrame, String> {
+    match runtime_actual {
+        RespFrame::Sequence(frames) => read_resp_sequence_from_stream(stream, frames.len()),
+        _ => read_resp_frame_from_stream(stream),
+    }
+}
+
+fn read_resp_sequence_from_stream(
+    stream: &mut TcpStream,
+    frame_count: usize,
+) -> Result<RespFrame, String> {
+    if frame_count == 0 {
+        return Ok(RespFrame::Sequence(Vec::new()));
+    }
+
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = [0_u8; 4096];
+    let mut frames = Vec::with_capacity(frame_count);
+    loop {
+        strip_leading_live_replication_keepalives(&mut buf);
+        while !buf.is_empty() && frames.len() < frame_count {
+            match parse_frame(&buf) {
+                Ok(parsed) => {
+                    frames.push(parsed.frame);
+                    buf.drain(..parsed.consumed);
+                    strip_leading_live_replication_keepalives(&mut buf);
+                }
+                Err(fr_protocol::RespParseError::Incomplete) => break,
+                Err(err) => return Err(format!("invalid RESP from redis: {err}")),
+            }
+        }
+
+        if frames.len() == frame_count {
+            return if frame_count == 1 {
+                Ok(frames.remove(0))
+            } else {
+                Ok(RespFrame::Sequence(frames))
+            };
+        }
+
+        let n = match stream.read(&mut chunk) {
+            Ok(n) => n,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(format!(
+                    "redis produced {}/{} sequence frames before timeout",
+                    frames.len(),
+                    frame_count
+                ));
+            }
+            Err(err) => return Err(format!("failed to read response: {err}")),
+        };
+        if n == 0 {
+            return Err("redis closed connection before sequence reply was complete".to_string());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > 16 * 1024 * 1024 {
+            return Err("response exceeded max read bound".to_string());
+        }
+    }
+}
+
 fn read_optional_resp_frame_from_stream(
     stream: &mut TcpStream,
 ) -> Result<Option<RespFrame>, String> {
@@ -1830,6 +1901,79 @@ fn runtime_matches_live_no_reply_case(case: &ConformanceCase, actual: &RespFrame
 
 fn live_oracle_no_reply_sentinel() -> RespFrame {
     RespFrame::Error("NOREPLY live redis produced no direct client response".to_string())
+}
+
+fn live_oracle_frames_match(
+    case: &ConformanceCase,
+    runtime_actual: &RespFrame,
+    redis_actual: &RespFrame,
+) -> bool {
+    runtime_actual == redis_actual
+        || live_oracle_no_arg_unsubscribe_sequences_match(case, runtime_actual, redis_actual)
+}
+
+fn live_oracle_no_arg_unsubscribe_sequences_match(
+    case: &ConformanceCase,
+    runtime_actual: &RespFrame,
+    redis_actual: &RespFrame,
+) -> bool {
+    if !matches!(
+        case.argv.as_slice(),
+        [command]
+            if command.eq_ignore_ascii_case("UNSUBSCRIBE")
+                || command.eq_ignore_ascii_case("PUNSUBSCRIBE")
+                || command.eq_ignore_ascii_case("SUNSUBSCRIBE")
+    ) {
+        return false;
+    }
+
+    let Some(runtime_parts) = pubsub_unsubscribe_sequence_parts(runtime_actual) else {
+        return false;
+    };
+    let Some(redis_parts) = pubsub_unsubscribe_sequence_parts(redis_actual) else {
+        return false;
+    };
+    runtime_parts == redis_parts
+}
+
+fn pubsub_unsubscribe_sequence_parts(
+    frame: &RespFrame,
+) -> Option<(Vec<u8>, Vec<Vec<u8>>, Vec<i64>)> {
+    let RespFrame::Sequence(items) = frame else {
+        return None;
+    };
+    let mut command_name = None::<Vec<u8>>;
+    let mut channels = Vec::with_capacity(items.len());
+    let mut remaining_counts = Vec::with_capacity(items.len());
+    for item in items {
+        let RespFrame::Array(Some(parts)) = item else {
+            return None;
+        };
+        let [
+            RespFrame::BulkString(Some(command)),
+            RespFrame::BulkString(Some(channel)),
+            RespFrame::Integer(remaining),
+        ] = parts.as_slice()
+        else {
+            return None;
+        };
+        if !matches!(
+            command.as_slice(),
+            b"unsubscribe" | b"punsubscribe" | b"sunsubscribe"
+        ) {
+            return None;
+        }
+        match &command_name {
+            Some(existing) if existing != command => return None,
+            Some(_) => {}
+            None => command_name = Some(command.clone()),
+        }
+        channels.push(channel.clone());
+        remaining_counts.push(*remaining);
+    }
+    channels.sort();
+    remaining_counts.sort_unstable();
+    command_name.map(|command| (command, channels, remaining_counts))
 }
 
 fn compare_live_info_contract(
@@ -7786,6 +7930,25 @@ mod tests {
         let oracle = oracle_handle.oracle_config();
         run_live_diff_tolerant("core_geo", || {
             run_live_redis_diff(&cfg, "core_geo.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_pubsub.json` fixture through the self-spawning
+    /// vendored redis-server oracle. Covers the single-client
+    /// PUB/SUB surface: PUBLISH without subscribers, PUBSUB
+    /// CHANNELS / NUMSUB / NUMPAT, UNSUBSCRIBE without prior
+    /// subscriptions. Multi-client SUBSCRIBE/PUBLISH fanout lives in
+    /// core_pubsub_multi_client (different harness).
+    /// (br-frankenredis-qx7p)
+    #[test]
+    fn live_redis_core_pubsub_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_pubsub", || {
+            run_live_redis_diff(&cfg, "core_pubsub.json", &oracle)
         });
     }
 
