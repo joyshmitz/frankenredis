@@ -1935,6 +1935,59 @@ fn live_oracle_frames_match(
         || live_oracle_client_info_drift_matches(case, runtime_actual, redis_actual)
         || live_oracle_config_get_matches(case, runtime_actual, redis_actual)
         || live_oracle_debug_object_drift_matches(case, runtime_actual, redis_actual)
+        || live_oracle_acl_cat_order_matches(case, runtime_actual, redis_actual)
+}
+
+/// `ACL CAT <category>` returns the commands in the category as a
+/// flat Array. Upstream emits them in dict-iteration order while
+/// our command registry yields them in a stable but different
+/// order. Both impls surface the same set of commands. Compare
+/// after sorting. (br-frankenredis-faqe)
+fn live_oracle_acl_cat_order_matches(
+    case: &ConformanceCase,
+    runtime_actual: &RespFrame,
+    redis_actual: &RespFrame,
+) -> bool {
+    let first = case
+        .argv
+        .first()
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let second = case
+        .argv
+        .get(1)
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    if first != "acl" || second != "cat" {
+        return false;
+    }
+    // `ACL CAT` without a category just lists categories. Only the
+    // 3-arg form enumerates commands in a category.
+    if case.argv.len() != 3 {
+        return false;
+    }
+    let Some(ours_sorted) = canonical_flat_bulk_set(runtime_actual) else {
+        return false;
+    };
+    let Some(theirs_sorted) = canonical_flat_bulk_set(redis_actual) else {
+        return false;
+    };
+    ours_sorted == theirs_sorted
+}
+
+fn canonical_flat_bulk_set(frame: &RespFrame) -> Option<Vec<Vec<u8>>> {
+    let RespFrame::Array(Some(items)) = frame else {
+        return None;
+    };
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(items.len());
+    for item in items {
+        let RespFrame::BulkString(Some(b)) = item else {
+            return None;
+        };
+        out.push(b.clone());
+    }
+    out.sort();
+    Some(out)
 }
 
 /// DEBUG OBJECT returns a single-line bulk string of `key:value`
@@ -9265,13 +9318,6 @@ mod tests {
             "auth_nonexistent_user",
             "auth_wrong_arity_too_many",
             "auth_wrong_password",
-            // ACL CAT <category> entry order: upstream uses dict
-            // iteration order, ours registers deterministically —
-            // compare would need per-category sort. Keep as XFAIL.
-            "acl_cat_bitmap_returns_commands",
-            "acl_cat_hyperloglog_returns_commands",
-            "acl_cat_string_returns_commands",
-            "acl_cat_transaction_returns_commands",
             // ACL SAVE/LOAD config-file awareness — our runtime lets
             // SAVE succeed without an ACL file, upstream rejects.
             "acl_load_returns_ok",

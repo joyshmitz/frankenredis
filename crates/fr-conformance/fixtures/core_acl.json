@@ -630,6 +630,14 @@
           {
             "kind": "bulk",
             "value": "pfmerge"
+          },
+          {
+            "kind": "bulk",
+            "value": "pfdebug"
+          },
+          {
+            "kind": "bulk",
+            "value": "pfselftest"
           }
         ]
       }
@@ -702,6 +710,10 @@
           {
             "kind": "bulk",
             "value": "bitfield"
+          },
+          {
+            "kind": "bulk",
+            "value": "bitfield_ro"
           }
         ]
       }

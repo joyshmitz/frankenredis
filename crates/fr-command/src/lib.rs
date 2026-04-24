@@ -10812,9 +10812,23 @@ fn command_matches_acl_category(name: &str, flags: &str, category: &str) -> bool
         ),
         "bitmap" => matches!(
             name,
-            "setbit" | "getbit" | "bitcount" | "bitpos" | "bitop" | "bitfield"
+            "setbit"
+                | "getbit"
+                | "bitcount"
+                | "bitpos"
+                | "bitop"
+                | "bitfield"
+                // Upstream acl.c::aclCategoryMap maps BITFIELD_RO
+                // under @bitmap too. (br-frankenredis-faqe)
+                | "bitfield_ro"
         ),
-        "hyperloglog" => matches!(name, "pfadd" | "pfcount" | "pfmerge"),
+        // Upstream @hyperloglog covers the introspection-only
+        // PFSELFTEST + PFDEBUG in addition to the three user-facing
+        // commands. (br-frankenredis-faqe)
+        "hyperloglog" => matches!(
+            name,
+            "pfadd" | "pfcount" | "pfmerge" | "pfselftest" | "pfdebug"
+        ),
         "geo" => matches!(
             name,
             "geoadd"
