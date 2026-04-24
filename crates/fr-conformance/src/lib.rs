@@ -7595,6 +7595,39 @@ mod tests {
         });
     }
 
+    /// Wire the `core_strings.json` fixture (307 command cases covering
+    /// GET/SET/APPEND/STRLEN/INCR/DECR/SETRANGE/GETRANGE and variants)
+    /// through the self-spawning vendored redis-server oracle. Tolerant
+    /// by default (divergences go to stderr); STRICT mode asserts byte
+    /// parity on every case. (br-frankenredis-o4su)
+    #[test]
+    fn live_redis_core_strings_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_strings", || {
+            run_live_redis_diff(&cfg, "core_strings.json", &oracle)
+        });
+    }
+
+    /// Wire the `core_hash.json` fixture (137 command cases covering
+    /// HSET/HGET/HMGET/HDEL/HINCRBY/HLEN/HKEYS/HVALS/HGETALL and the
+    /// Redis 7.4 HEXPIRE family) through the self-spawning vendored
+    /// redis-server oracle. (br-frankenredis-6y8p)
+    #[test]
+    fn live_redis_core_hash_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        run_live_diff_tolerant("core_hash", || {
+            run_live_redis_diff(&cfg, "core_hash.json", &oracle)
+        });
+    }
+
     #[test]
     fn live_redis_core_replication_stable_matches_runtime() {
         let cfg = HarnessConfig::default_paths();
