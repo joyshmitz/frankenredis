@@ -406,9 +406,11 @@ fn run_live_redis_diff_with_fixture(
                     }
                 }
             } else {
-                redis_actual =
-                    read_resp_frame_matching_runtime_from_stream(&mut dedicated_stream, &runtime_actual)
-                        .map_err(|err| format!("{}: {err}", case.name))?;
+                redis_actual = read_resp_frame_matching_runtime_from_stream(
+                    &mut dedicated_stream,
+                    &runtime_actual,
+                )
+                .map_err(|err| format!("{}: {err}", case.name))?;
                 frame_ok = live_oracle_frames_match(&case, &runtime_actual, &redis_actual);
             }
         } else {
@@ -2230,7 +2232,8 @@ fn canonical_config_get_entries(frame: &RespFrame) -> Option<Vec<(Vec<u8>, Vec<u
     }
     let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(items.len() / 2);
     for chunk in items.chunks_exact(2) {
-        let (RespFrame::BulkString(Some(k)), RespFrame::BulkString(Some(v))) = (&chunk[0], &chunk[1])
+        let (RespFrame::BulkString(Some(k)), RespFrame::BulkString(Some(v))) =
+            (&chunk[0], &chunk[1])
         else {
             return None;
         };
@@ -2394,11 +2397,8 @@ fn live_oracle_hello_id_drift_matches(
                 // "redis" server-name echo — let any version-shaped
                 // ASCII-digits-plus-dots pass, but require exact
                 // matches everywhere else.
-                let looks_like_version = |s: &[u8]| {
-                    !s.is_empty()
-                        && s.iter()
-                            .all(|b| b.is_ascii_digit() || *b == b'.')
-                };
+                let looks_like_version =
+                    |s: &[u8]| !s.is_empty() && s.iter().all(|b| b.is_ascii_digit() || *b == b'.');
                 if x != y && !(looks_like_version(x) && looks_like_version(y)) {
                     return false;
                 }
@@ -2477,7 +2477,7 @@ fn canonical_scan_reply(frame: &RespFrame, pair_shape: bool) -> Option<RespFrame
         Some(RespFrame::Array(Some(out)))
     } else {
         let mut sorted = items.clone();
-        sorted.sort_by(|a, b| frame_sort_key_for_scan(a).cmp(&frame_sort_key_for_scan(b)));
+        sorted.sort_by_key(frame_sort_key_for_scan);
         Some(RespFrame::Array(Some(sorted)))
     }
 }
@@ -2674,9 +2674,9 @@ fn live_oracle_no_arg_unsubscribe_sequences_match(
     runtime_parts == redis_parts
 }
 
-fn pubsub_unsubscribe_sequence_parts(
-    frame: &RespFrame,
-) -> Option<(Vec<u8>, Vec<Vec<u8>>, Vec<i64>)> {
+type PubsubUnsubscribeParts = (Vec<u8>, Vec<Vec<u8>>, Vec<i64>);
+
+fn pubsub_unsubscribe_sequence_parts(frame: &RespFrame) -> Option<PubsubUnsubscribeParts> {
     let RespFrame::Sequence(items) = frame else {
         return None;
     };
@@ -3329,15 +3329,15 @@ mod tests {
     use super::{
         CaseOutcome, ConformanceCase, DIFFERENTIAL_REPORT_SCHEMA_VERSION, EvidenceEvent,
         ExpectedFrame, ExpectedThreat, HarnessConfig, LiveOracleConfig, ReplayFixture,
-        StructuredLogEmissionContext, build_differential_report, expected_to_frame,
-        live_oracle_case_expects_no_reply, live_oracle_case_uses_dedicated_connection,
-        live_oracle_case_uses_legacy_sync_snapshot, load_conformance_fixture,
-        load_multi_client_fixture, run_fixture, run_live_redis_diff,
-        run_live_redis_diff_for_cases, run_live_redis_protocol_diff, run_protocol_fixture,
-        run_replay_fixture, run_replication_handshake_fixture, run_smoke,
-        runtime_for_harness_config, runtime_matches_live_no_reply_case,
-        runtime_matches_live_sync_snapshot_case, validate_structured_log_emission,
-        validate_threat_expectation,
+        StructuredLogEmissionContext, build_differential_report, connect_live_redis,
+        expected_to_frame, flushall, live_oracle_case_expects_no_reply,
+        live_oracle_case_uses_dedicated_connection, live_oracle_case_uses_legacy_sync_snapshot,
+        load_conformance_fixture, load_multi_client_fixture, read_resp_frame_from_stream,
+        run_fixture, run_live_redis_diff, run_live_redis_diff_for_cases,
+        run_live_redis_protocol_diff, run_protocol_fixture, run_replay_fixture,
+        run_replication_handshake_fixture, run_smoke, runtime_for_harness_config,
+        runtime_matches_live_no_reply_case, runtime_matches_live_sync_snapshot_case, send_frame,
+        validate_structured_log_emission, validate_threat_expectation,
     };
     use crate::log_contract::{
         LogMode, LogOutcome, StructuredLogEvent, VerificationPath, live_log_output_path,
@@ -8426,10 +8426,7 @@ mod tests {
     /// `FR_CONFORMANCE_LIVE_ORACLE_STRICT=1` to enforce
     /// `report.total == report.passed`. Either way we assert
     /// `report.total > 0` to prove the diff actually ran.
-    fn assert_live_report(
-        label: &str,
-        report: &crate::DifferentialReport,
-    ) {
+    fn assert_live_report(label: &str, report: &crate::DifferentialReport) {
         eprintln!(
             "[live-oracle:{label}] total={} passed={} failed={}",
             report.total,
@@ -9015,23 +9012,65 @@ mod tests {
         });
     }
 
-    /// `core_connection.json` remains skipped in the live oracle.
-    /// RESP3 parsing works now via `allow_resp3` (br-frankenredis-
-    /// ozcx), but the fixture still interleaves QUIT/RESET with
-    /// COMMAND DOCS and state-mutating AUTH/SELECT cases that wedge
-    /// the single-TCP-connection harness — the per-case read
-    /// timeout + stream-read + connection-lifecycle work tracked
-    /// under br-frankenredis-4e32 is still required before the
-    /// suite can run end-to-end.
-    /// (br-frankenredis-4e32, ozcx)
+    /// Wire the stable `core_connection.json` connection-command subset
+    /// through the self-spawning vendored Redis oracle. Dedicated-connection
+    /// routing isolates AUTH/HELLO/QUIT/RESET/SELECT so connection-local
+    /// state cannot leak between fixture cases. COMMAND metadata cases remain
+    /// outside this subset because their generated payloads are tracked by
+    /// command-surface parity beads. (br-frankenredis-4e32, ozcx)
     #[test]
     fn live_redis_core_connection_matches_runtime() {
-        eprintln!(
-            "[live-oracle:core_connection] skipping — RESP3 parser now \
-             available (ozcx) but harness still needs per-case TCP \
-             read timeout + stream-read to drive QUIT/COMMAND DOCS \
-             cases end-to-end (tracked as br-frankenredis-4e32)."
-        );
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        const CASES: &[&str] = &[
+            "ping_no_args_returns_pong",
+            "ping_with_message",
+            "ping_wrong_arity",
+            "echo_returns_argument",
+            "echo_wrong_arity_no_args",
+            "echo_wrong_arity_too_many",
+            "echo_binary_safe",
+            "ping_binary_message",
+            "echo_empty_string",
+            "ping_with_custom_message",
+            "echo_empty_string_returns_empty",
+            "select_db0_ok",
+            "select_db1_ok",
+            "select_wrong_arity",
+            "select_invalid_db",
+            "select_noncanonical_plus",
+            "select_noncanonical_leading_zero",
+            "select_db15_ok",
+            "select_db0_after_db15",
+            "select_negative_db",
+            "select_large_db",
+            "select_too_many_args",
+            "select_db_negative",
+            "select_db_very_large",
+            "select_db_non_integer",
+            "move_same_db_errors_even_when_key_is_missing",
+            "quit_returns_ok",
+            "readonly_reports_cluster_disabled",
+            "readwrite_reports_cluster_disabled",
+            "readonly_wrong_arity",
+            "readwrite_wrong_arity",
+            "reset_returns_reset",
+            "auth_no_password_configured",
+            "hello_resp2",
+            "hello_resp3",
+            "hello_unsupported_version",
+            "hello_version_1_unsupported",
+            "hello_reset_to_2",
+            "hello_no_version_returns_info",
+            "hello_wrong_type_version",
+            "hello_version_0_unsupported",
+        ];
+        run_live_diff_tolerant("core_connection", || {
+            run_live_redis_diff_for_cases(&cfg, "core_connection.json", CASES, &oracle)
+        });
     }
 
     /// Wire the `core_config.json` fixture through the self-spawning
@@ -9578,6 +9617,169 @@ mod tests {
         run_live_diff_tolerant("fr_p2c_006_replication_journey", || {
             run_live_redis_diff(&cfg, "fr_p2c_006_replication_journey.json", &oracle)
         });
+    }
+
+    /// Cross-impl DUMP/RESTORE round-trip gate for STRING values.
+    ///
+    /// Drives the two directions the `MIGRATE` wire protocol relies
+    /// on, across the STRING encodings our `dump_key` / `restore_key`
+    /// support:
+    ///
+    ///   1. Our → theirs: `store.dump_key(key)` → send
+    ///      `RESTORE key 0 <payload>` to the vendored oracle. Upstream
+    ///      must reply `+OK` (envelope, version, and CRC64 footer
+    ///      accepted). A follow-up `GET key` must echo the original
+    ///      bytes.
+    ///   2. Theirs → ours: seed the oracle with `SET key value`, pull
+    ///      the payload via `DUMP key`, feed it back into our
+    ///      `store.restore_key`, then `get` and compare.
+    ///
+    /// Covers the upstream integer-string encodings (INT8/INT16/
+    /// INT32) and raw length-prefixed blobs of several sizes,
+    /// including a large (>512 byte) blob that upstream may choose
+    /// to LZF-compress on the DUMP side. (br-frankenredis-lxda)
+    #[test]
+    fn live_redis_string_dump_restore_roundtrip_matches_upstream() {
+        use fr_store::Store;
+
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"rt_str_raw_small", b"hello"),
+            (b"rt_str_int8", b"42"),
+            (b"rt_str_int8_neg", b"-128"),
+            (b"rt_str_int16", b"-129"),
+            (b"rt_str_int16_pos", b"32767"),
+            (b"rt_str_int32", b"2147483647"),
+            (b"rt_str_leading_zeros", b"00123"),
+            (b"rt_str_len_63", b"0123456789012345678901234567890123456789012345678901234567890123"[..63].as_ref()),
+            (b"rt_str_long_highly_compressible", b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            (b"rt_str_binary_with_null",
+             b"\x00\x01\x02binary\x00payload\xff\xfe\xfd"),
+        ];
+
+        let mut stream = connect_live_redis(&oracle)
+            .expect("connect to vendored redis for DUMP/RESTORE round-trip");
+        flushall(&mut stream).expect("flushall on oracle");
+
+        // Direction A: our DUMP → oracle RESTORE → oracle GET
+        for (key, value) in cases {
+            let mut store = Store::new();
+            store.set(key.to_vec(), value.to_vec(), None, 100);
+            let payload = store
+                .dump_key(key, 100)
+                .expect("dump_key produced payload for fresh key");
+
+            // Clear the key on the oracle side so RESTORE can place
+            // a new value. (Round-trip test is independent between
+            // cases.)
+            let del = RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"DEL".to_vec())),
+                RespFrame::BulkString(Some(key.to_vec())),
+            ]));
+            send_frame(&mut stream, &del).expect("send DEL");
+            let _ = read_resp_frame_from_stream(&mut stream).expect("read DEL reply");
+
+            let restore = RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"RESTORE".to_vec())),
+                RespFrame::BulkString(Some(key.to_vec())),
+                RespFrame::BulkString(Some(b"0".to_vec())),
+                RespFrame::BulkString(Some(payload.clone())),
+            ]));
+            send_frame(&mut stream, &restore).expect("send RESTORE");
+            let reply =
+                read_resp_frame_from_stream(&mut stream).expect("read RESTORE reply from oracle");
+            match reply {
+                RespFrame::SimpleString(ref s) if s == "OK" => {}
+                other => panic!(
+                    "oracle rejected our DUMP payload for key {:?} (value {:?}): {:?}",
+                    String::from_utf8_lossy(key),
+                    value,
+                    other,
+                ),
+            }
+
+            let get = RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"GET".to_vec())),
+                RespFrame::BulkString(Some(key.to_vec())),
+            ]));
+            send_frame(&mut stream, &get).expect("send GET");
+            let get_reply =
+                read_resp_frame_from_stream(&mut stream).expect("read GET reply from oracle");
+            assert_eq!(
+                get_reply,
+                RespFrame::BulkString(Some(value.to_vec())),
+                "oracle GET after our DUMP→RESTORE mismatch for key {:?}",
+                String::from_utf8_lossy(key),
+            );
+        }
+
+        // Direction B: oracle SET → oracle DUMP → our restore_key
+        for (key, value) in cases {
+            // Reset oracle state and seed.
+            let del = RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"DEL".to_vec())),
+                RespFrame::BulkString(Some(key.to_vec())),
+            ]));
+            send_frame(&mut stream, &del).expect("send DEL (reverse)");
+            let _ = read_resp_frame_from_stream(&mut stream).expect("read DEL reply (reverse)");
+
+            let set = RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"SET".to_vec())),
+                RespFrame::BulkString(Some(key.to_vec())),
+                RespFrame::BulkString(Some(value.to_vec())),
+            ]));
+            send_frame(&mut stream, &set).expect("send SET (reverse)");
+            let set_reply =
+                read_resp_frame_from_stream(&mut stream).expect("read SET reply (reverse)");
+            assert!(
+                matches!(&set_reply, RespFrame::SimpleString(s) if s == "OK"),
+                "oracle SET failed for key {:?}: {:?}",
+                String::from_utf8_lossy(key),
+                set_reply,
+            );
+
+            let dump = RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"DUMP".to_vec())),
+                RespFrame::BulkString(Some(key.to_vec())),
+            ]));
+            send_frame(&mut stream, &dump).expect("send DUMP (reverse)");
+            let dump_reply =
+                read_resp_frame_from_stream(&mut stream).expect("read DUMP reply (reverse)");
+            let upstream_payload = match dump_reply {
+                RespFrame::BulkString(Some(p)) => p,
+                other => panic!(
+                    "oracle DUMP returned non-bulk for key {:?}: {:?}",
+                    String::from_utf8_lossy(key),
+                    other,
+                ),
+            };
+
+            let mut store = Store::new();
+            store
+                .restore_key(key, 0, &upstream_payload, false, 100)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "restore_key rejected upstream DUMP payload for key {:?}: {:?}",
+                        String::from_utf8_lossy(key),
+                        err,
+                    )
+                });
+            let got = store
+                .get(key, 100)
+                .expect("get after restore_key")
+                .expect("key present after restore_key");
+            assert_eq!(
+                got.as_slice(),
+                *value,
+                "our GET after oracle DUMP→our RESTORE mismatch for key {:?}",
+                String::from_utf8_lossy(key),
+            );
+        }
     }
 
     #[test]

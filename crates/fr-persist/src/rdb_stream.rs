@@ -74,7 +74,7 @@ pub(crate) fn encode_upstream_stream_listpacks3(
 ) -> Option<Vec<u8>> {
     let mut buf = Vec::new();
     let mut sorted_entries = entries.to_vec();
-    sorted_entries.sort_by(|left, right| (left.0, left.1).cmp(&(right.0, right.1)));
+    sorted_entries.sort_by_key(|entry| (entry.0, entry.1));
 
     super::rdb_encode_length(&mut buf, sorted_entries.len());
     for entry in &sorted_entries {

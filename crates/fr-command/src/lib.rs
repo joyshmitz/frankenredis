@@ -11837,6 +11837,7 @@ const CLIENT_TRACKING_BCAST_OPT_CONFLICT: &str =
     "ERR OPTIN and OPTOUT are not compatible with BCAST";
 const CLIENT_TRACKING_BCAST_SWITCH_REQUIRES_DISABLE: &str = "ERR You can't switch BCAST mode on/off before disabling tracking for this client, and then re-enabling it with a different mode.";
 const CLIENT_TRACKING_OPT_SWITCH_REQUIRES_DISABLE: &str = "ERR You can't switch OPTIN/OPTOUT mode before disabling tracking for this client, and then re-enabling it with a different mode.";
+#[allow(dead_code)]
 const CLIENT_CACHING_REQUIRES_TRACKING: &str = "ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled";
 const CLIENT_CACHING_YES_REQUIRES_OPTIN: &str =
     "ERR CLIENT CACHING YES is only valid when tracking is enabled in OPTIN mode.";
