@@ -6,8 +6,8 @@
 //! container-type support (br-frankenredis-hycu) to read listpack blobs
 //! embedded inside bigger structures.
 //!
-//! No writer is provided — our RDB/DUMP encoders still use the legacy
-//! frankenredis-internal format for now. A writer lands in br-frankenredis-6zk9.
+//! The stream RDB encoder owns a small write-side subset for stream macro-node
+//! listpacks; this module remains the shared read-side parser.
 //!
 //! (br-frankenredis-3g0p)
 

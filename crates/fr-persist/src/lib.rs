@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+#[cfg(feature = "upstream-stream-rdb")]
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -1019,40 +1021,7 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
                 }
             }
             RdbValue::Stream(stream_entries, watermark, groups) => {
-                buf.push(RDB_TYPE_STREAM);
-                rdb_encode_string(&mut buf, &entry.key);
-                let (wm_ms, wm_seq) = watermark.unwrap_or((0, 0));
-                buf.extend_from_slice(&wm_ms.to_le_bytes());
-                buf.extend_from_slice(&wm_seq.to_le_bytes());
-                rdb_encode_length(&mut buf, stream_entries.len());
-                for (ms, seq, fields) in stream_entries {
-                    buf.extend_from_slice(&ms.to_le_bytes());
-                    buf.extend_from_slice(&seq.to_le_bytes());
-                    rdb_encode_length(&mut buf, fields.len());
-                    for (fname, fval) in fields {
-                        rdb_encode_string(&mut buf, fname);
-                        rdb_encode_string(&mut buf, fval);
-                    }
-                }
-                // Consumer groups
-                rdb_encode_length(&mut buf, groups.len());
-                for group in groups {
-                    rdb_encode_string(&mut buf, &group.name);
-                    buf.extend_from_slice(&group.last_delivered_id_ms.to_le_bytes());
-                    buf.extend_from_slice(&group.last_delivered_id_seq.to_le_bytes());
-                    rdb_encode_length(&mut buf, group.consumers.len());
-                    for consumer in &group.consumers {
-                        rdb_encode_string(&mut buf, consumer);
-                    }
-                    rdb_encode_length(&mut buf, group.pending.len());
-                    for pe in &group.pending {
-                        buf.extend_from_slice(&pe.entry_id_ms.to_le_bytes());
-                        buf.extend_from_slice(&pe.entry_id_seq.to_le_bytes());
-                        rdb_encode_string(&mut buf, &pe.consumer);
-                        buf.extend_from_slice(&pe.deliveries.to_le_bytes());
-                        buf.extend_from_slice(&pe.last_delivered_ms.to_le_bytes());
-                    }
-                }
+                encode_stream_rdb_value(&mut buf, &entry.key, stream_entries, *watermark, groups);
             }
         }
         debug_assert!(index < sorted_entries.len());
@@ -1064,6 +1033,122 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
     buf.extend_from_slice(&checksum.to_le_bytes());
 
     buf
+}
+
+fn encode_stream_rdb_value(
+    buf: &mut Vec<u8>,
+    key: &[u8],
+    stream_entries: &[StreamEntry],
+    watermark: Option<(u64, u64)>,
+    groups: &[RdbStreamConsumerGroup],
+) {
+    #[cfg(feature = "upstream-stream-rdb")]
+    {
+        if can_encode_upstream_stream_losslessly(stream_entries, watermark, groups)
+            && let Some(payload) =
+                rdb_stream::encode_upstream_stream_listpacks3(stream_entries, watermark, groups)
+        {
+            buf.push(UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3);
+            rdb_encode_string(buf, key);
+            buf.extend_from_slice(&payload);
+            return;
+        }
+    }
+
+    encode_private_stream_rdb_value(buf, key, stream_entries, watermark, groups);
+}
+
+#[cfg(feature = "upstream-stream-rdb")]
+fn can_encode_upstream_stream_losslessly(
+    stream_entries: &[StreamEntry],
+    watermark: Option<(u64, u64)>,
+    groups: &[RdbStreamConsumerGroup],
+) -> bool {
+    if watermark.is_none() {
+        return false;
+    }
+
+    if stream_entries.windows(2).any(|pair| {
+        let left = (pair[0].0, pair[0].1);
+        let right = (pair[1].0, pair[1].1);
+        left >= right
+    }) {
+        return false;
+    }
+
+    groups.iter().all(consumer_group_is_lossless_type21)
+}
+
+#[cfg(feature = "upstream-stream-rdb")]
+fn consumer_group_is_lossless_type21(group: &RdbStreamConsumerGroup) -> bool {
+    let mut pending_ids = BTreeSet::new();
+    for pending in &group.pending {
+        if !group
+            .consumers
+            .iter()
+            .any(|consumer| consumer.as_slice() == pending.consumer.as_slice())
+        {
+            return false;
+        }
+        if !pending_ids.insert((pending.entry_id_ms, pending.entry_id_seq)) {
+            return false;
+        }
+    }
+
+    let mut encoded_order = Vec::with_capacity(group.pending.len());
+    for consumer in &group.consumers {
+        encoded_order.extend(
+            group
+                .pending
+                .iter()
+                .filter(|pending| pending.consumer.as_slice() == consumer.as_slice()),
+        );
+    }
+
+    encoded_order.into_iter().eq(group.pending.iter())
+}
+
+fn encode_private_stream_rdb_value(
+    buf: &mut Vec<u8>,
+    key: &[u8],
+    stream_entries: &[StreamEntry],
+    watermark: Option<(u64, u64)>,
+    groups: &[RdbStreamConsumerGroup],
+) {
+    buf.push(RDB_TYPE_STREAM);
+    rdb_encode_string(buf, key);
+    let (wm_ms, wm_seq) = watermark.unwrap_or((0, 0));
+    buf.extend_from_slice(&wm_ms.to_le_bytes());
+    buf.extend_from_slice(&wm_seq.to_le_bytes());
+    rdb_encode_length(buf, stream_entries.len());
+    for (ms, seq, fields) in stream_entries {
+        buf.extend_from_slice(&ms.to_le_bytes());
+        buf.extend_from_slice(&seq.to_le_bytes());
+        rdb_encode_length(buf, fields.len());
+        for (fname, fval) in fields {
+            rdb_encode_string(buf, fname);
+            rdb_encode_string(buf, fval);
+        }
+    }
+    // Consumer groups
+    rdb_encode_length(buf, groups.len());
+    for group in groups {
+        rdb_encode_string(buf, &group.name);
+        buf.extend_from_slice(&group.last_delivered_id_ms.to_le_bytes());
+        buf.extend_from_slice(&group.last_delivered_id_seq.to_le_bytes());
+        rdb_encode_length(buf, group.consumers.len());
+        for consumer in &group.consumers {
+            rdb_encode_string(buf, consumer);
+        }
+        rdb_encode_length(buf, group.pending.len());
+        for pe in &group.pending {
+            buf.extend_from_slice(&pe.entry_id_ms.to_le_bytes());
+            buf.extend_from_slice(&pe.entry_id_seq.to_le_bytes());
+            rdb_encode_string(buf, &pe.consumer);
+            buf.extend_from_slice(&pe.deliveries.to_le_bytes());
+            buf.extend_from_slice(&pe.last_delivered_ms.to_le_bytes());
+        }
+    }
 }
 
 /// Decode an RDB length. Returns `(length, bytes_consumed)` or `None` on
@@ -2877,6 +2962,41 @@ mod tests {
         assert_eq!(decoded, entries);
     }
 
+    #[cfg(feature = "upstream-stream-rdb")]
+    #[test]
+    fn rdb_feature_encodes_streams_as_upstream_type21() {
+        let entries = vec![RdbEntry {
+            db: 0,
+            key: b"cg_stream".to_vec(),
+            value: RdbValue::Stream(
+                vec![(1000, 0, vec![(b"msg".to_vec(), b"hello".to_vec())])],
+                Some((1000, 0)),
+                vec![RdbStreamConsumerGroup {
+                    name: b"mygroup".to_vec(),
+                    last_delivered_id_ms: 1000,
+                    last_delivered_id_seq: 0,
+                    consumers: vec![b"alice".to_vec()],
+                    pending: vec![RdbStreamPendingEntry {
+                        entry_id_ms: 1000,
+                        entry_id_seq: 0,
+                        consumer: b"alice".to_vec(),
+                        deliveries: 2,
+                        last_delivered_ms: 5000,
+                    }],
+                }],
+            ),
+            expire_ms: None,
+        }];
+
+        let encoded = encode_rdb(&entries, &[]);
+
+        // Header + SELECTDB(2) + RESIZEDB(3) puts the first value type byte at 14.
+        assert_eq!(encoded[14], UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3);
+
+        let (decoded, _) = decode_rdb(&encoded).expect("decode");
+        assert_eq!(decoded, entries);
+    }
+
     #[test]
     fn rdb_hash_with_ttls_uses_private_non_upstream_stream_type_tag() {
         let entries = vec![RdbEntry {
@@ -3275,7 +3395,9 @@ mod tests {
             }];
             let encoded = encode_rdb(&entries, &[]);
 
-            // TYPE_STREAM = 15 (0x0F)
+            // Private TYPE_STREAM = 15 (0x0F) remains the default encoding.
+            // Empty streams without a watermark also keep this shape under the
+            // upstream feature because type-21 always decodes a concrete last-id.
             assert!(
                 encoded.contains(&0x0F),
                 "RDB stream must have TYPE_STREAM (0x0F)"
