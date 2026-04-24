@@ -15488,6 +15488,7 @@ mod tests {
     use fr_protocol::RespFrame;
     use fr_store::{
         SCRIPT_PROPAGATE_ALL, SCRIPT_PROPAGATE_AOF, SCRIPT_PROPAGATE_REPLICA, Store, StoreError,
+        StreamGroupReadCursor, StreamGroupReadOptions,
     };
 
     use super::{
@@ -35117,6 +35118,78 @@ mod tests {
         }
     }
 
+    struct ManagedRedis {
+        child: std::process::Child,
+    }
+
+    impl Drop for ManagedRedis {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn project_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("manifest has workspace root")
+            .to_path_buf()
+    }
+
+    fn pick_free_port() -> u16 {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind ephemeral port");
+        listener.local_addr().expect("local addr").port()
+    }
+
+    fn wait_for_redis_cli(redis_cli: &std::path::Path, port: u16) -> bool {
+        let port = port.to_string();
+        for _ in 0..100 {
+            if let Ok(output) = std::process::Command::new(redis_cli)
+                .args(["-h", "127.0.0.1", "-p", port.as_str(), "--raw", "PING"])
+                .output()
+                && output.status.success()
+                && output.stdout.starts_with(b"PONG")
+            {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+
+    fn redis_cli_output(redis_cli: &std::path::Path, port: u16, argv: &[&str]) -> String {
+        let port = port.to_string();
+        let output = std::process::Command::new(redis_cli)
+            .args(["-h", "127.0.0.1", "-p", port.as_str(), "--raw"])
+            .args(argv)
+            .output()
+            .expect("run redis-cli");
+        assert!(
+            output.status.success(),
+            "redis-cli {:?} failed: {}",
+            argv,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("redis-cli stdout is utf8")
+    }
+
+    fn redis_command(port: u16, argv: &[&[u8]]) -> RespFrame {
+        let mut stream =
+            TcpStream::connect(("127.0.0.1", port)).expect("connect vendored redis-server");
+        let frame = RespFrame::Array(Some(
+            argv.iter()
+                .map(|arg| RespFrame::BulkString(Some((*arg).to_vec())))
+                .collect(),
+        ));
+        stream
+            .write_all(&frame.to_bytes())
+            .expect("write redis command");
+        let reply = read_test_frame(&mut stream, &mut Vec::new());
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+        reply
+    }
+
     #[test]
     fn del_like_wrong_arity_keeps_original_command_name() {
         let mut store = Store::new();
@@ -35309,6 +35382,146 @@ mod tests {
         assert_eq!(reply, RespFrame::SimpleString("OK".to_string()));
 
         server.join().expect("join fake target");
+    }
+
+    #[test]
+    fn migrate_stream_dump_payload_loads_in_vendored_redis_and_restores_back() {
+        let root = project_root();
+        let redis_server = root.join("legacy_redis_code/redis/src/redis-server");
+        let redis_cli = root.join("legacy_redis_code/redis/src/redis-cli");
+        if !redis_server.is_file() || !redis_cli.is_file() {
+            eprintln!(
+                "[SKIP] vendored redis-server/redis-cli unavailable under {}",
+                root.display()
+            );
+            return;
+        }
+
+        let port = pick_free_port();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let child = std::process::Command::new(&redis_server)
+            .arg("--dir")
+            .arg(std::env::temp_dir())
+            .arg("--dbfilename")
+            .arg(format!(
+                "fr_command_migrate_stream_{}_{}.rdb",
+                std::process::id(),
+                unique
+            ))
+            .arg("--port")
+            .arg(port.to_string())
+            .arg("--bind")
+            .arg("127.0.0.1")
+            .arg("--protected-mode")
+            .arg("no")
+            .arg("--save")
+            .arg("")
+            .arg("--appendonly")
+            .arg("no")
+            .arg("--daemonize")
+            .arg("no")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn vendored redis-server");
+        let _redis = ManagedRedis { child };
+        assert!(
+            wait_for_redis_cli(&redis_cli, port),
+            "vendored redis-server did not become ready"
+        );
+
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1, 0), &[(b"name".to_vec(), b"alice".to_vec())], 100)
+            .expect("seed first stream entry");
+        store
+            .xadd(b"s", (2, 0), &[(b"name".to_vec(), b"bob".to_vec())], 100)
+            .expect("seed second stream entry");
+        store
+            .xgroup_create(b"s", b"g", (0, 0), false, 100)
+            .expect("create stream group");
+        let read = store
+            .xreadgroup(
+                b"s",
+                b"g",
+                b"alice",
+                StreamGroupReadOptions {
+                    cursor: StreamGroupReadCursor::NewEntries,
+                    noack: false,
+                    count: None,
+                },
+                150,
+            )
+            .expect("read stream group")
+            .expect("stream group records");
+        assert_eq!(read.len(), 2);
+
+        let request = parse_migrate_request(&[
+            b"MIGRATE".to_vec(),
+            b"127.0.0.1".to_vec(),
+            port.to_string().into_bytes(),
+            b"s".to_vec(),
+            b"0".to_vec(),
+            b"5000".to_vec(),
+            b"REPLACE".to_vec(),
+        ])
+        .expect("parse migrate request");
+        let key_specs = vec![MigrateKeySpec {
+            source_key: b"s".to_vec(),
+            target_key: b"s".to_vec(),
+        }];
+
+        let outcome = execute_migrate(&request, &key_specs, &mut store, 200).expect("migrate");
+        assert_eq!(outcome.reply, RespFrame::SimpleString("OK".to_string()));
+        assert_eq!(outcome.deleted_keys, vec![b"s".to_vec()]);
+        assert!(!store.exists(b"s", 200));
+
+        assert_eq!(
+            redis_cli_output(&redis_cli, port, &["TYPE", "s"]).trim(),
+            "stream"
+        );
+        assert_eq!(
+            redis_cli_output(&redis_cli, port, &["XLEN", "s"]).trim(),
+            "2"
+        );
+        let xinfo = redis_cli_output(&redis_cli, port, &["XINFO", "STREAM", "s", "FULL"]);
+        assert!(
+            xinfo.contains("alice") && xinfo.contains("bob") && xinfo.contains("g"),
+            "missing stream entries or group metadata in XINFO STREAM FULL: {xinfo}"
+        );
+        let xpending = redis_cli_output(&redis_cli, port, &["XPENDING", "s", "g"]);
+        assert!(
+            xpending.contains("alice") && xpending.contains("2"),
+            "missing pending metadata in XPENDING: {xpending}"
+        );
+
+        let dump_payload = match redis_command(port, &[b"DUMP", b"s"]) {
+            RespFrame::BulkString(Some(bytes)) => bytes,
+            other => panic!("expected Redis DUMP bulk string, got {other:?}"), // ubs:ignore — AI triage
+        };
+        let mut restored = Store::new();
+        restored
+            .restore_key(b"s", 0, &dump_payload, false, 300)
+            .expect("restore Redis stream dump into FrankenRedis");
+        let entries = restored
+            .xrange(b"s", (0, 0), (u64::MAX, u64::MAX), None, 300)
+            .expect("read restored stream entries");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, (1, 0));
+        assert_eq!(entries[0].1, vec![(b"name".to_vec(), b"alice".to_vec())]);
+        assert_eq!(entries[1].0, (2, 0));
+        assert_eq!(entries[1].1, vec![(b"name".to_vec(), b"bob".to_vec())]);
+        let groups = restored.xinfo_groups(b"s", 300).unwrap().expect("groups");
+        assert_eq!(groups, vec![(b"g".to_vec(), 1, 2, (2, 0))]);
+        let pending = restored
+            .xpending_summary(b"s", b"g", 300)
+            .unwrap()
+            .expect("pending summary");
+        assert_eq!(pending.0, 2);
+        assert_eq!(pending.3, vec![(b"alice".to_vec(), 2)]);
     }
 
     #[test]
@@ -36770,4 +36983,3 @@ mod tests {
 }
 #[cfg(test)]
 mod zadd_xx_test;
-

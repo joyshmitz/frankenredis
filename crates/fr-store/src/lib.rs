@@ -18,7 +18,10 @@ const RDB_TYPE_SET_INTSET: u8 = 11;
 const RDB_TYPE_HASH_LISTPACK: u8 = 16;
 const RDB_TYPE_ZSET_LISTPACK: u8 = 17;
 const RDB_TYPE_LIST_QUICKLIST_2: u8 = 18;
+const RDB_TYPE_STREAM_LISTPACKS: u8 = fr_persist::UPSTREAM_RDB_TYPE_STREAM_LISTPACKS;
+const RDB_TYPE_STREAM_LISTPACKS_2: u8 = fr_persist::UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_2;
 const RDB_TYPE_SET_LISTPACK: u8 = 20;
+const RDB_TYPE_STREAM_LISTPACKS_3: u8 = fr_persist::UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3;
 const DUMP_VERSION_LEN: usize = 2;
 const DUMP_CRC64_LEN: usize = 8;
 const DUMP_TRAILER_LEN: usize = DUMP_VERSION_LEN + DUMP_CRC64_LEN;
@@ -9948,6 +9951,36 @@ impl Store {
         self.subscribed_channels.iter().cloned().collect()
     }
 
+    fn dump_stream_consumer_groups(&self, key: &[u8]) -> Vec<fr_persist::RdbStreamConsumerGroup> {
+        self.stream_groups
+            .get(key)
+            .map(|groups| {
+                groups
+                    .iter()
+                    .map(|(name, group)| fr_persist::RdbStreamConsumerGroup {
+                        name: name.clone(),
+                        last_delivered_id_ms: group.last_delivered_id.0,
+                        last_delivered_id_seq: group.last_delivered_id.1,
+                        consumers: group.consumers.iter().cloned().collect(),
+                        pending: group
+                            .pending
+                            .iter()
+                            .map(|((entry_id_ms, entry_id_seq), pending)| {
+                                fr_persist::RdbStreamPendingEntry {
+                                    entry_id_ms: *entry_id_ms,
+                                    entry_id_seq: *entry_id_seq,
+                                    consumer: pending.consumer.clone(),
+                                    deliveries: pending.deliveries,
+                                    last_delivered_ms: pending.last_delivered_ms,
+                                }
+                            })
+                            .collect(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Serialize a key's value for DUMP. Returns None if key doesn't exist.
     /// Format: [type_byte][payload][2-byte RDB version][8-byte CRC64].
     pub fn dump_key(&mut self, key: &[u8], now_ms: u64) -> Option<Vec<u8>> {
@@ -10048,19 +10081,21 @@ impl Store {
                 }
             }
             Value::Stream(entries) => {
-                buf.push(15); // type 15 = stream
-                encode_length(&mut buf, entries.len());
-                for ((ms, seq), fields) in entries {
-                    buf.extend_from_slice(&ms.to_le_bytes());
-                    buf.extend_from_slice(&seq.to_le_bytes());
-                    encode_length(&mut buf, fields.len());
-                    for (fname, fval) in fields {
-                        encode_length(&mut buf, fname.len());
-                        buf.extend_from_slice(fname);
-                        encode_length(&mut buf, fval.len());
-                        buf.extend_from_slice(fval);
-                    }
-                }
+                let stream_entries = dump_stream_entries(entries);
+                let watermark = self
+                    .stream_last_ids
+                    .get(key)
+                    .copied()
+                    .or_else(|| entries.keys().next_back().copied())
+                    .or(Some((0, 0)));
+                let groups = self.dump_stream_consumer_groups(key);
+                let payload = fr_persist::encode_upstream_stream_listpacks3_payload(
+                    &stream_entries,
+                    watermark,
+                    &groups,
+                )?;
+                buf.push(RDB_TYPE_STREAM_LISTPACKS_3);
+                buf.extend_from_slice(&payload);
             }
         }
         // Append Redis DUMP footer: 2-byte little-endian RDB version, then CRC64.
@@ -10113,6 +10148,8 @@ impl Store {
         let mut cursor = 1;
         // Data boundary: exclude trailer (2-byte version + 8-byte CRC64).
         let data_end = payload.len() - DUMP_TRAILER_LEN;
+        let mut restored_stream_last_id = None;
+        let mut restored_stream_groups = None;
         let value = match type_byte {
             RDB_TYPE_STRING => {
                 let (v, consumed) = decode_rdb_string(payload, cursor, data_end)?;
@@ -10201,49 +10238,25 @@ impl Store {
                 }
                 Value::SortedSet(zs)
             }
-            15 => {
-                // Stream
-                let (entry_count, consumed) = decode_length(payload, cursor)?;
+            RDB_TYPE_STREAM_LISTPACKS
+            | RDB_TYPE_STREAM_LISTPACKS_2
+            | RDB_TYPE_STREAM_LISTPACKS_3 => {
+                let (stream_value, consumed) = fr_persist::decode_upstream_stream_payload(
+                    type_byte,
+                    &payload[cursor..data_end],
+                )
+                .ok_or(StoreError::InvalidDumpPayload)?;
                 cursor += consumed;
+                let fr_persist::RdbValue::Stream(stream_entries, watermark, groups) = stream_value
+                else {
+                    return Err(StoreError::InvalidDumpPayload);
+                };
                 let mut entries = BTreeMap::new();
-                for _ in 0..entry_count {
-                    if cursor + 16 > data_end {
-                        return Err(StoreError::InvalidDumpPayload);
-                    }
-                    let ms = u64::from_le_bytes(
-                        payload[cursor..cursor + 8]
-                            .try_into()
-                            .map_err(|_| StoreError::InvalidDumpPayload)?,
-                    );
-                    cursor += 8;
-                    let seq = u64::from_le_bytes(
-                        payload[cursor..cursor + 8]
-                            .try_into()
-                            .map_err(|_| StoreError::InvalidDumpPayload)?,
-                    );
-                    cursor += 8;
-                    let (field_count, fc) = decode_length(payload, cursor)?;
-                    cursor += fc;
-                    let mut fields = Vec::with_capacity(field_count);
-                    for _ in 0..field_count {
-                        let (fname_len, fnc) = decode_length(payload, cursor)?;
-                        cursor += fnc;
-                        if cursor + fname_len > data_end {
-                            return Err(StoreError::InvalidDumpPayload);
-                        }
-                        let fname = payload[cursor..cursor + fname_len].to_vec();
-                        cursor += fname_len;
-                        let (fval_len, fvc) = decode_length(payload, cursor)?;
-                        cursor += fvc;
-                        if cursor + fval_len > data_end {
-                            return Err(StoreError::InvalidDumpPayload);
-                        }
-                        let fval = payload[cursor..cursor + fval_len].to_vec();
-                        cursor += fval_len;
-                        fields.push((fname, fval));
-                    }
+                for (ms, seq, fields) in stream_entries {
                     entries.insert((ms, seq), fields);
                 }
+                restored_stream_last_id = watermark.or_else(|| entries.keys().next_back().copied());
+                restored_stream_groups = Some(restore_stream_groups(groups));
                 Value::Stream(entries)
             }
             RDB_TYPE_LIST_QUICKLIST_2 => {
@@ -10329,6 +10342,14 @@ impl Store {
         self.stream_groups.remove(key);
         self.stream_last_ids.remove(key);
         self.internal_entries_insert(key.to_vec(), Entry::new(value, expires_at_ms, now_ms));
+        if let Some(last_id) = restored_stream_last_id {
+            self.stream_last_ids.insert(key.to_vec(), last_id);
+        }
+        if let Some(groups) = restored_stream_groups
+            && !groups.is_empty()
+        {
+            self.stream_groups.insert(key.to_vec(), groups);
+        }
         self.dirty = self.dirty.saturating_add(1);
         Ok(())
     }
@@ -10609,6 +10630,43 @@ fn encode_rdb_string(buf: &mut Vec<u8>, data: &[u8]) {
         encode_length(buf, data.len());
         buf.extend_from_slice(data);
     }
+}
+
+fn dump_stream_entries(entries: &StreamEntries) -> Vec<fr_persist::StreamEntry> {
+    entries
+        .iter()
+        .map(|((ms, seq), fields)| (*ms, *seq, fields.clone()))
+        .collect()
+}
+
+fn restore_stream_groups(groups: Vec<fr_persist::RdbStreamConsumerGroup>) -> StreamGroupState {
+    groups
+        .into_iter()
+        .map(|group| {
+            let pending = group
+                .pending
+                .into_iter()
+                .map(|pending| {
+                    (
+                        (pending.entry_id_ms, pending.entry_id_seq),
+                        StreamPendingEntry {
+                            consumer: pending.consumer,
+                            deliveries: pending.deliveries,
+                            last_delivered_ms: pending.last_delivered_ms,
+                        },
+                    )
+                })
+                .collect();
+            (
+                group.name,
+                StreamGroup {
+                    last_delivered_id: (group.last_delivered_id_ms, group.last_delivered_id_seq),
+                    consumers: group.consumers.into_iter().collect(),
+                    pending,
+                },
+            )
+        })
+        .collect()
 }
 
 fn encode_integer_rdb_string(data: &[u8]) -> Option<Vec<u8>> {
@@ -11826,10 +11884,10 @@ mod tests {
         MaxmemoryPolicy, MaxmemoryPressureLevel, NOTIFY_EVICTED, NOTIFY_EXPIRED, NOTIFY_GENERIC,
         NOTIFY_KEYEVENT, PttlValue, RDB_DUMP_VERSION, RDB_TYPE_HASH, RDB_TYPE_HASH_LISTPACK,
         RDB_TYPE_LIST_QUICKLIST_2, RDB_TYPE_SET, RDB_TYPE_SET_INTSET, RDB_TYPE_SET_LISTPACK,
-        RDB_TYPE_STRING, RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_LISTPACK, ScoreBound, ScoreMember, Store,
-        StoreError, StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions,
-        StreamClaimReply, StreamGroupReadCursor, StreamGroupReadOptions, StreamPendingEntry, Value,
-        ValueType, encode_db_key, encode_length, hll_sparse_decode,
+        RDB_TYPE_STREAM_LISTPACKS_3, RDB_TYPE_STRING, RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_LISTPACK,
+        ScoreBound, ScoreMember, Store, StoreError, StreamAutoClaimOptions, StreamAutoClaimReply,
+        StreamClaimOptions, StreamClaimReply, StreamGroupReadCursor, StreamGroupReadOptions,
+        StreamPendingEntry, Value, ValueType, encode_db_key, encode_length, hll_sparse_decode,
     };
 
     fn group_read_options(
@@ -15746,7 +15804,24 @@ mod tests {
                 100,
             )
             .unwrap();
+        store.xgroup_create(b"s", b"g", (0, 0), false, 100).unwrap();
+        let read = store
+            .xreadgroup(
+                b"s",
+                b"g",
+                b"alice",
+                StreamGroupReadOptions {
+                    cursor: StreamGroupReadCursor::NewEntries,
+                    noack: false,
+                    count: None,
+                },
+                150,
+            )
+            .unwrap()
+            .expect("stream group read");
+        assert_eq!(read.len(), 2);
         let payload = store.dump_key(b"s", 100).unwrap();
+        assert_eq!(payload[0], RDB_TYPE_STREAM_LISTPACKS_3);
         let mut store2 = Store::new();
         store2.restore_key(b"s", 0, &payload, false, 100).unwrap();
         let entries = store2
@@ -15756,6 +15831,16 @@ mod tests {
         assert_eq!(entries[0].0, (1, 0));
         assert_eq!(entries[0].1, vec![(b"name".to_vec(), b"alice".to_vec())]);
         assert_eq!(entries[1].0, (2, 0));
+        let groups = store2.xinfo_groups(b"s", 100).unwrap().expect("groups");
+        assert_eq!(groups, vec![(b"g".to_vec(), 1, 2, (2, 0))]);
+        let pending = store2
+            .xpending_summary(b"s", b"g", 200)
+            .unwrap()
+            .expect("pending summary");
+        assert_eq!(pending.0, 2);
+        assert_eq!(pending.1, Some((1, 0)));
+        assert_eq!(pending.2, Some((2, 0)));
+        assert_eq!(pending.3, vec![(b"alice".to_vec(), 2)]);
     }
 
     #[test]

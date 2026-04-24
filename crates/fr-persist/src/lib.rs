@@ -785,11 +785,11 @@ const RDB_TYPE_STREAM: u8 = 15; // FrankenRedis stream encoding
 /// routed through the upstream stream decoder by the top-level RDB path.
 /// (br-frankenredis-hjub, br-frankenredis-qi6z)
 #[allow(dead_code)]
-pub(crate) const UPSTREAM_RDB_TYPE_STREAM_LISTPACKS: u8 = 15;
+pub const UPSTREAM_RDB_TYPE_STREAM_LISTPACKS: u8 = 15;
 #[allow(dead_code)]
-pub(crate) const UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_2: u8 = 19;
+pub const UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_2: u8 = 19;
 #[allow(dead_code)]
-pub(crate) const UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3: u8 = 21;
+pub const UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3: u8 = 21;
 const RDB_CHECKSUM_LEN: usize = 8;
 const CRC64_REDIS_POLY: u64 = 0xAD93_D235_94C9_35A9;
 
@@ -852,6 +852,26 @@ pub enum RdbValue {
         Option<(u64, u64)>,
         Vec<RdbStreamConsumerGroup>,
     ),
+}
+
+/// Encode a Redis 7.2+ STREAM_LISTPACKS_3 payload for DUMP/RESTORE values.
+///
+/// The returned bytes start after the type byte and before the DUMP trailer.
+#[must_use]
+pub fn encode_upstream_stream_listpacks3_payload(
+    entries: &[StreamEntry],
+    watermark: Option<(u64, u64)>,
+    groups: &[RdbStreamConsumerGroup],
+) -> Option<Vec<u8>> {
+    rdb_stream::encode_upstream_stream_listpacks3(entries, watermark, groups)
+}
+
+/// Decode an upstream stream DUMP payload starting after the type byte.
+///
+/// Returns `(value, consumed)` so callers can verify the payload boundary.
+#[must_use]
+pub fn decode_upstream_stream_payload(type_byte: u8, data: &[u8]) -> Option<(RdbValue, usize)> {
+    rdb_stream::decode_upstream_stream_skeleton(type_byte, data).ok()
 }
 
 /// Encode an RDB length using Redis's variable-length encoding.
