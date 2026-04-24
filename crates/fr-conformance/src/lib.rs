@@ -7905,6 +7905,14 @@ mod tests {
     /// Wire the `core_hyperloglog.json` fixture through the
     /// self-spawning vendored redis-server oracle. Covers
     /// PFADD/PFCOUNT/PFMERGE. (br-frankenredis-gz9f)
+    ///
+    /// `pfmerge_ttl_verify_ttl_after` is XFAIL-filtered because the
+    /// fixture pins the expected PTTL to the exact value it was
+    /// captured with (60000), but the live oracle uses wall-clock
+    /// time so by the time the harness sends the subsequent PTTL
+    /// 1–3ms have elapsed and upstream returns 59998–59999. The
+    /// divergence is a harness artifact, not a behavioral bug —
+    /// closes br-frankenredis-b2qs.
     #[test]
     fn live_redis_core_hyperloglog_matches_runtime() {
         let cfg = HarnessConfig::default_paths();
@@ -7912,8 +7920,23 @@ mod tests {
             return;
         };
         let oracle = oracle_handle.oracle_config();
+        let fixture = match load_conformance_fixture(&cfg, "core_hyperloglog.json") {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!("[live-oracle:core_hyperloglog] fixture load error: {err}");
+                return;
+            }
+        };
+        const XFAIL: &[&str] = &["pfmerge_ttl_verify_ttl_after"];
+        let stable: Vec<String> = fixture
+            .cases
+            .iter()
+            .map(|case| case.name.clone())
+            .filter(|name| !XFAIL.contains(&name.as_str()))
+            .collect();
+        let refs: Vec<&str> = stable.iter().map(String::as_str).collect();
         run_live_diff_tolerant("core_hyperloglog", || {
-            run_live_redis_diff(&cfg, "core_hyperloglog.json", &oracle)
+            run_live_redis_diff_for_cases(&cfg, "core_hyperloglog.json", &refs, &oracle)
         });
     }
 
@@ -8044,6 +8067,94 @@ mod tests {
         let stable_refs: Vec<&str> = stable_names.iter().map(String::as_str).collect();
         run_live_diff_tolerant("core_scripting", || {
             run_live_redis_diff_for_cases(&cfg, "core_scripting.json", &stable_refs, &oracle)
+        });
+    }
+
+    /// Wire the persistence-related `core_server.json` cases through the
+    /// self-spawning vendored redis-server oracle. Covers LASTSAVE, SAVE,
+    /// BGSAVE, BGREWRITEAOF, DEBUG RELOAD, and INFO persistence. Dynamic
+    /// wall-clock / forked persistence state is explicitly XFAIL'd below.
+    /// (br-frankenredis-9r93)
+    #[test]
+    fn live_redis_core_persistence_matches_runtime() {
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let mut oracle = oracle_handle.oracle_config();
+        oracle.align_timing_from_fixture = false;
+        let fixture = match load_conformance_fixture(&cfg, "core_server.json") {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!("[live-oracle:core_persistence] fixture load error: {err}");
+                return;
+            }
+        };
+        const PERSISTENCE_CASES: &[&str] = &[
+            "lastsave_initially_zero",
+            "config_set_rdb_target_before_save",
+            "save_returns_ok",
+            "lastsave_after_save",
+            "bgsave_returns_message",
+            "lastsave_after_bgsave",
+            "bgsave_schedule",
+            "bgrewriteaof_returns_message",
+            "config_set_appendonly_yes_before_bgrewriteaof",
+            "bgrewriteaof_errors_when_appendonlydir_is_missing",
+            "debug_reload",
+            "config_set_appendonly_no_before_save_duplicate_block",
+            "config_set_rdb_target_before_save_duplicate_block",
+            "save_returns_ok_duplicate_block",
+            "bgsave_returns_ok",
+            "config_set_appendonly_no_before_bgrewriteaof_duplicate_block",
+            "bgrewriteaof_returns_ok",
+            "info_persistence_section",
+            "lastsave_returns_integer",
+            "lastsave_wrong_arity",
+            "lastsave_case_insensitive",
+        ];
+        const XFAIL_CASES: &[&str] = &[
+            "lastsave_initially_zero",
+            "lastsave_after_save",
+            "lastsave_after_bgsave",
+            "config_set_appendonly_yes_before_bgrewriteaof",
+            "bgrewriteaof_errors_when_appendonlydir_is_missing",
+            "debug_reload",
+            "info_persistence_section",
+            "lastsave_returns_integer",
+            "lastsave_case_insensitive",
+        ];
+        let known_cases = fixture
+            .cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing_cases = PERSISTENCE_CASES
+            .iter()
+            .copied()
+            .filter(|name| !known_cases.contains(name))
+            .collect::<Vec<_>>();
+        assert!(
+            missing_cases.is_empty(),
+            "core_server persistence cases missing from fixture: {missing_cases:?}"
+        );
+        let xfails = XFAIL_CASES.iter().copied().collect::<BTreeSet<_>>();
+        let missing_xfails = xfails
+            .iter()
+            .copied()
+            .filter(|name| !PERSISTENCE_CASES.contains(name))
+            .collect::<Vec<_>>();
+        assert!(
+            missing_xfails.is_empty(),
+            "core_server persistence XFAIL entries missing from case list: {missing_xfails:?}"
+        );
+        let stable_refs = PERSISTENCE_CASES
+            .iter()
+            .copied()
+            .filter(|name| !xfails.contains(name))
+            .collect::<Vec<_>>();
+        run_live_diff_tolerant("core_persistence", || {
+            run_live_redis_diff_for_cases(&cfg, "core_server.json", &stable_refs, &oracle)
         });
     }
 
