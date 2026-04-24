@@ -9297,12 +9297,20 @@ mod tests {
                 return;
             }
         };
+        // The live-oracle harness spawns a fresh Runtime for every
+        // AUTH/HELLO case (`live_oracle_case_uses_dedicated_connection`)
+        // so connection-mode mutations do not bleed between cases,
+        // but the fresh Runtime does NOT inherit the ACL subsystem
+        // state that earlier `ACL SETUSER` cases built on the shared
+        // runtime. Upstream runs against the same persistent server
+        // from a fresh TCP connection, so its ACL subsystem survives.
+        // Every AUTH-after-SETUSER case therefore sees our fresh
+        // runtime's nopass-locked default and returns the
+        // "no password configured" error instead of matching upstream.
+        // The proper fix is to share `ServerState` (ACL + keyspace)
+        // across isolated sessions in the harness; tracked on faqe.
+        // (br-frankenredis-faqe)
         const XFAIL: &[&str] = &[
-            // AUTH against SETUSER-configured passwords: fr-runtime's
-            // default ACL state treats default as nopass-locked, so
-            // every AUTH-after-SETUSER case returns our lockout error
-            // instead of matching upstream. Tracked on faqe as the
-            // substantive AUTH-flow fix.
             "acl_category_auth_reader",
             "acl_category_reauth_default2",
             "acl_deny_override_auth",
@@ -9313,7 +9321,6 @@ mod tests {
             "auth_correct_user_pass",
             "auth_disabled_user_rejected",
             "auth_nonexistent_user",
-            "auth_wrong_arity_too_many",
             "auth_wrong_password",
         ];
         let stable: Vec<String> = fixture

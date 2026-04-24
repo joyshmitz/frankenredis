@@ -765,7 +765,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'auth' command"
+        "value": "ERR syntax error"
       }
     },
     {
@@ -1668,7 +1668,7 @@
       ],
       "expect": {
         "kind": "integer",
-        "value": 1
+        "value": 0
       }
     },
     {

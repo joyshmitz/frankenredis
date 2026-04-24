@@ -988,6 +988,32 @@ impl AuthState {
     }
 
     fn set_user(&mut self, username: Vec<u8>, rules: &[&[u8]]) -> Result<(), String> {
+        // Upstream acl.c::aclCommand SETUSER is atomic: invalid rules
+        // leave the user store unchanged, even when the user did not
+        // exist prior to the call. We snapshot any pre-existing user
+        // entry (or remember its absence) and restore it when the
+        // rule-application loop aborts early. (br-frankenredis-faqe)
+        let prior: Option<AclUser> = self.acl_users.get(&username).cloned();
+        let username_for_rollback = username.clone();
+        let result = self.apply_setuser_rules(username, rules);
+        if result.is_err() {
+            match prior {
+                Some(prev) => {
+                    self.acl_users.insert(username_for_rollback, prev);
+                }
+                None => {
+                    self.acl_users.remove(&username_for_rollback);
+                }
+            }
+        }
+        result
+    }
+
+    fn apply_setuser_rules(
+        &mut self,
+        username: Vec<u8>,
+        rules: &[&[u8]],
+    ) -> Result<(), String> {
         let is_default = username == DEFAULT_AUTH_USER;
         let acl_pubsub_default = self.acl_pubsub_default;
         let user = self.acl_users.entry(username).or_insert_with(|| {
@@ -5281,8 +5307,13 @@ impl Runtime {
     }
 
     fn handle_auth_command(&mut self, argv: &[Vec<u8>], now_ms: u64) -> RespFrame {
-        if argv.len() != 2 && argv.len() != 3 {
+        if argv.len() < 2 {
             return CommandError::WrongArity("AUTH").to_resp();
+        }
+        if argv.len() > 3 {
+            // Upstream server.c::authCommand emits `shared.syntaxerr`
+            // ("ERR syntax error") when argc > 3. (br-frankenredis-faqe)
+            return RespFrame::Error("ERR syntax error".to_string());
         }
 
         let (username, password) = if argv.len() == 2 {
