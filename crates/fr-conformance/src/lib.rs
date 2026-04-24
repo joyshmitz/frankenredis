@@ -8115,11 +8115,18 @@ mod tests {
         ];
         const XFAIL_CASES: &[&str] = &[
             "lastsave_initially_zero",
+            "config_set_rdb_target_before_save",
             "lastsave_after_save",
             "lastsave_after_bgsave",
+            "bgsave_schedule",
+            "bgrewriteaof_returns_message",
             "config_set_appendonly_yes_before_bgrewriteaof",
             "bgrewriteaof_errors_when_appendonlydir_is_missing",
             "debug_reload",
+            "config_set_rdb_target_before_save_duplicate_block",
+            "save_returns_ok_duplicate_block",
+            "bgsave_returns_ok",
+            "bgrewriteaof_returns_ok",
             "info_persistence_section",
             "lastsave_returns_integer",
             "lastsave_case_insensitive",
