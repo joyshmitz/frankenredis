@@ -2437,6 +2437,68 @@ mod tests {
         encoded
     }
 
+    #[cfg(feature = "upstream-stream-rdb")]
+    struct ManagedRedis {
+        child: std::process::Child,
+    }
+
+    #[cfg(feature = "upstream-stream-rdb")]
+    impl Drop for ManagedRedis {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    #[cfg(feature = "upstream-stream-rdb")]
+    fn project_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("manifest has workspace root")
+            .to_path_buf()
+    }
+
+    #[cfg(feature = "upstream-stream-rdb")]
+    fn pick_free_port() -> u16 {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind ephemeral port");
+        listener.local_addr().expect("local addr").port()
+    }
+
+    #[cfg(feature = "upstream-stream-rdb")]
+    fn wait_for_redis_cli(redis_cli: &std::path::Path, port: u16) -> bool {
+        let port = port.to_string();
+        for _ in 0..100 {
+            if let Ok(output) = std::process::Command::new(redis_cli)
+                .args(["-h", "127.0.0.1", "-p", port.as_str(), "--raw", "PING"])
+                .output()
+                && output.status.success()
+                && output.stdout.starts_with(b"PONG")
+            {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[cfg(feature = "upstream-stream-rdb")]
+    fn redis_cli_output(redis_cli: &std::path::Path, port: u16, argv: &[&str]) -> String {
+        let port = port.to_string();
+        let output = std::process::Command::new(redis_cli)
+            .args(["-h", "127.0.0.1", "-p", port.as_str(), "--raw"])
+            .args(argv)
+            .output()
+            .expect("run redis-cli");
+        assert!(
+            output.status.success(),
+            "redis-cli {:?} failed: {}",
+            argv,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("redis-cli stdout is utf8")
+    }
+
     #[test]
     fn lzf_decompresses_literal_runs() {
         let compressed = [4, b'h', b'e', b'l', b'l', b'o'];
@@ -2995,6 +3057,136 @@ mod tests {
 
         let (decoded, _) = decode_rdb(&encoded).expect("decode");
         assert_eq!(decoded, entries);
+    }
+
+    #[cfg(feature = "upstream-stream-rdb")]
+    #[test]
+    fn rdb_feature_type21_streams_load_in_vendored_redis() {
+        let root = project_root();
+        let redis_server = root.join("legacy_redis_code/redis/src/redis-server");
+        let redis_cli = root.join("legacy_redis_code/redis/src/redis-cli");
+        if !redis_server.is_file() || !redis_cli.is_file() {
+            eprintln!(
+                "[SKIP] vendored redis-server/redis-cli unavailable under {}",
+                root.display()
+            );
+            return;
+        }
+
+        let fixture_count = 20_u64;
+        let entries: Vec<RdbEntry> = (0..fixture_count)
+            .map(|fixture| {
+                let key = format!("stream:{fixture}").into_bytes();
+                let first_value = format!("fixture-{fixture}-first").into_bytes();
+                let second_value = format!("fixture-{fixture}-second").into_bytes();
+                let ms = 1000 + fixture;
+                let groups = if fixture % 5 == 0 {
+                    vec![RdbStreamConsumerGroup {
+                        name: format!("group-{fixture}").into_bytes(),
+                        last_delivered_id_ms: ms,
+                        last_delivered_id_seq: 1,
+                        consumers: vec![b"alice".to_vec()],
+                        pending: vec![RdbStreamPendingEntry {
+                            entry_id_ms: ms,
+                            entry_id_seq: 0,
+                            consumer: b"alice".to_vec(),
+                            deliveries: fixture + 1,
+                            last_delivered_ms: 50_000 + fixture,
+                        }],
+                    }]
+                } else {
+                    Vec::new()
+                };
+
+                RdbEntry {
+                    db: 0,
+                    key,
+                    value: RdbValue::Stream(
+                        vec![
+                            (ms, 0, vec![(b"field".to_vec(), first_value)]),
+                            (
+                                ms,
+                                1,
+                                vec![
+                                    (b"field".to_vec(), second_value),
+                                    (b"extra".to_vec(), format!("extra-{fixture}").into_bytes()),
+                                ],
+                            ),
+                        ],
+                        Some((ms, 1)),
+                        groups,
+                    ),
+                    expire_ms: None,
+                }
+            })
+            .collect();
+
+        let port = pick_free_port();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "fr_persist_upstream_stream_rdb_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp redis dir");
+        let dump_path = dir.join("dump.rdb");
+        std::fs::write(&dump_path, encode_rdb(&entries, &[])).expect("write upstream rdb");
+
+        let child = std::process::Command::new(&redis_server)
+            .arg("--dir")
+            .arg(&dir)
+            .arg("--dbfilename")
+            .arg("dump.rdb")
+            .arg("--port")
+            .arg(port.to_string())
+            .arg("--bind")
+            .arg("127.0.0.1")
+            .arg("--protected-mode")
+            .arg("no")
+            .arg("--save")
+            .arg("")
+            .arg("--appendonly")
+            .arg("no")
+            .arg("--daemonize")
+            .arg("no")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn vendored redis-server");
+        let _redis = ManagedRedis { child };
+        assert!(
+            wait_for_redis_cli(&redis_cli, port),
+            "vendored redis-server did not become ready"
+        );
+
+        for fixture in 0..fixture_count {
+            let key = format!("stream:{fixture}");
+            let output = redis_cli_output(&redis_cli, port, &["XINFO", "STREAM", &key, "FULL"]);
+            assert!(
+                output.contains(&format!("fixture-{fixture}-first")),
+                "missing first entry in XINFO STREAM FULL for {key}: {output}"
+            );
+            assert!(
+                output.contains(&format!("fixture-{fixture}-second")),
+                "missing second entry in XINFO STREAM FULL for {key}: {output}"
+            );
+            assert!(
+                output.contains(&format!("extra-{fixture}")),
+                "missing multi-field entry in XINFO STREAM FULL for {key}: {output}"
+            );
+            if fixture % 5 == 0 {
+                assert!(
+                    output.contains(&format!("group-{fixture}")) && output.contains("alice"),
+                    "missing consumer-group metadata in XINFO STREAM FULL for {key}: {output}"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_file(dump_path);
+        let _ = std::fs::remove_dir(dir);
     }
 
     #[test]
