@@ -7025,13 +7025,14 @@ impl Store {
                                 Some(max_deleted.map_or(*id, |current: StreamId| current.max(*id)));
                         }
                     }
-                    if let Some(groups) = self.stream_groups.get_mut(key) {
-                        for group_state in groups.values_mut() {
-                            for id in ids {
-                                group_state.pending.remove(id);
-                            }
-                        }
-                    }
+                    // Upstream Redis XDEL deliberately LEAVES the
+                    // entry in any consumer-group PEL — orphan IDs
+                    // are surfaced (and cleaned up) by XAUTOCLAIM /
+                    // XPENDING / XCLAIM when those commands iterate.
+                    // Removing them here makes XAUTOCLAIM's cursor
+                    // skip past the deleted slot and breaks the
+                    // upstream-visible "deleted_ids" reply slot.
+                    // (br-frankenredis-r82v)
                     if removed > 0 {
                         Self::mark_digest_stale_fields(
                             &mut self.digest_stale,
@@ -7534,10 +7535,19 @@ impl Store {
         let mut claimed_ids = Vec::new();
         let mut deleted_ids = Vec::new();
         let mut scanned_last: Option<StreamId> = None;
+        // Upstream t_stream.c::xautoclaimCommand decrements the same
+        // `count` budget for both claimed and deleted entries, so the
+        // top-level reply is bounded at `count` regardless of how
+        // many orphans we surface. (br-frankenredis-r82v)
+        let mut budget = options.count;
         for (id, pending_entry) in &pending_snapshot {
+            if budget == 0 {
+                break;
+            }
             scanned_last = Some(*id);
             if !stream_records.contains_key(id) {
                 deleted_ids.push(*id);
+                budget -= 1;
                 continue;
             }
 
@@ -7547,9 +7557,7 @@ impl Store {
             }
 
             claimed_ids.push(*id);
-            if claimed_ids.len() >= options.count {
-                break;
-            }
+            budget -= 1;
         }
 
         let Some(groups) = self.stream_groups.get_mut(key) else {
@@ -14559,14 +14567,16 @@ mod tests {
             )
             .unwrap()
             .expect("group exists");
+        // Upstream xautoclaimCommand decrements `count` on BOTH
+        // claimed and deleted entries (see t_stream.c:3441,3478),
+        // so a count=2 budget covers 1 claim + 1 delete and the
+        // cursor stops at (1000, 2) ready for the next call.
+        // (br-frankenredis-r82v)
         assert_eq!(
             first,
             StreamAutoClaimReply::Entries {
-                next_start: (0, 0),
-                entries: vec![
-                    ((1000, 0), vec![(b"f".to_vec(), b"v0".to_vec())]),
-                    ((1000, 2), vec![(b"f".to_vec(), b"v2".to_vec())]),
-                ],
+                next_start: (1000, 2),
+                entries: vec![((1000, 0), vec![(b"f".to_vec(), b"v0".to_vec())]),],
                 deleted_ids: vec![(1000, 1)],
             }
         );
