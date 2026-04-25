@@ -584,6 +584,12 @@ mod tests {
         UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3, rdb_encode_length,
     };
 
+    type StreamParts = (
+        Vec<StreamEntry>,
+        Option<(u64, u64)>,
+        Vec<RdbStreamConsumerGroup>,
+    );
+
     // ── Listpack byte builders ──────────────────────────────────────
     //
     // These build upstream-compatible listpack bytes for test inputs.
@@ -843,13 +849,7 @@ mod tests {
         buf
     }
 
-    fn stream_parts(
-        value: RdbValue,
-    ) -> Option<(
-        Vec<StreamEntry>,
-        Option<(u64, u64)>,
-        Vec<RdbStreamConsumerGroup>,
-    )> {
+    fn stream_parts(value: RdbValue) -> Option<StreamParts> {
         match value {
             RdbValue::Stream(entries, watermark, groups) => Some((entries, watermark, groups)),
             _ => None,
@@ -1002,7 +1002,7 @@ mod tests {
                 })
                 .collect();
             let mut expected_entries = entries.clone();
-            expected_entries.sort_by(|left, right| (left.0, left.1).cmp(&(right.0, right.1)));
+            expected_entries.sort_by_key(|entry| (entry.0, entry.1));
             let watermark = expected_entries
                 .last()
                 .map(|entry| (entry.0, entry.1))
