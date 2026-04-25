@@ -9407,6 +9407,12 @@ impl Store {
         std::mem::take(&mut self.pending_acl_log_events)
     }
 
+    /// Total live keys across every database. Used by the MEMORY
+    /// STATS reply (`keys.count` field). (br-frankenredis-s14v)
+    pub fn total_keys_across_dbs(&self) -> usize {
+        self.entries.len()
+    }
+
     pub fn estimate_memory_usage_bytes(&self) -> usize {
         let cached_bytes = self.cached_memory_usage_bytes.get();
         let cached_dirty = self.cached_memory_usage_dirty.get();

@@ -2069,7 +2069,7 @@
         "STATS"
       ],
       "expect": {
-        "kind": "any_bulk"
+        "kind": "any_array"
       }
     },
     {

@@ -13297,13 +13297,88 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         if argv.len() != 2 {
             return Err(CommandError::SyntaxError);
         }
-        let used = store.estimate_memory_usage_bytes();
-        Ok(RespFrame::BulkString(Some(
-            format!(
-                "peak.allocated:{used}\r\ntotal.allocated:{used}\r\nstartup.allocated:0\r\nreplication.backlog:0\r\nclients.slaves:0\r\nclients.normal:0\r\naof.buffer:0\r\n"
-            )
-            .into_bytes(),
-        )))
+        // Upstream object.c::memoryCommand emits a RESP map (or
+        // RESP2 alternating-key/value array) with 27 fixed fields
+        // plus per-db sub-maps. We don't track every field but
+        // emitting the upstream-shape array (with zero placeholders
+        // for unmodeled counters) lets clients that parse this as a
+        // map work correctly. (br-frankenredis-s14v)
+        let used = store.estimate_memory_usage_bytes() as i64;
+        let total_keys = store.total_keys_across_dbs() as i64;
+        let bytes_per_key = if total_keys > 0 { used / total_keys } else { 0 };
+        fn pair(k: &str, v: i64) -> [RespFrame; 2] {
+            [
+                RespFrame::BulkString(Some(k.as_bytes().to_vec())),
+                RespFrame::Integer(v),
+            ]
+        }
+        fn pair_double(k: &str, v: f64) -> [RespFrame; 2] {
+            [
+                RespFrame::BulkString(Some(k.as_bytes().to_vec())),
+                RespFrame::BulkString(Some(format!("{v}").into_bytes())),
+            ]
+        }
+        let mut items = Vec::with_capacity(60);
+        for kv in [
+            pair("peak.allocated", used),
+            pair("total.allocated", used),
+            pair("startup.allocated", 0),
+            pair("replication.backlog", 0),
+            pair("clients.slaves", 0),
+            pair("clients.normal", 0),
+            pair("cluster.links", 0),
+            pair("aof.buffer", 0),
+            pair("lua.caches", 0),
+            pair("functions.caches", 0),
+        ] {
+            items.extend(kv);
+        }
+        // Single db.0 sub-map (FrankenRedis runs with 16 dbs but we
+        // only surface the active one to keep the reply compact;
+        // upstream emits one entry per db that is non-empty).
+        items.push(RespFrame::BulkString(Some(b"db.0".to_vec())));
+        items.push(RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec())),
+            RespFrame::Integer(0),
+            RespFrame::BulkString(Some(b"overhead.hashtable.expires".to_vec())),
+            RespFrame::Integer(0),
+            RespFrame::BulkString(Some(b"overhead.hashtable.slot-to-keys".to_vec())),
+            RespFrame::Integer(0),
+        ])));
+        for kv in [
+            pair("overhead.total", 0),
+            pair("keys.count", total_keys),
+            pair("keys.bytes-per-key", bytes_per_key),
+            pair("dataset.bytes", used),
+        ] {
+            items.extend(kv);
+        }
+        for kv in [
+            pair_double("dataset.percentage", 100.0),
+            pair_double("peak.percentage", 100.0),
+        ] {
+            items.extend(kv);
+        }
+        for kv in [
+            pair("allocator.allocated", used),
+            pair("allocator.active", used),
+            pair("allocator.resident", used),
+        ] {
+            items.extend(kv);
+        }
+        for kv in [
+            pair_double("allocator-fragmentation.ratio", 1.0),
+            pair("allocator-fragmentation.bytes", 0),
+            pair_double("allocator-rss.ratio", 1.0),
+            pair("allocator-rss.bytes", 0),
+            pair_double("rss-overhead.ratio", 1.0),
+            pair("rss-overhead.bytes", 0),
+            pair_double("fragmentation", 1.0),
+            pair("fragmentation.bytes", 0),
+        ] {
+            items.extend(kv);
+        }
+        Ok(RespFrame::Array(Some(items)))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
             return Err(CommandError::SyntaxError);
