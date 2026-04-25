@@ -259,10 +259,10 @@ fn debug_jmap_rejects_extra_arguments() {
 }
 
 #[test]
-fn debug_set_active_expire_validates_value() {
+fn debug_set_active_expire_accepts_nonzero_atoi_values() {
     let mut rt = Runtime::default_strict();
     let resp = rt.execute_frame(command(&[b"DEBUG", b"SET-ACTIVE-EXPIRE", b"2"]), 0);
-    assert!(matches!(resp, RespFrame::Error(_)));
+    assert_eq!(resp, RespFrame::SimpleString("OK".to_string()));
 }
 
 #[test]
