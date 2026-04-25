@@ -14117,11 +14117,13 @@ fn eval_cmd(
     // Cache the script (Redis caches on EVAL too)
     store.script_load(script);
 
-    // Execute
+    // Execute. Honour upstream `#!lua flags=...` shebang: if the
+    // script declares `no-writes`, force read-only mode even from a
+    // plain EVAL call. (br-frankenredis-r75v)
     let keys_vec: Vec<Vec<u8>> = keys.to_vec();
     let args_vec: Vec<Vec<u8>> = args.to_vec();
     let previous_read_only = store.script_read_only;
-    store.script_read_only = read_only_script;
+    store.script_read_only = read_only_script || script_shebang_has_no_writes_flag(script);
     store.script_nesting_level += 1;
     let result = match lua_eval::eval_script(script, &keys_vec, &args_vec, store, now_ms) {
         Ok(frame) => Ok(frame),
@@ -14161,7 +14163,7 @@ fn evalsha_cmd(
     let keys_vec: Vec<Vec<u8>> = keys.to_vec();
     let args_vec: Vec<Vec<u8>> = args.to_vec();
     let previous_read_only = store.script_read_only;
-    store.script_read_only = read_only_script;
+    store.script_read_only = read_only_script || script_shebang_has_no_writes_flag(&script);
     store.script_nesting_level += 1;
     let result = match lua_eval::eval_script(&script, &keys_vec, &args_vec, store, now_ms) {
         Ok(frame) => Ok(frame),
@@ -14170,6 +14172,46 @@ fn evalsha_cmd(
     store.script_nesting_level -= 1;
     store.script_read_only = previous_read_only;
     result
+}
+
+/// Parse a Redis 7.0+ Lua script shebang and return `true` if the
+/// `flags=` directive contains `no-writes`. Upstream
+/// scripting_engine/script.c parses the first line of the script
+/// when it starts with `#!lua`; a comma-separated `flags=...` token
+/// determines whether writes are allowed regardless of the call
+/// being EVAL or EVAL_RO. We honour `no-writes` only — the other
+/// upstream flags (`allow-oom`, `allow-stale`, `allow-cross-slot-keys`,
+/// `no-cluster`) gate maxmemory / replication / cluster paths that
+/// our single-node runtime doesn't model. (br-frankenredis-r75v)
+fn script_shebang_has_no_writes_flag(script: &[u8]) -> bool {
+    let Some(first_line_end) = script.iter().position(|&b| b == b'\n') else {
+        return script_shebang_line_has_no_writes(script);
+    };
+    script_shebang_line_has_no_writes(&script[..first_line_end])
+}
+
+fn script_shebang_line_has_no_writes(line: &[u8]) -> bool {
+    let trimmed = line.strip_prefix(b"#!").unwrap_or(b"");
+    let trimmed = trimmed.strip_prefix(b"lua").unwrap_or(b"");
+    // The remainder may be empty, whitespace, or `name=...` /
+    // `flags=...` tokens separated by whitespace. Find a `flags=`
+    // prefix (case-insensitive) and check its csv list for
+    // "no-writes".
+    let text = match std::str::from_utf8(trimmed) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    for token in text.split_whitespace() {
+        let lower = token.to_ascii_lowercase();
+        if let Some(flags_csv) = lower.strip_prefix("flags=") {
+            for flag in flags_csv.split(',') {
+                if flag == "no-writes" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
@@ -28653,6 +28695,57 @@ mod tests {
         )
         .expect("eval_ro pcall write rejection");
         assert_eq!(pcall_out, RespFrame::Integer(1));
+    }
+
+    #[test]
+    fn eval_with_shebang_no_writes_flag_rejects_writes() {
+        let mut store = Store::new();
+        // EVAL on a script that begins with `#!lua flags=no-writes`
+        // must reject any write-side redis.call even though the
+        // call site is plain EVAL (not EVAL_RO).
+        // (br-frankenredis-r75v)
+        let script = b"#!lua flags=no-writes\nreturn redis.call('SET','shebang_k','v')";
+        let out = dispatch_argv(
+            &[b"EVAL".to_vec(), script.to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("eval shebang no-writes");
+        assert_eq!(
+            out,
+            RespFrame::Error(format_eval_read_only_script_error(script))
+        );
+    }
+
+    #[test]
+    fn eval_with_shebang_other_flags_does_not_force_read_only() {
+        let mut store = Store::new();
+        // `flags=allow-oom` alone should not block writes.
+        let script = b"#!lua flags=allow-oom\nreturn redis.call('SET','shebang_oom','v')";
+        let out = dispatch_argv(
+            &[b"EVAL".to_vec(), script.to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("eval shebang allow-oom");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn eval_with_shebang_combined_flags_honours_no_writes() {
+        let mut store = Store::new();
+        // Multiple flags including `no-writes` must still gate.
+        let script = b"#!lua name=mylib flags=allow-stale,no-writes,allow-oom\nreturn redis.call('SET','shebang_combo','v')";
+        let out = dispatch_argv(
+            &[b"EVAL".to_vec(), script.to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("eval shebang combo");
+        assert_eq!(
+            out,
+            RespFrame::Error(format_eval_read_only_script_error(script))
+        );
     }
 
     #[test]

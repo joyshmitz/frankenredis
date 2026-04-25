@@ -4906,7 +4906,29 @@ pub fn eval_script(
     let argv_vals: Vec<LuaValue> = argv.iter().map(|a| LuaValue::Str(a.clone())).collect();
     state.set_keys_argv(keys_vals, argv_vals);
 
-    let result = state.execute(script)?;
+    // Strip a Redis 7.0+ Lua shebang line if present; upstream Lua
+    // parses `#!...\n` as a comment, but our minimal interpreter
+    // doesn't. The flag-honouring side of the shebang is handled
+    // upstream of this call in fr-command::eval_cmd. Replace the
+    // shebang line with whitespace of the same length so reported
+    // line numbers stay aligned with the user's script.
+    // (br-frankenredis-r75v)
+    let stripped: Vec<u8>;
+    let executed_script: &[u8] = if script.starts_with(b"#!") {
+        let line_end = script
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap_or(script.len());
+        let mut tmp = Vec::with_capacity(script.len());
+        tmp.extend(std::iter::repeat_n(b' ', line_end));
+        tmp.extend_from_slice(&script[line_end..]);
+        stripped = tmp;
+        &stripped
+    } else {
+        script
+    };
+
+    let result = state.execute(executed_script)?;
     Ok(lua_to_resp(&result))
 }
 
