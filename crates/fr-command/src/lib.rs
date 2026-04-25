@@ -6253,6 +6253,13 @@ fn xack_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
 
 fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     // XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]
+    //
+    // Upstream t_stream.c::xsetidCommand parses both options strictly,
+    // requires ENTRIESADDED >= 0, validates MAXDELETEDID as a stream
+    // ID, and rejects when last-id < max_deleted_entry_id. The
+    // missing-key case routes to `shared.nokeyerr` ("ERR no such key"),
+    // not the prior FrankenRedis-specific "not present in the target
+    // stream" wording. (br-frankenredis-r71v)
     if argv.len() < 3 {
         return Err(CommandError::WrongArity("XSETID"));
     }
@@ -6261,23 +6268,48 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         Ok(id) => id,
         Err(reply) => return Ok(reply),
     };
-    // parse optional ENTRIESADDED / MAXDELETEDID (accept but ignore)
+
+    let mut max_deleted_id: Option<StreamId> = None;
     let mut i = 3;
     while i < argv.len() {
         let kw = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-        if kw.eq_ignore_ascii_case("ENTRIESADDED") {
-            i += 2; // skip arg
-        } else if kw.eq_ignore_ascii_case("MAXDELETEDID") {
+        let moreargs = argv.len().saturating_sub(i + 1);
+        if kw.eq_ignore_ascii_case("ENTRIESADDED") && moreargs > 0 {
+            let value = parse_i64_arg(&argv[i + 1])?;
+            if value < 0 {
+                return Ok(RespFrame::Error(
+                    "ERR entries_added must be positive".to_string(),
+                ));
+            }
+            // Upstream stores entries_added on the stream object; we
+            // don't track it as a distinct counter yet so accept-and-
+            // record-the-validation-only is the safe path. The limit
+            // check against `length` below would require fetching the
+            // stream length; we skip that secondary check until we
+            // model entries_added.
+            i += 2;
+        } else if kw.eq_ignore_ascii_case("MAXDELETEDID") && moreargs > 0 {
+            let parsed = match parse_stream_id(&argv[i + 1]) {
+                Ok(id) => id,
+                Err(reply) => return Ok(reply),
+            };
+            if last_id < parsed {
+                return Ok(RespFrame::Error(
+                    "ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id"
+                        .to_string(),
+                ));
+            }
+            max_deleted_id = Some(parsed);
             i += 2;
         } else {
             return Ok(RespFrame::Error("ERR syntax error".to_string()));
         }
     }
+    let _ = max_deleted_id;
+
     match store.xsetid(key, last_id, now_ms) {
         Ok(true) => Ok(RespFrame::SimpleString("OK".to_string())),
-        Ok(false) => Ok(RespFrame::Error(
-            "ERR The ID specified in XSETID is not present in the target stream".to_string(),
-        )),
+        Ok(false) => Ok(RespFrame::Error("ERR no such key".to_string())),
         Err(e) => Err(e.into()),
     }
 }
@@ -30678,11 +30710,97 @@ mod tests {
             0,
         )
         .unwrap();
-        // Returns error when key doesn't exist
-        match out {
-            RespFrame::Error(_) => {}
-            other => panic!("expected error, got {other:?}"), // ubs:ignore — AI triage
-        }
+        // Upstream returns shared.nokeyerr ("ERR no such key").
+        // (br-frankenredis-r71v)
+        assert_eq!(out, RespFrame::Error("ERR no such key".to_string()));
+    }
+
+    #[test]
+    fn xsetid_entriesadded_negative_rejected() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1-0".to_vec(),
+                b"k".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xadd seed");
+
+        let out = dispatch_argv(
+            &[
+                b"XSETID".to_vec(),
+                b"s".to_vec(),
+                b"2-0".to_vec(),
+                b"ENTRIESADDED".to_vec(),
+                b"-5".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            RespFrame::Error("ERR entries_added must be positive".to_string())
+        );
+    }
+
+    #[test]
+    fn xsetid_maxdeletedid_above_lastid_rejected() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"5-0".to_vec(),
+                b"k".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xadd seed");
+
+        let out = dispatch_argv(
+            &[
+                b"XSETID".to_vec(),
+                b"s".to_vec(),
+                b"5-0".to_vec(),
+                b"MAXDELETEDID".to_vec(),
+                b"10-0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            RespFrame::Error(
+                "ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn xsetid_entriesadded_missing_value_rejected() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[
+                b"XSETID".to_vec(),
+                b"s".to_vec(),
+                b"1-0".to_vec(),
+                b"ENTRIESADDED".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out, RespFrame::Error("ERR syntax error".to_string()));
     }
 
     // ── LOLWUT test ─────────────────────────────────────────────────

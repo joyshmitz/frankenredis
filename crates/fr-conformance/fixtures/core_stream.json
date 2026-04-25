@@ -3240,7 +3240,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR The ID specified in XSETID is not present in the target stream"
+        "value": "ERR no such key"
       }
     },
     {
