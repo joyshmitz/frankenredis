@@ -5333,11 +5333,36 @@ impl Runtime {
             .pubsub_client_shard_channels
             .get(&session.client_id)
             .map_or(0, HashSet::len);
-        let flags = if session.transaction_state.in_transaction {
-            "x"
-        } else {
-            "N"
-        };
+        // Build the flags string per upstream networking.c::catClientInfoString:
+        //   x = MULTI, P = PUBSUB, t = tracking, B = BCAST tracking,
+        //   e = no-evict, T = no-touch, r = readonly, b = blocked, ...
+        // 'N' is the fallback when no flag is set. (br-frankenredis-s10v)
+        let mut flag_chars = String::new();
+        if session.transaction_state.in_transaction {
+            flag_chars.push('x');
+        }
+        if channel_subs > 0 || pattern_subs > 0 || shard_subs > 0 {
+            flag_chars.push('P');
+        }
+        if session.client_tracking.enabled {
+            flag_chars.push('t');
+            if session.client_tracking.bcast {
+                flag_chars.push('B');
+            }
+        }
+        if session.client_no_evict {
+            flag_chars.push('e');
+        }
+        if session.client_no_touch {
+            flag_chars.push('T');
+        }
+        if session.cluster_state.mode == ClusterClientMode::ReadOnly {
+            flag_chars.push('r');
+        }
+        if flag_chars.is_empty() {
+            flag_chars.push('N');
+        }
+        let flags = flag_chars.as_str();
         let multi_count = if session.transaction_state.in_transaction {
             session.transaction_state.command_queue.len() as i64
         } else {
