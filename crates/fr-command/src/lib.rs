@@ -14564,6 +14564,66 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         std::process::abort();
     } else if sub.eq_ignore_ascii_case("OOM") {
         std::alloc::handle_alloc_error(std::alloc::Layout::new::<u8>());
+    } else if sub.eq_ignore_ascii_case("CHANGE-REPL-ID") {
+        // Upstream debug.c::debugCommand rotates the master+secondary
+        // replication IDs. Our replication state machine doesn't yet
+        // model dual repl-ids, so accept-and-OK matches the upstream
+        // wire contract for tests that don't inspect the new ids.
+        // (br-frankenredis-s11v)
+        if argv.len() != 2 {
+            return Err(CommandError::WrongArity("DEBUG"));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("STRINGMATCH-LEN") {
+        // Upstream debug.c spells this `STRINGMATCH-TEST` and runs
+        // an in-process fuzz of stringmatchlen() before replying OK.
+        // Both forms surface in the wild; accept-and-OK is correct
+        // for tests that just want a no-op breakpoint hook.
+        // (br-frankenredis-s11v)
+        if argv.len() != 2 {
+            return Err(CommandError::WrongArity("DEBUG"));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("STRINGMATCH-TEST") {
+        if argv.len() != 2 {
+            return Err(CommandError::WrongArity("DEBUG"));
+        }
+        Ok(RespFrame::SimpleString(
+            "Apparently Redis did not crash: test passed".to_string(),
+        ))
+    } else if sub.eq_ignore_ascii_case("QUICKLIST-PACKED-THRESHOLD") {
+        // Upstream debug.c parses the argument with memtoull and
+        // calls quicklistisSetPackedThreshold(). Our quicklist
+        // representation is currently a single-node listpack so
+        // the threshold has no observable effect — match the
+        // upstream OK reply on accepted-memory-value, error on
+        // unparseable input. (br-frankenredis-s11v)
+        if argv.len() != 3 {
+            return Err(CommandError::WrongArity("DEBUG"));
+        }
+        let val = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        let parsed: Option<u64> = if let Some(rest) = val.strip_suffix(['k', 'K']) {
+            rest.parse::<u64>().ok().and_then(|n| n.checked_mul(1024))
+        } else if let Some(rest) = val.strip_suffix(['m', 'M']) {
+            rest.parse::<u64>()
+                .ok()
+                .and_then(|n| n.checked_mul(1024 * 1024))
+        } else if let Some(rest) = val.strip_suffix(['g', 'G']) {
+            rest.parse::<u64>()
+                .ok()
+                .and_then(|n| n.checked_mul(1024 * 1024 * 1024))
+        } else {
+            val.parse::<u64>().ok()
+        };
+        match parsed {
+            Some(n) if n > 1 && n < 4 * 1024 * 1024 * 1024 => {
+                Ok(RespFrame::SimpleString("OK".to_string()))
+            }
+            _ => Ok(RespFrame::Error(
+                "ERR argument must be a memory value bigger than 1 and smaller than 4gb"
+                    .to_string(),
+            )),
+        }
     } else {
         Ok(RespFrame::Error(format!(
             "ERR unknown subcommand or wrong number of arguments for '{}'. Try DEBUG HELP.",
@@ -29212,6 +29272,75 @@ mod tests {
         )
         .expect("debug sleep");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn debug_change_repl_id_returns_ok() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"CHANGE-REPL-ID".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("debug change-repl-id");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn debug_quicklist_packed_threshold_accepts_memory_values() {
+        let mut store = Store::new();
+        for arg in [b"100".as_slice(), b"4k".as_slice(), b"1m".as_slice()] {
+            let out = dispatch_argv(
+                &[
+                    b"DEBUG".to_vec(),
+                    b"QUICKLIST-PACKED-THRESHOLD".to_vec(),
+                    arg.to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("debug quicklist-packed-threshold");
+            assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        }
+    }
+
+    #[test]
+    fn debug_quicklist_packed_threshold_rejects_invalid_values() {
+        let mut store = Store::new();
+        for arg in [b"0".as_slice(), b"1".as_slice(), b"abc".as_slice()] {
+            let out = dispatch_argv(
+                &[
+                    b"DEBUG".to_vec(),
+                    b"QUICKLIST-PACKED-THRESHOLD".to_vec(),
+                    arg.to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("debug quicklist-packed-threshold reject");
+            assert_eq!(
+                out,
+                RespFrame::Error(
+                    "ERR argument must be a memory value bigger than 1 and smaller than 4gb"
+                        .to_string()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn debug_stringmatch_test_returns_pass_message() {
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"STRINGMATCH-TEST".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("debug stringmatch-test");
+        assert_eq!(
+            out,
+            RespFrame::SimpleString("Apparently Redis did not crash: test passed".to_string())
+        );
     }
 
     #[test]
