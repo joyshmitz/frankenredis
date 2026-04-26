@@ -9715,6 +9715,16 @@ impl Store {
             ));
         }
         let footer_offset = data.len() - FOOTER_LEN;
+        // Upstream cluster.c::verifyDumpPayload rejects a payload
+        // whose version is newer than the local RDB_VERSION. We
+        // mirror that so a future-version FUNCTION DUMP can't
+        // sneak past the body parser. (br-frankenredis-r83v)
+        let stored_version = u16::from_le_bytes([data[footer_offset], data[footer_offset + 1]]);
+        if stored_version > Self::FUNCTION_DUMP_RDB_VERSION {
+            return Err(StoreError::GenericError(
+                "ERR DUMP payload version or checksum are wrong".to_string(),
+            ));
+        }
         let stored_crc = u64::from_le_bytes(
             data[footer_offset + 2..]
                 .try_into()
@@ -16630,6 +16640,39 @@ mod tests {
             function_library_snapshot(&store),
             before,
             "failed FUNCTION RESTORE must not clear or partially mutate state"
+        );
+    }
+
+    #[test]
+    fn function_restore_rejects_payload_with_future_rdb_version() {
+        // Upstream cluster.c::verifyDumpPayload rejects RDB versions
+        // higher than the local RDB_VERSION. We mirror that so a
+        // forged future-version FUNCTION DUMP can't slip past the
+        // body parser. (br-frankenredis-r83v)
+        let mut store = Store::new();
+        let library = sample_function_library("vguard", "alpha", "beta");
+        store
+            .function_load(&library, false)
+            .expect("seed library must load");
+        let mut dump = store.function_dump();
+        // Bump the version field (last 10 bytes are version+crc64;
+        // version is bytes [..2] of the footer).
+        let footer_offset = dump.len() - 10;
+        // Replace version with FUNCTION_DUMP_RDB_VERSION + 1.
+        let bumped = (Store::FUNCTION_DUMP_RDB_VERSION + 1).to_le_bytes();
+        dump[footer_offset] = bumped[0];
+        dump[footer_offset + 1] = bumped[1];
+        // Recompute CRC so this fails the version gate, not the CRC
+        // gate — proves the version check is the gate that fires.
+        let new_crc = fr_persist::crc64_redis(&dump[..footer_offset + 2]);
+        dump[footer_offset + 2..].copy_from_slice(&new_crc.to_le_bytes());
+
+        let err = store
+            .function_restore(&dump, "FLUSH")
+            .expect_err("future-version dump must fail");
+        assert_eq!(
+            err,
+            StoreError::GenericError("ERR DUMP payload version or checksum are wrong".to_string())
         );
     }
 
