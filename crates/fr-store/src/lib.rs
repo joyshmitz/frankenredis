@@ -9656,13 +9656,21 @@ impl Store {
     }
 
     const EMPTY_FUNCTION_DUMP_PAYLOAD: [u8; 10] = [11, 0, 52, 68, 225, 51, 242, 224, 75, 83];
+    /// Upstream functions.c::functionDumpCommand pins payloads to
+    /// `RDB_VERSION` (currently 11 for Redis 7.2.x). Our envelope
+    /// matches that shape: `[body … | u16 LE version | u64 LE crc64]`.
+    /// (br-frankenredis-r83v)
+    const FUNCTION_DUMP_RDB_VERSION: u16 = 11;
 
-    /// Dump all function libraries as a serialized blob.
+    /// Dump all function libraries as a serialized blob, wrapped in
+    /// the Redis 7+ envelope (body + 2-byte version + 8-byte CRC64)
+    /// so cross-impl callers can validate the footer even when the
+    /// body itself is FrankenRedis-private.
     pub fn function_dump(&self) -> Vec<u8> {
         if self.function_libraries.is_empty() {
             return Self::EMPTY_FUNCTION_DUMP_PAYLOAD.to_vec();
         }
-        // Simple binary format: [count:4LE] [for each: name_len:4LE name code_len:4LE code]
+        // Body: [count:4LE] [for each: name_len:4LE name code_len:4LE code engine_len:4LE engine]
         let mut buf = Vec::new();
         let count = self.function_libraries.len() as u32;
         buf.extend_from_slice(&count.to_le_bytes());
@@ -9676,6 +9684,9 @@ impl Store {
             buf.extend_from_slice(&(engine_bytes.len() as u32).to_le_bytes());
             buf.extend_from_slice(engine_bytes);
         }
+        buf.extend_from_slice(&Self::FUNCTION_DUMP_RDB_VERSION.to_le_bytes());
+        let crc = fr_persist::crc64_redis(&buf);
+        buf.extend_from_slice(&crc.to_le_bytes());
         buf
     }
 
@@ -9693,19 +9704,44 @@ impl Store {
             ));
         }
 
-        let (count, mut pos) = if data == Self::EMPTY_FUNCTION_DUMP_PAYLOAD.as_slice() {
-            (0, data.len())
+        // Strip + validate the upstream envelope footer (2-byte
+        // version + 8-byte CRC64) before parsing the body. The
+        // empty-libraries marker is itself a valid envelope so it
+        // round-trips through the same path. (br-frankenredis-r83v)
+        const FOOTER_LEN: usize = 10;
+        if data.len() < FOOTER_LEN {
+            return Err(StoreError::GenericError(
+                "ERR Invalid dump data".to_string(),
+            ));
+        }
+        let footer_offset = data.len() - FOOTER_LEN;
+        let stored_crc = u64::from_le_bytes(
+            data[footer_offset + 2..]
+                .try_into()
+                .map_err(|_| StoreError::GenericError("ERR Invalid dump data".to_string()))?,
+        );
+        let computed_crc = fr_persist::crc64_redis(&data[..footer_offset + 2]);
+        if stored_crc != computed_crc {
+            return Err(StoreError::GenericError(
+                "ERR DUMP payload version or checksum are wrong".to_string(),
+            ));
+        }
+        let body = &data[..footer_offset];
+        let (count, mut pos) = if body.is_empty() {
+            (0, 0)
         } else {
-            if data.len() < 4 {
+            if body.len() < 4 {
                 return Err(StoreError::GenericError(
                     "ERR Invalid dump data".to_string(),
                 ));
             }
             (
-                u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize,
+                u32::from_le_bytes([body[0], body[1], body[2], body[3]]) as usize,
                 4,
             )
         };
+        // Use `body` as the parsing window from here on.
+        let data = body;
         let mut seen_names: HashSet<String> = if append {
             self.function_libraries.keys().cloned().collect()
         } else {
@@ -16582,9 +16618,13 @@ mod tests {
         let err = store
             .function_restore(&invalid_dump, "FLUSH")
             .expect_err("truncated function dump must fail");
+        // After wrapping FUNCTION DUMP in the upstream version+CRC64
+        // envelope (br-frankenredis-r83v), a payload without the
+        // 10-byte footer fails the checksum gate first with the
+        // upstream wording rather than the body-parse error.
         assert_eq!(
             err,
-            StoreError::GenericError("ERR Invalid dump data".to_string())
+            StoreError::GenericError("ERR DUMP payload version or checksum are wrong".to_string())
         );
         assert_eq!(
             function_library_snapshot(&store),
@@ -18320,9 +18360,21 @@ mod tests {
                 let err = store
                     .function_restore(&invalid_dump, "FLUSH")
                     .expect_err("truncated FUNCTION DUMP payload must fail");
-                prop_assert_eq!(
-                    err,
-                    StoreError::GenericError("ERR Invalid dump data".to_string())
+                // Truncating either (a) takes the buffer below the
+                // 10-byte footer minimum and trips the length check
+                // ("Invalid dump data"), or (b) corrupts the trailing
+                // CRC64 footer ("DUMP payload version or checksum are
+                // wrong"). Both come from the new envelope gate
+                // landed under br-frankenredis-r83v and are valid
+                // upstream behaviours.
+                let msg = match err {
+                    StoreError::GenericError(ref s) => s.clone(),
+                    other => panic!("unexpected error: {other:?}"),
+                };
+                prop_assert!(
+                    msg == "ERR Invalid dump data"
+                        || msg == "ERR DUMP payload version or checksum are wrong",
+                    "unexpected error wording: {msg}"
                 );
                 prop_assert_eq!(function_library_snapshot(&store), before_snapshot);
                 prop_assert_eq!(store.function_dump(), before_dump);
