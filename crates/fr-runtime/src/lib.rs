@@ -2384,15 +2384,23 @@ impl ClientSession {
     }
 
     fn reset_connection_state(&mut self, auth_state: &AuthState) {
+        // Upstream networking.c::resetCommand clears every per-
+        // connection bit set since the post-handshake state:
+        // transaction, pubsub, db, RESP protocol, name, lib-name,
+        // lib-ver, tracking, no-evict, no-touch, reply mode, and
+        // re-runs the auth-default flow. (br-frankenredis-s13v)
         self.cluster_state = ClusterClientState::default();
         self.transaction_state = TransactionState::default();
         self.selected_db = 0;
         self.resp_protocol_version = 2;
         self.client_name = None;
+        self.client_lib_name = None;
+        self.client_lib_ver = None;
         self.client_no_evict = false;
         self.client_no_touch = false;
         self.client_tracking = ClientTrackingState::default();
         self.client_reply = ClientReplyState::default();
+        self.last_command_name = String::new();
         self.refresh_authentication_for_server(auth_state, false);
     }
 }
@@ -12018,8 +12026,11 @@ mod tests {
         assert_eq!(rt.session.selected_db, 0);
         assert_eq!(rt.session.resp_protocol_version, 2);
         assert_eq!(rt.session.client_name, None);
-        assert_eq!(rt.session.client_lib_name.as_deref(), Some("redis-rs"));
-        assert_eq!(rt.session.client_lib_ver.as_deref(), Some("1.2.3"));
+        // Upstream networking.c::resetCommand clears lib-name and
+        // lib-ver as part of the post-handshake-state restore.
+        // (br-frankenredis-s13v)
+        assert_eq!(rt.session.client_lib_name, None);
+        assert_eq!(rt.session.client_lib_ver, None);
         assert_eq!(
             rt.execute_frame(command(&[b"GET", b"k"]), 3),
             RespFrame::Error("NOAUTH Authentication required.".to_string())
