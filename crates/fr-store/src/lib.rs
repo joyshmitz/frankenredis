@@ -9578,6 +9578,21 @@ impl Store {
                 "ERR Library name was not given".to_string(),
             ));
         }
+        // Upstream functions.c::functionsVerifyName restricts
+        // library names to ASCII letters, digits, and underscore.
+        // Anything outside that set is rejected with the canonical
+        // wording. (br-frankenredis-r85v)
+        if !lib_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            return Err(StoreError::GenericError(
+                "ERR Library names can only contain letters, numbers, \
+                 or underscores(_) and must be at least one character \
+                 long"
+                    .to_string(),
+            ));
+        }
         if engine.is_empty() {
             return Err(StoreError::GenericError(
                 "ERR Missing library metadata".to_string(),
@@ -16607,6 +16622,44 @@ mod tests {
             .expect("self-generated FUNCTION DUMP payload must restore");
 
         assert_eq!(function_library_snapshot(&restored), expected);
+    }
+
+    #[test]
+    fn function_load_rejects_invalid_library_name_chars_with_upstream_wording() {
+        // Upstream functions.c::functionsVerifyName restricts
+        // library names to [A-Za-z0-9_] and rejects everything
+        // else with the documented wording. (br-frankenredis-r85v)
+        let mut store = Store::new();
+        // Note: shebang names with whitespace get truncated at the
+        // first space by the split_whitespace tokenizer (so
+        // "lib bad" parses as "lib" which is valid). The cases
+        // below all contain forbidden chars in a single token.
+        for bad in [
+            "lib-with-dashes",
+            "lib.with.dots",
+            "lib!",
+            "café",
+            "lib/slash",
+        ] {
+            let code =
+                format!("#!lua name={bad}\nredis.register_function('fn', function() return 1 end)");
+            let err = store
+                .function_load(code.as_bytes(), false)
+                .expect_err("invalid name must be rejected");
+            assert_eq!(
+                err,
+                StoreError::GenericError(
+                    "ERR Library names can only contain letters, numbers, or underscores(_) and must be at least one character long"
+                        .to_string()
+                ),
+                "name {bad:?} should hit the verify-name gate"
+            );
+        }
+        // Valid names still pass.
+        let code = b"#!lua name=lib_123_OK\nredis.register_function('fn', function() return 1 end)";
+        store
+            .function_load(code, false)
+            .expect("valid library name must load");
     }
 
     #[test]
