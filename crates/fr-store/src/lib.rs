@@ -9590,18 +9590,18 @@ impl Store {
             )));
         }
 
-        // Parse function registrations from the code
+        // Parse function registrations from the code, capturing the
+        // optional `description` field from the table-form
+        // invocation. (br-frankenredis-r85v)
         let mut functions = Vec::new();
         for line in code_str.lines() {
             let trimmed = line.trim();
-            // Look for redis.register_function('name', callback)
-            // or redis.register_function{function_name='name', callback=func, ...}
             if trimmed.contains("register_function")
-                && let Some(name) = extract_function_name(trimmed)
+                && let Some((name, description)) = extract_function_metadata(trimmed)
             {
                 functions.push(FunctionEntry {
                     name,
-                    description: None,
+                    description,
                     flags: Vec::new(),
                 });
             }
@@ -9812,11 +9812,11 @@ impl Store {
             for line in code_str.lines() {
                 let trimmed = line.trim();
                 if trimmed.contains("register_function")
-                    && let Some(fn_name) = extract_function_name(trimmed)
+                    && let Some((fn_name, fn_desc)) = extract_function_metadata(trimmed)
                 {
                     functions.push(FunctionEntry {
                         name: fn_name,
-                        description: None,
+                        description: fn_desc,
                         flags: Vec::new(),
                     });
                 }
@@ -11759,28 +11759,45 @@ fn glob_match_str(pattern: &str, string: &str) -> bool {
 /// Handles patterns like:
 ///   redis.register_function('myFunc', function(keys, args) ...)
 ///   redis.register_function{function_name='myFunc', ...}
-fn extract_function_name(line: &str) -> Option<String> {
-    // Pattern 1: redis.register_function('name', ...)
+/// Pull `(name, description)` out of a `redis.register_function`
+/// call. Upstream function_lua.c accepts the `description` field
+/// in the table-form invocation (`{function_name='n',
+/// description='d', callback=fn}`); previously we extracted only
+/// the function name and dropped the description, leaving the
+/// FUNCTION LIST `description` slot at nil even when the script
+/// explicitly set it. (br-frankenredis-r85v)
+fn extract_function_metadata(line: &str) -> Option<(String, Option<String>)> {
+    // Pattern 1: redis.register_function('name', callback)
     if let Some(start) = line.find("register_function") {
         let rest = &line[start..];
-        // Look for quoted string after (
         if let Some(paren) = rest.find('(') {
             let after = &rest[paren + 1..].trim_start();
             if let Some(name) = extract_quoted_string(after) {
-                return Some(name);
+                return Some((name, None));
             }
         }
-        // Pattern 2: register_function{function_name='name', ...}
+        // Pattern 2: register_function{function_name='name',
+        //              description='d', callback=fn, ...}
         if let Some(brace) = rest.find('{') {
             let after = &rest[brace + 1..];
+            let mut name = None;
+            let mut description = None;
             if let Some(fn_idx) = after.find("function_name") {
                 let rest2 = &after[fn_idx..];
                 if let Some(eq) = rest2.find('=') {
                     let after_eq = rest2[eq + 1..].trim_start();
-                    if let Some(name) = extract_quoted_string(after_eq) {
-                        return Some(name);
-                    }
+                    name = extract_quoted_string(after_eq);
                 }
+            }
+            if let Some(desc_idx) = after.find("description") {
+                let rest2 = &after[desc_idx..];
+                if let Some(eq) = rest2.find('=') {
+                    let after_eq = rest2[eq + 1..].trim_start();
+                    description = extract_quoted_string(after_eq);
+                }
+            }
+            if let Some(name) = name {
+                return Some((name, description));
             }
         }
     }
@@ -16579,6 +16596,30 @@ mod tests {
             .expect("self-generated FUNCTION DUMP payload must restore");
 
         assert_eq!(function_library_snapshot(&restored), expected);
+    }
+
+    #[test]
+    fn function_load_extracts_per_function_description_from_table_form() {
+        // Upstream function_lua.c accepts `description` in
+        // redis.register_function{function_name=...,
+        //   description='d', callback=fn}. We previously dropped
+        // the description, leaving FUNCTION LIST description=nil
+        // even when the script set it. (br-frankenredis-r85v)
+        let mut store = Store::new();
+        let code = b"#!lua name=desclib\nredis.register_function{function_name='myfn', description='hello world', callback=function() return 1 end}";
+        store.function_load(code, false).expect("library must load");
+
+        let lib = store
+            .function_libraries
+            .get("desclib")
+            .expect("library present");
+        assert_eq!(lib.functions.len(), 1);
+        assert_eq!(lib.functions[0].name, "myfn");
+        assert_eq!(
+            lib.functions[0].description.as_deref(),
+            Some("hello world"),
+            "description from register_function table-form must be captured"
+        );
     }
 
     #[test]
