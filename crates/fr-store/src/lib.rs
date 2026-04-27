@@ -9679,6 +9679,20 @@ impl Store {
             encode_rdb_string(&mut buf, lib.name.as_bytes());
             encode_rdb_string(&mut buf, &lib.code);
             encode_rdb_string(&mut buf, lib.engine.as_bytes());
+            // Description is optional in upstream's FunctionLibInfo
+            // and we surface it via FUNCTION LIST; previously it was
+            // silently dropped on dump/restore. Prefix with a 1-byte
+            // presence flag (0 = None, 1 = Some) followed by the
+            // rdb-string when present. (br-frankenredis-r85v)
+            match &lib.description {
+                Some(desc) => {
+                    buf.push(1);
+                    encode_rdb_string(&mut buf, desc.as_bytes());
+                }
+                None => {
+                    buf.push(0);
+                }
+            }
         }
         buf.extend_from_slice(&Self::FUNCTION_DUMP_RDB_VERSION.to_le_bytes());
         let crc = fr_persist::crc64_redis(&buf);
@@ -9762,6 +9776,30 @@ impl Store {
             pos += engine_consumed;
             let engine = String::from_utf8_lossy(&engine_bytes).to_string();
 
+            // Description presence flag (br-frankenredis-r85v).
+            if pos >= data.len() {
+                return Err(StoreError::GenericError(
+                    "ERR Invalid dump data".to_string(),
+                ));
+            }
+            let description = match data[pos] {
+                0 => {
+                    pos += 1;
+                    None
+                }
+                1 => {
+                    pos += 1;
+                    let (desc_bytes, desc_consumed) = decode_rdb_string(data, pos, data.len())?;
+                    pos += desc_consumed;
+                    Some(String::from_utf8_lossy(&desc_bytes).to_string())
+                }
+                _ => {
+                    return Err(StoreError::GenericError(
+                        "ERR Invalid dump data".to_string(),
+                    ));
+                }
+            };
+
             if append && !seen_names.insert(name.clone()) {
                 return Err(StoreError::GenericError(format!(
                     "ERR Library '{name}' already exists"
@@ -9789,7 +9827,7 @@ impl Store {
                 FunctionLibrary {
                     name,
                     engine,
-                    description: None,
+                    description,
                     code,
                     functions,
                 },
@@ -16541,6 +16579,37 @@ mod tests {
             .expect("self-generated FUNCTION DUMP payload must restore");
 
         assert_eq!(function_library_snapshot(&restored), expected);
+    }
+
+    #[test]
+    fn function_dump_restore_roundtrip_preserves_description_field() {
+        // Previously the description field was silently dropped on
+        // dump → restore. The body now carries a presence-flag +
+        // optional rdb-string for description so the round-trip
+        // preserves it. (br-frankenredis-r85v)
+        let mut original = Store::new();
+        let library = sample_function_library("desclib", "fn1", "fn2");
+        original
+            .function_load(&library, false)
+            .expect("seed library must load");
+        // Inject a description directly (FUNCTION LOAD doesn't yet
+        // parse a description shebang, so we set the field via the
+        // store's internal mutation hook for tests).
+        if let Some(lib) = original.function_libraries.get_mut("desclib") {
+            lib.description = Some("the description".to_string());
+        }
+
+        let dumped = original.function_dump();
+        let mut restored = Store::new();
+        restored
+            .function_restore(&dumped, "REPLACE")
+            .expect("self-generated FUNCTION DUMP payload must restore");
+
+        let lib = restored
+            .function_libraries
+            .get("desclib")
+            .expect("library should be present");
+        assert_eq!(lib.description.as_deref(), Some("the description"));
     }
 
     #[test]
