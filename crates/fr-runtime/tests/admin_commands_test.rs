@@ -78,14 +78,72 @@ fn memory_purge_ok() {
 }
 
 #[test]
-fn memory_stats_returns_bulk() {
+fn memory_stats_returns_keyed_array() {
+    // Upstream `object.c::memoryCommand` reply for MEMORY STATS is a
+    // RESP map/array of (bulk-string-key, integer-value) pairs — see
+    // legacy_redis_code/redis/src/object.c:1566 (`addReplyMapLen` + a
+    // run of `addReplyBulkCString` / `addReplyLongLong`). The previous
+    // shape of this test asserted a single bulk-string body with
+    // `key:value\n` lines (mistaking MEMORY STATS for INFO-style
+    // output) and so always failed against our Redis-correct array
+    // reply. (br-frankenredis-3kdz)
     let mut rt = Runtime::default_strict();
     let stats = rt.execute_frame(command(&[b"MEMORY", b"STATS"]), 0);
-    let text = extract_bulk(&stats);
+    let RespFrame::Array(Some(items)) = stats else {
+        panic!("MEMORY STATS must reply with an array, got: {stats:?}");
+    };
     assert!(
-        text.contains("peak.allocated:") || text.contains("total.allocated:"),
-        "MEMORY STATS should contain allocation stats"
+        !items.is_empty(),
+        "MEMORY STATS must produce a non-empty key-value pair array"
     );
+    assert!(
+        items.len() >= 2 && items.len() % 2 == 0,
+        "MEMORY STATS reply length must be an even number of entries (key, value, ...), got {}",
+        items.len()
+    );
+
+    // Pull keys (every even-indexed bulk string) and verify the canonical
+    // upstream-documented allocation-stat keys are all present. This
+    // catches both shape regressions (someone returning a single bulk
+    // string again) and silent label drift.
+    let keys: Vec<String> = items
+        .chunks(2)
+        .filter_map(|pair| match &pair[0] {
+            RespFrame::BulkString(Some(b)) => Some(String::from_utf8_lossy(b).into_owned()),
+            _ => None,
+        })
+        .collect();
+    for required in &["peak.allocated", "total.allocated", "startup.allocated"] {
+        assert!(
+            keys.iter().any(|k| k == required),
+            "MEMORY STATS missing required key {required:?}; saw {keys:?}"
+        );
+    }
+
+    // Every value paired with one of the well-known integer keys must
+    // itself be an integer — guards against a paired bulk-string value
+    // accidentally drifting in (which would break any client lib that
+    // parses these as longs).
+    for pair in items.chunks(2) {
+        if let RespFrame::BulkString(Some(k)) = &pair[0] {
+            let key = String::from_utf8_lossy(k);
+            if matches!(
+                key.as_ref(),
+                "peak.allocated"
+                    | "total.allocated"
+                    | "startup.allocated"
+                    | "replication.backlog"
+                    | "aof.buffer"
+                    | "keys.count"
+            ) {
+                assert!(
+                    matches!(pair[1], RespFrame::Integer(_)),
+                    "MEMORY STATS key {key:?} must pair with an integer value, got {:?}",
+                    pair[1]
+                );
+            }
+        }
+    }
 }
 
 #[test]
