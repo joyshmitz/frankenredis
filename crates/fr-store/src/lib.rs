@@ -1295,6 +1295,8 @@ pub struct Store {
     pub latency_tracker: LatencyTracker,
     /// Per-command latency histograms for LATENCY HISTOGRAM command.
     pub command_histograms: CommandHistogramTracker,
+    /// Store-owned Sentinel state used by SENTINEL subcommands.
+    pub sentinel_state: fr_sentinel::SentinelState,
     /// Server hz (event loop frequency), synced from runtime.
     pub server_hz: u64,
     /// Replication backlog size, synced from runtime.
@@ -1471,6 +1473,7 @@ impl Default for Store {
             slowlog_max_len: 128,
             latency_tracker: LatencyTracker::default(),
             command_histograms: CommandHistogramTracker::default(),
+            sentinel_state: fr_sentinel::SentinelState::new(),
             server_hz: 10,
             server_repl_backlog_size: 1_048_576,
             server_maxclients: 10000,

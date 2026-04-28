@@ -1089,7 +1089,7 @@ pub fn dispatch_argv(
         Some(CommandId::Migrate) => return migrate_cmd(argv, store, now_ms),
         Some(CommandId::Failover) => return failover_cmd(argv, store),
         Some(CommandId::Module) => return module_cmd(argv, store),
-        Some(CommandId::Sentinel) => return sentinel_cmd(argv),
+        Some(CommandId::Sentinel) => return sentinel_cmd(argv, store),
         Some(CommandId::Pfdebug) => return pfdebug_cmd(argv, store, now_ms),
         Some(CommandId::Pfselftest) => return pfselftest_cmd(argv, store),
         None => {}
@@ -8974,11 +8974,12 @@ fn module_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError
     )))
 }
 
-fn sentinel_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
-    Err(CommandError::UnknownCommand {
-        command: bytes_to_lossy_string(&argv[0]),
-        args_preview: Some(build_unknown_args_preview(argv).unwrap_or_default()),
-    })
+fn sentinel_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
+    let args = argv.iter().skip(1).map(Vec::as_slice).collect::<Vec<_>>();
+    Ok(fr_sentinel::commands::dispatch_sentinel_command(
+        &mut store.sentinel_state,
+        &args,
+    ))
 }
 
 fn bytes_to_lossy_string(bytes: &[u8]) -> String {
@@ -26510,7 +26511,7 @@ mod tests {
     #[test]
     fn sentinel_master_rejects_extra_arguments() {
         let mut store = Store::new();
-        let err = dispatch_argv(
+        let reply = dispatch_argv(
             &[
                 b"SENTINEL".to_vec(),
                 b"MASTER".to_vec(),
@@ -26520,34 +26521,30 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("extra sentinel args should fail");
+        .expect("extra sentinel args should return a Redis error frame");
         assert_eq!(
-            err,
-            CommandError::UnknownCommand {
-                command: "SENTINEL".to_string(),
-                args_preview: Some("'MASTER' 'mymaster' 'extra' ".to_string()),
-            }
+            reply,
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'sentinel master' command".to_string()
+            )
         );
     }
 
     #[test]
-    fn sentinel_without_subcommand_uses_unknown_command_surface() {
+    fn sentinel_without_subcommand_uses_sentinel_arity_error() {
         let mut store = Store::new();
-        let err = dispatch_argv(&[b"SENTINEL".to_vec()], &mut store, 0)
-            .expect_err("bare sentinel should fail");
+        let reply = dispatch_argv(&[b"SENTINEL".to_vec()], &mut store, 0)
+            .expect("bare sentinel should return a Redis error frame");
         assert_eq!(
-            err,
-            CommandError::UnknownCommand {
-                command: "SENTINEL".to_string(),
-                args_preview: Some(String::new()),
-            }
+            reply,
+            RespFrame::Error("ERR wrong number of arguments for 'sentinel' command".to_string())
         );
     }
 
     #[test]
     fn sentinel_failover_rejects_extra_arguments() {
         let mut store = Store::new();
-        let err = dispatch_argv(
+        let reply = dispatch_argv(
             &[
                 b"SENTINEL".to_vec(),
                 b"FAILOVER".to_vec(),
@@ -26557,49 +26554,87 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("extra sentinel args should fail");
+        .expect("extra sentinel args should return a Redis error frame");
         assert_eq!(
-            err,
-            CommandError::UnknownCommand {
-                command: "SENTINEL".to_string(),
-                args_preview: Some("'FAILOVER' 'mymaster' 'extra' ".to_string()),
-            }
+            reply,
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'sentinel failover' command".to_string()
+            )
         );
     }
 
     #[test]
     fn sentinel_help_rejects_extra_arguments() {
         let mut store = Store::new();
-        let err = dispatch_argv(
+        let reply = dispatch_argv(
             &[b"SENTINEL".to_vec(), b"HELP".to_vec(), b"extra".to_vec()],
             &mut store,
             0,
         )
-        .expect_err("extra sentinel help args should fail");
+        .expect("extra sentinel help args should return a Redis error frame");
         assert_eq!(
-            err,
-            CommandError::UnknownCommand {
-                command: "SENTINEL".to_string(),
-                args_preview: Some("'HELP' 'extra' ".to_string()),
-            }
+            reply,
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'sentinel help' command".to_string()
+            )
         );
     }
 
     #[test]
     fn sentinel_masters_rejects_extra_arguments() {
         let mut store = Store::new();
-        let err = dispatch_argv(
+        let reply = dispatch_argv(
             &[b"SENTINEL".to_vec(), b"MASTERS".to_vec(), b"extra".to_vec()],
             &mut store,
             0,
         )
-        .expect_err("extra sentinel args should fail");
+        .expect("extra sentinel args should return a Redis error frame");
         assert_eq!(
-            err,
-            CommandError::UnknownCommand {
-                command: "SENTINEL".to_string(),
-                args_preview: Some("'MASTERS' 'extra' ".to_string()),
-            }
+            reply,
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'sentinel masters' command".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn sentinel_monitor_state_persists_through_command_dispatch() {
+        let mut store = Store::new();
+        let monitor = dispatch_argv(
+            &[
+                b"SENTINEL".to_vec(),
+                b"MONITOR".to_vec(),
+                b"mymaster".to_vec(),
+                b"127.0.0.1".to_vec(),
+                b"6379".to_vec(),
+                b"2".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("SENTINEL MONITOR should dispatch");
+        assert_eq!(monitor, RespFrame::SimpleString("OK".to_string()));
+
+        let masters = dispatch_argv(&[b"SENTINEL".to_vec(), b"MASTERS".to_vec()], &mut store, 0)
+            .expect("SENTINEL MASTERS should dispatch");
+        assert!(matches!(masters, RespFrame::Array(Some(ref items)) if items.len() == 1));
+
+        let addr = dispatch_argv(
+            &[
+                b"SENTINEL".to_vec(),
+                b"GET-MASTER-ADDR-BY-NAME".to_vec(),
+                b"mymaster".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("SENTINEL GET-MASTER-ADDR-BY-NAME should dispatch");
+        assert_eq!(
+            addr,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"127.0.0.1".to_vec())),
+                RespFrame::BulkString(Some(b"6379".to_vec())),
+            ]))
         );
     }
 

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 fr-protocol = { version = "0.1.0", path = "../fr-protocol" }
+fr-sentinel = { version = "0.1.0", path = "../fr-sentinel" }
 fr-store = { version = "0.1.0", path = "../fr-store" }
 
 [dev-dependencies]
