@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Instant;
 
 use fr_protocol::RespFrame;
 use fr_store::{SCRIPT_PROPAGATE_ALL, SCRIPT_PROPAGATE_AOF, SCRIPT_PROPAGATE_REPLICA, Store};
@@ -1471,6 +1472,7 @@ pub struct LuaState<'a> {
     call_depth: usize,
     iterations: u64,
     rng_seed: u64,
+    script_started_at: Instant,
 }
 
 struct Scope {
@@ -1661,6 +1663,7 @@ impl<'a> LuaState<'a> {
             call_depth: 0,
             iterations: 0,
             rng_seed,
+            script_started_at: Instant::now(),
         }
     }
 
@@ -3074,9 +3077,11 @@ impl<'a> LuaState<'a> {
             }
             // ── OS library ───────────────────────────────────────────────
             "os.clock" => {
-                // Returns CPU time in seconds (approximation using wall clock)
-                // Redis Lua provides this for basic timing
-                Ok(vec![LuaValue::Number(0.0)])
+                // Redis exposes Lua's os.clock. Approximate CPU time with
+                // monotonic elapsed wall time for this script invocation.
+                Ok(vec![LuaValue::Number(
+                    self.script_started_at.elapsed().as_secs_f64(),
+                )])
             }
             // ── Coroutine stubs (not supported, matches Redis) ──────────
             "coroutine.create" | "coroutine.resume" | "coroutine.yield" | "coroutine.status"
@@ -4938,7 +4943,7 @@ mod tests {
     use fr_store::Store;
 
     use super::{
-        LuaState, LuaTable, LuaValue, SCRIPT_NOSCRIPT_ERROR, eval_script, json_to_lua_value,
+        Env, LuaState, LuaTable, LuaValue, SCRIPT_NOSCRIPT_ERROR, eval_script, json_to_lua_value,
         lua_raw_equal, lua_value_to_json,
     };
 
@@ -5737,6 +5742,41 @@ mod tests {
         let mut store = Store::new();
         let result = eval_script(b"return type(coroutine)", &[], &[], &mut store, 0);
         assert_eq!(result, Ok(RespFrame::BulkString(Some(b"table".to_vec()))));
+    }
+
+    #[test]
+    fn os_clock_reports_elapsed_script_time() {
+        fn one_number(values: &[LuaValue]) -> Option<f64> {
+            match values {
+                [LuaValue::Number(value)] => Some(*value),
+                _ => None,
+            }
+        }
+
+        let mut store = Store::new();
+        let mut state = LuaState::new(&mut store, 0);
+        let mut env = Env::new();
+        let mut no_args = Vec::new();
+        let initial = state
+            .call_builtin("os.clock", &mut no_args, &mut env)
+            .unwrap_or_default();
+
+        let mut accumulator = 0_u64;
+        for value in 0..100_000 {
+            accumulator = std::hint::black_box(accumulator.wrapping_add(value));
+        }
+        std::hint::black_box(accumulator);
+
+        let later = state
+            .call_builtin("os.clock", &mut no_args, &mut env)
+            .unwrap_or_default();
+
+        let first = one_number(initial.as_slice()).unwrap_or(f64::NAN);
+        let second = one_number(later.as_slice()).unwrap_or(f64::NAN);
+        assert!(first.is_finite(), "os.clock returned {initial:?}");
+        assert!(second.is_finite(), "os.clock returned {later:?}");
+        assert!(first >= 0.0);
+        assert!(second > first);
     }
 
     #[test]
