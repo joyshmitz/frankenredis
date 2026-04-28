@@ -4013,6 +4013,20 @@
       }
     },
     {
+      "name": "object_encoding_setup_hashtable_hash_pin_threshold",
+      "now_ms": 30000,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "hash-max-listpack-entries",
+        "128"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
       "name": "object_encoding_setup_hashtable_hash",
       "now_ms": 30000,
       "argv": [

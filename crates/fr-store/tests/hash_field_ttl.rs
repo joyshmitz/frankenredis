@@ -430,8 +430,8 @@ fn object_encoding_reports_listpack_ex_for_hash_with_any_field_ttl() {
 #[test]
 fn object_encoding_reports_hashtable_ex_when_big_hash_has_field_ttl() {
     let mut store = Store::new();
-    // Seed >128 entries to push over the listpack threshold.
-    let fields: Vec<Vec<u8>> = (0..140_u32).map(|i| format!("f{i}").into_bytes()).collect();
+    // Seed >512 entries to push over the listpack threshold (upstream 7.2 default).
+    let fields: Vec<Vec<u8>> = (0..520_u32).map(|i| format!("f{i}").into_bytes()).collect();
     for f in &fields {
         store
             .hset(b"h", f.clone(), b"v".to_vec(), NOW)

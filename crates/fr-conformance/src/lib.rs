@@ -105,7 +105,13 @@ fn configure_runtime_for_fixture(runtime: &mut Runtime, fixture_name: &str) {
     // upstream vendored oracle spawns without `--aclfile`, so ACL
     // SAVE/LOAD must return "This Redis instance is not configured
     // to use an ACL file." under both impls. (br-frankenredis-faqe)
-    if matches!(fixture_name, "core_config.json" | "core_server.json") {
+    // core_server.json keeps a config_file_path because its persistence cases
+    // (BGSAVE/SAVE/AOF rewrite) lean on the runtime knowing where to write the
+    // dump file. core_config.json no longer auto-provisions one: upstream
+    // 7.2 spawns without --include in the live oracle, so CONFIG REWRITE
+    // must return "ERR The server is running without a config file" under
+    // both implementations. (br-frankenredis-2di1)
+    if fixture_name == "core_server.json" {
         runtime.set_config_file_path(Some(runtime_fixture_config_path(fixture_name)));
     }
 }
@@ -9214,28 +9220,12 @@ mod tests {
             }
         };
         const XFAIL: &[&str] = &[
-            // Default-value tuning: upstream 7.2.4 ships with different
-            // defaults than our fr-config. Requires fr-config update.
-            "config_get_hash_max_listpack_entries",
-            "config_get_proto_max_bulk_len",
             // CONFIG GET * returns a different set of supported params
             // because upstream includes slave-ignore-maxmemory and a
             // few others we don't model. Canonicalizer would need a
             // tolerate-missing-keys mode.
             "config_get_star_returns_array",
             "config_get_notify_keyspace_events_after_set",
-            // CONFIG REWRITE expects a config file path. In the
-            // conformance harness we construct Runtime::default_strict
-            // which may or may not set a config_file_path; upstream
-            // spawns without one and returns the error. Harness tweak.
-            "config_rewrite",
-            "config_rewrite_ok",
-            "config_subcommand_case_insensitive_rewrite",
-            // active-defrag-enabled is a feature we don't model;
-            // upstream accepts the parameter. Silent-accept vs
-            // reject semantic mismatch.
-            "config_set_active_defrag_enabled",
-            "config_get_active_defrag_enabled_after_set",
             // OOM maxmemory-driven eviction isn't wired in the
             // harness Runtime; upstream rejects writes with OOM when
             // maxmemory is exceeded but our Runtime proceeds.

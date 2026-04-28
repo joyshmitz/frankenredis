@@ -1129,8 +1129,8 @@
         "REWRITE"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR The server is running without a config file"
       }
     },
     {
@@ -1277,7 +1277,7 @@
           },
           {
             "kind": "bulk",
-            "value": "128"
+            "value": "512"
           }
         ]
       }
@@ -1299,7 +1299,7 @@
           },
           {
             "kind": "bulk",
-            "value": "512000000"
+            "value": "536870912"
           }
         ]
       }
@@ -1800,8 +1800,8 @@
         "rewrite"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR The server is running without a config file"
       }
     },
     {
@@ -2426,8 +2426,8 @@
         "yes"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR Unknown option or number of arguments for CONFIG SET - 'active-defrag-enabled'"
       }
     },
     {
@@ -2440,16 +2440,7 @@
       ],
       "expect": {
         "kind": "array",
-        "value": [
-          {
-            "kind": "bulk",
-            "value": "active-defrag-enabled"
-          },
-          {
-            "kind": "bulk",
-            "value": "yes"
-          }
-        ]
+        "value": []
       }
     },
     {
@@ -2582,8 +2573,8 @@
         "REWRITE"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR The server is running without a config file"
       }
     },
     {

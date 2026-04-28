@@ -3685,7 +3685,7 @@
       ],
       "expect": {
         "kind": "bulk",
-        "value": "128"
+        "value": "512"
       }
     },
     {

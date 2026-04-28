@@ -11838,7 +11838,7 @@ const CONFIG_STATIC_DEFAULTS: &[(&str, &str)] = &[
     ("list-compress-depth", "0"),
     ("stream-node-max-bytes", "4096"),
     ("stream-node-max-entries", "100"),
-    ("proto-max-bulk-len", "512000000"),
+    ("proto-max-bulk-len", "536870912"),
     ("io-threads", "1"),
     ("io-threads-do-reads", "no"),
     ("requirepass", ""),

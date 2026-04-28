@@ -387,7 +387,6 @@ const CONFIG_STATIC_PARAMS: &[(&str, &str)] = &[
     ("hz", "10"),
     ("dynamic-hz", "yes"),
     ("activedefrag", "no"),
-    ("active-defrag-enabled", "no"),
     ("active-defrag-threshold-lower", "10"),
     ("active-defrag-threshold-upper", "100"),
     ("active-defrag-cycle-min", "1"),
@@ -410,7 +409,7 @@ const CONFIG_STATIC_PARAMS: &[(&str, &str)] = &[
     ("list-compress-depth", "0"),
     ("set-max-intset-entries", "512"),
     ("set-max-listpack-entries", "128"),
-    ("hash-max-listpack-entries", "128"),
+    ("hash-max-listpack-entries", "512"),
     ("hash-max-listpack-value", "64"),
     ("hash-max-ziplist-entries", "128"),
     ("hash-max-ziplist-value", "64"),
@@ -421,7 +420,7 @@ const CONFIG_STATIC_PARAMS: &[(&str, &str)] = &[
     ("stream-node-max-bytes", "4096"),
     ("stream-node-max-entries", "100"),
     // Protocol
-    ("proto-max-bulk-len", "512000000"),
+    ("proto-max-bulk-len", "536870912"),
     ("close-on-oom", "no"),
     // I/O threads
     ("io-threads", "1"),
@@ -1947,7 +1946,7 @@ impl Default for ServerState {
             cluster_migration_barrier: 1,
             output_buffer_limit: 256 * 1024 * 1024, // 256 MiB (reasonable default)
             query_buffer_limit: 1024 * 1024 * 1024, // 1 GiB (Redis default)
-            proto_max_bulk_len: 512_000_000,        // Redis default (512 MB, not 512 MiB)
+            proto_max_bulk_len: 536_870_912,        // Redis 7.2 default (512 MiB)
             shutdown_requested: false,
             shutdown_nosave: false,
             command_time_budget_ms: 5000,

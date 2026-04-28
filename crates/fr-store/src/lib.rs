@@ -1411,7 +1411,7 @@ impl Default for Store {
             hash_field_expired_counts: BTreeMap::new(),
             maxmemory_policy: MaxmemoryPolicy::default(),
             lfu_decay_time: 1,
-            hash_max_listpack_entries: 128,
+            hash_max_listpack_entries: 512,
             hash_max_listpack_value: 64,
             list_max_listpack_size: -2,
             list_max_listpack_entries: 128,
@@ -15630,10 +15630,15 @@ mod tests {
             .hset(b"hash", b"f".to_vec(), b"v".to_vec(), 100)
             .unwrap();
         store.zadd(b"zset", &[(1.5, b"a".to_vec())], 100).unwrap();
+        // raw_set/raw_zset use 129 to push past their 128-entry listpack
+        // threshold; raw_hash uses 513 to clear hash_max_listpack_entries
+        // (512, upstream Redis 7.2 default).
         for i in 0..129 {
             store
                 .sadd(b"raw_set", &[format!("member-{i}").into_bytes()], 100)
                 .unwrap();
+        }
+        for i in 0..513 {
             store
                 .hset(
                     b"raw_hash",
