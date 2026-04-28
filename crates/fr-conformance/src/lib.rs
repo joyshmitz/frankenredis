@@ -9225,7 +9225,6 @@ mod tests {
             // few others we don't model. Canonicalizer would need a
             // tolerate-missing-keys mode.
             "config_get_star_returns_array",
-            "config_get_notify_keyspace_events_after_set",
             // OOM maxmemory-driven eviction isn't wired in the
             // harness Runtime; upstream rejects writes with OOM when
             // maxmemory is exceeded but our Runtime proceeds.

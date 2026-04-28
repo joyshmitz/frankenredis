@@ -131,6 +131,13 @@ pub fn keyspace_events_parse(classes: &str) -> Option<u32> {
 }
 
 /// Convert notification flags back to a configuration string.
+///
+/// Mirrors upstream `notify.c::keyspaceEventsFlagsToString`: canonical
+/// order is A | g $ l s h z x e t n | K E m, where the `n` (NOTIFY_NEW)
+/// bit only appears when `A` is NOT set (upstream lists `n` inside the
+/// per-class else branch). This matters for CONFIG GET parity:
+/// `CONFIG SET notify-keyspace-events KEA` must echo back `AKE`,
+/// not `KEA`. (br-frankenredis-xmev)
 #[must_use]
 pub fn keyspace_events_to_string(flags: u32) -> String {
     let mut s = String::new();
@@ -164,9 +171,9 @@ pub fn keyspace_events_to_string(flags: u32) -> String {
         if flags & NOTIFY_STREAM != 0 {
             s.push('t');
         }
-    }
-    if flags & NOTIFY_NEW != 0 {
-        s.push('n');
+        if flags & NOTIFY_NEW != 0 {
+            s.push('n');
+        }
     }
     if flags & NOTIFY_KEYSPACE != 0 {
         s.push('K');
@@ -17360,9 +17367,19 @@ mod tests {
         }
 
         #[test]
-        fn golden_keyspace_events_all_preserves_new_flag() {
+        fn golden_keyspace_events_canonical_form_matches_upstream() {
+            // Upstream notify.c::keyspaceEventsFlagsToString emits the 'n'
+            // bit only in the per-class else branch — once 'A' covers
+            // every class flag, 'n' is dropped from the string form even
+            // when NOTIFY_NEW was set. CONFIG GET reflects this lossy
+            // canonicalization: SET KAn → GET AK.
+            // (br-frankenredis-xmev)
             let flags = keyspace_events_parse("KAn").expect("valid notify-keyspace-events");
-            assert_eq!(keyspace_events_to_string(flags), "AnK");
+            assert_eq!(keyspace_events_to_string(flags), "AK");
+
+            // n outside the A shorthand still survives in canonical form.
+            let flags = keyspace_events_parse("Kgn").expect("valid notify-keyspace-events");
+            assert_eq!(keyspace_events_to_string(flags), "gnK");
         }
     }
 
@@ -18345,7 +18362,14 @@ mod tests {
                 let reparsed = keyspace_events_parse(&canonical).expect("canonical form must parse");
                 let recanonical = keyspace_events_to_string(reparsed);
 
-                prop_assert_eq!(reparsed, flags);
+                // Upstream canonicalization is intentionally lossy when the
+                // 'A' shorthand subsumes per-class flags: e.g. flags
+                // NOTIFY_ALL|NOTIFY_NEW|NOTIFY_KEYSPACE round-trip via string
+                // to NOTIFY_ALL|NOTIFY_KEYSPACE (the 'n' is dropped because
+                // upstream emits it only outside the A-shorthand branch).
+                // The stable invariant is that two consecutive canonicalizations
+                // converge — not that the first one preserves all bits.
+                // (br-frankenredis-xmev)
                 prop_assert_eq!(recanonical, canonical);
             }
 

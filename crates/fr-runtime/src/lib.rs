@@ -7681,10 +7681,14 @@ impl Runtime {
                 let value_str = std::str::from_utf8(&pair[1]).unwrap_or("");
                 match fr_store::keyspace_events_parse(value_str) {
                     Some(flags) => {
-                        // Defer application to after all params are validated
+                        // Echo back the canonical AKE-order representation
+                        // upstream emits, not the raw user input. This makes
+                        // `CONFIG SET notify-keyspace-events KEA` followed by
+                        // `CONFIG GET` return "AKE" like upstream
+                        // (br-frankenredis-xmev).
+                        let canonical = fr_store::keyspace_events_to_string(flags);
                         static_override_updates
-                            .push(("notify-keyspace-events".to_string(), value_str.to_string()));
-                        // Store flags for deferred application
+                            .push(("notify-keyspace-events".to_string(), canonical));
                         next_keyspace_events = Some(flags);
                     }
                     None => {
