@@ -4088,7 +4088,7 @@ fn core_cluster_disabled_surface_live_redis_matches_runtime() {
 #[test]
 fn core_config_rewrite_live_redis_matches_runtime() {
     let cfg = HarnessConfig::default_paths();
-    let oracle_server = VendoredRedisOracle::start_with_config_file(&cfg);
+    let oracle_server = VendoredRedisOracle::start(&cfg);
     let oracle = LiveOracleConfig {
         host: "127.0.0.1".to_string(),
         port: oracle_server.port,

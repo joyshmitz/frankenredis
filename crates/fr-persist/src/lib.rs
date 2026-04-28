@@ -909,8 +909,52 @@ fn rdb_encode_length(buf: &mut Vec<u8>, len: usize) {
     }
 }
 
+/// Number of bytes `rdb_encode_length` would emit for the given length.
+/// Used by `rdb_encode_string` to decide whether the LZF wire form is
+/// strictly smaller than the raw form. (br-frankenredis-1uin)
+fn rdb_length_size(len: usize) -> usize {
+    if len < 64 {
+        1
+    } else if len < 16384 {
+        2
+    } else if len <= u32::MAX as usize {
+        5
+    } else {
+        9
+    }
+}
+
 /// Encode a length-prefixed string (RDB string encoding).
+///
+/// For inputs longer than 20 bytes, attempts LZF compression first and
+/// emits the `0xC3 [comp_len:rdb_length] [orig_len:rdb_length] [payload]`
+/// special encoding when the compressed wire form is strictly smaller
+/// than the raw form. Mirrors upstream's `rdbSaveLzfStringObject` policy
+/// (rdbcompression on) so dump.rdb files emitted by fr-persist
+/// round-trip through `redis-server --loadrdb` even when long strings
+/// are present. (br-frankenredis-1uin)
 fn rdb_encode_string(buf: &mut Vec<u8>, data: &[u8]) {
+    // Upstream skips LZF below this threshold because even a run of
+    // repeated bytes cannot compress enough to beat the wire overhead.
+    if data.len() > 20 {
+        // Upstream's compressed-fits budget: `out_len = in_len - 4`.
+        // lzf_compress returns None if it can't fit within that.
+        let budget = data.len() - 4;
+        if let Some(compressed) = lzf_compress(data, budget) {
+            let raw_size = rdb_length_size(data.len()) + data.len();
+            let lzf_size = 1
+                + rdb_length_size(compressed.len())
+                + rdb_length_size(data.len())
+                + compressed.len();
+            if lzf_size < raw_size {
+                buf.push(0xC3);
+                rdb_encode_length(buf, compressed.len());
+                rdb_encode_length(buf, data.len());
+                buf.extend_from_slice(&compressed);
+                return;
+            }
+        }
+    }
     rdb_encode_length(buf, data.len());
     buf.extend_from_slice(data);
 }
@@ -1288,6 +1332,169 @@ fn rdb_decode_length(data: &[u8]) -> Option<(usize, usize)> {
         }
         _ => None, // Special encodings (type 3) are handled by rdb_decode_string
     }
+}
+
+/// LZF compressor. Pure-Rust port of upstream `lzf_c.c::lzf_compress`
+/// (Marc Lehmann's LZF, BSD/GPL dual-licensed). Mirrors the wire
+/// format `lzf_decompress` already accepts:
+///
+/// ```text
+/// 000LLLLL <L+1 octets>           ; literal run, L+1 = 1..32 bytes
+/// LLLooooo oooooooo              ; backref, copy_len = L+2 (3..8), off = (top5<<8 | low8) + 1
+/// 111ooooo LLLLLLLL oooooooo     ; backref, copy_len = L+9 (9..264), off as above
+/// ```
+///
+/// Returns `None` if the encoded stream would not fit in `out_budget`
+/// bytes (caller's signal that compression isn't worth it). Upstream
+/// uses `outlen = in_len - 4` as the budget — we follow the same
+/// convention so a "compressed-fits" check guarantees ≥ 5 bytes saved
+/// after the 0xC3 + length prefix overhead is folded in.
+///
+/// (br-frankenredis-1uin)
+fn lzf_compress(input: &[u8], out_budget: usize) -> Option<Vec<u8>> {
+    const HLOG: u32 = 14;
+    const HSIZE: usize = 1 << HLOG;
+    const MAX_LIT: usize = 32;
+    const MAX_OFF: usize = 8192;
+    const MAX_REF: usize = (1 << 8) + (1 << 3); // 264
+
+    let in_len = input.len();
+    if in_len == 0 || out_budget == 0 {
+        return None;
+    }
+
+    // Knuth multiplicative hash on the (next 3 bytes) trigram.
+    fn trigram(buf: &[u8], i: usize) -> u32 {
+        ((buf[i] as u32) << 16) | ((buf[i + 1] as u32) << 8) | (buf[i + 2] as u32)
+    }
+    fn hash(v: u32) -> usize {
+        ((v.wrapping_mul(2_654_435_761)) >> (32 - HLOG)) as usize & (HSIZE - 1)
+    }
+
+    let mut out: Vec<u8> = Vec::with_capacity(out_budget);
+    // 0 means "unset" (we store ip+1 so position 0 is representable).
+    let mut htab = vec![0u32; HSIZE];
+
+    let mut ip: usize = 0;
+    let mut lit_hdr_pos: usize = out.len();
+    out.push(0); // placeholder for literal-run header, filled when run ends
+    if out.len() > out_budget {
+        return None;
+    }
+    let mut lit: usize = 0;
+
+    while ip + 2 < in_len {
+        let v = trigram(input, ip);
+        let h = hash(v);
+        let stored = htab[h];
+        htab[h] = (ip as u32).wrapping_add(1);
+        let ref_idx = if stored == 0 {
+            None
+        } else {
+            Some((stored - 1) as usize)
+        };
+
+        let mut emitted_match = false;
+        if let Some(r) = ref_idx {
+            // off = ip - ref - 1, must be in 0..MAX_OFF.
+            if r < ip
+                && ip - r - 1 < MAX_OFF
+                && r + 2 < in_len
+                && input[r] == input[ip]
+                && input[r + 1] == input[ip + 1]
+                && input[r + 2] == input[ip + 2]
+            {
+                let off = ip - r - 1;
+                let max_len = std::cmp::min(MAX_REF, in_len - ip);
+                let mut match_len = 3;
+                while match_len < max_len && input[r + match_len] == input[ip + match_len] {
+                    match_len += 1;
+                }
+                let len_minus_2 = match_len - 2; // 1..MAX_REF - 2 = 1..262
+
+                // Close the open literal run.
+                if lit > 0 {
+                    out[lit_hdr_pos] = (lit - 1) as u8;
+                } else {
+                    // Empty run — drop the placeholder.
+                    out.pop();
+                }
+
+                let off_hi = ((off >> 8) & 0x1F) as u8;
+                if len_minus_2 < 7 {
+                    let header = ((len_minus_2 as u8) << 5) | off_hi;
+                    out.push(header);
+                } else {
+                    out.push((7u8 << 5) | off_hi);
+                    out.push((len_minus_2 - 7) as u8);
+                }
+                out.push((off & 0xFF) as u8);
+                if out.len() > out_budget {
+                    return None;
+                }
+
+                ip += match_len;
+
+                // Open a new literal run.
+                lit = 0;
+                lit_hdr_pos = out.len();
+                out.push(0);
+                if out.len() > out_budget {
+                    return None;
+                }
+                emitted_match = true;
+            }
+        }
+
+        if !emitted_match {
+            out.push(input[ip]);
+            if out.len() > out_budget {
+                return None;
+            }
+            lit += 1;
+            ip += 1;
+            if lit == MAX_LIT {
+                out[lit_hdr_pos] = (lit - 1) as u8;
+                lit = 0;
+                lit_hdr_pos = out.len();
+                out.push(0);
+                if out.len() > out_budget {
+                    return None;
+                }
+            }
+        }
+    }
+
+    // Tail: drain remaining 0..2 bytes as literals.
+    while ip < in_len {
+        out.push(input[ip]);
+        if out.len() > out_budget {
+            return None;
+        }
+        lit += 1;
+        ip += 1;
+        if lit == MAX_LIT {
+            out[lit_hdr_pos] = (lit - 1) as u8;
+            lit = 0;
+            lit_hdr_pos = out.len();
+            out.push(0);
+            if out.len() > out_budget {
+                return None;
+            }
+        }
+    }
+
+    // Finalize the trailing literal run.
+    if lit > 0 {
+        out[lit_hdr_pos] = (lit - 1) as u8;
+    } else {
+        out.pop();
+    }
+
+    if out.is_empty() || out.len() > out_budget {
+        return None;
+    }
+    Some(out)
 }
 
 /// Decode an RDB string. Returns `(bytes, consumed)` or `None`.
@@ -3072,6 +3279,156 @@ mod tests {
     #[test]
     fn crc64_matches_redis_reference_vector() {
         assert_eq!(crc64_redis(b"123456789"), 0xe9c6_d914_c4b8_d9ca);
+    }
+
+    // ── LZF encoder tests (br-frankenredis-1uin) ───────────────────────
+
+    use super::lzf_compress;
+
+    #[test]
+    fn lzf_compress_round_trips_repetitive_payload() {
+        // 256 bytes of repeating pattern compresses well; the round-trip
+        // must restore the original byte-for-byte.
+        let payload: Vec<u8> = b"ababababcdcdcdcdef"
+            .iter()
+            .copied()
+            .cycle()
+            .take(256)
+            .collect();
+        let compressed =
+            lzf_compress(&payload, payload.len() - 4).expect("repetitive payload should compress");
+        assert!(
+            compressed.len() < payload.len(),
+            "compressed size {} should be smaller than raw {}",
+            compressed.len(),
+            payload.len()
+        );
+        let restored = lzf_decompress(&compressed, payload.len()).expect("decompress round-trip");
+        assert_eq!(restored, payload);
+    }
+
+    #[test]
+    fn lzf_compress_round_trips_short_input() {
+        // 5..32 byte inputs — boundary cases for the literal-run header
+        // (MAX_LIT == 32) and the minimum compressible length.
+        for &input in &[
+            &b"hello"[..],
+            &b"aaaaaaaaaa"[..],
+            &b"abcdefghijklmnopqrstuvwxyz0123456"[..], // 32 bytes
+            &b"abcdefghijklmnopqrstuvwxyz01234567"[..], // 33 bytes
+        ] {
+            // Use a generous budget so we test compressibility regardless
+            // of overhead; round-trip must always restore.
+            let budget = input.len() * 2 + 64;
+            if let Some(compressed) = lzf_compress(input, budget) {
+                let restored = lzf_decompress(&compressed, input.len())
+                    .unwrap_or_else(|| panic!("decompress {input:?}"));
+                assert_eq!(restored, input, "round-trip mismatch on {input:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn lzf_compress_round_trips_long_repetitive_payload() {
+        // 4096 bytes of mostly-repeating content — exercises the
+        // MAX_REF=264 backref-extension path and the extra-byte encoding
+        // (top3 == 7 + extra byte).
+        let mut payload = Vec::with_capacity(4096);
+        for _ in 0..512 {
+            payload.extend_from_slice(b"frankenredis_lzf");
+        }
+        let compressed =
+            lzf_compress(&payload, payload.len() - 4).expect("4096B repetitive should compress");
+        assert!(compressed.len() < payload.len() / 4);
+        let restored = lzf_decompress(&compressed, payload.len()).expect("decompress");
+        assert_eq!(restored, payload);
+    }
+
+    #[test]
+    fn lzf_compress_returns_none_when_budget_exceeded() {
+        // Random-looking bytes don't compress; with budget=in_len-4 we
+        // expect None since LZF cannot save 5+ bytes.
+        let payload: Vec<u8> = (0..20)
+            .map(|i: u8| i.wrapping_mul(73).wrapping_add(31))
+            .collect();
+        let compressed = lzf_compress(&payload, payload.len() - 4);
+        assert!(
+            compressed.is_none(),
+            "incompressible 20-byte payload should fail to fit in budget {}",
+            payload.len() - 4
+        );
+    }
+
+    #[test]
+    fn rdb_encode_string_emits_lzf_for_long_compressible_string() {
+        // Build an RDB containing a 256-byte highly compressible string.
+        // The encode/decode path must round-trip and the wire form must
+        // start with the 0xC3 special-encoding byte after the type tag
+        // and key prefix.
+        let payload: Vec<u8> = b"abc"[..].iter().copied().cycle().take(256).collect();
+        let entries = vec![RdbEntry {
+            db: 0,
+            key: b"big".to_vec(),
+            value: RdbValue::String(payload.clone()),
+            expire_ms: None,
+        }];
+        let encoded = encode_rdb(&entries, &[]);
+        let (decoded, _) = decode_rdb(&encoded).expect("decode lzf-encoded string");
+        assert_eq!(decoded, entries);
+
+        // After REDIS0011 + RESIZEDB headers + RDB_TYPE_STRING + key,
+        // we expect the value to start with 0xC3 (LZF special encoding).
+        // Search for the 0xC3 byte; it must be present somewhere.
+        assert!(
+            encoded.contains(&0xC3),
+            "expected LZF marker (0xC3) in encoded RDB; raw byte search across {} bytes",
+            encoded.len()
+        );
+    }
+
+    #[test]
+    fn rdb_encode_string_emits_raw_for_short_string() {
+        // Strings at or below upstream's 20-byte gate must skip the LZF
+        // path entirely, avoiding compression overhead for short keys
+        // and AUX values.
+        let entries = vec![RdbEntry {
+            db: 0,
+            key: b"k".to_vec(),
+            value: RdbValue::String(b"short value".to_vec()),
+            expire_ms: None,
+        }];
+        let encoded = encode_rdb(&entries, &[]);
+        // LZF marker 0xC3 must NOT appear. (0xC3 is also a possible
+        // CRC byte at the end so we restrict the search to the body.)
+        let body_end = encoded.len().saturating_sub(8);
+        assert!(
+            !encoded[..body_end].contains(&0xC3),
+            "did not expect LZF marker for short payload; encoded body: {:?}",
+            &encoded[..body_end.min(48)]
+        );
+        let (decoded, _) = decode_rdb(&encoded).expect("decode short string");
+        assert_eq!(decoded, entries);
+    }
+
+    #[test]
+    fn rdb_encode_string_emits_raw_when_compression_grows_payload() {
+        // 22..30 byte random-looking strings. Many of these will fail
+        // the budget check and fall back to raw; the round-trip must
+        // still work either way.
+        for seed in 0..16u8 {
+            let payload: Vec<u8> = (0..28u8)
+                .map(|i| seed.wrapping_mul(73).wrapping_add(i.wrapping_mul(101)))
+                .collect();
+            let entries = vec![RdbEntry {
+                db: 0,
+                key: format!("k{seed}").into_bytes(),
+                value: RdbValue::String(payload.clone()),
+                expire_ms: None,
+            }];
+            let encoded = encode_rdb(&entries, &[]);
+            let (decoded, _) = decode_rdb(&encoded).expect("decode incompressible-ish");
+            assert_eq!(decoded, entries, "round-trip drift for seed {seed}");
+        }
     }
 
     // ── Compact-encoding RDB decoder tests (br-frankenredis-aqgx) ──────

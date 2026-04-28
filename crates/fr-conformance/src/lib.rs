@@ -11754,6 +11754,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp_b_dir);
     }
 
+    /// Sub-task (c) of br-frankenredis-r73v: prove that upstream
+    /// redis-server can load a `dump.rdb` whose long-string values were
+    /// LZF-compressed by `fr_persist::encode_rdb`.
+    ///
+    /// Builds an in-memory `RdbEntry` set with a 256-byte highly
+    /// compressible string, encodes it through fr-persist (which emits
+    /// the upstream-compatible `0xC3 [clen] [ulen] [payload]` LZF wire
+    /// form for any string > 20 bytes whose compressed size strictly
+    /// beats raw), drops it into a fresh data dir, spawns the vendored
+    /// redis-server pointed at that dir, and verifies the value comes
+    /// back intact. Gates the LZF-on-save path against upstream's
+    /// loader. (br-frankenredis-1uin)
+    #[test]
+    fn live_redis_rdb_lzf_save_loads_under_upstream() {
+        use fr_persist::{RdbEntry, RdbValue, encode_rdb};
+
+        let cfg = HarnessConfig::default_paths();
+        // Build a dump.rdb without spawning oracle_a — we don't need
+        // upstream to produce this fixture, only to load it.
+        let payload: Vec<u8> = b"frankenredis_lzf_payload-"[..]
+            .iter()
+            .copied()
+            .cycle()
+            .take(256)
+            .collect();
+        let entries = vec![RdbEntry {
+            db: 0,
+            key: b"lzf_value".to_vec(),
+            value: RdbValue::String(payload.clone()),
+            expire_ms: None,
+        }];
+        let bytes = encode_rdb(&entries, &[("redis-ver", "7.2.4")]);
+        assert!(
+            bytes.contains(&0xC3),
+            "expected LZF marker (0xC3) in encoded RDB",
+        );
+
+        let Some(oracle) =
+            VendoredRedis::spawn_with_dump(&cfg.oracle_root, &bytes, "1uin_lzf_save_loadback")
+                .expect("spawn vendored redis with fr-emitted lzf dump")
+        else {
+            // No vendored binary on this host — treat as SKIP, mirroring
+            // skip_if_no_oracle's behavior.
+            eprintln!(
+                "[SKIP] vendored redis-server unavailable; cannot verify LZF dump.rdb loadback"
+            );
+            return;
+        };
+        let oracle_cfg = oracle.oracle_config();
+        let mut conn = connect_live_redis(&oracle_cfg).expect("connect to oracle for lzf loadback");
+
+        // Confirm the long-string value loaded byte-identical.
+        let frame = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"GET".to_vec())),
+            RespFrame::BulkString(Some(b"lzf_value".to_vec())),
+        ]));
+        send_frame(&mut conn, &frame).expect("send GET lzf_value");
+        let reply = read_resp_frame_from_stream(&mut conn).expect("read GET reply");
+        assert_eq!(
+            reply,
+            RespFrame::BulkString(Some(payload.clone())),
+            "upstream loaded fr-emitted LZF dump.rdb but value drifted",
+        );
+    }
+
     #[test]
     fn blocking_multi_client_fixture_loads_with_send_only_and_read_pending() {
         let config = HarnessConfig::default_paths();
