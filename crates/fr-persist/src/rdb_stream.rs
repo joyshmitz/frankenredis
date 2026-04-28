@@ -148,7 +148,17 @@ fn encode_consumer_group(buf: &mut Vec<u8>, group: &RdbStreamConsumerGroup) -> O
     super::rdb_encode_string(buf, &group.name);
     super::rdb_encode_length(buf, usize::try_from(group.last_delivered_id_ms).ok()?);
     super::rdb_encode_length(buf, usize::try_from(group.last_delivered_id_seq).ok()?);
-    super::rdb_encode_length(buf, group.pending.len()); // entries_read approximation
+    // Upstream `t_stream.h::SCG_INVALID_ENTRIES_READ` is `-1` cast to a
+    // u64; emitting it tells `streamReplyWithRange` / XINFO STREAM FULL
+    // to fall back to `streamEstimateDistanceFromFirstEverEntry` for
+    // lag computation rather than trusting a count we don't track.
+    // Previously we emitted `group.pending.len()` here as an
+    // approximation, which is structurally wrong: `entries_read` is
+    // the cumulative count of entries the group has read (including
+    // acked ones), not the size of the unacked pending list — using
+    // the latter under-counts and inflates the upstream-side `lag`
+    // metric every time a group acks anything. (br-frankenredis-3njd)
+    super::rdb_encode_length(buf, usize::MAX);
 
     let mut pending_by_id: BTreeMap<(u64, u64), &RdbStreamPendingEntry> = BTreeMap::new();
     for pending in &group.pending {
@@ -1210,5 +1220,87 @@ mod tests {
         let err = decode_upstream_stream_skeleton(UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3, &payload)
             .unwrap_err();
         assert_eq!(err, UpstreamStreamError::MissingGlobalPelEntry);
+    }
+
+    /// Lock in the SCG_INVALID_ENTRIES_READ contract: when fr-persist
+    /// emits a type-21 consumer-group payload from in-memory state
+    /// (i.e. without retained `RdbStreamMetadata` upstream payload), it
+    /// must encode `entries_read` as the upstream sentinel `-1` (=
+    /// `u64::MAX` on the wire), NOT as `pending.len()`. The sentinel
+    /// signals to upstream's loadrdb path to fall back to lag-by-
+    /// distance estimation instead of trusting a count we don't
+    /// actually track. (br-frankenredis-3njd)
+    #[test]
+    fn encode_consumer_group_writes_scg_invalid_entries_read_sentinel() {
+        // Single group with 2 pending entries — the OLD (wrong) encoder
+        // would have written `2` for entries_read here.
+        let entries: Vec<super::StreamEntry> = vec![(10, 0, vec![(b"f".to_vec(), b"v".to_vec())])];
+        let groups = vec![RdbStreamConsumerGroup {
+            name: b"g".to_vec(),
+            last_delivered_id_ms: 10,
+            last_delivered_id_seq: 0,
+            consumers: vec![b"alice".to_vec()],
+            pending: vec![
+                RdbStreamPendingEntry {
+                    entry_id_ms: 10,
+                    entry_id_seq: 0,
+                    consumer: b"alice".to_vec(),
+                    deliveries: 1,
+                    last_delivered_ms: 100,
+                },
+                RdbStreamPendingEntry {
+                    entry_id_ms: 11,
+                    entry_id_seq: 0,
+                    consumer: b"alice".to_vec(),
+                    deliveries: 1,
+                    last_delivered_ms: 101,
+                },
+            ],
+        }];
+
+        let payload = encode_upstream_stream_listpacks3(&entries, Some((11, 0)), &groups)
+            .expect("encode type21 payload with consumer group");
+
+        // Byte-scan for the SCG_INVALID_ENTRIES_READ sentinel encoding:
+        // upstream `rdbSaveLen(u64::MAX)` falls into the `>UINT32_MAX`
+        // branch and emits `0x81` followed by 8-byte big-endian
+        // `0xFFFFFFFFFFFFFFFF`. That 9-byte sequence appears nowhere
+        // else in a well-formed stream payload, so its presence
+        // uniquely confirms the sentinel was emitted.
+        let needle: [u8; 9] = [0x81, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert!(
+            payload.windows(needle.len()).any(|w| w == needle),
+            "expected SCG_INVALID_ENTRIES_READ sentinel (0x81 + 8x0xFF) somewhere in the \
+             encoded payload; got {} bytes: {:?}",
+            payload.len(),
+            &payload[..payload.len().min(64)]
+        );
+
+        // OLD-behavior anti-test: the wrong encoder used to emit
+        // `pending.len() = 2` as a 1-byte length (0x02). Confirm that
+        // 0x02 isn't sitting at the consumer-group entries_read slot
+        // anymore. The slot directly follows last_delivered_id_seq
+        // (also 0x00 here for ms=10/seq=0 → encoded as 0x0A 0x00).
+        // This is a sanity probe, not a strict invariant.
+        let group_name_marker: &[u8] = &[0x01, b'g']; // rdb_encode_string("g")
+        let group_start = payload
+            .windows(2)
+            .position(|w| w == group_name_marker)
+            .expect("group name marker present");
+        // After name (2 bytes) + last_id.ms (1 byte: 0x0A) + last_id.seq
+        // (1 byte: 0x00), the next byte starts entries_read.
+        let entries_read_byte = payload[group_start + 4];
+        assert_eq!(
+            entries_read_byte, 0x81,
+            "entries_read slot should start with the 0x81 (64-bit length) marker, \
+             not the old buggy 0x02 (= pending.len()); got 0x{entries_read_byte:02X}"
+        );
+
+        // Round-trip is still consumed end-to-end (decoder discards
+        // entries_read so this still passes).
+        let (_, consumed) =
+            decode_upstream_stream_skeleton(UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3, &payload)
+                .expect("decode payload with sentinel entries_read");
+        assert_eq!(consumed, payload.len());
     }
 }
