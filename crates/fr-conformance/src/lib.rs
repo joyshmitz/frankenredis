@@ -8484,6 +8484,14 @@ mod tests {
                 ..LiveOracleConfig::default()
             }
         }
+
+        /// Path to the directory the spawned redis-server uses for its
+        /// `--dir` argument. Used by the RDB corpus harvester to read
+        /// `dump.rdb` after issuing a synchronous SAVE.
+        /// (br-frankenredis-8w1e)
+        fn data_dir(&self) -> &std::path::Path {
+            &self._tmp_dir
+        }
     }
 
     impl Drop for VendoredRedis {
@@ -10929,6 +10937,214 @@ mod tests {
         assert!(fixture.steps[0].expect.is_some());
         assert!(fixture.steps[2].expect_async.is_some());
         assert_eq!(fixture.steps[2].async_timeout_ms, Some(2000));
+    }
+
+    /// Step 1 of br-frankenredis-r73v (RDB+AOF round-trip parity):
+    /// harvest a corpus of upstream-produced `dump.rdb` files covering
+    /// every RDB type tag `fr-persist::decode_rdb` is expected to
+    /// accept, and verify each loads cleanly.
+    ///
+    /// Spawns the vendored redis-server, populates ten distinct shapes
+    /// — each crafted to land on a specific RDB type byte — issues a
+    /// synchronous `SAVE`, reads `dump.rdb` from `--dir`, and pushes
+    /// the bytes through `fr_persist::decode_rdb`. The shapes exercise:
+    ///
+    /// * `RDB_TYPE_STRING` (0) raw + integer-encoded
+    /// * `RDB_TYPE_LIST_QUICKLIST_2` (18)
+    /// * `RDB_TYPE_SET_INTSET` (11), `RDB_TYPE_SET_LISTPACK` (20),
+    ///   `RDB_TYPE_SET` (2)
+    /// * `RDB_TYPE_HASH_LISTPACK` (16) and `RDB_TYPE_HASH` (4)
+    /// * `RDB_TYPE_ZSET_LISTPACK` (17) and `RDB_TYPE_ZSET_2` (5)
+    /// * `RDB_TYPE_STREAM_LISTPACKS_3` (21) with a consumer group
+    ///
+    /// Acceptance: `decode_rdb` returns Ok with one entry per seeded
+    /// key; the auxiliary fields parse without error. This is the
+    /// minimal "load upstream-produced .rdb cleanly" half of r73v
+    /// step 1; the re-emit + `redis-server --loadrdb` cross-impl gate
+    /// is tracked separately. (br-frankenredis-8w1e)
+    #[test]
+    fn live_redis_rdb_corpus_decodes_cleanly() {
+        use fr_persist::decode_rdb;
+
+        let cfg = HarnessConfig::default_paths();
+        let Some(oracle_handle) = skip_if_no_oracle(&cfg) else {
+            return;
+        };
+        let oracle = oracle_handle.oracle_config();
+        let dump_path = oracle_handle.data_dir().join("dump.rdb");
+
+        let mut conn =
+            connect_live_redis(&oracle).expect("connect to vendored redis for rdb corpus harvest");
+        flushall(&mut conn).expect("flushall on oracle");
+
+        // hash-max-listpack-entries default is 512 upstream; we need to
+        // push past that to force RDB_TYPE_HASH (4). Same threshold for
+        // sets/zsets at 128, but those are easier to overshoot.
+        fn send_owned(
+            conn: &mut std::net::TcpStream,
+            argv: Vec<Vec<u8>>,
+            ctx: &str,
+        ) {
+            let frame = RespFrame::Array(Some(
+                argv.into_iter()
+                    .map(|a| RespFrame::BulkString(Some(a)))
+                    .collect(),
+            ));
+            send_frame(conn, &frame).unwrap_or_else(|e| panic!("send {ctx}: {e}"));
+            let reply = read_resp_frame_from_stream(conn)
+                .unwrap_or_else(|e| panic!("read {ctx}: {e}"));
+            match reply {
+                RespFrame::SimpleString(_)
+                | RespFrame::Integer(_)
+                | RespFrame::BulkString(Some(_)) => {}
+                RespFrame::Error(err) => panic!("{ctx}: oracle returned error: {err}"),
+                other => panic!("{ctx}: unexpected reply: {other:?}"),
+            }
+        }
+        fn argv(parts: &[&[u8]]) -> Vec<Vec<u8>> {
+            parts.iter().map(|p| p.to_vec()).collect()
+        }
+
+        // RDB_TYPE_STRING raw + integer-encoded (the integer encoding
+        // is chosen automatically by upstream based on numeric content).
+        send_owned(&mut conn, argv(&[b"SET", b"str_raw", b"hello world"]), "set_raw");
+        send_owned(&mut conn, argv(&[b"SET", b"str_int", b"4242"]), "set_int");
+
+        // RDB_TYPE_LIST_QUICKLIST_2 (18). Upstream always uses quicklist
+        // for lists; small ones still produce type 18 with a single
+        // listpack node.
+        send_owned(
+            &mut conn,
+            argv(&[b"RPUSH", b"list_small", b"a", b"b", b"c"]),
+            "rpush_small",
+        );
+
+        // RDB_TYPE_SET_INTSET (11): all-integer members below the
+        // set-max-intset-entries threshold (512).
+        send_owned(
+            &mut conn,
+            argv(&[b"SADD", b"set_intset", b"1", b"2", b"3", b"4", b"5"]),
+            "sadd_intset",
+        );
+        // RDB_TYPE_SET_LISTPACK (20): non-integer members <= 128.
+        send_owned(
+            &mut conn,
+            argv(&[b"SADD", b"set_listpack", b"alpha", b"beta", b"gamma"]),
+            "sadd_listpack",
+        );
+        // RDB_TYPE_SET (2): >128 non-integer members forces hashtable.
+        let mut sadd_big: Vec<Vec<u8>> = vec![b"SADD".to_vec(), b"set_hashtable".to_vec()];
+        for i in 0..150_u32 {
+            sadd_big.push(format!("m{i:04}").into_bytes());
+        }
+        send_owned(&mut conn, sadd_big, "sadd_big");
+
+        // RDB_TYPE_HASH_LISTPACK (16): small hash.
+        send_owned(
+            &mut conn,
+            argv(&[b"HSET", b"hash_lp", b"f1", b"v1", b"f2", b"v2"]),
+            "hset_small",
+        );
+        // RDB_TYPE_HASH (4): >512 fields forces hashtable on upstream
+        // 7.2 (hash-max-listpack-entries default 512).
+        let mut hset_big: Vec<Vec<u8>> = vec![b"HSET".to_vec(), b"hash_ht".to_vec()];
+        for i in 0..520_u32 {
+            hset_big.push(format!("f{i:04}").into_bytes());
+            hset_big.push(b"v".to_vec());
+        }
+        send_owned(&mut conn, hset_big, "hset_big");
+
+        // RDB_TYPE_ZSET_LISTPACK (17): small zset.
+        send_owned(
+            &mut conn,
+            argv(&[b"ZADD", b"zset_lp", b"1.0", b"a", b"2.5", b"b", b"7.25", b"c"]),
+            "zadd_small",
+        );
+        // RDB_TYPE_ZSET_2 (5): >128 members.
+        let mut zadd_big: Vec<Vec<u8>> = vec![b"ZADD".to_vec(), b"zset_skiplist".to_vec()];
+        for i in 0..150_u32 {
+            zadd_big.push(format!("{i}").into_bytes());
+            zadd_big.push(format!("m{i:04}").into_bytes());
+        }
+        send_owned(&mut conn, zadd_big, "zadd_big");
+
+        // RDB_TYPE_STREAM_LISTPACKS_3 (21): stream + consumer group.
+        send_owned(
+            &mut conn,
+            argv(&[b"XADD", b"stream1", b"100-0", b"field1", b"value1"]),
+            "xadd_1",
+        );
+        send_owned(
+            &mut conn,
+            argv(&[b"XADD", b"stream1", b"200-0", b"k", b"v"]),
+            "xadd_2",
+        );
+        send_owned(
+            &mut conn,
+            argv(&[b"XGROUP", b"CREATE", b"stream1", b"grp1", b"0"]),
+            "xgroup_create",
+        );
+
+        // Trigger synchronous SAVE — writes <data_dir>/dump.rdb. The
+        // SAVE command works regardless of the auto-snapshot config.
+        send_owned(&mut conn, argv(&[b"SAVE"]), "save");
+
+        let bytes = std::fs::read(&dump_path).unwrap_or_else(|e| {
+            panic!(
+                "failed to read upstream-produced dump.rdb at {}: {e}",
+                dump_path.display()
+            )
+        });
+        assert!(
+            bytes.starts_with(b"REDIS"),
+            "dump.rdb should start with REDIS magic, got {:?}",
+            &bytes[..bytes.len().min(8)]
+        );
+
+        let (entries, aux) = decode_rdb(&bytes).unwrap_or_else(|e| {
+            panic!(
+                "fr_persist::decode_rdb rejected upstream-produced dump.rdb \
+                 ({} bytes): {e:?}",
+                bytes.len()
+            )
+        });
+
+        // Confirm we recovered every seeded key. We don't assert exact
+        // value equality (some shapes — listpack-encoded strings,
+        // intset, stream consumer groups — are tested for shape parity
+        // elsewhere); this gate only asserts decode-clean-ness.
+        let recovered_keys: BTreeSet<Vec<u8>> =
+            entries.iter().map(|e| e.key.clone()).collect();
+        let expected_keys: &[&[u8]] = &[
+            b"str_raw",
+            b"str_int",
+            b"list_small",
+            b"set_intset",
+            b"set_listpack",
+            b"set_hashtable",
+            b"hash_lp",
+            b"hash_ht",
+            b"zset_lp",
+            b"zset_skiplist",
+            b"stream1",
+        ];
+        for k in expected_keys {
+            assert!(
+                recovered_keys.contains(*k as &[u8]),
+                "fr_persist::decode_rdb did not recover key {:?}; recovered: {:?}",
+                std::str::from_utf8(k).unwrap_or("?"),
+                recovered_keys
+                    .iter()
+                    .map(|k| String::from_utf8_lossy(k).into_owned())
+                    .collect::<Vec<_>>()
+            );
+        }
+        // Auxiliary fields baked into every upstream RDB header.
+        assert!(
+            aux.contains_key("redis-ver"),
+            "expected aux 'redis-ver' from upstream-produced rdb, got: {:?}",
+            aux.keys().collect::<Vec<_>>()
+        );
     }
 
     #[test]
