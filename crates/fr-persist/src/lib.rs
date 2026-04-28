@@ -2827,8 +2827,8 @@ mod tests {
         RDB_TYPE_LIST_QUICKLIST_2, RDB_TYPE_SET_INTSET, RDB_TYPE_SET_LISTPACK, RDB_TYPE_STRING,
         RDB_TYPE_ZSET_LISTPACK, RdbEntry, RdbStreamConsumerGroup, RdbStreamMetadata,
         RdbStreamPendingEntry, RdbValue, UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3, crc64_redis,
-        decode_intset_members, decode_rdb, decode_rdb_prefix, encode_rdb, lzf_decompress,
-        rdb_encode_length, rdb_encode_string,
+        decode_intset_members, decode_rdb, decode_rdb_prefix, encode_rdb, lzf_compress,
+        lzf_decompress, rdb_decode_string, rdb_encode_length, rdb_encode_string,
     };
 
     fn append_rdb_checksum(encoded: &mut Vec<u8>) {
@@ -3282,8 +3282,6 @@ mod tests {
     }
 
     // ── LZF encoder tests (br-frankenredis-1uin) ───────────────────────
-
-    use super::lzf_compress;
 
     #[test]
     fn lzf_compress_round_trips_repetitive_payload() {
@@ -4721,6 +4719,105 @@ mod tests {
                 let expected_aux: BTreeMap<String, String> = aux_fields.into_iter().collect();
                 prop_assert_eq!(decoded_entries, entries);
                 prop_assert_eq!(decoded_aux, expected_aux);
+            }
+        }
+
+        // ── LZF encoder fuzz (br-frankenredis-xmr8 follow-up) ──────────
+        //
+        // Property-based coverage of the LZF compressor — the round-trip
+        // identity, never-panic on arbitrary input, and budget-rejection
+        // contract. Compression itself is generative (subject to the
+        // input's compressibility and the budget), so the strategy
+        // mixes pure-random byte vectors (low compressibility) with
+        // repetition-heavy mosaics (high compressibility) so both code
+        // paths in the encoder (literal-only and backref) are exercised.
+
+        fn lzf_input_strategy(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
+            // Three flavors:
+            //   1. Random bytes
+            //   2. Repeated byte (always compresses well)
+            //   3. Tile of small random pattern (also compresses well)
+            prop_oneof![
+                prop::collection::vec(any::<u8>(), 0..=max_len),
+                (any::<u8>(), 0..=max_len).prop_map(|(b, len)| vec![b; len]),
+                (
+                    prop::collection::vec(any::<u8>(), 1..=8),
+                    1..=(max_len.max(1) / 4 + 1),
+                )
+                    .prop_map(|(pattern, reps)| {
+                        let mut out = Vec::with_capacity(pattern.len() * reps);
+                        for _ in 0..reps {
+                            out.extend_from_slice(&pattern);
+                        }
+                        out
+                    }),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1024))]
+
+            /// LZF compress never panics on arbitrary input + budget combinations.
+            #[test]
+            fn lzf_compress_never_panics(
+                input in lzf_input_strategy(2048),
+                budget in 0usize..=8192,
+            ) {
+                let _ = lzf_compress(&input, budget);
+            }
+
+            /// Round-trip identity: when lzf_compress succeeds, lzf_decompress
+            /// must reconstruct the original input byte-for-byte.
+            #[test]
+            fn lzf_compress_decompress_round_trips(
+                input in lzf_input_strategy(4096),
+            ) {
+                // Use a generous budget so the encoder doesn't spuriously
+                // reject; we're stressing the round-trip, not the budget.
+                let budget = input.len() * 2 + 64;
+                if let Some(compressed) = lzf_compress(&input, budget) {
+                    let restored = lzf_decompress(&compressed, input.len());
+                    prop_assert!(
+                        restored.is_some(),
+                        "round-trip decode failed for input.len()={}, compressed.len()={}",
+                        input.len(),
+                        compressed.len(),
+                    );
+                    prop_assert_eq!(restored.unwrap(), input.clone());
+                }
+            }
+
+            /// Budget contract: when lzf_compress returns Some, the output
+            /// length is strictly within the caller's budget.
+            #[test]
+            fn lzf_compress_respects_budget(
+                input in lzf_input_strategy(2048),
+                budget in 1usize..=4096,
+            ) {
+                if let Some(compressed) = lzf_compress(&input, budget) {
+                    prop_assert!(
+                        compressed.len() <= budget,
+                        "encoder returned Some({}) but exceeded budget {}",
+                        compressed.len(),
+                        budget,
+                    );
+                }
+            }
+
+            /// rdb_encode_string + rdb_decode_string round-trips for any
+            /// byte vector, regardless of whether the LZF heuristic chose
+            /// the compressed or raw form. This is the production
+            /// invariant that matters: encoders and decoders agree.
+            #[test]
+            fn rdb_encode_decode_string_round_trips(
+                input in lzf_input_strategy(8192),
+            ) {
+                let mut buf = Vec::new();
+                rdb_encode_string(&mut buf, &input);
+                let (decoded, consumed) = rdb_decode_string(&buf)
+                    .expect("rdb_decode_string must succeed on rdb_encode_string output");
+                prop_assert_eq!(decoded, input.clone(), "round-trip drift");
+                prop_assert_eq!(consumed, buf.len(), "decoder must consume exactly the encoded bytes");
             }
         }
     }
