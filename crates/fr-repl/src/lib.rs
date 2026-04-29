@@ -453,6 +453,194 @@ mod tests {
         );
     }
 
+    /// Lock the contract for the structured corpus seeds in
+    /// `fuzz/corpus/fuzz_psync_reply/`. The fuzz harness dispatches
+    /// the first byte two ways (`% 2`):
+    ///
+    ///   0 → fuzz_raw_psync_reply (body fed to parse_psync_reply)
+    ///   1 → fuzz_structured_psync_reply (arbitrary)
+    ///
+    /// The seed generator (`fuzz/scripts/gen_psync_reply_seeds.py`)
+    /// writes mode-0 seeds covering each shape boundary
+    /// `parse_psync_reply` cares about. This test asserts:
+    ///
+    ///   1. Every "accept" seed produces the expected `PsyncReply`
+    ///      enum value, AND the round-trip-via-canonical-form
+    ///      property the fuzz target asserts also holds.
+    ///   2. Every "reject" seed fails with
+    ///      `ReplError::PsyncReplyStateMismatch` so libfuzzer
+    ///      doesn't get stuck on phantom successes if the parser
+    ///      ever drifts.
+    #[test]
+    fn fuzz_psync_reply_corpus_matches_documented_contract() {
+        use std::path::Path;
+
+        let corpus_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/fuzz_psync_reply");
+        if !corpus_root.exists() {
+            // Corpus is committed; skip if a packaged checkout
+            // strips the fuzz tree.
+            return;
+        }
+
+        // Each seed file is `<mode-byte><body>`. Strip the leading
+        // mode byte (always 0x00 for these seeds — selects the raw
+        // path) before feeding to parse_psync_reply.
+        fn read_body(corpus_root: &Path, name: &str) -> String {
+            let bytes = std::fs::read(corpus_root.join(name))
+                .unwrap_or_else(|err| panic!("read seed {name}: {err}"));
+            assert!(!bytes.is_empty(), "seed {name} is empty");
+            assert_eq!(
+                bytes[0], 0x00,
+                "seed {name} mode byte must be 0x00 (raw_psync_reply path)",
+            );
+            String::from_utf8_lossy(&bytes[1..]).into_owned()
+        }
+
+        // ── Accept-class seeds: must produce the listed reply.
+        // Each pair is (seed_name, expected_reply).
+        let accepts: &[(&str, PsyncReply)] = &[
+            ("continue_canonical.txt", PsyncReply::Continue),
+            ("continue_with_psync2_replid.txt", PsyncReply::Continue),
+            ("continue_leading_tab.txt", PsyncReply::Continue),
+            ("continue_trailing_crlf.txt", PsyncReply::Continue),
+            (
+                "fullresync_canonical_offset_zero.txt",
+                PsyncReply::FullResync {
+                    replid: "1234567890abcdef1234567890abcdef12345678".to_string(),
+                    offset: ReplOffset(0),
+                },
+            ),
+            (
+                "fullresync_canonical_offset_typical.txt",
+                PsyncReply::FullResync {
+                    replid: "1234567890abcdef1234567890abcdef12345678".to_string(),
+                    offset: ReplOffset(4096),
+                },
+            ),
+            (
+                "fullresync_canonical_offset_max_u64.txt",
+                PsyncReply::FullResync {
+                    replid: "1234567890abcdef1234567890abcdef12345678".to_string(),
+                    offset: ReplOffset(u64::MAX),
+                },
+            ),
+            (
+                "fullresync_multi_whitespace_separators.txt",
+                PsyncReply::FullResync {
+                    replid: "abc".to_string(),
+                    offset: ReplOffset(100),
+                },
+            ),
+            (
+                "fullresync_with_newlines_between_tokens.txt",
+                PsyncReply::FullResync {
+                    replid: "abcd".to_string(),
+                    offset: ReplOffset(42),
+                },
+            ),
+            (
+                "fullresync_one_char_replid.txt",
+                PsyncReply::FullResync {
+                    replid: "a".to_string(),
+                    offset: ReplOffset(0),
+                },
+            ),
+            (
+                "fullresync_long_replid.txt",
+                PsyncReply::FullResync {
+                    replid: "a".repeat(200),
+                    offset: ReplOffset(0),
+                },
+            ),
+            (
+                "fullresync_numeric_replid.txt",
+                PsyncReply::FullResync {
+                    replid: "12345".to_string(),
+                    offset: ReplOffset(100),
+                },
+            ),
+            (
+                "fullresync_replid_with_punctuation.txt",
+                PsyncReply::FullResync {
+                    replid: "repl-id_with.dashes".to_string(),
+                    offset: ReplOffset(100),
+                },
+            ),
+        ];
+
+        // Mirror the harness' canonical-round-trip property: any
+        // accepted reply must parse back from its canonical form.
+        fn canonical(reply: &PsyncReply) -> String {
+            match reply {
+                PsyncReply::Continue => "CONTINUE".to_string(),
+                PsyncReply::FullResync { replid, offset } => {
+                    format!("FULLRESYNC {replid} {}", offset.0)
+                }
+            }
+        }
+
+        for (name, expected) in accepts {
+            let body = read_body(&corpus_root, name);
+            let parsed =
+                parse_psync_reply(&body).unwrap_or_else(|err| panic!("seed {name}: {err:?}"));
+            assert_eq!(&parsed, expected, "seed {name} parse mismatch");
+            // Canonical round-trip property the fuzz target asserts.
+            assert_eq!(
+                parse_psync_reply(&canonical(&parsed)).as_ref(),
+                Ok(expected),
+                "seed {name} canonical round-trip broke",
+            );
+        }
+
+        // ── Reject-class seeds: must produce
+        // ReplError::PsyncReplyStateMismatch.
+        let rejects: &[&str] = &[
+            "empty.txt",
+            "whitespace_only_space.txt",
+            "whitespace_only_tab.txt",
+            "whitespace_only_crlf.txt",
+            "continue_lowercase.txt",
+            "continue_mixedcase.txt",
+            "fullresync_lowercase.txt",
+            "fullresync_missing_replid_and_offset.txt",
+            "fullresync_missing_offset.txt",
+            "fullresync_offset_negative.txt",
+            "fullresync_offset_overflow_u64.txt",
+            "fullresync_offset_nonnumeric.txt",
+            "fullresync_extra_trailing_token.txt",
+            "fullresync_extra_double_trailing_tokens.txt",
+            "continue_with_extra_token.txt",
+            "continue_with_three_extras.txt",
+            "first_token_unknown.txt",
+            "first_token_empty_after_resp_prefix.txt",
+        ];
+        for name in rejects {
+            let body = read_body(&corpus_root, name);
+            let err = parse_psync_reply(&body)
+                .unwrap_err_or_else_keep_compat(&format!("seed {name} must reject"));
+            assert!(
+                matches!(err, ReplError::PsyncReplyStateMismatch { .. }),
+                "seed {name} surfaced unexpected error variant: {err:?}",
+            );
+        }
+    }
+
+    /// Tiny helper kept inside the test module — Result has no
+    /// `unwrap_err_or_else_keep_compat`; this just makes the panic
+    /// message richer than the default `unwrap_err`.
+    trait UnwrapErrWithMsg<T, E> {
+        fn unwrap_err_or_else_keep_compat(self, msg: &str) -> E;
+    }
+    impl<T: std::fmt::Debug, E> UnwrapErrWithMsg<T, E> for Result<T, E> {
+        fn unwrap_err_or_else_keep_compat(self, msg: &str) -> E {
+            match self {
+                Ok(v) => panic!("{msg}: but got Ok({v:?})"),
+                Err(e) => e,
+            }
+        }
+    }
+
     #[test]
     fn parse_psync_reply_rejects_invalid_shape() {
         assert!(parse_psync_reply("CONTINUE replid extra").is_err());
