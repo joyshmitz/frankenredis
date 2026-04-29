@@ -11970,7 +11970,8 @@ mod tests {
             "zadd zset_obj",
         );
 
-        // Pre-state probes — used to check parity post-load.
+        // Base-state probes — these writes should be represented in
+        // the rewritten base RDB that the AOF manifest points at.
         let pre_str = send_command(&mut conn_a, argv(&[b"GET", b"str_raw"]), "get str_raw");
         let pre_llen = send_command(
             &mut conn_a,
@@ -12008,8 +12009,15 @@ mod tests {
         // Trigger BGREWRITEAOF so upstream rebuilds the AOF into a
         // consolidated base RDB + (typically empty) incr tail. The
         // rewrite is async; poll INFO PERSISTENCE until
-        // aof_rewrite_in_progress flips back to 0.
+        // aof_rewrite_in_progress flips back to 0 and the manifest
+        // points at a base file. Checking the manifest avoids a race
+        // where the first INFO poll sees 0 before the child rewrite has
+        // started, making later writes part of the base rather than the
+        // incremental tail this gate is meant to exercise.
         send_command(&mut conn_a, argv(&[b"BGREWRITEAOF"]), "bgrewriteaof");
+        let rewrite_manifest_path = tmp_a_dir
+            .join("appendonlydir")
+            .join("appendonly.aof.manifest");
         let rewrite_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             if std::time::Instant::now() >= rewrite_deadline {
@@ -12024,11 +12032,84 @@ mod tests {
                 panic!("INFO must reply with a bulk string");
             };
             let text = String::from_utf8_lossy(&text_bytes);
-            if text.contains("aof_rewrite_in_progress:0") {
+            let manifest_has_base = std::fs::read_to_string(&rewrite_manifest_path)
+                .ok()
+                .and_then(|contents| parse_aof_manifest(&contents).ok())
+                .is_some_and(|manifest| manifest.base.is_some());
+            if text.contains("aof_rewrite_in_progress:0") && manifest_has_base {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+
+        // Post-rewrite writes must land in the incremental AOF tail,
+        // not just the base RDB. Cover the explicit ri1u acceptance
+        // surface: SELECT-driven multi-DB state, EXPIREAT timing, and
+        // MULTI/EXEC transaction blocks.
+        send_command(
+            &mut conn_a,
+            argv(&[b"SET", b"post_rewrite_raw", b"tail-value"]),
+            "set post_rewrite_raw",
+        );
+        send_command(
+            &mut conn_a,
+            argv(&[b"SET", b"expire_key", b"ttl-value"]),
+            "set expire_key",
+        );
+        send_command(
+            &mut conn_a,
+            argv(&[b"EXPIREAT", b"expire_key", b"2000000000"]),
+            "expireat expire_key",
+        );
+        send_command(&mut conn_a, argv(&[b"MULTI"]), "multi");
+        send_command(
+            &mut conn_a,
+            argv(&[b"SET", b"tx_str", b"tx-value"]),
+            "multi set tx_str",
+        );
+        send_command(
+            &mut conn_a,
+            argv(&[b"RPUSH", b"tx_list", b"x", b"y"]),
+            "multi rpush tx_list",
+        );
+        send_command(&mut conn_a, argv(&[b"EXEC"]), "exec");
+        send_command(&mut conn_a, argv(&[b"SELECT", b"1"]), "select db1");
+        send_command(
+            &mut conn_a,
+            argv(&[b"SET", b"db1_str", b"db-one"]),
+            "set db1_str",
+        );
+        send_command(
+            &mut conn_a,
+            argv(&[b"RPUSH", b"db1_list", b"one", b"two"]),
+            "rpush db1_list",
+        );
+        send_command(&mut conn_a, argv(&[b"SELECT", b"0"]), "select db0");
+
+        let pre_post_rewrite = send_command(
+            &mut conn_a,
+            argv(&[b"GET", b"post_rewrite_raw"]),
+            "get post_rewrite_raw",
+        );
+        let pre_expiretime = send_command(
+            &mut conn_a,
+            argv(&[b"EXPIRETIME", b"expire_key"]),
+            "expiretime expire_key",
+        );
+        let pre_tx_str = send_command(&mut conn_a, argv(&[b"GET", b"tx_str"]), "get tx_str");
+        let pre_tx_lrange = send_command(
+            &mut conn_a,
+            argv(&[b"LRANGE", b"tx_list", b"0", b"-1"]),
+            "lrange tx_list",
+        );
+        send_command(&mut conn_a, argv(&[b"SELECT", b"1"]), "pre select db1");
+        let pre_db1_str = send_command(&mut conn_a, argv(&[b"GET", b"db1_str"]), "get db1_str");
+        let pre_db1_lrange = send_command(
+            &mut conn_a,
+            argv(&[b"LRANGE", b"db1_list", b"0", b"-1"]),
+            "lrange db1_list",
+        );
+        send_command(&mut conn_a, argv(&[b"SELECT", b"0"]), "pre select db0");
 
         // SHUTDOWN NOSAVE flushes the manifest + AOF files. The
         // server then exits; the connection drops without a reply.
@@ -12080,6 +12161,10 @@ mod tests {
         // the records portion (preserving any RDB preamble that
         // upstream emits at the head of the file).
         let mut new_manifest = AofManifest::default();
+        let mut saw_incremental_select = false;
+        let mut saw_incremental_expire_command = false;
+        let mut saw_incremental_multi = false;
+        let mut saw_incremental_exec = false;
         for entry in manifest_a.replay_entries() {
             let src = aof_dir_a.join(&entry.file_name);
             match entry.file_type {
@@ -12111,6 +12196,17 @@ mod tests {
                         let stream = decode_aof_replay_stream(&bytes).unwrap_or_else(|e| {
                             panic!("decode oracle_a incr {}: {e:?}", src.display())
                         });
+                        for replay_record in &stream.records {
+                            let Some(command) = replay_record.record.argv.first() else {
+                                continue;
+                            };
+                            saw_incremental_select |= command.eq_ignore_ascii_case(b"SELECT");
+                            saw_incremental_expire_command |= command
+                                .eq_ignore_ascii_case(b"EXPIREAT")
+                                || command.eq_ignore_ascii_case(b"PEXPIREAT");
+                            saw_incremental_multi |= command.eq_ignore_ascii_case(b"MULTI");
+                            saw_incremental_exec |= command.eq_ignore_ascii_case(b"EXEC");
+                        }
                         let records: Vec<_> =
                             stream.records.into_iter().map(|r| r.record).collect();
                         encode_aof_stream(&records)
@@ -12131,6 +12227,15 @@ mod tests {
                 }
             }
         }
+        assert!(
+            saw_incremental_select
+                && saw_incremental_expire_command
+                && saw_incremental_multi
+                && saw_incremental_exec,
+            "oracle_a incremental AOF tail must contain SELECT, EXPIREAT/PEXPIREAT, MULTI, and EXEC records \
+             (select={saw_incremental_select}, expire={saw_incremental_expire_command}, \
+             multi={saw_incremental_multi}, exec={saw_incremental_exec})",
+        );
 
         // Drop the re-emitted manifest into place.
         let manifest_path_b = aof_dir_b.join("appendonly.aof.manifest");
@@ -12171,6 +12276,31 @@ mod tests {
             argv(&[b"ZRANGE", b"zset_obj", b"0", b"-1", b"WITHSCORES"]),
             "post zrange",
         );
+        let post_post_rewrite = send_command(
+            &mut conn_b,
+            argv(&[b"GET", b"post_rewrite_raw"]),
+            "post get post_rewrite_raw",
+        );
+        let post_expiretime = send_command(
+            &mut conn_b,
+            argv(&[b"EXPIRETIME", b"expire_key"]),
+            "post expiretime expire_key",
+        );
+        let post_tx_str = send_command(&mut conn_b, argv(&[b"GET", b"tx_str"]), "post get tx_str");
+        let post_tx_lrange = send_command(
+            &mut conn_b,
+            argv(&[b"LRANGE", b"tx_list", b"0", b"-1"]),
+            "post lrange tx_list",
+        );
+        send_command(&mut conn_b, argv(&[b"SELECT", b"1"]), "post select db1");
+        let post_db1_str =
+            send_command(&mut conn_b, argv(&[b"GET", b"db1_str"]), "post get db1_str");
+        let post_db1_lrange = send_command(
+            &mut conn_b,
+            argv(&[b"LRANGE", b"db1_list", b"0", b"-1"]),
+            "post lrange db1_list",
+        );
+        send_command(&mut conn_b, argv(&[b"SELECT", b"0"]), "post select db0");
 
         assert_eq!(pre_str, post_str, "GET drifted across AOF round-trip");
         assert_eq!(pre_llen, post_llen, "LLEN drifted across AOF round-trip");
@@ -12190,6 +12320,30 @@ mod tests {
         assert_eq!(
             pre_zrange, post_zrange,
             "ZRANGE drifted across AOF round-trip"
+        );
+        assert_eq!(
+            pre_post_rewrite, post_post_rewrite,
+            "post-rewrite GET drifted across incremental AOF round-trip"
+        );
+        assert_eq!(
+            pre_expiretime, post_expiretime,
+            "EXPIRETIME drifted across incremental AOF round-trip"
+        );
+        assert_eq!(
+            pre_tx_str, post_tx_str,
+            "MULTI/EXEC string write drifted across incremental AOF round-trip"
+        );
+        assert_eq!(
+            pre_tx_lrange, post_tx_lrange,
+            "MULTI/EXEC list write drifted across incremental AOF round-trip"
+        );
+        assert_eq!(
+            pre_db1_str, post_db1_str,
+            "DB1 GET drifted across SELECT-bearing AOF round-trip"
+        );
+        assert_eq!(
+            pre_db1_lrange, post_db1_lrange,
+            "DB1 LRANGE drifted across SELECT-bearing AOF round-trip"
         );
 
         let _ = std::fs::remove_dir_all(&tmp_a_dir);
