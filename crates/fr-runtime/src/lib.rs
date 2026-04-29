@@ -2491,6 +2491,10 @@ impl ExecutionSource {
 
 fn preserve_store_load_context(replacement: &mut Store, original: &Store) {
     replacement.set_aof_enabled(original.aof_enabled);
+    replacement.cluster_enabled = original.cluster_enabled;
+    replacement
+        .cluster_assigned_slots
+        .clone_from(&original.cluster_assigned_slots);
     replacement
         .server_run_id
         .clone_from(&original.server_run_id);
@@ -2499,6 +2503,7 @@ fn preserve_store_load_context(replacement: &mut Store, original: &Store) {
         .clone_from(&original.cluster_shard_id);
     replacement.server_pid = original.server_pid;
     replacement.server_port = original.server_port;
+    replacement.sentinel_mode = original.sentinel_mode;
 }
 
 const MAX_COMMAND_ARITY: usize = 1024 * 1024;
@@ -18324,6 +18329,9 @@ mod tests {
 
         let mut rt = Runtime::default_strict();
         rt.set_server_port(6380);
+        rt.server.store.sentinel_mode = true;
+        rt.server.store.cluster_enabled = true;
+        rt.server.store.cluster_assigned_slots.insert(42);
         let run_id = rt.server.store.server_run_id.clone();
         rt.set_aof_path(aof_path);
 
@@ -18331,6 +18339,9 @@ mod tests {
         assert_eq!(loaded, records.len());
         assert_eq!(rt.server_port(), 6380);
         assert_eq!(rt.server.store.server_run_id, run_id);
+        assert!(rt.server.store.sentinel_mode);
+        assert!(rt.server.store.cluster_enabled);
+        assert!(rt.server.store.cluster_assigned_slots.contains(&42));
 
         let info = rt.execute_frame(command(&[b"INFO", b"server"]), 100);
         let RespFrame::BulkString(Some(info_bytes)) = info else {
@@ -18339,6 +18350,14 @@ mod tests {
         let info = String::from_utf8(info_bytes).expect("utf8 info");
         assert!(info.contains("tcp_port:6380\r\n"), "{info}");
         assert!(info.contains(&format!("run_id:{run_id}\r\n")), "{info}");
+
+        let sentinel = rt.execute_frame(command(&[b"SENTINEL", b"MASTERS"]), 100);
+        assert_eq!(sentinel, RespFrame::Array(Some(vec![])));
+        let cluster = rt.execute_frame(command(&[b"CLUSTER", b"MYID"]), 100);
+        assert_eq!(
+            cluster,
+            RespFrame::BulkString(Some(run_id.as_bytes().to_vec()))
+        );
     }
 
     #[test]
