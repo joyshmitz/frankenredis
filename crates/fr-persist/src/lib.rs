@@ -3200,6 +3200,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn aof_manifest_fuzz_corpus_seeds_parse_or_reject_cleanly()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let corpus_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/fuzz_aof_manifest_parser");
+        assert!(
+            corpus_root.exists(),
+            "fuzz corpus dir {} not present",
+            corpus_root.display()
+        );
+
+        let mut seed_paths = std::fs::read_dir(&corpus_root)
+            .map_err(|err| format!("read corpus dir {}: {err}", corpus_root.display()))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        seed_paths.sort();
+        seed_paths.retain(|path| path.is_file());
+        assert!(
+            seed_paths.len() >= 10,
+            "expected at least 10 AOF manifest parser fuzz seeds, found {}",
+            seed_paths.len()
+        );
+
+        for path in seed_paths {
+            let bytes = std::fs::read(&path)
+                .map_err(|err| format!("read seed {}: {err}", path.display()))?;
+            if bytes.len() > 1_000_000 {
+                continue;
+            }
+            let Ok(text) = std::str::from_utf8(&bytes) else {
+                continue;
+            };
+
+            if let Ok(manifest) = parse_aof_manifest(text) {
+                let formatted = format_aof_manifest(&manifest);
+                assert_eq!(
+                    parse_aof_manifest(&formatted).map_err(|err| format!(
+                        "reparse formatted seed {}: {err:?}",
+                        path.display()
+                    ))?,
+                    manifest,
+                    "formatted manifest did not round-trip for {}",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    }
+
     // ── RDB tests ────────────────────────────────────────────────────
 
     use super::{
