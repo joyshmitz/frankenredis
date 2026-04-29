@@ -15,6 +15,30 @@ pub enum RespFrame {
     Sequence(Vec<RespFrame>),
 }
 
+/// Sanitize bytes destined for an inline RESP frame body (`SimpleString`
+/// or `Error`). RESP inline frames are terminated by the first `\r\n`,
+/// so any embedded `\r` or `\n` in the payload would split the frame
+/// and let bytes after the split be re-parsed by the peer as a separate
+/// reply — a CRLF-injection / frame-smuggling primitive when the body
+/// is built from user-controlled input via `format!()`. Mirrors
+/// upstream Redis' `_addReplyErrorFormat` which does
+/// `sdsmapchars(s, "\r\n", "  ", 2)` for the same reason.
+fn push_inline_sanitized(out: &mut Vec<u8>, body: &[u8]) {
+    let needs_sanitize = body.iter().any(|&b| b == b'\r' || b == b'\n');
+    if !needs_sanitize {
+        out.extend_from_slice(body);
+        return;
+    }
+    out.reserve(body.len());
+    for &b in body {
+        if b == b'\r' || b == b'\n' {
+            out.push(b' ');
+        } else {
+            out.push(b);
+        }
+    }
+}
+
 impl RespFrame {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -28,12 +52,12 @@ impl RespFrame {
         match self {
             Self::SimpleString(s) => {
                 out.extend_from_slice(b"+");
-                out.extend_from_slice(s.as_bytes());
+                push_inline_sanitized(out, s.as_bytes());
                 out.extend_from_slice(b"\r\n");
             }
             Self::Error(s) => {
                 out.extend_from_slice(b"-");
-                out.extend_from_slice(s.as_bytes());
+                push_inline_sanitized(out, s.as_bytes());
                 out.extend_from_slice(b"\r\n");
             }
             Self::Integer(n) => {
@@ -637,6 +661,43 @@ mod tests {
             "parity_ok",
         );
         event.assert_schema_contract();
+    }
+
+    #[test]
+    fn resp_inline_encoder_sanitizes_crlf_in_body() {
+        // CRLF-injection guard: when SimpleString/Error bodies are
+        // built via `format!()` from user-controlled bytes (e.g.
+        // `RespFrame::Error(format!("ERR Unrecognized option '{attr}'"))`
+        // where `attr` comes from a client argv), any embedded `\r`
+        // or `\n` would terminate the inline frame early and let the
+        // remaining bytes be re-parsed by the peer as a separate
+        // reply. The encoder must replace `\r` and `\n` with spaces,
+        // matching upstream Redis' `_addReplyErrorFormat`
+        // sanitization.
+        let injected = RespFrame::Error("ERR x\r\nINJECTED".to_string());
+        let bytes = injected.to_bytes();
+        assert_eq!(
+            bytes, b"-ERR x  INJECTED\r\n",
+            "Error body must have \\r and \\n replaced with spaces; otherwise the frame splits"
+        );
+        // And re-parsing the encoder output round-trips through our
+        // own parser as a single Error frame consuming all bytes —
+        // proving the injection is neutralized.
+        let parsed = parse_frame(&bytes).expect("sanitized frame must parse");
+        assert_eq!(parsed.consumed, bytes.len());
+        assert_eq!(parsed.frame, RespFrame::Error("ERR x  INJECTED".to_string()));
+
+        let ss = RespFrame::SimpleString("OK\r\nSMUGGLED".to_string());
+        let ss_bytes = ss.to_bytes();
+        assert_eq!(ss_bytes, b"+OK  SMUGGLED\r\n");
+        let parsed_ss = parse_frame(&ss_bytes).expect("sanitized SimpleString must parse");
+        assert_eq!(parsed_ss.consumed, ss_bytes.len());
+
+        // Lone \r and lone \n in isolation must also be sanitized —
+        // a peer reading bytes off the wire could see a lone \n as a
+        // legacy inline-protocol terminator.
+        let lone = RespFrame::Error("ERR a\rb\nc".to_string()).to_bytes();
+        assert_eq!(lone, b"-ERR a b c\r\n");
     }
 
     #[test]
