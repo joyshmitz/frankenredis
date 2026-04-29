@@ -1541,6 +1541,150 @@ mod tests {
     ///      parse outcome for the documented shapes.
     ///   3. Reject seeds (unterminated quotes, dangling backslash)
     ///      surface a `ConfigFileParseError` without panicking.
+    /// Lock the contract for the structured corpus seeds in
+    /// `fuzz/corpus/fuzz_tls_config/`. The fuzz target's
+    /// `fuzz_raw_protocols` runs every seed through
+    /// `parse_tls_protocols` AND
+    /// `validate_tls_directive_value(TlsDirective::TlsProtocols, …)`,
+    /// asserting the two agree on accept/reject.
+    ///
+    /// The seed generator (`fuzz/scripts/gen_tls_config_seeds.py`)
+    /// covers each branch of `parse_tls_protocols` +
+    /// `TlsProtocol::parse`:
+    ///
+    ///   - canonical "TLSv1.2 TLSv1.3" / "TLSv1.2,TLSv1.3"
+    ///   - alias forms (tls1.2 / tlsv1_2 / case-insensitive)
+    ///   - whitespace + comma separator combinations
+    ///   - dedup of repeated protocols
+    ///   - unsupported versions (TLSv1.0/1.1/1.4, SSL, gibberish)
+    ///   - empty / whitespace-only / commas-only
+    ///
+    /// Verifies the harness invariant: parse_tls_protocols result
+    /// agrees with directive-validation result for every seed.
+    #[test]
+    fn fuzz_tls_config_corpus_matches_documented_contract() {
+        use std::path::Path;
+
+        let corpus_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/fuzz_tls_config");
+        if !corpus_root.exists() {
+            return;
+        }
+
+        fn read_seed(corpus_root: &Path, name: &str) -> String {
+            let bytes = std::fs::read(corpus_root.join(name))
+                .unwrap_or_else(|err| panic!("read seed {name}: {err}"));
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+
+        // Accept-class: parse_tls_protocols must succeed AND
+        // produce the listed canonical protocols. The set is
+        // ordered by first-seen (dedup preserves order).
+        let accepts: &[(&str, &[TlsProtocol])] = &[
+            (
+                "canonical_both_protocols.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "canonical_comma_separated.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "lowercase_both.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "mixed_case.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            ("alias_tls1_2.txt", &[TlsProtocol::TlsV1_2]),
+            ("alias_tlsv1_2_underscore.txt", &[TlsProtocol::TlsV1_2]),
+            ("alias_tls1_3.txt", &[TlsProtocol::TlsV1_3]),
+            ("alias_tlsv1_3_underscore.txt", &[TlsProtocol::TlsV1_3]),
+            ("only_tlsv1_2.txt", &[TlsProtocol::TlsV1_2]),
+            ("only_tlsv1_3.txt", &[TlsProtocol::TlsV1_3]),
+            (
+                "dedup_repeated.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "dedup_mixed_aliases.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "tab_separator.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "multi_separator.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "leading_whitespace.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "trailing_whitespace.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            ("leading_comma.txt", &[TlsProtocol::TlsV1_2]),
+            ("trailing_comma.txt", &[TlsProtocol::TlsV1_2]),
+            (
+                "multiple_commas.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+            (
+                "crlf_separators.txt",
+                &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            ),
+        ];
+        assert!(
+            accepts.len() >= 14,
+            "fuzz_tls_config accept seeds must have >= 14 entries"
+        );
+        for (name, expected) in accepts {
+            let body = read_seed(&corpus_root, name);
+            let parsed = parse_tls_protocols(&body)
+                .unwrap_or_else(|err| panic!("seed {name} must parse: {err:?}"));
+            assert_eq!(&parsed, expected, "seed {name} parsed protocols mismatch");
+            // Harness invariant: parse and validate must agree.
+            assert!(
+                validate_tls_directive_value(TlsDirective::TlsProtocols, &body).is_ok(),
+                "seed {name}: parse-OK must imply validate-OK"
+            );
+        }
+
+        // Reject-class.
+        let rejects: &[&str] = &[
+            "empty.txt",
+            "whitespace_only.txt",
+            "commas_only.txt",
+            "unsupported_tls_v1_0.txt",
+            "unsupported_tls_v1_1.txt",
+            "unsupported_tls_v1_4.txt",
+            "unsupported_ssl.txt",
+            "mixed_valid_and_invalid.txt",
+            "nonsense_token.txt",
+            "numeric_only.txt",
+            "almost_match.txt",
+            "unicode_emoji.txt",
+            "just_dot.txt",
+            "just_v.txt",
+        ];
+        for name in rejects {
+            let body = read_seed(&corpus_root, name);
+            assert!(
+                parse_tls_protocols(&body).is_err(),
+                "seed {name} must reject (got Ok)"
+            );
+            // Harness invariant: parse-Err must imply validate-Err.
+            assert!(
+                validate_tls_directive_value(TlsDirective::TlsProtocols, &body).is_err(),
+                "seed {name}: parse-Err must imply validate-Err"
+            );
+        }
+    }
+
     #[test]
     fn fuzz_config_file_corpus_matches_documented_contract() -> Result<(), String> {
         use std::path::Path;
