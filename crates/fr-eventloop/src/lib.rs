@@ -1004,19 +1004,19 @@ mod tests {
     /// canonical / truncated / out-of-order / repetitions /
     /// alternations / boundary lengths / ASCII-mapped sequences.
     ///
-    /// Verifies every seed's `replay_phase_trace(trace)` runs to
-    /// completion without panicking — same no-panic invariant the
-    /// fuzz target ultimately depends on. Pinned outcomes for the
-    /// canonical 1-iteration / 2-iteration / empty traces.
-    /// Asserts ≥14 seeds against silent regression.
+    /// Verifies every seed's `replay_phase_trace(trace)` matches an
+    /// independent replay model — same invariant the fuzz target
+    /// ultimately depends on. Pinned outcomes for the canonical
+    /// 1-iteration / 2-iteration / empty traces. Asserts ≥14 seeds
+    /// against silent regression.
     #[test]
-    fn fuzz_eventloop_validators_corpus_matches_documented_contract() {
+    fn fuzz_eventloop_validators_corpus_matches_documented_contract() -> Result<(), String> {
         use std::path::Path;
 
         let corpus_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fuzz/corpus/fuzz_eventloop_validators");
         if !corpus_root.exists() {
-            return;
+            return Ok(());
         }
 
         // Mirror the harness's phase_from_byte: byte % 5 → phase.
@@ -1030,20 +1030,64 @@ mod tests {
             }
         }
 
+        fn expected_next_phase(phase: EventLoopPhase) -> EventLoopPhase {
+            match phase {
+                EventLoopPhase::BeforeSleep => EventLoopPhase::Poll,
+                EventLoopPhase::Poll => EventLoopPhase::FileDispatch,
+                EventLoopPhase::FileDispatch => EventLoopPhase::TimeDispatch,
+                EventLoopPhase::TimeDispatch => EventLoopPhase::AfterSleep,
+                EventLoopPhase::AfterSleep => EventLoopPhase::BeforeSleep,
+            }
+        }
+
+        fn model_replay_phase_trace(trace: &[EventLoopPhase]) -> Result<usize, PhaseReplayError> {
+            let Some((&first, rest)) = trace.split_first() else {
+                return Err(PhaseReplayError::EmptyTrace);
+            };
+            if first != EventLoopPhase::BeforeSleep {
+                return Err(PhaseReplayError::MissingMainLoopEntry { first });
+            }
+
+            let mut completed_ticks = 0usize;
+            let mut current = first;
+            for &next in rest {
+                let expected = expected_next_phase(current);
+                if next != expected {
+                    return Err(PhaseReplayError::StageTransitionInvalid {
+                        from: current,
+                        to: next,
+                    });
+                }
+                current = next;
+                if current == EventLoopPhase::AfterSleep {
+                    completed_ticks = completed_ticks.saturating_add(1);
+                }
+            }
+
+            if current != EventLoopPhase::AfterSleep {
+                return Err(PhaseReplayError::PartialTick {
+                    observed: trace.len(),
+                });
+            }
+            Ok(completed_ticks)
+        }
+
         const MAX_TRACE_LEN: usize = 64;
 
-        let entries: Vec<String> = std::fs::read_dir(&corpus_root)
-            .expect("read fuzz_eventloop_validators corpus")
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name().into_string().ok()?;
-                if name.ends_with(".bin") {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&corpus_root)
+            .map_err(|err| format!("read fuzz_eventloop_validators corpus: {err}"))?
+        {
+            let entry =
+                entry.map_err(|err| format!("read fuzz_eventloop_validators entry: {err}"))?;
+            let name = entry.file_name().into_string().map_err(|name| {
+                format!("fuzz_eventloop_validators seed filename is not UTF-8: {name:?}")
+            })?;
+            if name.ends_with(".bin") {
+                entries.push(name);
+            }
+        }
+        entries.sort();
         assert!(
             entries.len() >= 14,
             "fuzz_eventloop_validators corpus must have >= 14 .bin seeds; got {}",
@@ -1052,17 +1096,17 @@ mod tests {
 
         for name in &entries {
             let bytes = std::fs::read(corpus_root.join(name))
-                .unwrap_or_else(|err| panic!("read seed {name}: {err}"));
+                .map_err(|err| format!("read seed {name}: {err}"))?;
             let trace: Vec<EventLoopPhase> = bytes
                 .iter()
                 .take(MAX_TRACE_LEN)
                 .map(|byte| phase_from_byte(*byte))
                 .collect();
-            // The replay function must not panic regardless of
-            // input. We don't bind the result — the harness's
-            // shadow-model assertion checks deeper equality, but
-            // here we just verify the no-panic property.
-            let _ = replay_phase_trace(&trace);
+            assert_eq!(
+                replay_phase_trace(&trace),
+                model_replay_phase_trace(&trace),
+                "seed {name}: replay_phase_trace drifted from the corpus shadow model"
+            );
         }
 
         // Pinned outcome: canonical loop iteration replays cleanly.
@@ -1093,10 +1137,7 @@ mod tests {
         // documented contract — the loop must enter BeforeSleep
         // at least once.
         assert!(
-            matches!(
-                replay_phase_trace(&[]),
-                Err(PhaseReplayError::EmptyTrace)
-            ),
+            matches!(replay_phase_trace(&[]), Err(PhaseReplayError::EmptyTrace)),
             "empty trace must surface EmptyTrace error"
         );
 
@@ -1117,5 +1158,6 @@ mod tests {
             ),
             "non-BeforeSleep first phase must surface MissingMainLoopEntry"
         );
+        Ok(())
     }
 }
