@@ -4246,6 +4246,175 @@ mod tests {
         }
     }
 
+    /// Mirrors the invariants enforced by the libfuzzer harness in
+    /// `fuzz/fuzz_targets/fuzz_rdb_encode_round_trip.rs`. Runs in
+    /// regular `cargo test` (no nightly / libfuzzer infra needed) so a
+    /// future regression in `encode_rdb_with_options` would be caught
+    /// before it reaches the fuzz pipeline. Each fixture is a shape
+    /// libfuzzer is known to mutate into via the seed corpus committed
+    /// alongside the harness. (br-frankenredis-91kt fuzz follow-up)
+    #[test]
+    fn encode_rdb_round_trip_invariants_for_fuzz_seeds() {
+        // Fixtures: (name, RdbValue, opts.compact)
+        // Each invariant runs both sides (compact / canonical-only) so
+        // a divergence in either path is caught.
+        let fixtures: &[(&str, RdbValue)] = &[
+            ("string_short", RdbValue::String(b"hello world".to_vec())),
+            (
+                "string_long",
+                RdbValue::String(b"abc".repeat(50)), // 150 bytes — triggers LZF
+            ),
+            (
+                "list_small",
+                RdbValue::List(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]),
+            ),
+            (
+                "list_long_element",
+                RdbValue::List(vec![b"x".repeat(8500)]), // overflows quicklist size
+            ),
+            (
+                "set_intset",
+                RdbValue::Set(vec![
+                    b"1".to_vec(),
+                    b"2".to_vec(),
+                    b"3".to_vec(),
+                    b"100".to_vec(),
+                    b"-5".to_vec(),
+                ]),
+            ),
+            (
+                "set_listpack",
+                RdbValue::Set(vec![b"alpha".to_vec(), b"beta".to_vec(), b"gamma".to_vec()]),
+            ),
+            (
+                "set_canonical",
+                RdbValue::Set(
+                    (0..200)
+                        .map(|i: i32| format!("m{i}").into_bytes())
+                        .collect(),
+                ),
+            ),
+            (
+                "hash_listpack",
+                RdbValue::Hash(vec![
+                    (b"f1".to_vec(), b"v1".to_vec()),
+                    (b"f2".to_vec(), b"v2".to_vec()),
+                    (b"f3".to_vec(), b"v3".to_vec()),
+                ]),
+            ),
+            (
+                "hash_canonical",
+                RdbValue::Hash(
+                    (0..600)
+                        .map(|i: i32| (format!("f{i}").into_bytes(), format!("v{i}").into_bytes()))
+                        .collect(),
+                ),
+            ),
+            (
+                "zset_listpack",
+                RdbValue::SortedSet(vec![
+                    (b"a".to_vec(), 1.0),
+                    (b"b".to_vec(), 2.5),
+                    (b"c".to_vec(), -3.5),
+                ]),
+            ),
+        ];
+
+        for (name, value) in fixtures {
+            for compact in [None, Some(CompactRdbThresholds::default())] {
+                let label = if compact.is_some() {
+                    "compact"
+                } else {
+                    "canonical"
+                };
+                let entries = vec![RdbEntry {
+                    db: 0,
+                    key: name.as_bytes().to_vec(),
+                    value: value.clone(),
+                    expire_ms: None,
+                }];
+                let opts = RdbEncodeOptions { compact };
+                let encoded = encode_rdb_with_options(&entries, &[], opts);
+
+                // Invariant: REDIS magic + 8-byte CRC trailer.
+                assert!(
+                    encoded.starts_with(b"REDIS"),
+                    "[{label}] {name}: missing REDIS magic"
+                );
+                assert!(encoded.len() > 18, "[{label}] {name}: encoded too short");
+
+                // Invariant: decode_rdb must accept what
+                // encode_rdb_with_options produced.
+                let (decoded, _aux) = decode_rdb(&encoded).unwrap_or_else(|e| {
+                    panic!(
+                        "[{label}] {name}: decode_rdb rejected encoder output: {e:?}\n\
+                         encoded.len()={}\nfirst 64: {:02x?}",
+                        encoded.len(),
+                        &encoded[..encoded.len().min(64)],
+                    )
+                });
+                assert_eq!(
+                    decoded.len(),
+                    1,
+                    "[{label}] {name}: round-trip dropped entry"
+                );
+                assert_eq!(
+                    decoded[0].key,
+                    name.as_bytes(),
+                    "[{label}] {name}: round-trip key drift",
+                );
+
+                // Invariant: shape-equivalent round-trip (under
+                // canonicalisation for unordered shapes).
+                match (value, &decoded[0].value) {
+                    (RdbValue::String(a), RdbValue::String(b)) => {
+                        assert_eq!(a, b, "[{label}] {name}: string drift")
+                    }
+                    (RdbValue::List(a), RdbValue::List(b)) => {
+                        assert_eq!(a, b, "[{label}] {name}: list drift")
+                    }
+                    (RdbValue::Set(a), RdbValue::Set(b)) => {
+                        let mut x = a.clone();
+                        let mut y = b.clone();
+                        x.sort();
+                        y.sort();
+                        assert_eq!(x, y, "[{label}] {name}: set drift");
+                    }
+                    (RdbValue::Hash(a), RdbValue::Hash(b)) => {
+                        let mut x = a.clone();
+                        let mut y = b.clone();
+                        x.sort();
+                        y.sort();
+                        assert_eq!(x, y, "[{label}] {name}: hash drift");
+                    }
+                    (RdbValue::SortedSet(a), RdbValue::SortedSet(b)) => {
+                        assert_eq!(a.len(), b.len(), "[{label}] {name}: zset card drift");
+                        let mut x = a.clone();
+                        let mut y = b.clone();
+                        x.sort_by(|p, q| {
+                            p.0.cmp(&q.0)
+                                .then(p.1.partial_cmp(&q.1).unwrap_or(std::cmp::Ordering::Equal))
+                        });
+                        y.sort_by(|p, q| {
+                            p.0.cmp(&q.0)
+                                .then(p.1.partial_cmp(&q.1).unwrap_or(std::cmp::Ordering::Equal))
+                        });
+                        for (xi, yi) in x.iter().zip(y.iter()) {
+                            assert_eq!(xi.0, yi.0, "[{label}] {name}: zset member drift");
+                            assert!(
+                                (xi.1 - yi.1).abs() < 1e-9,
+                                "[{label}] {name}: zset score drift {} vs {}",
+                                xi.1,
+                                yi.1
+                            );
+                        }
+                    }
+                    _ => panic!("[{label}] {name}: kind mismatch"),
+                }
+            }
+        }
+    }
+
     #[test]
     fn encode_rdb_compact_zset_listpack_rejects_nan() {
         // Upstream's d2string can't represent NaN; the zset listpack

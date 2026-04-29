@@ -266,3 +266,10 @@ path = "fuzz_targets/fuzz_differential_runtime.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_rdb_encode_round_trip"
+path = "fuzz_targets/fuzz_rdb_encode_round_trip.rs"
+test = false
+doc = false
+bench = false
