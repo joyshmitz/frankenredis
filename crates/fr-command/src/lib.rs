@@ -8800,6 +8800,50 @@ fn migrate_read_frame(
     }
 }
 
+fn migrate_port_from_redis_atoi(port_arg: &[u8]) -> Result<u16, CommandError> {
+    let mut idx = 0;
+    while port_arg
+        .get(idx)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        idx += 1;
+    }
+
+    let negative = match port_arg.get(idx) {
+        Some(b'-') => {
+            idx += 1;
+            true
+        }
+        Some(b'+') => {
+            idx += 1;
+            false
+        }
+        _ => false,
+    };
+
+    let mut saw_digit = false;
+    let mut value = 0u64;
+    while let Some(byte @ b'0'..=b'9') = port_arg.get(idx).copied() {
+        saw_digit = true;
+        value = value
+            .saturating_mul(10)
+            .saturating_add(u64::from(byte - b'0'));
+        if value > u64::from(u16::MAX) {
+            return Err(migrate_connect_err());
+        }
+        idx += 1;
+    }
+
+    if !saw_digit {
+        return Ok(0);
+    }
+    if negative {
+        return Err(migrate_connect_err());
+    }
+
+    u16::try_from(value).map_err(|_| migrate_connect_err())
+}
+
 pub fn execute_migrate(
     request: &MigrateRequest,
     keys: &[MigrateKeySpec],
@@ -8826,10 +8870,7 @@ pub fn execute_migrate(
     }
 
     // Redis only validates the target port once there is at least one key to transfer.
-    let port = match parse_i64_arg(&request.port_arg) {
-        Ok(value) => u16::try_from(value).map_err(|_| CommandError::InvalidInteger)?,
-        Err(_) => return Err(CommandError::InvalidInteger),
-    };
+    let port = migrate_port_from_redis_atoi(&request.port_arg)?;
     let mut stream = migrate_connect(&request.host, port, request.timeout)?;
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(request.timeout));
@@ -38574,7 +38615,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_existing_key_still_rejects_invalid_port() {
+    fn migrate_existing_key_invalid_port_reports_ioerr_like_redis() {
         let mut store = Store::new();
         dispatch_argv(
             &[b"SET".to_vec(), b"present".to_vec(), b"value".to_vec()],
@@ -38595,7 +38636,28 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert_eq!(err, CommandError::InvalidInteger);
+        assert!(
+            matches!(err, CommandError::Custom(ref message) if message.starts_with("IOERR")),
+            "existing-key MIGRATE with a nonnumeric port should reach the IOERR socket path like Redis, got {err:?}"
+        );
+
+        let err = dispatch_argv(
+            &[
+                b"MIGRATE".to_vec(),
+                b"127.0.0.1".to_vec(),
+                b"65536".to_vec(),
+                b"present".to_vec(),
+                b"0".to_vec(),
+                b"1000".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CommandError::Custom(ref message) if message.starts_with("IOERR")),
+            "out-of-range MIGRATE port should report IOERR instead of integer syntax, got {err:?}"
+        );
     }
 
     #[test]

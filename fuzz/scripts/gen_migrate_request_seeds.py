@@ -27,10 +27,12 @@ The accept-class invariant is canonical round-trip: the parsed
     - Negative / zero timeout (clamps to 1000ms per upstream)
     - Various DB indices (0, 15)
     - Long KEYS list
+    - Non-numeric port (parser preserves raw bytes; dispatch validates
+      only after at least one source key exists)
 
   Reject-class:
     - Too few arity (< 5 args after MIGRATE)
-    - Non-numeric port / db / timeout
+    - Non-numeric db / timeout
     - AUTH missing password arg
     - AUTH2 missing username
     - AUTH2 missing password (single trailing token)
@@ -113,11 +115,11 @@ def main() -> None:
             [b"localhost", b"6379", b"", b"0", b"5000", b"KEYS"]
             + [bytes(f"k{i}", "ascii") for i in range(8)],
         ),
+        seed("invalid_port",
+             [b"localhost", b"abc", b"key", b"0", b"5000"]),
         # ── Reject-class ──────────────────────────────────────────
         seed("too_few_args",
              [b"localhost", b"6379", b"key", b"0"]),
-        seed("invalid_port",
-             [b"localhost", b"abc", b"key", b"0", b"5000"]),
         seed("invalid_db_index",
              [b"localhost", b"6379", b"key", b"xyz", b"5000"]),
         seed("invalid_timeout",

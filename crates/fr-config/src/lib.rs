@@ -1541,6 +1541,7 @@ mod tests {
     ///      parse outcome for the documented shapes.
     ///   3. Reject seeds (unterminated quotes, dangling backslash)
     ///      surface a `ConfigFileParseError` without panicking.
+    ///
     /// Lock the contract for the structured corpus seeds in
     /// `fuzz/corpus/fuzz_tls_config/`. The fuzz target's
     /// `fuzz_raw_protocols` runs every seed through
@@ -1565,8 +1566,8 @@ mod tests {
     fn fuzz_tls_config_corpus_matches_documented_contract() {
         use std::path::Path;
 
-        let corpus_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fuzz/corpus/fuzz_tls_config");
+        let corpus_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus/fuzz_tls_config");
         if !corpus_root.exists() {
             return;
         }
