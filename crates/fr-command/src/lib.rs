@@ -4989,8 +4989,13 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             "ERR syntax error, LIMIT cannot be used without the special ~ option".to_string(),
         ));
     }
-    let trim_limit_usize: Option<usize> =
-        trim_limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let trim_limit_usize: Option<usize> = trim_limit.and_then(|n| {
+        if n == 0 {
+            None
+        } else {
+            Some(usize::try_from(n).unwrap_or(usize::MAX))
+        }
+    });
 
     // argv[idx] should now be the ID, followed by field-value pairs
     if idx >= argv.len() {
@@ -5065,17 +5070,19 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     // (~) without LIMIT is best-effort: upstream lazily skips trimming
     // when the trailing radix-tree node isn't full, and we model that
     // as a no-op. Approximate trimming WITH `LIMIT n` (Redis 6.2+
-    // dialect) MUST cap removal at n entries; the count is bounded
-    // and cheap so we always honor it. Exact trimming (= or absent
-    // qualifier) always executes and rejects LIMIT upstream of this
-    // block. (br-frankenredis-r71v + LIMIT clause follow-up)
+    // dialect) executes through the store cap path; LIMIT 0 means no
+    // cap, matching upstream streamAddTrimArgs::limit. Exact trimming
+    // (= or absent qualifier) always executes and rejects LIMIT
+    // upstream of this block. (br-frankenredis-r71v + LIMIT clause
+    // follow-up)
+    let should_run_inline_trim = !trim_approx || limit_given;
     if let Some(max_len) = trim_maxlen
-        && (!trim_approx || trim_limit_usize.is_some())
+        && should_run_inline_trim
     {
         let _ = store.xtrim(&argv[1], max_len, trim_limit_usize, now_ms);
     }
     if let Some(min_id) = trim_minid
-        && (!trim_approx || trim_limit_usize.is_some())
+        && should_run_inline_trim
     {
         let _ = store.xtrim_minid(&argv[1], min_id, trim_limit_usize, now_ms);
     }
@@ -5154,6 +5161,7 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     idx += 1;
 
     let mut limit: Option<usize> = None;
+    let mut limit_given = false;
     if idx < argv.len() {
         if !eq_ascii_command(&argv[idx], b"LIMIT") {
             return Err(CommandError::SyntaxError);
@@ -5173,7 +5181,10 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                 "ERR syntax error, LIMIT cannot be used without the special ~ option".to_string(),
             ));
         }
-        limit = Some(usize::try_from(n).unwrap_or(usize::MAX));
+        limit_given = true;
+        if n != 0 {
+            limit = Some(usize::try_from(n).unwrap_or(usize::MAX));
+        }
         idx += 1;
         if idx != argv.len() {
             return Err(CommandError::SyntaxError);
@@ -5184,9 +5195,10 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     // path: upstream lazily skips trimming when the trailing
     // radix-tree node isn't full, which we model as a no-op (return
     // 0 removed). Exact (=, or no qualifier) always trims fully.
-    // Approximate WITH LIMIT honors the cap. A precondition the
-    // XTRIM-specific oracle gate codifies vs vendored Redis 7.2.
-    let approx_noop = approx && limit.is_none();
+    // Approximate WITH LIMIT honors the cap. LIMIT 0 is still an
+    // explicit LIMIT and means no cap, not no work. A precondition
+    // the XTRIM-specific oracle gate codifies vs vendored Redis 7.2.
+    let approx_noop = approx && !limit_given;
 
     if is_maxlen {
         let max_len_raw = parse_i64_arg(&argv[threshold_idx])?;
@@ -21956,6 +21968,115 @@ mod tests {
             reply,
             RespFrame::Error("ERR The LIMIT argument must be >= 0.".to_string())
         );
+    }
+
+    #[test]
+    fn stream_trim_limit_zero_means_unlimited_cap() {
+        let mut store = Store::new();
+        for id in [b"1-0", b"2-0", b"3-0", b"4-0", b"5-0"] {
+            dispatch_argv(
+                &[
+                    b"XADD".to_vec(),
+                    b"s".to_vec(),
+                    id.to_vec(),
+                    b"f".to_vec(),
+                    b"v".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("seed xadd");
+        }
+
+        let removed = dispatch_argv(
+            &[
+                b"XTRIM".to_vec(),
+                b"s".to_vec(),
+                b"MAXLEN".to_vec(),
+                b"~".to_vec(),
+                b"2".to_vec(),
+                b"LIMIT".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xtrim limit zero");
+        assert_eq!(removed, RespFrame::Integer(3));
+
+        let remaining = dispatch_argv(
+            &[
+                b"XRANGE".to_vec(),
+                b"s".to_vec(),
+                b"-".to_vec(),
+                b"+".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xrange remaining");
+        assert_eq!(
+            remaining,
+            RespFrame::Array(Some(vec![
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"4-0".to_vec())),
+                    RespFrame::Array(Some(vec![
+                        RespFrame::BulkString(Some(b"f".to_vec())),
+                        RespFrame::BulkString(Some(b"v".to_vec())),
+                    ])),
+                ])),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"5-0".to_vec())),
+                    RespFrame::Array(Some(vec![
+                        RespFrame::BulkString(Some(b"f".to_vec())),
+                        RespFrame::BulkString(Some(b"v".to_vec())),
+                    ])),
+                ])),
+            ]))
+        );
+
+        let mut inline_store = Store::new();
+        for id in [b"1-0", b"2-0", b"3-0", b"4-0"] {
+            dispatch_argv(
+                &[
+                    b"XADD".to_vec(),
+                    b"inline".to_vec(),
+                    id.to_vec(),
+                    b"f".to_vec(),
+                    b"v".to_vec(),
+                ],
+                &mut inline_store,
+                0,
+            )
+            .expect("seed inline xadd");
+        }
+
+        let added = dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"inline".to_vec(),
+                b"MAXLEN".to_vec(),
+                b"~".to_vec(),
+                b"2".to_vec(),
+                b"LIMIT".to_vec(),
+                b"0".to_vec(),
+                b"5-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut inline_store,
+            0,
+        )
+        .expect("xadd limit zero");
+        assert_eq!(added, RespFrame::BulkString(Some(b"5-0".to_vec())));
+
+        let len = dispatch_argv(
+            &[b"XLEN".to_vec(), b"inline".to_vec()],
+            &mut inline_store,
+            0,
+        )
+        .expect("xlen after inline trim");
+        assert_eq!(len, RespFrame::Integer(2));
     }
 
     #[test]

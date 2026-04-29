@@ -116,11 +116,13 @@ pub fn parse_info_response(info: &str) -> ParsedInfo {
         if let Some((key, value)) = line.split_once(':') {
             match key {
                 "role" => {
-                    result.role = match value {
+                    if let Some(role) = match value {
                         "master" => Some(Role::Master),
                         "slave" => Some(Role::Slave),
                         _ => None,
-                    };
+                    } {
+                        result.role = Some(role);
+                    }
                 }
                 "master_host" => {
                     result.master_host = Some(value.to_string());
@@ -279,6 +281,19 @@ master_repl_offset:12345
         assert_eq!(parsed.connected_slaves, Some(2));
         assert_eq!(parsed.run_id, Some("abc123def456".to_string()));
         assert_eq!(parsed.slave_repl_offset, Some(12345));
+    }
+
+    #[test]
+    fn parse_info_ignores_malformed_duplicate_role_lines() {
+        let info = r#"
+# Replication
+role:master
+role:master:with-extra-colon
+connected_slaves:0
+"#;
+        let parsed = parse_info_response(info);
+        assert_eq!(parsed.role, Some(Role::Master));
+        assert_eq!(parsed.connected_slaves, Some(0));
     }
 
     #[test]
