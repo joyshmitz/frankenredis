@@ -110,10 +110,25 @@ fn fuzz_structured_keyspace_events(case: StructuredKeyspaceCase) {
 
 fn assert_success_invariants(flags: u32) {
     let canonical = keyspace_events_to_string(flags);
+    // Upstream `notify.c::keyspaceEventsFlagsToString` emits the
+    // 'n' (NOTIFY_NEW) bit only in the per-class `else` branch —
+    // once 'A' covers every class flag, 'n' is intentionally
+    // dropped from the canonical string even when NOTIFY_NEW was
+    // set. We mirror that lossy canonicalization (see
+    // fr_store::keyspace_events_to_string and the pinned
+    // CONFIG-SET-then-GET test). The round-trip property is
+    // therefore "parse(canonical(flags)) equals flags ∖ n when A
+    // covers all classes, else equals flags."
+    let expected_after_canonical = if (flags & NOTIFY_ALL) == NOTIFY_ALL {
+        flags & !NOTIFY_NEW
+    } else {
+        flags
+    };
     assert_eq!(
         keyspace_events_parse(&canonical),
-        Some(flags),
-        "accepted notify-keyspace-events flags must round-trip through canonical rendering",
+        Some(expected_after_canonical),
+        "accepted notify-keyspace-events flags must round-trip through canonical rendering \
+         (with the documented `n`-when-A-set lossy drop accounted for)",
     );
 
     if flags != 0 {

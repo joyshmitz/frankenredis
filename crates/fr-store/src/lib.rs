@@ -17704,6 +17704,150 @@ mod tests {
         );
     }
 
+    /// Lock the contract for the structured corpus seeds in
+    /// `fuzz/corpus/fuzz_keyspace_events/`. The fuzz harness runs
+    /// every input through both `fuzz_raw_keyspace_events` and
+    /// `fuzz_structured_keyspace_events`; both call into
+    /// `keyspace_events_parse`. The seed generator
+    /// (`fuzz/scripts/gen_keyspace_events_seeds.py`) crafts the
+    /// raw-path inputs that hit each documented branch of the
+    /// parser:
+    ///
+    ///   - empty / no-class disables / canonical AKE
+    ///   - K-only / E-only / KE without class chars (returns 0 per
+    ///     the "K/E without any class disables all" rule)
+    ///   - each individual class char (`g $ l s h z x e t m n`)
+    ///   - Redis 6.0 `m` (key-miss) and Redis 7.0 `n` (NEW) bits
+    ///   - `A` superset + redundant explicit class chars
+    ///   - reject paths: lowercase k, unknown chars, snowman, etc.
+    ///
+    /// This test verifies every accept seed returns the exact
+    /// expected flag set (and round-trips through the canonical
+    /// rendering, which is the property the fuzz target itself
+    /// asserts) and every reject seed returns `None`. Locks the
+    /// seeds against parser drift in case-sensitivity or class
+    /// alphabet.
+    #[test]
+    fn fuzz_keyspace_events_corpus_matches_documented_contract() {
+        use crate::{
+            NOTIFY_ALL, NOTIFY_EVICTED, NOTIFY_EXPIRED, NOTIFY_GENERIC, NOTIFY_HASH,
+            NOTIFY_KEY_MISS, NOTIFY_KEYEVENT, NOTIFY_KEYSPACE, NOTIFY_LIST, NOTIFY_NEW,
+            NOTIFY_SET, NOTIFY_STREAM, NOTIFY_STRING, NOTIFY_ZSET, keyspace_events_parse,
+            keyspace_events_to_string,
+        };
+        use std::path::Path;
+
+        let corpus_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/fuzz_keyspace_events");
+        if !corpus_root.exists() {
+            return;
+        }
+
+        fn read_seed(corpus_root: &Path, name: &str) -> String {
+            let bytes = std::fs::read(corpus_root.join(name))
+                .unwrap_or_else(|err| panic!("read seed {name}: {err}"));
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+
+        // Accept-class seeds with their expected flag bitmaps.
+        // Empty input → 0; per-char accept; AKE → ALL+K+E etc.
+        let accepts: &[(&str, u32)] = &[
+            ("empty.txt", 0),
+            ("canonical_AKE.txt", NOTIFY_ALL | NOTIFY_KEYSPACE | NOTIFY_KEYEVENT),
+            ("KEA_alternate_ordering.txt",
+             NOTIFY_ALL | NOTIFY_KEYSPACE | NOTIFY_KEYEVENT),
+            // K alone, E alone, KE without class chars — the parser
+            // KEEPS the K/E bits in the bitmap. The "disable all"
+            // post-pass only fires when class bits are set but
+            // neither K nor E is set; so K-only / E-only / KE pass
+            // through unchanged. (No notifications actually fire on
+            // these because the dispatcher checks both that K/E is
+            // set AND that a class bit is set, but the bitmap shape
+            // is what we lock here.)
+            ("K_alone_no_class_disables.txt", NOTIFY_KEYSPACE),
+            ("E_alone_no_class_disables.txt", NOTIFY_KEYEVENT),
+            ("KE_no_class_disables.txt", NOTIFY_KEYSPACE | NOTIFY_KEYEVENT),
+            ("Kg_generic_only.txt", NOTIFY_KEYSPACE | NOTIFY_GENERIC),
+            ("Egn_generic_plus_new.txt",
+             NOTIFY_KEYEVENT | NOTIFY_GENERIC | NOTIFY_NEW),
+            ("KEm_key_miss.txt",
+             NOTIFY_KEYSPACE | NOTIFY_KEYEVENT | NOTIFY_KEY_MISS),
+            ("KEt_stream.txt",
+             NOTIFY_KEYSPACE | NOTIFY_KEYEVENT | NOTIFY_STREAM),
+            ("KEn_new_key_redis7.txt",
+             NOTIFY_KEYSPACE | NOTIFY_KEYEVENT | NOTIFY_NEW),
+            // KEA + redundant `$` — A already includes string class.
+            ("KEA_dollar_idempotent.txt",
+             NOTIFY_ALL | NOTIFY_KEYSPACE | NOTIFY_KEYEVENT),
+            ("K_string_class.txt", NOTIFY_KEYSPACE | NOTIFY_STRING),
+            ("E_list_class.txt", NOTIFY_KEYEVENT | NOTIFY_LIST),
+            ("K_set_class.txt", NOTIFY_KEYSPACE | NOTIFY_SET),
+            ("K_hash_class.txt", NOTIFY_KEYSPACE | NOTIFY_HASH),
+            ("K_zset_class.txt", NOTIFY_KEYSPACE | NOTIFY_ZSET),
+            ("K_expired_class.txt", NOTIFY_KEYSPACE | NOTIFY_EXPIRED),
+            ("K_evicted_class.txt", NOTIFY_KEYSPACE | NOTIFY_EVICTED),
+            ("K_stream_class.txt", NOTIFY_KEYSPACE | NOTIFY_STREAM),
+            ("K_keymiss_class.txt", NOTIFY_KEYSPACE | NOTIFY_KEY_MISS),
+            ("K_new_class.txt", NOTIFY_KEYSPACE | NOTIFY_NEW),
+            // `KEg$lshzxetmn` enumerates every class char alongside
+            // K + E. Equals union of all class bits + K + E.
+            ("KE_all_per_class_chars.txt",
+             NOTIFY_KEYSPACE | NOTIFY_KEYEVENT
+                 | NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET
+                 | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | NOTIFY_EVICTED
+                 | NOTIFY_STREAM | NOTIFY_KEY_MISS | NOTIFY_NEW),
+            ("KEA_with_explicit_redundants.txt",
+             NOTIFY_ALL | NOTIFY_KEYSPACE | NOTIFY_KEYEVENT
+                 | NOTIFY_KEY_MISS | NOTIFY_NEW),
+        ];
+
+        for (name, expected) in accepts {
+            let body = read_seed(&corpus_root, name);
+            let parsed = keyspace_events_parse(&body)
+                .unwrap_or_else(|| panic!("seed {name} must parse"));
+            assert_eq!(
+                parsed, *expected,
+                "seed {name} parse flags mismatch (got {parsed:#x}, expected {expected:#x})"
+            );
+            // Canonical round-trip property the fuzz target asserts,
+            // accounting for the documented `n`-when-A-set lossy
+            // drop (mirrors upstream notify.c).
+            let canonical = keyspace_events_to_string(parsed);
+            let expected_after_canonical = if (parsed & NOTIFY_ALL) == NOTIFY_ALL {
+                parsed & !NOTIFY_NEW
+            } else {
+                parsed
+            };
+            assert_eq!(
+                keyspace_events_parse(&canonical),
+                Some(expected_after_canonical),
+                "seed {name} canonical round-trip broke"
+            );
+        }
+
+        // Reject-class seeds: parser must return None.
+        let rejects: &[&str] = &[
+            "lowercase_k_rejected.txt",
+            "uppercase_g_rejected.txt",
+            "question_mark.txt",
+            "digit_7.txt",
+            "space_only.txt",
+            "tab_only.txt",
+            "K_then_invalid_char.txt",
+            "KEA_then_invalid.txt",
+            "snowman_unicode.txt",
+            "crlf_only.txt",
+        ];
+        for name in rejects {
+            let body = read_seed(&corpus_root, name);
+            assert_eq!(
+                keyspace_events_parse(&body),
+                None,
+                "seed {name} must reject (got Some(_))"
+            );
+        }
+    }
+
     // ── Golden artifact tests ──────────────────────────────────────────
     mod golden {
         use crate::{
