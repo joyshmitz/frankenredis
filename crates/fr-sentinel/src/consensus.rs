@@ -40,11 +40,9 @@ pub fn evaluate_o_down(
         votes_for_down
     };
 
-    let should_mark_o_down =
-        quorum > 0 && !master.is_o_down() && master.is_s_down() && effective_votes >= quorum;
-
-    let should_clear_o_down =
-        master.is_o_down() && !master.is_s_down() && votes_for_down < quorum / 2;
+    let odown_now = quorum > 0 && master.is_s_down() && effective_votes >= quorum;
+    let should_mark_o_down = !master.is_o_down() && odown_now;
+    let should_clear_o_down = master.is_o_down() && !odown_now;
 
     ODownResult {
         should_mark_o_down,
@@ -192,6 +190,26 @@ mod tests {
         assert!(!result.should_mark_o_down);
         assert_eq!(result.votes_for_down, 0);
         assert_eq!(result.total_votes, 0);
+    }
+
+    #[test]
+    fn o_down_clears_when_votes_fall_below_quorum_even_if_s_down_remains() {
+        let mut master =
+            SentinelRedisInstance::new_master("mymaster", SentinelAddr::new("127.0.0.1", 6379), 3);
+        master.flags.insert(InstanceFlags::S_DOWN);
+        master.flags.insert(InstanceFlags::O_DOWN);
+
+        let votes = vec![ODownVote {
+            sentinel_runid: "s1".to_string(),
+            is_down: true,
+            vote_time: 1000,
+        }];
+        let result = evaluate_o_down(&master, &votes, 2000);
+
+        assert!(!result.should_mark_o_down);
+        assert!(result.should_clear_o_down);
+        assert_eq!(result.votes_for_down, 1);
+        assert_eq!(result.total_votes, 1);
     }
 
     #[test]
