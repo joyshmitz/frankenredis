@@ -998,9 +998,78 @@ fn sync_parent_dir(path: &Path) -> Result<(), PersistError> {
     Ok(())
 }
 
+/// Compact-encoding thresholds for `encode_rdb_with_options`. When
+/// `Some`, the encoder selects upstream-compatible compact RDB type
+/// tags (`RDB_TYPE_SET_INTSET=11`, `_SET_LISTPACK=20`,
+/// `_HASH_LISTPACK=16`, `_ZSET_LISTPACK=17`, `_LIST_QUICKLIST_2=18`)
+/// for shapes whose cardinality / per-element byte size fits within
+/// the matching threshold. When `None`, the encoder always emits the
+/// canonical (non-compact) tags 1/2/4/5 — preserving the historical
+/// `encode_rdb` behavior. Defaults mirror Redis 7.2 vanilla.
+/// (br-frankenredis-91kt)
+#[derive(Debug, Clone, Copy)]
+pub struct CompactRdbThresholds {
+    pub hash_max_listpack_entries: usize,
+    pub hash_max_listpack_value: usize,
+    pub set_max_intset_entries: usize,
+    pub set_max_listpack_entries: usize,
+    pub set_max_listpack_value: usize,
+    pub zset_max_listpack_entries: usize,
+    pub zset_max_listpack_value: usize,
+    /// Upper bound on the listpack body emitted for an
+    /// `RDB_TYPE_LIST_QUICKLIST_2` PACKED node (mirrors upstream
+    /// `list-max-listpack-size`'s byte interpretation, default 8 KiB).
+    pub list_max_listpack_size: usize,
+}
+
+impl Default for CompactRdbThresholds {
+    fn default() -> Self {
+        Self {
+            hash_max_listpack_entries: 512,
+            hash_max_listpack_value: 64,
+            set_max_intset_entries: 512,
+            set_max_listpack_entries: 128,
+            set_max_listpack_value: 64,
+            zset_max_listpack_entries: 128,
+            zset_max_listpack_value: 64,
+            list_max_listpack_size: 8192,
+        }
+    }
+}
+
+/// Options for `encode_rdb_with_options`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RdbEncodeOptions {
+    /// When `Some`, emit compact RDB type tags for shapes within the
+    /// supplied thresholds. When `None`, always emit canonical tags.
+    pub compact: Option<CompactRdbThresholds>,
+}
+
+/// Encode a complete RDB file using the supplied encoding options.
+#[must_use]
+pub fn encode_rdb_with_options(
+    entries: &[RdbEntry],
+    aux: &[(&str, &str)],
+    options: RdbEncodeOptions,
+) -> Vec<u8> {
+    encode_rdb_internal(entries, aux, options)
+}
+
 /// Encode a complete RDB file from a set of entries.
+///
+/// Convenience wrapper around `encode_rdb_with_options` with default
+/// options (canonical type tags only, no compact-encoding selection).
+/// Existing callers retain their byte-for-byte output shape.
 #[must_use]
 pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
+    encode_rdb_internal(entries, aux, RdbEncodeOptions::default())
+}
+
+fn encode_rdb_internal(
+    entries: &[RdbEntry],
+    aux: &[(&str, &str)],
+    options: RdbEncodeOptions,
+) -> Vec<u8> {
     let mut buf = Vec::new();
 
     // Magic + version
@@ -1056,28 +1125,63 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
                 rdb_encode_string(&mut buf, v);
             }
             RdbValue::List(items) => {
-                buf.push(RDB_TYPE_LIST);
-                rdb_encode_string(&mut buf, &entry.key);
-                rdb_encode_length(&mut buf, items.len());
-                for item in items {
-                    rdb_encode_string(&mut buf, item);
+                if let Some(thresholds) = options.compact.as_ref()
+                    && let Some(payload) = encode_compact_list_quicklist2(items, thresholds)
+                {
+                    buf.push(RDB_TYPE_LIST_QUICKLIST_2);
+                    rdb_encode_string(&mut buf, &entry.key);
+                    buf.extend_from_slice(&payload);
+                } else {
+                    buf.push(RDB_TYPE_LIST);
+                    rdb_encode_string(&mut buf, &entry.key);
+                    rdb_encode_length(&mut buf, items.len());
+                    for item in items {
+                        rdb_encode_string(&mut buf, item);
+                    }
                 }
             }
             RdbValue::Set(members) => {
-                buf.push(RDB_TYPE_SET);
-                rdb_encode_string(&mut buf, &entry.key);
-                rdb_encode_length(&mut buf, members.len());
-                for member in members {
-                    rdb_encode_string(&mut buf, member);
+                if let Some(thresholds) = options.compact.as_ref() {
+                    if let Some(payload) = encode_compact_set_intset(members, thresholds) {
+                        buf.push(RDB_TYPE_SET_INTSET);
+                        rdb_encode_string(&mut buf, &entry.key);
+                        buf.extend_from_slice(&payload);
+                    } else if let Some(payload) = encode_compact_set_listpack(members, thresholds) {
+                        buf.push(RDB_TYPE_SET_LISTPACK);
+                        rdb_encode_string(&mut buf, &entry.key);
+                        buf.extend_from_slice(&payload);
+                    } else {
+                        buf.push(RDB_TYPE_SET);
+                        rdb_encode_string(&mut buf, &entry.key);
+                        rdb_encode_length(&mut buf, members.len());
+                        for member in members {
+                            rdb_encode_string(&mut buf, member);
+                        }
+                    }
+                } else {
+                    buf.push(RDB_TYPE_SET);
+                    rdb_encode_string(&mut buf, &entry.key);
+                    rdb_encode_length(&mut buf, members.len());
+                    for member in members {
+                        rdb_encode_string(&mut buf, member);
+                    }
                 }
             }
             RdbValue::Hash(fields) => {
-                buf.push(RDB_TYPE_HASH);
-                rdb_encode_string(&mut buf, &entry.key);
-                rdb_encode_length(&mut buf, fields.len());
-                for (field, value) in fields {
-                    rdb_encode_string(&mut buf, field);
-                    rdb_encode_string(&mut buf, value);
+                if let Some(thresholds) = options.compact.as_ref()
+                    && let Some(payload) = encode_compact_hash_listpack(fields, thresholds)
+                {
+                    buf.push(RDB_TYPE_HASH_LISTPACK);
+                    rdb_encode_string(&mut buf, &entry.key);
+                    buf.extend_from_slice(&payload);
+                } else {
+                    buf.push(RDB_TYPE_HASH);
+                    rdb_encode_string(&mut buf, &entry.key);
+                    rdb_encode_length(&mut buf, fields.len());
+                    for (field, value) in fields {
+                        rdb_encode_string(&mut buf, field);
+                        rdb_encode_string(&mut buf, value);
+                    }
                 }
             }
             RdbValue::HashWithTtls(fields) => {
@@ -1094,13 +1198,21 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
                 }
             }
             RdbValue::SortedSet(members) => {
-                buf.push(RDB_TYPE_ZSET_2);
-                rdb_encode_string(&mut buf, &entry.key);
-                rdb_encode_length(&mut buf, members.len());
-                for (member, score) in members {
-                    rdb_encode_string(&mut buf, member);
-                    // ZSET2 encoding: 8-byte LE double
-                    buf.extend_from_slice(&score.to_le_bytes());
+                if let Some(thresholds) = options.compact.as_ref()
+                    && let Some(payload) = encode_compact_zset_listpack(members, thresholds)
+                {
+                    buf.push(RDB_TYPE_ZSET_LISTPACK);
+                    rdb_encode_string(&mut buf, &entry.key);
+                    buf.extend_from_slice(&payload);
+                } else {
+                    buf.push(RDB_TYPE_ZSET_2);
+                    rdb_encode_string(&mut buf, &entry.key);
+                    rdb_encode_length(&mut buf, members.len());
+                    for (member, score) in members {
+                        rdb_encode_string(&mut buf, member);
+                        // ZSET2 encoding: 8-byte LE double
+                        buf.extend_from_slice(&score.to_le_bytes());
+                    }
                 }
             }
             RdbValue::Stream(stream_entries, watermark, groups, metadata) => {
@@ -1123,6 +1235,177 @@ pub fn encode_rdb(entries: &[RdbEntry], aux: &[(&str, &str)]) -> Vec<u8> {
     buf.extend_from_slice(&checksum.to_le_bytes());
 
     buf
+}
+
+// ── Compact-shape selection (br-frankenredis-91kt) ─────────────────
+//
+// Each helper below returns `Some(payload)` if the input fits the
+// supplied threshold and the encoded form is well-formed, or `None`
+// to signal "fall back to the canonical (non-compact) RDB type tag."
+// `payload` does NOT include the leading type byte or the key — those
+// are emitted by `encode_rdb_internal` per-value-kind.
+
+fn encode_compact_set_intset(
+    members: &[Vec<u8>],
+    thresholds: &CompactRdbThresholds,
+) -> Option<Vec<u8>> {
+    if members.len() > thresholds.set_max_intset_entries {
+        return None;
+    }
+    // Every member must parse as an i64 with a canonical decimal
+    // representation matching itself (rejects "+1", "01", " 1", etc.
+    // which upstream's intset path also refuses).
+    let mut values = Vec::with_capacity(members.len());
+    for raw in members {
+        let s = std::str::from_utf8(raw).ok()?;
+        let value: i64 = s.parse().ok()?;
+        if value.to_string().as_bytes() != raw.as_slice() {
+            return None;
+        }
+        values.push(value);
+    }
+    let blob = encode_intset_blob(&values)?;
+    let mut out = Vec::with_capacity(blob.len() + 4);
+    rdb_encode_length(&mut out, blob.len());
+    out.extend_from_slice(&blob);
+    Some(out)
+}
+
+fn encode_compact_set_listpack(
+    members: &[Vec<u8>],
+    thresholds: &CompactRdbThresholds,
+) -> Option<Vec<u8>> {
+    if members.len() > thresholds.set_max_listpack_entries {
+        return None;
+    }
+    if members
+        .iter()
+        .any(|m| m.len() > thresholds.set_max_listpack_value)
+    {
+        return None;
+    }
+    let refs: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
+    let lp = encode_listpack_strings_blob(&refs)?;
+    let mut out = Vec::with_capacity(lp.len() + 4);
+    rdb_encode_length(&mut out, lp.len());
+    out.extend_from_slice(&lp);
+    Some(out)
+}
+
+fn encode_compact_hash_listpack(
+    fields: &[(Vec<u8>, Vec<u8>)],
+    thresholds: &CompactRdbThresholds,
+) -> Option<Vec<u8>> {
+    if fields.len() > thresholds.hash_max_listpack_entries {
+        return None;
+    }
+    if fields.iter().any(|(f, v)| {
+        f.len() > thresholds.hash_max_listpack_value || v.len() > thresholds.hash_max_listpack_value
+    }) {
+        return None;
+    }
+    let mut flat: Vec<&[u8]> = Vec::with_capacity(fields.len() * 2);
+    for (f, v) in fields {
+        flat.push(f.as_slice());
+        flat.push(v.as_slice());
+    }
+    let lp = encode_listpack_strings_blob(&flat)?;
+    let mut out = Vec::with_capacity(lp.len() + 4);
+    rdb_encode_length(&mut out, lp.len());
+    out.extend_from_slice(&lp);
+    Some(out)
+}
+
+fn encode_compact_zset_listpack(
+    members: &[(Vec<u8>, f64)],
+    thresholds: &CompactRdbThresholds,
+) -> Option<Vec<u8>> {
+    if members.len() > thresholds.zset_max_listpack_entries {
+        return None;
+    }
+    if members
+        .iter()
+        .any(|(m, _)| m.len() > thresholds.zset_max_listpack_value)
+    {
+        return None;
+    }
+    // Reject NaN scores — upstream's zset listpack path uses
+    // `d2string` which doesn't represent NaN; the wire form would be
+    // unparseable on the read side.
+    if members.iter().any(|(_, score)| score.is_nan()) {
+        return None;
+    }
+    let mut flat_owned: Vec<Vec<u8>> = Vec::with_capacity(members.len() * 2);
+    for (member, score) in members {
+        flat_owned.push(member.clone());
+        // Match upstream's `d2string` behavior: emit "%.17g"-style
+        // shortest-round-trip ASCII, but keep simple integer scores
+        // as plain decimals when possible. Rust's `{score}` Display
+        // yields "1", "2.5", "-3.14159" for the common cases; we
+        // collapse "x.0" to "x" to match upstream's integer path.
+        let formatted =
+            if score.fract() == 0.0 && *score >= -1e18 && *score <= 1e18 && score.is_finite() {
+                format!("{}", *score as i64)
+            } else {
+                format!("{score}")
+            };
+        flat_owned.push(formatted.into_bytes());
+    }
+    let flat: Vec<&[u8]> = flat_owned.iter().map(Vec::as_slice).collect();
+    let lp = encode_listpack_strings_blob(&flat)?;
+    let mut out = Vec::with_capacity(lp.len() + 4);
+    rdb_encode_length(&mut out, lp.len());
+    out.extend_from_slice(&lp);
+    Some(out)
+}
+
+fn encode_compact_list_quicklist2(
+    items: &[Vec<u8>],
+    thresholds: &CompactRdbThresholds,
+) -> Option<Vec<u8>> {
+    // Pack all items into a single listpack node (container=2 PACKED).
+    // Upstream lists are always quicklist-encoded; large lists span
+    // multiple PACKED nodes, but the simple single-node form covers
+    // the common case while staying upstream-compatible. If a single
+    // element exceeds the listpack-size budget, emit a PLAIN node
+    // (container=1) carrying the raw bytes.
+    if items.is_empty() {
+        return None;
+    }
+    let refs: Vec<&[u8]> = items.iter().map(Vec::as_slice).collect();
+    let lp = encode_listpack_strings_blob(&refs)?;
+    if lp.len() > thresholds.list_max_listpack_size {
+        // Try splitting into one-item-per-node PLAIN nodes when any
+        // single item exceeds the per-node budget. Mirrors upstream's
+        // quicklist-fallback path. Small lists with one giant element
+        // hit this branch.
+        if items
+            .iter()
+            .any(|item| item.len() > thresholds.list_max_listpack_size)
+        {
+            let mut buf = Vec::new();
+            rdb_encode_length(&mut buf, items.len());
+            for item in items {
+                if item.len() > thresholds.list_max_listpack_size {
+                    rdb_encode_length(&mut buf, 1); // PLAIN container
+                    rdb_encode_string(&mut buf, item);
+                } else {
+                    let one_lp = encode_listpack_strings_blob(&[item.as_slice()])?;
+                    rdb_encode_length(&mut buf, 2); // PACKED container
+                    rdb_encode_length(&mut buf, one_lp.len());
+                    buf.extend_from_slice(&one_lp);
+                }
+            }
+            return Some(buf);
+        }
+        return None;
+    }
+    let mut buf = Vec::new();
+    rdb_encode_length(&mut buf, 1); // node count = 1
+    rdb_encode_length(&mut buf, 2); // container = PACKED
+    rdb_encode_length(&mut buf, lp.len());
+    buf.extend_from_slice(&lp);
+    Some(buf)
 }
 
 fn encode_stream_rdb_value(
@@ -1299,6 +1582,104 @@ fn decode_intset_members(data: &[u8]) -> Option<Vec<Vec<u8>>> {
         members.push(value.to_string().into_bytes());
     }
     Some(members)
+}
+
+// ── Compact-encoding emitters (br-frankenredis-91kt) ────────────────
+//
+// Mirror the encoder helpers in `fr-store::dump_key` (DUMP/RESTORE
+// path) so RDB blobs emitted by `fr-persist::encode_rdb_with_options`
+// can pick the same compact RDB type tags upstream's `redis-server`
+// would have chosen for shapes within the listpack/intset thresholds.
+// fr-store can't be a dep of fr-persist (the dep arrow goes the other
+// way), so the helpers are duplicated here. Both sides round-trip
+// through the shared `decode_listpack` / `decode_intset_members`
+// readers.
+
+/// Encode a sorted-ascending intset blob (8-byte header + per-element
+/// little-endian fixed-width values). Returns `None` when any value
+/// exceeds the i64 range or `len > u32::MAX`.
+fn encode_intset_blob(values: &[i64]) -> Option<Vec<u8>> {
+    let width: u32 = if values.iter().all(|v| i16::try_from(*v).is_ok()) {
+        2
+    } else if values.iter().all(|v| i32::try_from(*v).is_ok()) {
+        4
+    } else {
+        8
+    };
+    let len = u32::try_from(values.len()).ok()?;
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let mut out = Vec::with_capacity(8usize.saturating_add(sorted.len() * width as usize));
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&len.to_le_bytes());
+    for value in &sorted {
+        match width {
+            2 => out.extend_from_slice(&i16::try_from(*value).ok()?.to_le_bytes()),
+            4 => out.extend_from_slice(&i32::try_from(*value).ok()?.to_le_bytes()),
+            8 => out.extend_from_slice(&value.to_le_bytes()),
+            _ => unreachable!("width is one of 2, 4, 8"),
+        }
+    }
+    Some(out)
+}
+
+fn encode_listpack_backlen(buf: &mut Vec<u8>, len: usize) {
+    if len <= 127 {
+        buf.push(len as u8);
+    } else if len < 16_383 {
+        buf.push((len >> 7) as u8);
+        buf.push(((len & 0x7F) as u8) | 0x80);
+    } else if len < 2_097_151 {
+        buf.push((len >> 14) as u8);
+        buf.push((((len >> 7) & 0x7F) as u8) | 0x80);
+        buf.push(((len & 0x7F) as u8) | 0x80);
+    } else if len < 268_435_455 {
+        buf.push((len >> 21) as u8);
+        buf.push((((len >> 14) & 0x7F) as u8) | 0x80);
+        buf.push((((len >> 7) & 0x7F) as u8) | 0x80);
+        buf.push(((len & 0x7F) as u8) | 0x80);
+    } else {
+        buf.push((len >> 28) as u8);
+        buf.push((((len >> 21) & 0x7F) as u8) | 0x80);
+        buf.push((((len >> 14) & 0x7F) as u8) | 0x80);
+        buf.push((((len >> 7) & 0x7F) as u8) | 0x80);
+        buf.push(((len & 0x7F) as u8) | 0x80);
+    }
+}
+
+fn encode_listpack_entry(buf: &mut Vec<u8>, entry: &[u8]) {
+    let start = buf.len();
+    if entry.len() < 64 {
+        buf.push(0x80 | entry.len() as u8);
+    } else if entry.len() < 4096 {
+        buf.push(0xE0 | ((entry.len() >> 8) as u8 & 0x0F));
+        buf.push((entry.len() & 0xFF) as u8);
+    } else {
+        buf.push(0xF0);
+        buf.extend_from_slice(&(entry.len() as u32).to_le_bytes());
+    }
+    buf.extend_from_slice(entry);
+    let data_len = buf.len() - start;
+    encode_listpack_backlen(buf, data_len);
+}
+
+/// Encode a flat list of byte-strings as an upstream-compatible
+/// listpack body (header + entries + 0xFF terminator). Returns `None`
+/// when the total wire size doesn't fit in a u32.
+fn encode_listpack_strings_blob(entries: &[&[u8]]) -> Option<Vec<u8>> {
+    let mut encoded = Vec::new();
+    for entry in entries {
+        encode_listpack_entry(&mut encoded, entry);
+    }
+    let total_bytes = 6usize.checked_add(encoded.len())?.checked_add(1)?;
+    let total_bytes = u32::try_from(total_bytes).ok()?;
+    let mut listpack = Vec::with_capacity(total_bytes as usize);
+    listpack.extend_from_slice(&total_bytes.to_le_bytes());
+    let entry_count = u16::try_from(entries.len()).unwrap_or(u16::MAX);
+    listpack.extend_from_slice(&entry_count.to_le_bytes());
+    listpack.extend_from_slice(&encoded);
+    listpack.push(0xFF);
+    Some(listpack)
 }
 
 fn rdb_decode_length(data: &[u8]) -> Option<(usize, usize)> {
@@ -2822,13 +3203,15 @@ mod tests {
     // ── RDB tests ────────────────────────────────────────────────────
 
     use super::{
-        RDB_CHECKSUM_LEN, RDB_OPCODE_AUX, RDB_OPCODE_EOF, RDB_OPCODE_EXPIRETIME_MS,
-        RDB_OPCODE_RESIZEDB, RDB_OPCODE_SELECTDB, RDB_TYPE_HASH_LISTPACK, RDB_TYPE_HASH_WITH_TTLS,
-        RDB_TYPE_LIST_QUICKLIST_2, RDB_TYPE_SET_INTSET, RDB_TYPE_SET_LISTPACK, RDB_TYPE_STRING,
-        RDB_TYPE_ZSET_LISTPACK, RdbEntry, RdbStreamConsumerGroup, RdbStreamMetadata,
-        RdbStreamPendingEntry, RdbValue, UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3, crc64_redis,
-        decode_intset_members, decode_rdb, decode_rdb_prefix, encode_rdb, lzf_compress,
-        lzf_decompress, rdb_decode_string, rdb_encode_length, rdb_encode_string,
+        CompactRdbThresholds, RDB_CHECKSUM_LEN, RDB_OPCODE_AUX, RDB_OPCODE_EOF,
+        RDB_OPCODE_EXPIRETIME_MS, RDB_OPCODE_RESIZEDB, RDB_OPCODE_SELECTDB, RDB_TYPE_HASH,
+        RDB_TYPE_HASH_LISTPACK, RDB_TYPE_HASH_WITH_TTLS, RDB_TYPE_LIST, RDB_TYPE_LIST_QUICKLIST_2,
+        RDB_TYPE_SET, RDB_TYPE_SET_INTSET, RDB_TYPE_SET_LISTPACK, RDB_TYPE_STRING, RDB_TYPE_ZSET_2,
+        RDB_TYPE_ZSET_LISTPACK, RdbEncodeOptions, RdbEntry, RdbStreamConsumerGroup,
+        RdbStreamMetadata, RdbStreamPendingEntry, RdbValue, UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3,
+        crc64_redis, decode_intset_members, decode_rdb, decode_rdb_prefix, encode_rdb,
+        encode_rdb_with_options, lzf_compress, lzf_decompress, rdb_decode_string,
+        rdb_encode_length, rdb_encode_string,
     };
 
     fn append_rdb_checksum(encoded: &mut Vec<u8>) {
@@ -3515,6 +3898,373 @@ mod tests {
         let checksum = crc64_redis(payload);
         payload.extend_from_slice(&checksum.to_le_bytes());
         std::mem::take(payload)
+    }
+
+    // ── Compact-type encoder selection (br-frankenredis-91kt) ─────
+
+    /// Helper: scan `encoded` for the leading type byte of the entry
+    /// for `key`. Skips REDIS magic, AUX records, SELECTDB / RESIZEDB,
+    /// and any expiry opcodes. Used by the compact-encoder tests to
+    /// confirm the chosen RDB type tag without decoding the full file.
+    fn type_byte_for_key(encoded: &[u8], key: &[u8]) -> Option<u8> {
+        let (_, aux) = decode_rdb(encoded).ok()?;
+        // Sanity: header should have at least one aux field for
+        // upstream-shaped output (we don't pin a specific one here).
+        let _ = aux;
+        // Re-walk the bytes manually to find the type byte preceding
+        // the key marker. The key wire form is rdb_encode_length(len)
+        // + key_bytes; we look for that exact 2..N-byte sequence.
+        let mut wire_key = Vec::new();
+        rdb_encode_length(&mut wire_key, key.len());
+        wire_key.extend_from_slice(key);
+        let mut idx = 0;
+        while idx + wire_key.len() <= encoded.len() {
+            if encoded[idx..idx + wire_key.len()] == wire_key[..] {
+                if idx > 0 {
+                    return Some(encoded[idx - 1]);
+                }
+                return None;
+            }
+            idx += 1;
+        }
+        None
+    }
+
+    #[test]
+    fn encode_rdb_default_options_emit_canonical_type_tags() {
+        let entries = vec![
+            RdbEntry {
+                db: 0,
+                key: b"s_canon".to_vec(),
+                value: RdbValue::Set(vec![b"alpha".to_vec(), b"beta".to_vec()]),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"h_canon".to_vec(),
+                value: RdbValue::Hash(vec![(b"f".to_vec(), b"v".to_vec())]),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"z_canon".to_vec(),
+                value: RdbValue::SortedSet(vec![(b"a".to_vec(), 1.0)]),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"l_canon".to_vec(),
+                value: RdbValue::List(vec![b"x".to_vec(), b"y".to_vec()]),
+                expire_ms: None,
+            },
+        ];
+        let encoded = encode_rdb(&entries, &[]);
+        // Default `encode_rdb` MUST stay byte-stable on the canonical
+        // (non-compact) tags so prior callers don't see drift.
+        assert_eq!(type_byte_for_key(&encoded, b"s_canon"), Some(RDB_TYPE_SET));
+        assert_eq!(type_byte_for_key(&encoded, b"h_canon"), Some(RDB_TYPE_HASH));
+        assert_eq!(
+            type_byte_for_key(&encoded, b"z_canon"),
+            Some(RDB_TYPE_ZSET_2)
+        );
+        assert_eq!(type_byte_for_key(&encoded, b"l_canon"), Some(RDB_TYPE_LIST));
+    }
+
+    #[test]
+    fn encode_rdb_with_compact_options_emits_compact_type_tags() {
+        let entries = vec![
+            RdbEntry {
+                db: 0,
+                key: b"s_intset".to_vec(),
+                value: RdbValue::Set(vec![b"1".to_vec(), b"2".to_vec(), b"3".to_vec()]),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"s_listpack".to_vec(),
+                value: RdbValue::Set(vec![b"alpha".to_vec(), b"beta".to_vec(), b"gamma".to_vec()]),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"h_listpack".to_vec(),
+                value: RdbValue::Hash(vec![
+                    (b"f1".to_vec(), b"v1".to_vec()),
+                    (b"f2".to_vec(), b"v2".to_vec()),
+                ]),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"z_listpack".to_vec(),
+                value: RdbValue::SortedSet(vec![
+                    (b"a".to_vec(), 1.0),
+                    (b"b".to_vec(), 2.5),
+                    (b"c".to_vec(), 7.25),
+                ]),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"l_quicklist".to_vec(),
+                value: RdbValue::List(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]),
+                expire_ms: None,
+            },
+        ];
+        let opts = RdbEncodeOptions {
+            compact: Some(CompactRdbThresholds::default()),
+        };
+        let encoded = encode_rdb_with_options(&entries, &[], opts);
+
+        assert_eq!(
+            type_byte_for_key(&encoded, b"s_intset"),
+            Some(RDB_TYPE_SET_INTSET),
+        );
+        assert_eq!(
+            type_byte_for_key(&encoded, b"s_listpack"),
+            Some(RDB_TYPE_SET_LISTPACK),
+        );
+        assert_eq!(
+            type_byte_for_key(&encoded, b"h_listpack"),
+            Some(RDB_TYPE_HASH_LISTPACK),
+        );
+        assert_eq!(
+            type_byte_for_key(&encoded, b"z_listpack"),
+            Some(RDB_TYPE_ZSET_LISTPACK),
+        );
+        assert_eq!(
+            type_byte_for_key(&encoded, b"l_quicklist"),
+            Some(RDB_TYPE_LIST_QUICKLIST_2),
+        );
+
+        // Round-trip back through decode_rdb — every emitted shape
+        // must restore byte-identical content.
+        let (decoded, _) = decode_rdb(&encoded).expect("compact-encoded RDB should decode");
+        assert_eq!(decoded.len(), entries.len());
+        for original in &entries {
+            let restored = decoded
+                .iter()
+                .find(|d| d.key == original.key)
+                .unwrap_or_else(|| panic!("missing key {:?} in decoded", original.key));
+            match (&original.value, &restored.value) {
+                (RdbValue::Set(a), RdbValue::Set(b)) => {
+                    let mut a = a.clone();
+                    let mut b = b.clone();
+                    a.sort();
+                    b.sort();
+                    assert_eq!(a, b, "set round-trip drift on key {:?}", original.key);
+                }
+                (RdbValue::Hash(a), RdbValue::Hash(b)) => {
+                    let mut a = a.clone();
+                    let mut b = b.clone();
+                    a.sort();
+                    b.sort();
+                    assert_eq!(a, b, "hash round-trip drift on key {:?}", original.key);
+                }
+                (RdbValue::SortedSet(a), RdbValue::SortedSet(b)) => {
+                    assert_eq!(a.len(), b.len());
+                    for ((am, asc), (bm, bsc)) in a.iter().zip(b.iter()) {
+                        assert_eq!(am, bm, "zset member drift");
+                        assert!((asc - bsc).abs() < 1e-9, "zset score drift");
+                    }
+                }
+                (RdbValue::List(a), RdbValue::List(b)) => {
+                    assert_eq!(a, b, "list round-trip drift on key {:?}", original.key);
+                }
+                _ => panic!("kind mismatch on key {:?}", original.key),
+            }
+        }
+    }
+
+    #[test]
+    fn encode_rdb_compact_falls_back_to_canonical_above_thresholds() {
+        // Set with all-integer members BUT >set_max_intset_entries:
+        // upstream falls through intset → listpack → hashtable. With
+        // 600 entries (over both intset=512 and listpack=128), the
+        // canonical RDB_TYPE_SET should win.
+        let big_int_members: Vec<Vec<u8>> =
+            (0..600).map(|i: i64| i.to_string().into_bytes()).collect();
+        // Hash with one value > hash_max_listpack_value (64 bytes).
+        let big_hash = vec![(b"f".to_vec(), vec![b'x'; 100])];
+        // Set with one member > set_max_listpack_value.
+        let big_set = vec![b"a".to_vec(), vec![b'b'; 100]];
+        // Zset with one member > zset_max_listpack_value.
+        let big_zset = vec![(b"a".to_vec(), 1.0), (vec![b'm'; 100], 2.0)];
+
+        let entries = vec![
+            RdbEntry {
+                db: 0,
+                key: b"s_big_int".to_vec(),
+                value: RdbValue::Set(big_int_members),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"h_big_value".to_vec(),
+                value: RdbValue::Hash(big_hash),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"s_big_value".to_vec(),
+                value: RdbValue::Set(big_set),
+                expire_ms: None,
+            },
+            RdbEntry {
+                db: 0,
+                key: b"z_big_value".to_vec(),
+                value: RdbValue::SortedSet(big_zset),
+                expire_ms: None,
+            },
+        ];
+        let opts = RdbEncodeOptions {
+            compact: Some(CompactRdbThresholds::default()),
+        };
+        let encoded = encode_rdb_with_options(&entries, &[], opts);
+
+        // All four must fall back to canonical (non-compact) tags.
+        assert_eq!(
+            type_byte_for_key(&encoded, b"s_big_int"),
+            Some(RDB_TYPE_SET),
+            "600-entry integer set must overshoot intset threshold (512) into RDB_TYPE_SET",
+        );
+        assert_eq!(
+            type_byte_for_key(&encoded, b"h_big_value"),
+            Some(RDB_TYPE_HASH),
+            "100-byte value must overshoot hash listpack value threshold (64) into RDB_TYPE_HASH",
+        );
+        assert_eq!(
+            type_byte_for_key(&encoded, b"s_big_value"),
+            Some(RDB_TYPE_SET),
+            "100-byte member must overshoot set listpack value threshold (64) into RDB_TYPE_SET",
+        );
+        assert_eq!(
+            type_byte_for_key(&encoded, b"z_big_value"),
+            Some(RDB_TYPE_ZSET_2),
+            "100-byte member must overshoot zset listpack value threshold (64) into RDB_TYPE_ZSET_2",
+        );
+
+        // Decode round-trip must still succeed (the canonical-shape
+        // emitter has been on this path the whole time).
+        let (decoded, _) = decode_rdb(&encoded).expect("compact fallback RDB should decode");
+        assert_eq!(decoded.len(), entries.len());
+    }
+
+    #[test]
+    fn encode_rdb_compact_set_intset_rejects_non_canonical_integers() {
+        // Members "+1" and "01" parse as integers but DON'T round-trip
+        // to the same byte string — upstream's intset encoder rejects
+        // these. The encoder must fall back to the listpack form (or
+        // canonical hashtable if listpack is over threshold).
+        let opts = RdbEncodeOptions {
+            compact: Some(CompactRdbThresholds::default()),
+        };
+        for non_canonical in [b"+1".to_vec(), b"01".to_vec(), b" 1".to_vec()] {
+            let entries = vec![RdbEntry {
+                db: 0,
+                key: b"s".to_vec(),
+                value: RdbValue::Set(vec![non_canonical.clone(), b"2".to_vec()]),
+                expire_ms: None,
+            }];
+            let encoded = encode_rdb_with_options(&entries, &[], opts);
+            // Must not be intset — intset would round-trip "+1" to "1"
+            // and lose the original byte form.
+            assert_ne!(
+                type_byte_for_key(&encoded, b"s"),
+                Some(RDB_TYPE_SET_INTSET),
+                "non-canonical integer member {:?} must NOT trigger intset encoding",
+                non_canonical,
+            );
+        }
+    }
+
+    /// br-frankenredis-91kt acceptance: for compact-encoded
+    /// upstream-shaped RDB blobs (the seeds emitted by
+    /// `fuzz/scripts/gen_compact_rdb_seeds.py`), `decode_rdb` followed
+    /// by `encode_rdb_with_options(compact=Some(default))` must select
+    /// the **same compact RDB type tag** for each shape. That's the
+    /// "byte-identical re-emit" contract scoped to type-tag selection
+    /// — full byte-identical equality also depends on aux fields,
+    /// db-header ordering, and value-element ordering, which are
+    /// shape-independent and tracked separately.
+    #[test]
+    fn compact_encoder_round_trips_upstream_shaped_seeds() {
+        let corpus_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/fuzz_rdb_decoder");
+        if !corpus_root.exists() {
+            eprintln!(
+                "[SKIP] fuzz corpus dir {} not present",
+                corpus_root.display()
+            );
+            return;
+        }
+
+        let well_formed: &[(&str, u8, &[u8])] = &[
+            ("compact_intset_small_16bit", RDB_TYPE_SET_INTSET, b"si"),
+            ("compact_set_listpack", RDB_TYPE_SET_LISTPACK, b"slp"),
+            ("compact_hash_listpack", RDB_TYPE_HASH_LISTPACK, b"hlp"),
+            ("compact_zset_listpack", RDB_TYPE_ZSET_LISTPACK, b"zlp"),
+            (
+                "compact_quicklist2_packed",
+                RDB_TYPE_LIST_QUICKLIST_2,
+                b"lq",
+            ),
+        ];
+
+        for (seed_name, expected_tag, key) in well_formed {
+            let path = corpus_root.join(seed_name);
+            let seed_bytes = std::fs::read(&path)
+                .unwrap_or_else(|e| panic!("read corpus seed {}: {e}", path.display()));
+            let (entries, _) = decode_rdb(&seed_bytes)
+                .unwrap_or_else(|e| panic!("decode upstream seed {seed_name}: {e:?}"));
+
+            let opts = RdbEncodeOptions {
+                compact: Some(CompactRdbThresholds::default()),
+            };
+            let re_emitted = encode_rdb_with_options(&entries, &[], opts);
+
+            let re_emitted_tag = type_byte_for_key(&re_emitted, key)
+                .unwrap_or_else(|| panic!("re-emitted RDB missing key {key:?}"));
+            assert_eq!(
+                re_emitted_tag,
+                *expected_tag,
+                "compact re-emit drifted: seed {seed_name} (key {:?}) decoded → \
+                 re-encoded with type byte 0x{:02X}, expected 0x{:02X}",
+                std::str::from_utf8(key).unwrap_or("?"),
+                re_emitted_tag,
+                expected_tag,
+            );
+
+            // And the re-emitted bytes must themselves decode cleanly
+            // back into the same value shape.
+            let (re_decoded, _) = decode_rdb(&re_emitted).unwrap_or_else(|e| {
+                panic!(
+                    "re-emitted compact-encoded RDB for seed {seed_name} failed to decode: {e:?}"
+                )
+            });
+            assert_eq!(re_decoded.len(), entries.len());
+        }
+    }
+
+    #[test]
+    fn encode_rdb_compact_zset_listpack_rejects_nan() {
+        // Upstream's d2string can't represent NaN; the zset listpack
+        // path must fall back rather than emit an unparseable wire form.
+        let entries = vec![RdbEntry {
+            db: 0,
+            key: b"z_nan".to_vec(),
+            value: RdbValue::SortedSet(vec![(b"a".to_vec(), f64::NAN)]),
+            expire_ms: None,
+        }];
+        let opts = RdbEncodeOptions {
+            compact: Some(CompactRdbThresholds::default()),
+        };
+        let encoded = encode_rdb_with_options(&entries, &[], opts);
+        assert_eq!(
+            type_byte_for_key(&encoded, b"z_nan"),
+            Some(RDB_TYPE_ZSET_2),
+            "NaN score must force fallback to RDB_TYPE_ZSET_2",
+        );
     }
 
     #[test]
