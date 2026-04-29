@@ -29223,6 +29223,203 @@ mod tests {
     ///   2. Representative deterministic seeds produce the exact
     ///      expected `RespFrame` so the corpus locks the eval
     ///      result.
+    /// Lock the contract for the structured corpus seeds in
+    /// `fuzz/corpus/fuzz_client_reply/`. The fuzz target parses
+    /// each input as newline-separated argv and feeds every
+    /// command through `apply_client_reply_state`, asserting the
+    /// real impl matches the harness's shadow model.
+    ///
+    /// The seed generator (`fuzz/scripts/gen_client_reply_seeds.py`)
+    /// covers each CLIENT REPLY transition + interaction with
+    /// non-CLIENT-REPLY commands. This test pins:
+    ///
+    ///   1. Every accept seed runs through the parser without
+    ///      returning Err (the per-command result is `Ok(())`
+    ///      regardless of the post-state shape).
+    ///   2. Pinned representative seeds drive the documented
+    ///      state transitions: ON → off=false; OFF → off=true,
+    ///      suppress=true; SKIP → skip_next=true, suppress=true;
+    ///      a non-CLIENT-REPLY command after OFF stays suppressed
+    ///      until the next ON.
+    ///   3. Reject seeds (wrong arity, invalid mode token) surface
+    ///      a CommandError without panicking.
+    #[test]
+    fn fuzz_client_reply_corpus_matches_documented_contract() {
+        use crate::apply_client_reply_state;
+        use fr_store::ClientReplyState;
+        use std::path::Path;
+
+        let corpus_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/fuzz_client_reply");
+        if !corpus_root.exists() {
+            return;
+        }
+
+        // Mirror the harness's commands_from_raw parser: split on
+        // \n and \0 into commands; whitespace-separated argv per
+        // command. Empty argv lines are skipped.
+        fn parse_commands(body: &[u8]) -> Vec<Vec<Vec<u8>>> {
+            let mut commands = Vec::new();
+            let mut current_command: Vec<Vec<u8>> = Vec::new();
+            let mut current_arg: Vec<u8> = Vec::new();
+            let flush_arg = |cmd: &mut Vec<Vec<u8>>, arg: &mut Vec<u8>| {
+                if !arg.is_empty() {
+                    cmd.push(std::mem::take(arg));
+                }
+            };
+            let flush_command = |cmds: &mut Vec<Vec<Vec<u8>>>, cmd: &mut Vec<Vec<u8>>| {
+                if !cmd.is_empty() {
+                    cmds.push(std::mem::take(cmd));
+                }
+            };
+            for &byte in body {
+                if byte == b'\n' || byte == 0 {
+                    flush_arg(&mut current_command, &mut current_arg);
+                    flush_command(&mut commands, &mut current_command);
+                } else if byte.is_ascii_whitespace() {
+                    flush_arg(&mut current_command, &mut current_arg);
+                } else {
+                    current_arg.push(byte);
+                }
+            }
+            flush_arg(&mut current_command, &mut current_arg);
+            flush_command(&mut commands, &mut current_command);
+            commands
+        }
+
+        fn read_seed(corpus_root: &Path, name: &str) -> Vec<u8> {
+            std::fs::read(corpus_root.join(name))
+                .unwrap_or_else(|err| panic!("read seed {name}: {err}"))
+        }
+
+        // Accept-class: every command in every seed must return
+        // Ok(()). State drift is checked by the fuzz target itself
+        // against the shadow model; here we just lock the no-error
+        // property on real ground truth.
+        let accepts: &[&str] = &[
+            "empty.txt",
+            "whitespace_only.txt",
+            "reply_on_alone.txt",
+            "reply_off_alone.txt",
+            "reply_skip_alone.txt",
+            "on_off_on_cycle.txt",
+            "off_then_command.txt",
+            "skip_then_one_command.txt",
+            "skip_then_two_commands.txt",
+            "off_command_then_on.txt",
+            "lowercase_subcommand.txt",
+            "mixed_case_subcommand.txt",
+            "uppercase_value.txt",
+            "mixed_case_value.txt",
+            "multiple_skips_only_one_persists.txt",
+            "client_other_subcommand_mixed.txt",
+            "echo_hello_alone.txt",
+            "ping_alone.txt",
+            "ping_then_echo.txt",
+            "long_alternating_off_on.txt",
+            "many_skips_with_intervening_commands.txt",
+            "nul_separator_in_stream.txt",
+        ];
+        assert!(
+            accepts.len() >= 14,
+            "fuzz_client_reply accept seeds must have >= 14 entries"
+        );
+        for name in accepts {
+            let body = read_seed(&corpus_root, name);
+            let commands = parse_commands(&body);
+            let mut state = ClientReplyState::default();
+            for argv in &commands {
+                apply_client_reply_state(argv, &mut state).unwrap_or_else(|err| {
+                    panic!("seed {name} argv {argv:?} must apply cleanly: {err:?}")
+                });
+            }
+        }
+
+        // Pinned state-transition expectations.
+
+        // ON sets off=false, skip_next=false, suppress=false.
+        let mut state = ClientReplyState::default();
+        for argv in parse_commands(&read_seed(&corpus_root, "reply_on_alone.txt")) {
+            apply_client_reply_state(&argv, &mut state).unwrap();
+        }
+        assert!(!state.off);
+        assert!(!state.skip_next);
+        assert!(!state.suppress_current_response);
+
+        // OFF sets off=true, suppress=true (the OFF reply itself
+        // is also suppressed).
+        let mut state = ClientReplyState::default();
+        for argv in parse_commands(&read_seed(&corpus_root, "reply_off_alone.txt")) {
+            apply_client_reply_state(&argv, &mut state).unwrap();
+        }
+        assert!(state.off);
+        assert!(state.suppress_current_response);
+
+        // SKIP sets skip_next=true, suppress=true (one-shot).
+        let mut state = ClientReplyState::default();
+        for argv in parse_commands(&read_seed(&corpus_root, "reply_skip_alone.txt")) {
+            apply_client_reply_state(&argv, &mut state).unwrap();
+        }
+        assert!(!state.off);
+        assert!(state.skip_next);
+        assert!(state.suppress_current_response);
+
+        // SKIP → PING → PING: only the FIRST PING is suppressed,
+        // the second responds. After the sequence, skip_next is
+        // false.
+        let mut state = ClientReplyState::default();
+        let cmds = parse_commands(&read_seed(&corpus_root, "skip_then_two_commands.txt"));
+        // command 0: SKIP (skip_next=true, suppress=true)
+        apply_client_reply_state(&cmds[0], &mut state).unwrap();
+        assert!(state.skip_next);
+        assert!(state.suppress_current_response);
+        // command 1: PING (consumes skip_next, suppress=true)
+        apply_client_reply_state(&cmds[1], &mut state).unwrap();
+        assert!(!state.skip_next, "skip_next must clear after first command");
+        assert!(state.suppress_current_response);
+        // command 2: PING (no suppression any more)
+        apply_client_reply_state(&cmds[2], &mut state).unwrap();
+        assert!(!state.suppress_current_response);
+
+        // OFF → command → ON: off stays true through the
+        // non-CLIENT-REPLY command, then ON clears it.
+        let mut state = ClientReplyState::default();
+        let cmds = parse_commands(&read_seed(&corpus_root, "off_command_then_on.txt"));
+        apply_client_reply_state(&cmds[0], &mut state).unwrap(); // OFF
+        assert!(state.off);
+        apply_client_reply_state(&cmds[1], &mut state).unwrap(); // GET k1
+        assert!(state.off);
+        assert!(state.suppress_current_response);
+        apply_client_reply_state(&cmds[2], &mut state).unwrap(); // ON
+        assert!(!state.off);
+
+        // ── Reject-class: parser must return Err.
+        let rejects: &[&str] = &[
+            "reply_no_mode_arg.txt",
+            "reply_extra_arg.txt",
+            "reply_bogus_mode.txt",
+            "reply_with_two_extras.txt",
+            "reply_empty_mode.txt",
+            "reply_lowercase_invalid_mode.txt",
+            "reply_numeric_mode.txt",
+        ];
+        for name in rejects {
+            let body = read_seed(&corpus_root, name);
+            let commands = parse_commands(&body);
+            let mut at_least_one_err = false;
+            let mut state = ClientReplyState::default();
+            for argv in &commands {
+                if apply_client_reply_state(argv, &mut state).is_err() {
+                    at_least_one_err = true;
+                }
+            }
+            assert!(
+                at_least_one_err,
+                "seed {name} must surface at least one Err"
+            );
+        }
+    }
+
     #[test]
     fn fuzz_lua_eval_corpus_matches_documented_contract() {
         use std::path::Path;
