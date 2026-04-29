@@ -20515,6 +20515,173 @@ user bob reset off nopass +@all
     /// This test pins that property on the seeded valid corpus AND
     /// asserts the reject seeds surface an Err so libfuzzer doesn't
     /// drift toward phantom successes if the parser ever loosens.
+    /// Lock the contract for the structured corpus seeds in
+    /// `fuzz/corpus/fuzz_runtime_execute_bytes/`. The fuzz target
+    /// dispatches the first byte two ways (`mode % 2`):
+    ///
+    ///   0 → fuzz_raw_bytes (body fed straight to execute_bytes;
+    ///       if the bytes parse as a RESP frame, the reply must
+    ///       match execute_frame on that parsed frame)
+    ///   1 → fuzz_valid_command (arbitrary StructuredCommand,
+    ///       structurally encoded as a RESP array)
+    ///
+    /// The seed generator
+    /// (`fuzz/scripts/gen_runtime_execute_bytes_seeds.py`) writes
+    /// mode-byte = 0x00 seeds covering canonical RESP commands
+    /// (PING / ECHO / SET / GET / SUBSCRIBE / etc.), inline-protocol
+    /// form, and adversarial inputs (negative bulk length, RESP3
+    /// prefix rejection, truncated bulk length).
+    ///
+    /// The test verifies:
+    ///   1. Every seed runs through `Runtime::execute_bytes`
+    ///      without panicking. Same invariant the fuzz target
+    ///      asserts.
+    ///   2. For seeds whose body parses as a single RESP frame
+    ///      under the runtime's wire-side parser config,
+    ///      execute_bytes must produce the same reply bytes as
+    ///      execute_frame on that parsed frame (the
+    ///      `from_bytes == from_frame` invariant the harness
+    ///      tests).
+    #[test]
+    fn fuzz_runtime_execute_bytes_corpus_matches_documented_contract() {
+        use fr_protocol::{ParserConfig, parse_frame_with_config};
+        use std::path::Path;
+
+        let corpus_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/fuzz_runtime_execute_bytes");
+        if !corpus_root.exists() {
+            return;
+        }
+
+        fn read_body(corpus_root: &Path, name: &str) -> Vec<u8> {
+            let bytes = std::fs::read(corpus_root.join(name))
+                .unwrap_or_else(|err| panic!("read seed {name}: {err}"));
+            assert!(
+                !bytes.is_empty(),
+                "seed {name} is shorter than the mode byte"
+            );
+            assert_eq!(
+                bytes[0], 0x00,
+                "seed {name} mode byte must be 0x00 (raw_bytes path)"
+            );
+            bytes[1..].to_vec()
+        }
+
+        // Mirror the runtime's wire-side parser config (see the
+        // fuzz harness's `default_runtime_parser_config`).
+        let parser_config = ParserConfig {
+            max_bulk_len: 8 * 1024 * 1024,
+            max_array_len: 1024,
+            max_recursion_depth: 128,
+            allow_resp3: false,
+        };
+
+        // Hardcoded list of 0x00-prefixed seeds the generator
+        // writes. The original 3 seeds (ping.resp / invalid_bulk
+        // / subscribe_multi.resp) use a 0x30 ('0') prefix which
+        // also lands on the raw path (`mode % 2 == 0`); they stay
+        // in tree as additional libfuzzer starting points but
+        // aren't checked here.
+        let mode_prefixed: &[&str] = &[
+            "ping_no_arg.resp",
+            "ping_with_payload.resp",
+            "echo.resp",
+            "select_db_zero.resp",
+            "set_basic.resp",
+            "get_basic.resp",
+            "del_basic.resp",
+            "exists_basic.resp",
+            "incr.resp",
+            "decr.resp",
+            "type_check.resp",
+            "ttl_check.resp",
+            "dbsize.resp",
+            "time.resp",
+            "keys_glob_all.resp",
+            "info_default.resp",
+            "info_server_section.resp",
+            "config_get_maxmem.resp",
+            "client_getname.resp",
+            "client_setname.resp",
+            "hello_resp2.resp",
+            "reset.resp",
+            "set_with_ex.resp",
+            "set_nx.resp",
+            "subscribe_one_channel.resp",
+            "subscribe_multi_channels.resp",
+            "empty_array.resp",
+            "unknown_command.resp",
+            "set_wrong_arity.resp",
+            "get_wrong_arity_zero.resp",
+            "inline_ping.resp",
+            "inline_echo_with_arg.resp",
+            "negative_bulk_len.resp",
+            "bulk_length_too_large.resp",
+            "truncated_bulk_length_no_crlf.resp",
+            "array_negative_count.resp",
+            "resp3_map_prefix_rejected.resp",
+            "resp3_set_prefix_rejected.resp",
+            "empty_resp_body.resp",
+            "just_crlf.resp",
+            "bare_lf.resp",
+        ];
+        assert!(
+            mode_prefixed.len() >= 14,
+            "fuzz_runtime_execute_bytes mode-prefixed seed list must have >= 14 entries; got {}",
+            mode_prefixed.len()
+        );
+
+        // Seeds whose reply contains time-derived fields (server
+        // uptime, run_id, etc. via INFO + TIME) are
+        // deterministic-by-input but two fresh Runtime instances
+        // observe different wall-clock starts, so the fuzz
+        // harness's strict bytes==bytes equality only holds on
+        // commands without per-instance state. Exclude those from
+        // the equality check; the no-panic contract still applies.
+        // Commands whose reply depends on per-instance state
+        // (client id sequence, uptime, run_id, etc.) — two fresh
+        // Runtime instances observe different values. The fuzz
+        // harness's bytes==bytes invariant assumes pure-input
+        // commands; for these we only verify no-panic.
+        let nondeterministic_across_instances: &[&str] = &[
+            "info_default.resp",
+            "info_server_section.resp",
+            "time.resp",
+            "hello_resp2.resp",
+            "client_getname.resp",
+            "client_setname.resp",
+            "subscribe_one_channel.resp",
+            "subscribe_multi_channels.resp",
+            "reset.resp",
+        ];
+
+        for name in mode_prefixed {
+            let body = read_body(&corpus_root, name);
+
+            // Invariant 1: execute_bytes must not panic.
+            let mut rt_bytes = Runtime::default_strict();
+            let _ = rt_bytes.execute_bytes(&body, 1_000);
+
+            // Invariant 2: when the body parses as a frame under
+            // the runtime's parser config, execute_bytes must
+            // match execute_frame on that frame (the fuzz
+            // harness's `from_bytes == from_frame` invariant).
+            if nondeterministic_across_instances.contains(name) {
+                continue;
+            }
+            if let Ok(parsed) = parse_frame_with_config(&body, &parser_config) {
+                let mut rt_bytes2 = Runtime::default_strict();
+                let from_bytes = rt_bytes2.execute_bytes(&body, 1_000);
+                let mut rt_frame = Runtime::default_strict();
+                let from_frame = rt_frame.execute_frame(parsed.frame, 1_000).to_bytes();
+                assert_eq!(
+                    from_bytes, from_frame,
+                    "seed {name}: execute_bytes / execute_frame replies diverged"
+                );
+            }
+        }
+    }
+
     #[test]
     fn fuzz_acl_rules_corpus_matches_documented_contract() {
         use std::path::Path;
