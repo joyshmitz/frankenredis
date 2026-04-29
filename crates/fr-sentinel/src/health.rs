@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{InstanceLink, PING_PERIOD_MS, Role, SentinelRedisInstance};
+use crate::{InstanceLink, Role, SentinelRedisInstance, PING_PERIOD_MS};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HealthCheckResult {
@@ -140,7 +140,10 @@ pub fn parse_info_response(info: &str) -> ParsedInfo {
                     }
                 }
                 "master_link_down_since_seconds" => {
-                    result.master_link_down_since = value.parse::<u64>().ok().map(|s| s * 1000);
+                    result.master_link_down_since = value
+                        .parse::<u64>()
+                        .ok()
+                        .map(|seconds| seconds.saturating_mul(1000));
                 }
                 "slave_repl_offset" | "master_repl_offset"
                     if result.slave_repl_offset.is_none() =>
@@ -335,6 +338,15 @@ slave_priority:100
         assert_eq!(parsed.master_link_status, Some(true));
         assert_eq!(parsed.slave_repl_offset, Some(54321));
         assert_eq!(parsed.slave_priority, Some(100));
+    }
+
+    #[test]
+    fn parse_info_saturates_huge_link_down_duration() {
+        let parsed = parse_info_response(
+            "role:slave\nmaster_link_down_since_seconds:18446744073709551615\n",
+        );
+
+        assert_eq!(parsed.master_link_down_since, Some(u64::MAX));
     }
 
     #[test]
