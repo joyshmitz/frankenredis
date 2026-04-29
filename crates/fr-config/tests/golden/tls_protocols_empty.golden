@@ -1,3 +1,4 @@
-Error: ProtocolsParseContractViolation(
-    "empty tls-protocols list",
-)
+[
+    TlsV1_2,
+    TlsV1_3,
+]

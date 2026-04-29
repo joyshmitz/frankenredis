@@ -457,7 +457,7 @@ impl Default for TlsConfig {
             cert_file: None,
             key_file: None,
             ca_file: None,
-            protocols: vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
+            protocols: default_tls_protocols(),
             ciphers: None,
             auth_clients: TlsAuthClients::Required,
             session_caching: true,
@@ -636,6 +636,10 @@ pub fn tls_directive_policy(directive: TlsDirective) -> TlsDirectivePolicy {
     }
 }
 
+fn default_tls_protocols() -> Vec<TlsProtocol> {
+    vec![TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3]
+}
+
 pub fn validate_tls_directive_value(
     directive: TlsDirective,
     value: &str,
@@ -713,6 +717,10 @@ pub fn validate_tls_directive_value(
 }
 
 pub fn parse_tls_protocols(raw: &str) -> Result<Vec<TlsProtocol>, TlsCfgError> {
+    if raw.is_empty() {
+        return Ok(default_tls_protocols());
+    }
+
     let mut out = Vec::new();
     let raw = raw.trim_matches(|ch: char| ch.is_ascii_whitespace());
     for token in raw.split(' ').filter(|token| !token.is_empty()) {
@@ -957,10 +965,11 @@ mod tests {
         ConfigFileParseErrorReason, DecisionAction, DriftSeverity, HARDENED_ALLOWLIST_DEFAULT,
         HardenedDeviationCategory, Mode, RuntimePolicy, ThreatClass, TlsAuthClients, TlsCfgError,
         TlsConfig, TlsDirective, TlsListenerTransition, TlsProtocol, TlsRuntimeState,
-        evaluate_tls_hardened_deviation, parse_redis_config, parse_redis_config_bytes,
-        parse_tls_bool, parse_tls_protocols, plan_tls_runtime_apply, rewrite_tls_directives,
-        split_config_line_args, split_config_line_args_bytes, tls_bool_token, tls_directive_policy,
-        validate_bind_transition_atomicity, validate_tls_config, validate_tls_directive_value,
+        default_tls_protocols, evaluate_tls_hardened_deviation, parse_redis_config,
+        parse_redis_config_bytes, parse_tls_bool, parse_tls_protocols, plan_tls_runtime_apply,
+        rewrite_tls_directives, split_config_line_args, split_config_line_args_bytes,
+        tls_bool_token, tls_directive_policy, validate_bind_transition_atomicity,
+        validate_tls_config, validate_tls_directive_value,
     };
 
     #[test]
@@ -1066,6 +1075,8 @@ mod tests {
             err.reason_code(),
             "tlscfg.protocols_parse_contract_violation"
         );
+
+        assert_eq!(parse_tls_protocols(""), Ok(default_tls_protocols()));
 
         let err = parse_tls_protocols("tls1.2").expect_err("must reject Redis-unsupported alias");
         assert_eq!(
@@ -1662,6 +1673,7 @@ mod tests {
                 "trailing_whitespace.txt",
                 &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3],
             ),
+            ("empty.txt", &[TlsProtocol::TlsV1_2, TlsProtocol::TlsV1_3]),
         ];
         assert!(
             accepts.len() >= 14,
@@ -1681,7 +1693,6 @@ mod tests {
 
         // Reject-class.
         let rejects: &[&str] = &[
-            "empty.txt",
             "whitespace_only.txt",
             "commas_only.txt",
             "canonical_comma_separated.txt",
