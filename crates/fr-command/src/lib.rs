@@ -4989,7 +4989,8 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             "ERR syntax error, LIMIT cannot be used without the special ~ option".to_string(),
         ));
     }
-    let _ = trim_limit;
+    let trim_limit_usize: Option<usize> = trim_limit
+        .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
 
     // argv[idx] should now be the ID, followed by field-value pairs
     if idx >= argv.len() {
@@ -5061,19 +5062,22 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     store.xadd(&argv[1], id, &fields, now_ms)?;
 
     // Apply inline trimming after the add. Approximate trimming
-    // (~) is best-effort: upstream lazily skips trimming when the
-    // trailing radix-tree node isn't full, and we model that as a
-    // no-op. Exact trimming (= or absent qualifier) always
-    // executes. (br-frankenredis-r71v)
+    // (~) without LIMIT is best-effort: upstream lazily skips trimming
+    // when the trailing radix-tree node isn't full, and we model that
+    // as a no-op. Approximate trimming WITH `LIMIT n` (Redis 6.2+
+    // dialect) MUST cap removal at n entries; the count is bounded
+    // and cheap so we always honor it. Exact trimming (= or absent
+    // qualifier) always executes and rejects LIMIT upstream of this
+    // block. (br-frankenredis-r71v + LIMIT clause follow-up)
     if let Some(max_len) = trim_maxlen
-        && !trim_approx
+        && (!trim_approx || trim_limit_usize.is_some())
     {
-        let _ = store.xtrim(&argv[1], max_len, now_ms);
+        let _ = store.xtrim(&argv[1], max_len, trim_limit_usize, now_ms);
     }
     if let Some(min_id) = trim_minid
-        && !trim_approx
+        && (!trim_approx || trim_limit_usize.is_some())
     {
-        let _ = store.xtrim_minid(&argv[1], min_id, now_ms);
+        let _ = store.xtrim_minid(&argv[1], min_id, trim_limit_usize, now_ms);
     }
 
     Ok(RespFrame::BulkString(Some(format_stream_id(id))))
@@ -5113,7 +5117,18 @@ fn xdel(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
 }
 
 fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
-    if argv.len() < 4 || argv.len() > 5 {
+    // Upstream t_stream.c::xtrimCommand → streamParseAddOrTrimArgsOrReply:
+    //   XTRIM key (MAXLEN | MINID) [= | ~] threshold [LIMIT count]
+    //
+    // LIMIT requires the approximate (`~`) modifier and a trimming
+    // strategy. The exact (`=`) form rejects LIMIT, and the bare
+    // form (no = / ~) defaults to exact and likewise rejects LIMIT.
+    // argc inclusive of the command name ranges 4..=7:
+    //   4 → key + STRAT + threshold
+    //   5 → key + STRAT + (= | ~) + threshold
+    //   6 → key + STRAT + threshold + LIMIT count           (= → error)
+    //   7 → key + STRAT + (= | ~) + threshold + LIMIT count
+    if argv.len() < 4 || argv.len() > 7 {
         return Err(CommandError::WrongArity("XTRIM"));
     }
 
@@ -5123,15 +5138,54 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         return Err(CommandError::SyntaxError);
     }
 
-    // Skip optional = or ~ modifier
-    let threshold_idx = if argv.len() == 5 {
-        if !eq_ascii_command(&argv[3], b"=") && !eq_ascii_command(&argv[3], b"~") {
+    let mut idx = 3usize;
+    let mut approx = false;
+    if idx < argv.len() && (eq_ascii_command(&argv[idx], b"=") || eq_ascii_command(&argv[idx], b"~"))
+    {
+        approx = eq_ascii_command(&argv[idx], b"~");
+        idx += 1;
+    }
+
+    if idx >= argv.len() {
+        return Err(CommandError::SyntaxError);
+    }
+    let threshold_idx = idx;
+    idx += 1;
+
+    let mut limit: Option<usize> = None;
+    if idx < argv.len() {
+        if !eq_ascii_command(&argv[idx], b"LIMIT") {
             return Err(CommandError::SyntaxError);
         }
-        4
-    } else {
-        3
-    };
+        idx += 1;
+        if idx >= argv.len() {
+            return Err(CommandError::SyntaxError);
+        }
+        let n = parse_i64_arg(&argv[idx])?;
+        if n < 0 {
+            return Ok(RespFrame::Error(
+                "ERR The LIMIT argument must be >= 0.".to_string(),
+            ));
+        }
+        if !approx {
+            return Ok(RespFrame::Error(
+                "ERR syntax error, LIMIT cannot be used without the special ~ option".to_string(),
+            ));
+        }
+        limit = Some(usize::try_from(n).unwrap_or(usize::MAX));
+        idx += 1;
+        if idx != argv.len() {
+            return Err(CommandError::SyntaxError);
+        }
+    }
+
+    // Approximate (~) without LIMIT mirrors the XADD inline-trim
+    // path: upstream lazily skips trimming when the trailing
+    // radix-tree node isn't full, which we model as a no-op (return
+    // 0 removed). Exact (=, or no qualifier) always trims fully.
+    // Approximate WITH LIMIT honors the cap. A precondition the
+    // XTRIM-specific oracle gate codifies vs vendored Redis 7.2.
+    let approx_noop = approx && limit.is_none();
 
     if is_maxlen {
         let max_len_raw = parse_i64_arg(&argv[threshold_idx])?;
@@ -5139,7 +5193,14 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
             return Err(CommandError::InvalidInteger);
         }
         let max_len = usize::try_from(max_len_raw).unwrap_or(usize::MAX);
-        let removed = store.xtrim(&argv[1], max_len, now_ms)?;
+        if approx_noop {
+            // Touch type validation by calling xlen — this matches
+            // upstream's "syntax was valid, the stream key resolves,
+            // but the approximate trim chose to skip" path.
+            store.xlen(&argv[1], now_ms)?;
+            return Ok(RespFrame::Integer(0));
+        }
+        let removed = store.xtrim(&argv[1], max_len, limit, now_ms)?;
         Ok(RespFrame::Integer(
             i64::try_from(removed).unwrap_or(i64::MAX),
         ))
@@ -5148,7 +5209,11 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
             Ok(id) => id,
             Err(reply) => return Ok(reply),
         };
-        let removed = store.xtrim_minid(&argv[1], min_id, now_ms)?;
+        if approx_noop {
+            store.xlen(&argv[1], now_ms)?;
+            return Ok(RespFrame::Integer(0));
+        }
+        let removed = store.xtrim_minid(&argv[1], min_id, limit, now_ms)?;
         Ok(RespFrame::Integer(
             i64::try_from(removed).unwrap_or(i64::MAX),
         ))

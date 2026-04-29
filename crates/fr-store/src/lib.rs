@@ -7135,7 +7135,13 @@ impl Store {
         result
     }
 
-    pub fn xtrim(&mut self, key: &[u8], max_len: usize, now_ms: u64) -> Result<usize, StoreError> {
+    pub fn xtrim(
+        &mut self,
+        key: &[u8],
+        max_len: usize,
+        limit: Option<usize>,
+        now_ms: u64,
+    ) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
         let mut max_deleted = None;
         let result = match self.entries.get_mut(key) {
@@ -7144,7 +7150,10 @@ impl Store {
                     if entries.len() <= max_len {
                         return Ok(0);
                     }
-                    let to_remove = entries.len() - max_len;
+                    let mut to_remove = entries.len() - max_len;
+                    if let Some(cap) = limit {
+                        to_remove = to_remove.min(cap);
+                    }
                     let remove_ids: Vec<StreamId> =
                         entries.keys().copied().take(to_remove).collect();
                     max_deleted = remove_ids.last().copied();
@@ -7178,11 +7187,14 @@ impl Store {
         result
     }
 
-    /// XTRIM key MINID threshold — remove entries with IDs less than `min_id`.
+    /// XTRIM key MINID threshold [LIMIT count] — remove entries with
+    /// IDs less than `min_id`. When `limit` is `Some(n)`, cap removal
+    /// at n entries (used by the Redis 6.2 `~ ... LIMIT n` dialect).
     pub fn xtrim_minid(
         &mut self,
         key: &[u8],
         min_id: StreamId,
+        limit: Option<usize>,
         now_ms: u64,
     ) -> Result<usize, StoreError> {
         self.drop_if_expired(key, now_ms);
@@ -7190,11 +7202,14 @@ impl Store {
         let result = match self.entries.get_mut(key) {
             Some(entry) => match &mut entry.value {
                 Value::Stream(entries) => {
-                    let remove_ids: Vec<StreamId> = entries
+                    let mut remove_ids: Vec<StreamId> = entries
                         .keys()
                         .copied()
                         .take_while(|id| *id < min_id)
                         .collect();
+                    if let Some(cap) = limit {
+                        remove_ids.truncate(cap);
+                    }
                     let removed = remove_ids.len();
                     max_deleted = remove_ids.last().copied();
                     for id in &remove_ids {
@@ -12741,7 +12756,7 @@ mod tests {
         store
             .xadd(b"stream", (2, 0), &[(b"f".to_vec(), b"v2".to_vec())], 0)
             .expect("xadd 2");
-        store.xtrim(b"stream", 1, 0).expect("xtrim");
+        store.xtrim(b"stream", 1, None, 0).expect("xtrim");
         assert_digest_matches(&mut store);
     }
 
@@ -14211,7 +14226,7 @@ mod tests {
             .xadd(b"s", (1001, 0), &[(b"f3".to_vec(), b"v3".to_vec())], 0)
             .unwrap();
 
-        let removed = store.xtrim(b"s", 2, 0).unwrap();
+        let removed = store.xtrim(b"s", 2, None, 0).unwrap();
         assert_eq!(removed, 1);
         assert_eq!(store.xlen(b"s", 0).unwrap(), 2);
 
@@ -14233,14 +14248,103 @@ mod tests {
             .xadd(b"s", (1000, 1), &[(b"f2".to_vec(), b"v2".to_vec())], 0)
             .unwrap();
 
-        assert_eq!(store.xtrim(b"s", 0, 0).unwrap(), 2);
+        assert_eq!(store.xtrim(b"s", 0, None, 0).unwrap(), 2);
         assert_eq!(store.xlen(b"s", 0).unwrap(), 0);
         assert_eq!(store.key_type(b"s", 0), Some("stream"));
 
-        assert_eq!(store.xtrim(b"missing", 1, 0).unwrap(), 0);
+        assert_eq!(store.xtrim(b"missing", 1, None, 0).unwrap(), 0);
 
         store.set(b"str".to_vec(), b"value".to_vec(), None, 0);
-        assert_eq!(store.xtrim(b"str", 1, 0), Err(StoreError::WrongType));
+        assert_eq!(store.xtrim(b"str", 1, None, 0), Err(StoreError::WrongType));
+    }
+
+    /// XTRIM ... LIMIT n cap: when the requested removal count
+    /// exceeds the LIMIT, only `n` oldest entries are removed and
+    /// the rest survive, even though the resulting stream length
+    /// stays above `max_len`. Mirrors upstream
+    /// t_stream.c::streamTrim's LIMIT path semantics, which the
+    /// approximate (`~`) trim form caps at the user-supplied bound.
+    #[test]
+    fn stream_xtrim_maxlen_with_limit_caps_removal() {
+        let mut store = Store::new();
+        for i in 0..10u64 {
+            store
+                .xadd(
+                    b"s",
+                    (1000 + i, 0),
+                    &[(b"f".to_vec(), vec![i as u8])],
+                    0,
+                )
+                .unwrap();
+        }
+        // Without LIMIT: trims all the way down to max_len=2 (8
+        // removals).
+        let mut bare = Store::new();
+        for i in 0..10u64 {
+            bare.xadd(b"s", (1000 + i, 0), &[(b"f".to_vec(), vec![i as u8])], 0)
+                .unwrap();
+        }
+        assert_eq!(bare.xtrim(b"s", 2, None, 0).unwrap(), 8);
+        assert_eq!(bare.xlen(b"s", 0).unwrap(), 2);
+
+        // With LIMIT=3: cap removal at 3 even though 8 entries
+        // exceed max_len. Stream length remains 7, NOT 2.
+        let removed = store.xtrim(b"s", 2, Some(3), 0).unwrap();
+        assert_eq!(removed, 3);
+        assert_eq!(store.xlen(b"s", 0).unwrap(), 7);
+
+        // The removed entries must be the OLDEST three — verify
+        // the surviving range starts at id (1003, 0).
+        let remaining = store
+            .xrange(b"s", (0, 0), (u64::MAX, u64::MAX), None, 0)
+            .unwrap();
+        assert_eq!(remaining[0].0, (1003, 0));
+        assert_eq!(remaining.last().unwrap().0, (1009, 0));
+    }
+
+    /// Same cap semantics for the MINID variant.
+    #[test]
+    fn stream_xtrim_minid_with_limit_caps_removal() {
+        let mut store = Store::new();
+        for i in 0..10u64 {
+            store
+                .xadd(
+                    b"s",
+                    (1000 + i, 0),
+                    &[(b"f".to_vec(), vec![i as u8])],
+                    0,
+                )
+                .unwrap();
+        }
+        // MINID=1006 would normally remove ids (1000..=1005) = 6
+        // entries. Cap at 2 → only the 2 oldest go.
+        let removed = store.xtrim_minid(b"s", (1006, 0), Some(2), 0).unwrap();
+        assert_eq!(removed, 2);
+        let remaining = store
+            .xrange(b"s", (0, 0), (u64::MAX, u64::MAX), None, 0)
+            .unwrap();
+        assert_eq!(remaining[0].0, (1002, 0));
+    }
+
+    /// LIMIT=0 must be a true no-op even when entries exceed
+    /// max_len — exercises the boundary where the approximate-trim
+    /// path is asked to do zero work.
+    #[test]
+    fn stream_xtrim_with_limit_zero_is_noop() {
+        let mut store = Store::new();
+        for i in 0..5u64 {
+            store
+                .xadd(
+                    b"s",
+                    (1000 + i, 0),
+                    &[(b"f".to_vec(), vec![i as u8])],
+                    0,
+                )
+                .unwrap();
+        }
+        let removed = store.xtrim(b"s", 1, Some(0), 0).unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(store.xlen(b"s", 0).unwrap(), 5);
     }
 
     #[test]
@@ -14784,10 +14888,10 @@ mod tests {
         assert_eq!(store.xdel(b"s", &[(1000, 1)], 0).unwrap(), 1);
         assert_eq!(store.stream_max_deleted_id(b"s"), Some((1000, 1)));
 
-        assert_eq!(store.xtrim_minid(b"s", (1001, 0), 0).unwrap(), 1);
+        assert_eq!(store.xtrim_minid(b"s", (1001, 0), None, 0).unwrap(), 1);
         assert_eq!(store.stream_max_deleted_id(b"s"), Some((1000, 1)));
 
-        assert_eq!(store.xtrim(b"s", 0, 0).unwrap(), 1);
+        assert_eq!(store.xtrim(b"s", 0, None, 0).unwrap(), 1);
         assert_eq!(store.stream_max_deleted_id(b"s"), Some((1001, 0)));
     }
 

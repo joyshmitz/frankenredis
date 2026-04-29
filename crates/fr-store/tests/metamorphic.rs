@@ -600,7 +600,7 @@ proptest! {
         }
 
         let before_len = store.xlen(&key, 0).unwrap();
-        let trimmed = store.xtrim(&key, max_len, 0).unwrap();
+        let trimmed = store.xtrim(&key, max_len, None, 0).unwrap();
         let after_len = store.xlen(&key, 0).unwrap();
 
         prop_assert!(after_len <= max_len, "XTRIM MAXLEN must leave at most max_len entries");
@@ -631,7 +631,7 @@ proptest! {
         let threshold_idx = threshold_index.min(ids.len().saturating_sub(1));
         let min_id = ids[threshold_idx];
 
-        store.xtrim_minid(&key, min_id, 0).unwrap();
+        store.xtrim_minid(&key, min_id, None, 0).unwrap();
 
         let remaining = store.xrange(&key, (0, 0), (u64::MAX, u64::MAX), None, 0).unwrap();
         for (id, _) in &remaining {
