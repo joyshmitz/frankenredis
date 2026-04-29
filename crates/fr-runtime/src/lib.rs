@@ -2865,7 +2865,10 @@ impl Runtime {
         now_ms: u64,
     ) -> Result<(), PersistError> {
         match parse_psync_reply(reply_line).map_err(|_| PersistError::InvalidFrame)? {
-            PsyncReply::Continue => {
+            PsyncReply::Continue { replid } => {
+                if let Some(replid) = replid {
+                    self.server.replication_runtime_state.backlog.replid = replid;
+                }
                 let records = decode_aof_stream(payload)?;
                 self.replay_records_with_source(
                     &records,
@@ -15134,13 +15137,14 @@ mod tests {
             RespFrame::SimpleString("OK".to_string())
         );
         let backlog = primary.encoded_aof_stream_from_offset(fullresync_offset);
+        let new_replid = "1111111111111111111111111111111111111111";
         replica
-            .apply_replication_sync_payload(
-                "CONTINUE 1111111111111111111111111111111111111111",
-                &backlog,
-                5,
-            )
+            .apply_replication_sync_payload(&format!("CONTINUE {new_replid}"), &backlog, 5)
             .expect("apply psync2-style continue backlog");
+        assert_eq!(
+            replica.server.replication_runtime_state.backlog.replid,
+            new_replid
+        );
 
         assert_eq!(
             replica.execute_frame(command(&[b"GET", b"alpha"]), 6),

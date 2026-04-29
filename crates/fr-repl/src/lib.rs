@@ -196,7 +196,7 @@ pub enum PsyncDecision {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PsyncReply {
-    Continue,
+    Continue { replid: Option<String> },
     FullResync { replid: String, offset: ReplOffset },
 }
 
@@ -211,7 +211,11 @@ pub fn parse_psync_reply(line: &str) -> Result<PsyncReply, ReplError> {
     };
     if kind == "CONTINUE" {
         return match (parts.next(), parts.next()) {
-            (None, None) | (Some(_), None) => Ok(PsyncReply::Continue),
+            (None, None) => Ok(PsyncReply::Continue { replid: None }),
+            (Some(replid), None) => {
+                let replid = (replid.len() == REDIS_RUN_ID_BYTES).then(|| replid.to_string());
+                Ok(PsyncReply::Continue { replid })
+            }
             _ => Err(ReplError::PsyncReplyStateMismatch {
                 state: HandshakeState::PsyncSent,
             }),
@@ -466,10 +470,15 @@ mod tests {
     #[test]
     fn parse_psync_reply_accepts_continue_and_fullresync() {
         let replid = "1111111111111111111111111111111111111111";
-        assert_eq!(parse_psync_reply("CONTINUE"), Ok(PsyncReply::Continue));
+        assert_eq!(
+            parse_psync_reply("CONTINUE"),
+            Ok(PsyncReply::Continue { replid: None })
+        );
         assert_eq!(
             parse_psync_reply(&format!("CONTINUE {replid}")),
-            Ok(PsyncReply::Continue)
+            Ok(PsyncReply::Continue {
+                replid: Some(replid.to_string())
+            })
         );
         assert_eq!(
             parse_psync_reply(&format!("FULLRESYNC {replid} 42")),
@@ -544,10 +553,24 @@ mod tests {
         // ── Accept-class seeds: must produce the listed reply.
         // Each pair is (seed_name, expected_reply).
         let accepts: &[(&str, PsyncReply)] = &[
-            ("continue_canonical.txt", PsyncReply::Continue),
-            ("continue_with_psync2_replid.txt", PsyncReply::Continue),
-            ("continue_leading_tab.txt", PsyncReply::Continue),
-            ("continue_trailing_crlf.txt", PsyncReply::Continue),
+            (
+                "continue_canonical.txt",
+                PsyncReply::Continue { replid: None },
+            ),
+            (
+                "continue_with_psync2_replid.txt",
+                PsyncReply::Continue {
+                    replid: Some("1234567890abcdef1234567890abcdef12345678".to_string()),
+                },
+            ),
+            (
+                "continue_leading_tab.txt",
+                PsyncReply::Continue { replid: None },
+            ),
+            (
+                "continue_trailing_crlf.txt",
+                PsyncReply::Continue { replid: None },
+            ),
             (
                 "fullresync_canonical_offset_zero.txt",
                 PsyncReply::FullResync {
@@ -575,7 +598,10 @@ mod tests {
         // accepted reply must parse back from its canonical form.
         fn canonical(reply: &PsyncReply) -> String {
             match reply {
-                PsyncReply::Continue => "CONTINUE".to_string(),
+                PsyncReply::Continue { replid: None } => "CONTINUE".to_string(),
+                PsyncReply::Continue {
+                    replid: Some(replid),
+                } => format!("CONTINUE {replid}"),
                 PsyncReply::FullResync { replid, offset } => {
                     format!("FULLRESYNC {replid} {}", offset.0)
                 }

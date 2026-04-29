@@ -98,14 +98,21 @@ fn fuzz_structured_psync_reply(case: StructuredPsyncReplyCase) {
     match case {
         StructuredPsyncReplyCase::Continue(case) => {
             let rendered = render_continue(&case);
+            let expected_replid = case
+                .replid
+                .as_ref()
+                .map(|replid| sanitize_token(replid.clone(), "replid"))
+                .filter(|replid| replid.len() == 40);
             assert_eq!(
                 parse_psync_reply(&rendered),
-                Ok(PsyncReply::Continue),
+                Ok(PsyncReply::Continue {
+                    replid: expected_replid,
+                }),
                 "CONTINUE replies with an optional PSYNC2 replid must parse",
             );
             assert_eq!(
                 parse_psync_reply("CONTINUE"),
-                Ok(PsyncReply::Continue),
+                Ok(PsyncReply::Continue { replid: None }),
                 "canonical CONTINUE must remain accepted",
             );
         }
@@ -209,7 +216,10 @@ fn render_invalid_fullresync(case: InvalidFullResyncCase) -> String {
 
 fn canonical_reply(reply: &PsyncReply) -> String {
     match reply {
-        PsyncReply::Continue => "CONTINUE".to_string(),
+        PsyncReply::Continue { replid: None } => "CONTINUE".to_string(),
+        PsyncReply::Continue {
+            replid: Some(replid),
+        } => format!("CONTINUE {replid}"),
         PsyncReply::FullResync { replid, offset } => format!("FULLRESYNC {replid} {}", offset.0),
     }
 }
