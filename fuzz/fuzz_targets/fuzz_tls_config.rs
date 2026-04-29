@@ -417,12 +417,12 @@ fn render_directive_value(case: &RawDirectiveCase) -> (String, bool) {
         // ── TLS session-resumption directives ────────────────────
         TlsDirective::TlsSessionCaching => {
             if case.valid_hint {
-                let token = if case.auth_seed.is_multiple_of(2) {
+                let rendered = if case.auth_seed.is_multiple_of(2) {
                     "yes"
                 } else {
                     "no"
                 };
-                (token.to_string(), true)
+                (rendered.to_string(), true)
             } else {
                 (sanitize_invalid_token(&case.text, "maybe"), false)
             }
@@ -588,6 +588,9 @@ fn assert_rewrite_matches_config(config: &TlsConfig, directives: &[(String, Stri
         "tls-protocols",
         "tls-auth-clients",
         "max-new-tls-connections-per-cycle",
+        "tls-session-caching",
+        "tls-session-cache-size",
+        "tls-session-cache-timeout",
     ];
     if config.tls_enabled() {
         expected_names.extend([
@@ -616,6 +619,22 @@ fn assert_rewrite_matches_config(config: &TlsConfig, directives: &[(String, Stri
     assert_eq!(
         directive_value(directives, "max-new-tls-connections-per-cycle"),
         Some(config.max_new_tls_connections_per_cycle.to_string()),
+    );
+    assert_eq!(
+        directive_value(directives, "tls-session-caching"),
+        Some(if config.session_caching {
+            "yes".to_string()
+        } else {
+            "no".to_string()
+        }),
+    );
+    assert_eq!(
+        directive_value(directives, "tls-session-cache-size"),
+        Some(config.session_cache_size.to_string()),
+    );
+    assert_eq!(
+        directive_value(directives, "tls-session-cache-timeout"),
+        Some(config.session_cache_timeout_sec.to_string()),
     );
 
     let rewritten_protocols = directive_value(directives, "tls-protocols")
@@ -689,20 +708,20 @@ fn sanitize_nonempty_text(bytes: &[u8], fallback: &str) -> String {
 }
 
 fn sanitize_invalid_token(bytes: &[u8], fallback: &str) -> String {
-    let token = sanitize_nonempty_text(bytes, fallback);
-    if TlsProtocol::parse(&token).is_some() || TlsAuthClients::parse(&token).is_some() {
-        format!("x{token}")
+    let rendered = sanitize_nonempty_text(bytes, fallback);
+    if TlsProtocol::parse(&rendered).is_some() || TlsAuthClients::parse(&rendered).is_some() {
+        format!("x{rendered}")
     } else {
-        token
+        rendered
     }
 }
 
 fn sanitize_invalid_numeric(bytes: &[u8], fallback: &str) -> String {
-    let token = sanitize_nonempty_text(bytes, fallback);
-    if token.chars().all(|ch| ch.is_ascii_digit()) {
-        format!("x{token}")
+    let rendered = sanitize_nonempty_text(bytes, fallback);
+    if rendered.chars().all(|ch| ch.is_ascii_digit()) {
+        format!("x{rendered}")
     } else {
-        token
+        rendered
     }
 }
 
