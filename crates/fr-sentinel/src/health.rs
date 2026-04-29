@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{InstanceLink, PING_PERIOD_MS, Role, SentinelRedisInstance};
+use crate::{InstanceLink, Role, SentinelRedisInstance, PING_PERIOD_MS};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HealthCheckResult {
@@ -131,7 +131,13 @@ pub fn parse_info_response(info: &str) -> ParsedInfo {
                     result.master_port = value.parse().ok();
                 }
                 "master_link_status" => {
-                    result.master_link_status = Some(value == "up");
+                    if let Some(up) = match value {
+                        "up" => Some(true),
+                        "down" => Some(false),
+                        _ => None,
+                    } {
+                        result.master_link_status = Some(up);
+                    }
                 }
                 "master_link_down_since_seconds" => {
                     result.master_link_down_since = value.parse::<u64>().ok().map(|s| s * 1000);
@@ -294,6 +300,21 @@ connected_slaves:0
         let parsed = parse_info_response(info);
         assert_eq!(parsed.role, Some(Role::Master));
         assert_eq!(parsed.connected_slaves, Some(0));
+    }
+
+    #[test]
+    fn parse_info_ignores_malformed_master_link_status_lines() {
+        let info = r#"
+# Replication
+role:slave
+master_link_status:up
+master_link_status:up:with-extra-colon
+"#;
+        let parsed = parse_info_response(info);
+        assert_eq!(parsed.master_link_status, Some(true));
+
+        let malformed_only = parse_info_response("role:slave\nmaster_link_status:maybe\n");
+        assert_eq!(malformed_only.master_link_status, None);
     }
 
     #[test]
