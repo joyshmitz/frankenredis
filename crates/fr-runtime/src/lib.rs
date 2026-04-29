@@ -1251,6 +1251,7 @@ enum RuntimeSpecialCommand {
     Psync,
     Select,
     Swapdb,
+    Debug,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1323,6 +1324,8 @@ fn classify_runtime_special_command(cmd: &[u8]) -> Option<RuntimeSpecialCommand>
                 Some(RuntimeSpecialCommand::Watch)
             } else if eq_ascii_token(cmd, b"RESET") {
                 Some(RuntimeSpecialCommand::Reset)
+            } else if eq_ascii_token(cmd, b"DEBUG") {
+                Some(RuntimeSpecialCommand::Debug)
             } else {
                 None
             }
@@ -1805,6 +1808,12 @@ pub struct ServerState {
     stop_writes_on_bgsave_error: bool,
     /// Replica promotion priority reported in INFO replication / CONFIG.
     pub replica_priority: usize,
+    /// Upstream Redis 7.2's `enable-debug-command` knob (no | local |
+    /// yes). Default `"no"` denies DEBUG with the canonical lockout
+    /// error. Settable at startup via `--enable-debug-command` or the
+    /// config-file directive; immutable at runtime via CONFIG SET.
+    /// (br-frankenredis-j29y)
+    pub enable_debug_command: String,
     /// Optional username used when this server authenticates to its primary.
     pub masteruser: Option<Vec<u8>>,
     /// Optional password used when this server authenticates to its primary.
@@ -1938,6 +1947,7 @@ impl Default for ServerState {
             masterauth: None,
             replica_serve_stale_data: true,
             replica_priority: 100,
+            enable_debug_command: "no".to_string(),
             repl_diskless_sync: true,
             repl_diskless_sync_delay_sec: 5,
             cluster_allow_reads_when_down: false,
@@ -2540,6 +2550,22 @@ impl Runtime {
 
     pub fn set_config_file_path(&mut self, path: Option<std::path::PathBuf>) {
         self.server.config_file_path = path;
+    }
+
+    /// Set the `enable-debug-command` knob. Accepts `"no"`, `"local"`,
+    /// `"yes"` (case-insensitive); any other value normalizes to `"no"`
+    /// (the safe default, matching upstream's `enable-debug-command`
+    /// directive). Immutable at runtime via CONFIG SET; this setter is
+    /// the startup-time path used by `--enable-debug-command` and the
+    /// config-file `enable-debug-command` directive.
+    /// (br-frankenredis-j29y)
+    pub fn set_enable_debug_command(&mut self, value: &str) {
+        let normalized = match value.to_ascii_lowercase().as_str() {
+            "yes" => "yes",
+            "local" => "local",
+            _ => "no",
+        };
+        self.server.enable_debug_command = normalized.to_string();
     }
 
     /// Set the server listen port (for INFO server section).
@@ -4528,6 +4554,7 @@ impl Runtime {
                 }
                 Some(RuntimeSpecialCommand::Reset) => Some(self.handle_reset_command(&argv)),
                 Some(RuntimeSpecialCommand::Slowlog) => Some(self.handle_slowlog_command(&argv)),
+                Some(RuntimeSpecialCommand::Debug) => self.handle_debug_command_gate(&argv),
                 Some(RuntimeSpecialCommand::Save) => Some(self.handle_save_command(&argv, now_ms)),
                 Some(RuntimeSpecialCommand::Bgsave) => {
                     Some(self.handle_bgsave_command(&argv, now_ms))
@@ -6881,6 +6908,17 @@ impl Runtime {
                 entries.push(RespFrame::BulkString(Some(value.to_string().into_bytes())));
             }
         }
+        // Dynamic enable-debug-command — emit the runtime field, not
+        // the static "no" default. The static loop below skips this
+        // name to avoid double-emit. (br-frankenredis-j29y)
+        if Self::config_pattern_matches(pattern, "enable-debug-command") {
+            entries.push(RespFrame::BulkString(Some(
+                b"enable-debug-command".to_vec(),
+            )));
+            entries.push(RespFrame::BulkString(Some(
+                self.server.enable_debug_command.as_bytes().to_vec(),
+            )));
+        }
         // Static configuration parameters that clients commonly probe.
         // If a parameter has been overridden via CONFIG SET, use the override.
         for &(name, default_value) in CONFIG_STATIC_PARAMS {
@@ -6927,6 +6965,7 @@ impl Runtime {
                 || name == "client-query-buffer-limit"
                 || name == "proto-max-bulk-len"
                 || name == "client-output-buffer-limit"
+                || name == "enable-debug-command"
             {
                 continue;
             }
@@ -8615,6 +8654,35 @@ impl Runtime {
     /// Record a command execution in the slow log if it exceeded the threshold.
     fn record_slowlog(&mut self, argv: &[Vec<u8>], duration_us: u64, now_ms: u64) {
         self.server.store.record_slowlog(argv, duration_us, now_ms);
+    }
+
+    /// Gate the DEBUG command on the `enable-debug-command` config.
+    /// Returns `Some(error_frame)` when the gate denies (the canonical
+    /// upstream Redis 7.2 wording). Returns `None` when the gate
+    /// allows — the dispatcher then falls through to the normal
+    /// command-table path (fr-command::dispatch_argv → debug_cmd).
+    /// Mirrors Redis upstream `processCommand` which rejects DEBUG
+    /// before any subcommand arity check when
+    /// `server.enable_debug_command == 0`. (br-frankenredis-j29y)
+    fn handle_debug_command_gate(&self, _argv: &[Vec<u8>]) -> Option<RespFrame> {
+        match self.server.enable_debug_command.as_str() {
+            "yes" => None,
+            // "local" is only meaningful when the connection's peer
+            // address is loopback. The runtime doesn't carry per-call
+            // peer info today, so treat "local" as "yes" — fr-server
+            // is bound to 127.0.0.1 by default, which makes this
+            // safe in the typical deployment. A future per-session
+            // gate can tighten this without changing the wire shape.
+            "local" => None,
+            _ => Some(RespFrame::Error(
+                "ERR DEBUG command not allowed. \
+                 If the enable-debug-command option is set to \"local\", \
+                 you can run it from a local connection, otherwise \
+                 you need to set this option in the configuration file, \
+                 and then restart the server."
+                    .to_string(),
+            )),
+        }
     }
 
     fn handle_save_command(&mut self, argv: &[Vec<u8>], now_ms: u64) -> RespFrame {
@@ -18081,6 +18149,7 @@ mod tests {
         let dir = std::env::temp_dir().join("fr_runtime_debug_reload_aof_failure_dir");
         let _ = std::fs::create_dir_all(&dir);
         let mut rt = Runtime::default_strict();
+        rt.set_enable_debug_command("yes");
         rt.set_aof_path(dir);
 
         assert_eq!(
@@ -18262,6 +18331,7 @@ mod tests {
         let aof_path = dir.join("debug-reload.aof");
 
         let mut rt = Runtime::default_strict();
+        rt.set_enable_debug_command("yes");
         rt.set_aof_path(aof_path.clone());
         assert_eq!(
             rt.execute_frame(command(&[b"SET", b"reload:key", b"two"]), 1),
@@ -18286,6 +18356,7 @@ mod tests {
         let rdb_path = dir.join("debug-reload.rdb");
 
         let mut rt = Runtime::default_strict();
+        rt.set_enable_debug_command("yes");
         rt.set_rdb_path(rdb_path.clone());
         assert_eq!(
             rt.execute_frame(command(&[b"SET", b"reload:key", b"two"]), 1),

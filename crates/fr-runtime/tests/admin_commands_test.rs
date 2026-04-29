@@ -269,9 +269,17 @@ fn latency_wrong_arity() {
 
 // ── DEBUG ───────────────────────────────────────────
 
+// Each DEBUG test below explicitly enables the command via
+// set_enable_debug_command("yes") because the runtime defaults to
+// "no" — the upstream Redis 7.2 default — so DEBUG is gated behind
+// the canonical lockout error unless the operator opts in via the
+// startup config or `--enable-debug-command` CLI flag.
+// (br-frankenredis-j29y)
+
 #[test]
 fn debug_sleep_zero() {
     let mut rt = Runtime::default_strict();
+    rt.set_enable_debug_command("yes");
     let resp = rt.execute_frame(command(&[b"DEBUG", b"SLEEP", b"0"]), 0);
     assert_eq!(resp, RespFrame::SimpleString("OK".to_string()));
 }
@@ -279,6 +287,7 @@ fn debug_sleep_zero() {
 #[test]
 fn debug_set_active_expire() {
     let mut rt = Runtime::default_strict();
+    rt.set_enable_debug_command("yes");
     let resp = rt.execute_frame(command(&[b"DEBUG", b"SET-ACTIVE-EXPIRE", b"1"]), 0);
     assert_eq!(resp, RespFrame::SimpleString("OK".to_string()));
 }
@@ -286,6 +295,7 @@ fn debug_set_active_expire() {
 #[test]
 fn debug_jmap_returns_ok() {
     let mut rt = Runtime::default_strict();
+    rt.set_enable_debug_command("yes");
     let resp = rt.execute_frame(command(&[b"DEBUG", b"JMAP"]), 0);
     assert_eq!(resp, RespFrame::SimpleString("OK".to_string()));
 }
@@ -293,6 +303,7 @@ fn debug_jmap_returns_ok() {
 #[test]
 fn debug_reload_requires_configured_persistence() {
     let mut rt = Runtime::default_strict();
+    rt.set_enable_debug_command("yes");
     let resp = rt.execute_frame(command(&[b"DEBUG", b"RELOAD"]), 0);
     assert_eq!(
         resp,
@@ -305,6 +316,7 @@ fn debug_reload_requires_configured_persistence() {
 #[test]
 fn debug_object_requires_key_argument() {
     let mut rt = Runtime::default_strict();
+    rt.set_enable_debug_command("yes");
     let resp = rt.execute_frame(command(&[b"DEBUG", b"OBJECT"]), 0);
     assert!(matches!(resp, RespFrame::Error(_)));
 }
@@ -312,6 +324,7 @@ fn debug_object_requires_key_argument() {
 #[test]
 fn debug_jmap_rejects_extra_arguments() {
     let mut rt = Runtime::default_strict();
+    rt.set_enable_debug_command("yes");
     let resp = rt.execute_frame(command(&[b"DEBUG", b"JMAP", b"extra"]), 0);
     assert!(matches!(resp, RespFrame::Error(_)));
 }
@@ -319,6 +332,7 @@ fn debug_jmap_rejects_extra_arguments() {
 #[test]
 fn debug_set_active_expire_accepts_nonzero_atoi_values() {
     let mut rt = Runtime::default_strict();
+    rt.set_enable_debug_command("yes");
     let resp = rt.execute_frame(command(&[b"DEBUG", b"SET-ACTIVE-EXPIRE", b"2"]), 0);
     assert_eq!(resp, RespFrame::SimpleString("OK".to_string()));
 }
@@ -326,8 +340,24 @@ fn debug_set_active_expire_accepts_nonzero_atoi_values() {
 #[test]
 fn debug_wrong_arity() {
     let mut rt = Runtime::default_strict();
+    rt.set_enable_debug_command("yes");
     let resp = rt.execute_frame(command(&[b"DEBUG"]), 0);
     assert!(matches!(resp, RespFrame::Error(_)));
+}
+
+#[test]
+fn debug_default_denies_with_upstream_lockout_error() {
+    let mut rt = Runtime::default_strict();
+    // Default runtime mirrors upstream: enable-debug-command=no.
+    let resp = rt.execute_frame(command(&[b"DEBUG", b"SLEEP", b"0"]), 0);
+    let err = match resp {
+        RespFrame::Error(e) => e,
+        other => panic!("expected Error, got {other:?}"),
+    };
+    assert!(
+        err.contains("DEBUG command not allowed"),
+        "lockout wording must match upstream: {err}"
+    );
 }
 
 // ── INFO ────────────────────────────────────────────

@@ -114,6 +114,18 @@ fn configure_runtime_for_fixture(runtime: &mut Runtime, fixture_name: &str) {
     if fixture_name == "core_server.json" {
         runtime.set_config_file_path(Some(runtime_fixture_config_path(fixture_name)));
     }
+    // Conformance fixtures that exercise DEBUG must opt in. The
+    // runtime defaults to enable-debug-command=no (matches upstream
+    // Redis 7.2 startup default); the live oracle vendored
+    // redis-server is spawned with --enable-debug-command=yes (see
+    // VendoredRedis::spawn_with_flags), so these fixtures need the
+    // same parity on the runtime side. (br-frankenredis-j29y)
+    if fixture_name == "core_debug.json"
+        || fixture_name == "core_connection.json"
+        || fixture_name == "core_server.json"
+    {
+        runtime.set_enable_debug_command("yes");
+    }
 }
 
 fn runtime_fixture_config_path(fixture_name: &str) -> PathBuf {

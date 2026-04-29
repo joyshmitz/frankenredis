@@ -236,6 +236,7 @@ OPTIONS:\n\
   --replicaof <HOST> <PORT>  Configure this server as a replica of the given primary\n\
   --masteruser <USERNAME>    Authenticate to the configured primary as this ACL user\n\
   --masterauth <PASSWORD>    Authenticate to the configured primary with this password\n\
+  --enable-debug-command <VALUE>  Allow DEBUG commands: no | local | yes (default: no, matches upstream Redis 7.2)\n\
   --help                     Show this help\n"
     )
 }
@@ -254,6 +255,7 @@ struct StartupConfig {
     appenddirname: Option<String>,
     appendfilename: Option<String>,
     aclfile: Option<String>,
+    enable_debug_command: Option<String>,
 }
 
 impl StartupConfig {
@@ -369,6 +371,10 @@ fn startup_config_from_directives(
                     config.aclfile = Some(path);
                 }
             }
+            b"enable-debug-command" => {
+                expect_config_arg_count(directive, 1)?;
+                config.enable_debug_command = Some(config_arg_string(directive, 0)?);
+            }
             _ => {}
         }
     }
@@ -472,6 +478,7 @@ fn main() -> ExitCode {
     let mut cli_masterauth = false;
     let mut cli_aof = false;
     let mut cli_rdb = false;
+    let mut cli_enable_debug_command: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -579,6 +586,14 @@ fn main() -> ExitCode {
                 }
                 masterauth = Some(args[i].clone());
             }
+            "--enable-debug-command" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("error: --enable-debug-command requires a value (no, local, yes)");
+                    return ExitCode::from(1);
+                }
+                cli_enable_debug_command = Some(args[i].clone());
+            }
             "--help" | "-h" => {
                 print!("{}", server_help_text());
                 return ExitCode::SUCCESS;
@@ -594,6 +609,7 @@ fn main() -> ExitCode {
 
     let mut requirepass = None;
     let mut aclfile_path = None;
+    let mut config_enable_debug_command: Option<String> = None;
     if let Some(path) = &config_path {
         let startup_config = match load_startup_config_file(path) {
             Ok(config) => config,
@@ -602,6 +618,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        config_enable_debug_command = startup_config.enable_debug_command.clone();
         let config_rdb_path = startup_config.configured_rdb_path();
         let config_aof_path = startup_config.configured_aof_path();
         if !cli_bind_addr && let Some(config_bind_addr) = startup_config.bind_addr {
@@ -636,6 +653,16 @@ fn main() -> ExitCode {
     let mut runtime = Runtime::new(policy);
     runtime.set_server_port(port);
     runtime.set_config_file_path(config_path.map(std::path::PathBuf::from));
+    // CLI flag wins over config-file directive; both override the
+    // runtime's "no" default which mirrors upstream Redis 7.2's
+    // safe-by-default `enable-debug-command` behavior.
+    // (br-frankenredis-j29y)
+    if let Some(value) = cli_enable_debug_command
+        .as_deref()
+        .or(config_enable_debug_command.as_deref())
+    {
+        runtime.set_enable_debug_command(value);
+    }
     if let Some(config_requirepass) = requirepass {
         runtime.set_requirepass(config_requirepass);
     }
@@ -2954,6 +2981,7 @@ mod tests {
                 appenddirname: Some("aof-from-config".to_string()),
                 appendfilename: Some("startup.aof".to_string()),
                 aclfile: Some("/tmp/frankenredis-startup/users.acl".to_string()),
+                enable_debug_command: None,
             }
         );
         assert_eq!(
