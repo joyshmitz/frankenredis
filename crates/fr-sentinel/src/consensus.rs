@@ -40,7 +40,8 @@ pub fn evaluate_o_down(
         votes_for_down
     };
 
-    let should_mark_o_down = !master.is_o_down() && master.is_s_down() && effective_votes >= quorum;
+    let should_mark_o_down =
+        quorum > 0 && !master.is_o_down() && master.is_s_down() && effective_votes >= quorum;
 
     let should_clear_o_down =
         master.is_o_down() && !master.is_s_down() && votes_for_down < quorum / 2;
@@ -179,6 +180,18 @@ mod tests {
         let result = evaluate_o_down(&master, &votes, 2000);
         assert!(result.should_mark_o_down);
         assert_eq!(result.votes_for_down, 1);
+    }
+
+    #[test]
+    fn o_down_zero_quorum_fails_closed() {
+        let mut master =
+            SentinelRedisInstance::new_master("mymaster", SentinelAddr::new("127.0.0.1", 6379), 0);
+        master.flags.insert(InstanceFlags::S_DOWN);
+
+        let result = evaluate_o_down(&master, &[], 2000);
+        assert!(!result.should_mark_o_down);
+        assert_eq!(result.votes_for_down, 0);
+        assert_eq!(result.total_votes, 0);
     }
 
     #[test]
