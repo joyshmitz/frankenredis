@@ -34,8 +34,7 @@ use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
 use fr_persist::{
-    CompactRdbThresholds, RdbEncodeOptions, RdbEntry, RdbValue, decode_rdb,
-    encode_rdb_with_options,
+    CompactRdbThresholds, RdbEncodeOptions, RdbEntry, RdbValue, decode_rdb, encode_rdb_with_options,
 };
 
 #[derive(Debug, Arbitrary)]
@@ -76,12 +75,9 @@ impl FuzzValue {
         match self {
             FuzzValue::StringRaw(s) => RdbValue::String(s.clone()),
             FuzzValue::List(items) => RdbValue::List(items.clone()),
-            FuzzValue::SetIntegerLike(values) => RdbValue::Set(
-                values
-                    .iter()
-                    .map(|v| v.to_string().into_bytes())
-                    .collect(),
-            ),
+            FuzzValue::SetIntegerLike(values) => {
+                RdbValue::Set(values.iter().map(|v| v.to_string().into_bytes()).collect())
+            }
             FuzzValue::SetGeneral(members) => RdbValue::Set(members.clone()),
             FuzzValue::Hash(pairs) => RdbValue::Hash(pairs.clone()),
             FuzzValue::SortedSet(members) => RdbValue::SortedSet(members.clone()),
@@ -98,10 +94,8 @@ impl FuzzValue {
             FuzzValue::StringRaw(s) => CanonicalShape::String(s.clone()),
             FuzzValue::List(items) => CanonicalShape::List(items.clone()),
             FuzzValue::SetIntegerLike(values) => {
-                let mut canonical: Vec<Vec<u8>> = values
-                    .iter()
-                    .map(|v| v.to_string().into_bytes())
-                    .collect();
+                let mut canonical: Vec<Vec<u8>> =
+                    values.iter().map(|v| v.to_string().into_bytes()).collect();
                 canonical.sort();
                 canonical.dedup();
                 CanonicalShape::Set(canonical)
@@ -134,10 +128,8 @@ impl FuzzValue {
                     .map(|(m, s)| (m.clone(), *s))
                     .collect();
                 canonical.sort_by(|a, b| {
-                    a.0.cmp(&b.0).then(
-                        a.1.partial_cmp(&b.1)
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                    )
+                    a.0.cmp(&b.0)
+                        .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 });
                 CanonicalShape::SortedSet(canonical)
             }
@@ -182,10 +174,8 @@ fn rdb_canonical(value: &RdbValue) -> Option<CanonicalShape> {
                 .cloned()
                 .collect();
             sorted.sort_by(|a, b| {
-                a.0.cmp(&b.0).then(
-                    a.1.partial_cmp(&b.1)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
+                a.0.cmp(&b.0)
+                    .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             });
             Some(CanonicalShape::SortedSet(sorted))
         }
@@ -211,28 +201,25 @@ fuzz_target!(|input: FuzzInput| {
         // Cap individual member sizes so the encoder stays in the
         // usefully-explorable size range (also matches the project's
         // proto-max-bulk-len-style ceilings).
-        if let FuzzValue::List(items) = &fe.value {
-            if items.iter().any(|item| item.len() > 4096) {
-                return;
-            }
+        if let FuzzValue::List(items) = &fe.value
+            && items.iter().any(|item| item.len() > 4096)
+        {
+            return;
         }
-        if let FuzzValue::SetGeneral(members) = &fe.value {
-            if members.iter().any(|m| m.len() > 4096) {
-                return;
-            }
+        if let FuzzValue::SetGeneral(members) = &fe.value
+            && members.iter().any(|m| m.len() > 4096)
+        {
+            return;
         }
-        if let FuzzValue::Hash(pairs) = &fe.value {
-            if pairs
-                .iter()
-                .any(|(k, v)| k.len() > 4096 || v.len() > 4096)
-            {
-                return;
-            }
+        if let FuzzValue::Hash(pairs) = &fe.value
+            && pairs.iter().any(|(k, v)| k.len() > 4096 || v.len() > 4096)
+        {
+            return;
         }
-        if let FuzzValue::SortedSet(members) = &fe.value {
-            if members.iter().any(|(m, _)| m.len() > 4096) {
-                return;
-            }
+        if let FuzzValue::SortedSet(members) = &fe.value
+            && members.iter().any(|(m, _)| m.len() > 4096)
+        {
+            return;
         }
 
         let canonical = fe.value.canonical();
@@ -296,25 +283,36 @@ fuzz_target!(|input: FuzzInput| {
         entries.len(),
         "round-trip dropped or duplicated entries",
     );
-    for (input_key, expected_canonical) in &canonical_inputs {
-        let restored = decoded
-            .iter()
-            .find(|d| &d.key == input_key)
-            .unwrap_or_else(|| {
-                panic!(
-                    "round-trip lost key {:?}",
-                    String::from_utf8_lossy(input_key),
-                )
-            });
-        let restored_canonical = match rdb_canonical(&restored.value) {
+    let mut decoded_canonical = Vec::with_capacity(decoded.len());
+    for restored in &decoded {
+        let canonical = match rdb_canonical(&restored.value) {
             Some(c) => c,
             None => return, // Shape we don't model in canonical comparison.
         };
-        assert_eq!(
-            &restored_canonical, expected_canonical,
-            "round-trip shape drift on key {:?} (compact={})",
-            String::from_utf8_lossy(input_key),
-            opts.compact.is_some(),
-        );
+        decoded_canonical.push((restored.key.clone(), canonical));
+    }
+
+    // Duplicate top-level RDB keys are legal fuzz input. Match as a
+    // multiset so repeated keys with different values cannot be hidden by
+    // a first-key lookup.
+    let mut matched = vec![false; decoded_canonical.len()];
+    for (input_key, expected_canonical) in &canonical_inputs {
+        let match_idx = decoded_canonical
+            .iter()
+            .enumerate()
+            .find_map(|(idx, (restored_key, restored_canonical))| {
+                (!matched[idx]
+                    && restored_key == input_key
+                    && restored_canonical == expected_canonical)
+                    .then_some(idx)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "round-trip lost key/shape {:?} (compact={})",
+                    String::from_utf8_lossy(input_key),
+                    opts.compact.is_some(),
+                )
+            });
+        matched[match_idx] = true;
     }
 });
