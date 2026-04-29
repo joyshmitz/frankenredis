@@ -23,6 +23,17 @@ fn arb_zset_member() -> impl Strategy<Value = (Vec<u8>, f64)> {
     (arb_key(), arb_finite_f64())
 }
 
+fn sort_zset_for_redis_order(members: &[(Vec<u8>, f64)]) -> Vec<(Vec<u8>, f64)> {
+    let mut sorted = members.to_vec();
+    sorted.sort_by(|left, right| {
+        left.1
+            .partial_cmp(&right.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    sorted
+}
+
 fn arb_rdb_value() -> impl Strategy<Value = RdbValue> {
     prop_oneof![
         arb_value().prop_map(RdbValue::String),
@@ -98,7 +109,9 @@ proptest! {
                 }
                 (RdbValue::SortedSet(a), RdbValue::SortedSet(b)) => {
                     prop_assert_eq!(a.len(), b.len(), "zset length mismatch");
-                    for ((ma, sa), (mb, sb)) in a.iter().zip(b.iter()) {
+                    let a_sorted = sort_zset_for_redis_order(a);
+                    let b_sorted = sort_zset_for_redis_order(b);
+                    for ((ma, sa), (mb, sb)) in a_sorted.iter().zip(b_sorted.iter()) {
                         prop_assert_eq!(ma, mb, "zset member mismatch");
                         if sa.is_nan() && sb.is_nan() {
                             continue;
@@ -209,7 +222,9 @@ proptest! {
             }
             (RdbValue::SortedSet(a), RdbValue::SortedSet(b)) => {
                 prop_assert_eq!(a.len(), b.len(), "zset length mismatch");
-                for ((ma, sa), (mb, sb)) in a.iter().zip(b.iter()) {
+                let a_sorted = sort_zset_for_redis_order(a);
+                let b_sorted = sort_zset_for_redis_order(b);
+                for ((ma, sa), (mb, sb)) in a_sorted.iter().zip(b_sorted.iter()) {
                     prop_assert_eq!(ma, mb, "zset member mismatch");
                     if !(sa.is_nan() && sb.is_nan()) {
                         prop_assert!((sa - sb).abs() < 1e-10, "zset score mismatch");
