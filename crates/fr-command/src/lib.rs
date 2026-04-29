@@ -4989,8 +4989,8 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             "ERR syntax error, LIMIT cannot be used without the special ~ option".to_string(),
         ));
     }
-    let trim_limit_usize: Option<usize> = trim_limit
-        .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let trim_limit_usize: Option<usize> =
+        trim_limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
 
     // argv[idx] should now be the ID, followed by field-value pairs
     if idx >= argv.len() {
@@ -5140,7 +5140,8 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
 
     let mut idx = 3usize;
     let mut approx = false;
-    if idx < argv.len() && (eq_ascii_command(&argv[idx], b"=") || eq_ascii_command(&argv[idx], b"~"))
+    if idx < argv.len()
+        && (eq_ascii_command(&argv[idx], b"=") || eq_ascii_command(&argv[idx], b"~"))
     {
         approx = eq_ascii_command(&argv[idx], b"~");
         idx += 1;
@@ -9866,8 +9867,19 @@ fn parse_zstore_args(
     start: usize,
     numkeys: usize,
 ) -> Result<(Vec<f64>, Vec<u8>), CommandError> {
-    let mut weights: Vec<f64> = Vec::new();
+    let (weights, aggregate, _) = parse_zset_algebra_options(argv, start, numkeys, false)?;
+    Ok((weights, aggregate))
+}
+
+fn parse_zset_algebra_options(
+    argv: &[Vec<u8>],
+    start: usize,
+    numkeys: usize,
+    allow_withscores: bool,
+) -> Result<(Vec<f64>, Vec<u8>, bool), CommandError> {
+    let mut weights: Vec<f64> = vec![1.0; numkeys];
     let mut aggregate: Vec<u8> = b"SUM".to_vec();
+    let mut withscores = false;
     let mut i = start;
     while i < argv.len() {
         let kw = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -9876,7 +9888,7 @@ fn parse_zstore_args(
             if i + numkeys > argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            for _ in 0..numkeys {
+            for slot in weights.iter_mut().take(numkeys) {
                 let w = std::str::from_utf8(&argv[i])
                     .map_err(|_| CommandError::InvalidInteger)?
                     .trim()
@@ -9887,22 +9899,32 @@ fn parse_zstore_args(
                         "ERR weight value is not a float".to_string(),
                     ));
                 }
-                weights.push(w);
+                *slot = w;
                 i += 1;
             }
         } else if kw.eq_ignore_ascii_case("AGGREGATE") {
             i += 1;
-            if i < argv.len() {
-                aggregate = argv[i].clone();
-                i += 1;
+            if i >= argv.len() {
+                return Err(CommandError::SyntaxError);
+            }
+            if argv[i].eq_ignore_ascii_case(b"SUM") {
+                aggregate = b"SUM".to_vec();
+            } else if argv[i].eq_ignore_ascii_case(b"MIN") {
+                aggregate = b"MIN".to_vec();
+            } else if argv[i].eq_ignore_ascii_case(b"MAX") {
+                aggregate = b"MAX".to_vec();
             } else {
                 return Err(CommandError::SyntaxError);
             }
+            i += 1;
+        } else if allow_withscores && kw.eq_ignore_ascii_case("WITHSCORES") {
+            withscores = true;
+            i += 1;
         } else {
             return Err(CommandError::SyntaxError);
         }
     }
-    Ok((weights, aggregate))
+    Ok((weights, aggregate, withscores))
 }
 
 fn zunionstore(
@@ -13992,8 +14014,16 @@ fn zdiff(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     if argv.len() < 2_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
-    let withscores =
-        argv.len() > 2 + numkeys && argv[2 + numkeys].eq_ignore_ascii_case(b"WITHSCORES");
+    let mut withscores = false;
+    let mut idx = 2 + numkeys;
+    while idx < argv.len() {
+        if argv[idx].eq_ignore_ascii_case(b"WITHSCORES") {
+            withscores = true;
+            idx += 1;
+        } else {
+            return Err(CommandError::SyntaxError);
+        }
+    }
     let keys: Vec<&[u8]> = (0..numkeys)
         .map(|i| argv[2_usize.saturating_add(i)].as_slice())
         .collect();
@@ -14039,6 +14069,9 @@ fn zdiffstore(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     if argv.len() < 3_usize.saturating_add(numkeys) {
         return Ok(RespFrame::Error("ERR syntax error".to_string()));
     }
+    if argv.len() != 3_usize.saturating_add(numkeys) {
+        return Err(CommandError::SyntaxError);
+    }
     let keys: Vec<&[u8]> = (0..numkeys)
         .map(|i| argv[3_usize.saturating_add(i)].as_slice())
         .collect();
@@ -14080,21 +14113,8 @@ fn zinter(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     let keys: Vec<&[u8]> = (0..numkeys)
         .map(|i| argv[2_usize.saturating_add(i)].as_slice())
         .collect();
-    // Find WITHSCORES before parse_zstore_args
-    let withscores_pos = argv[2 + numkeys..]
-        .iter()
-        .position(|a| a.eq_ignore_ascii_case(b"WITHSCORES"));
-    // Filter out WITHSCORES before passing to parse_zstore_args
-    let args_end = if let Some(pos) = withscores_pos {
-        let abs = 2 + numkeys + pos;
-        // Create temporary argv without WITHSCORES for parsing
-        abs
-    } else {
-        argv.len()
-    };
-    let filtered: Vec<Vec<u8>> = argv[..args_end].to_vec();
-    let (weights, aggregate) = parse_zstore_args(&filtered, 2 + numkeys, numkeys)?;
-    let withscores = withscores_pos.is_some();
+    let (weights, aggregate, withscores) =
+        parse_zset_algebra_options(argv, 2 + numkeys, numkeys, true)?;
     let first_members = store.zget_members_with_scores(keys[0], now_ms)?;
     let mut result: Vec<(Vec<u8>, f64)> = Vec::new();
     let w0 = weights.first().copied().unwrap_or(1.0);
@@ -14143,17 +14163,8 @@ fn zunion_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     let keys: Vec<&[u8]> = (0..numkeys)
         .map(|i| argv[2_usize.saturating_add(i)].as_slice())
         .collect();
-    let withscores_pos = argv[2 + numkeys..]
-        .iter()
-        .position(|a| a.eq_ignore_ascii_case(b"WITHSCORES"));
-    let args_end = if let Some(pos) = withscores_pos {
-        2 + numkeys + pos
-    } else {
-        argv.len()
-    };
-    let filtered: Vec<Vec<u8>> = argv[..args_end].to_vec();
-    let (weights, aggregate) = parse_zstore_args(&filtered, 2 + numkeys, numkeys)?;
-    let withscores = withscores_pos.is_some();
+    let (weights, aggregate, withscores) =
+        parse_zset_algebra_options(argv, 2 + numkeys, numkeys, true)?;
     let mut combined: std::collections::HashMap<Vec<u8>, f64> = std::collections::HashMap::new();
     for (i, &key) in keys.iter().enumerate() {
         let w = weights.get(i).copied().unwrap_or(1.0);
@@ -16227,7 +16238,7 @@ mod tests {
         CLIENT_UNBLOCK_REASON_INVALID, COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec,
         SCRIPT_NOSCRIPT_ERROR, classify_command, client_wrong_subcommand_arity,
         cluster_disabled_error, cluster_reset_with_keys_error, cluster_wrong_subcommand_arity,
-        dispatch_argv, drain_pubsub_messages, eq_ascii_command, execute_migrate,
+        dispatch_argv, drain_pubsub_messages, eq_ascii_command, eval_script, execute_migrate,
         format_eval_read_only_script_error, frame_to_argv, hello_bulk, hello_simple,
         is_write_command, parse_blocking_deadline_milliseconds, parse_migrate_request,
         pubsub_message_to_frame, pubsub_message_to_frame_for_protocol,
@@ -28936,6 +28947,135 @@ mod tests {
     }
 
     #[test]
+    fn zset_algebra_options_accept_withscores_between_options() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"za".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+                b"2".to_vec(),
+                b"b".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"zb".to_vec(),
+                b"3".to_vec(),
+                b"b".to_vec(),
+                b"4".to_vec(),
+                b"c".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let union = dispatch_argv(
+            &[
+                b"ZUNION".to_vec(),
+                b"2".to_vec(),
+                b"za".to_vec(),
+                b"zb".to_vec(),
+                b"WITHSCORES".to_vec(),
+                b"AGGREGATE".to_vec(),
+                b"MAX".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zunion should accept WITHSCORES before AGGREGATE");
+        assert_eq!(
+            union,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"a".to_vec())),
+                RespFrame::BulkString(Some(b"1".to_vec())),
+                RespFrame::BulkString(Some(b"b".to_vec())),
+                RespFrame::BulkString(Some(b"3".to_vec())),
+                RespFrame::BulkString(Some(b"c".to_vec())),
+                RespFrame::BulkString(Some(b"4".to_vec())),
+            ]))
+        );
+
+        let inter = dispatch_argv(
+            &[
+                b"ZINTER".to_vec(),
+                b"2".to_vec(),
+                b"za".to_vec(),
+                b"zb".to_vec(),
+                b"WEIGHTS".to_vec(),
+                b"2".to_vec(),
+                b"3".to_vec(),
+                b"WITHSCORES".to_vec(),
+                b"AGGREGATE".to_vec(),
+                b"MIN".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zinter should accept WITHSCORES between weighted options");
+        assert_eq!(
+            inter,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"b".to_vec())),
+                RespFrame::BulkString(Some(b"4".to_vec())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn zset_algebra_rejects_trailing_and_invalid_options() {
+        let mut store = Store::new();
+        let cases = vec![
+            vec![
+                b"ZDIFF".to_vec(),
+                b"1".to_vec(),
+                b"za".to_vec(),
+                b"WEIGHTS".to_vec(),
+                b"1".to_vec(),
+            ],
+            vec![
+                b"ZDIFFSTORE".to_vec(),
+                b"dst".to_vec(),
+                b"1".to_vec(),
+                b"za".to_vec(),
+                b"WITHSCORES".to_vec(),
+            ],
+            vec![
+                b"ZUNION".to_vec(),
+                b"1".to_vec(),
+                b"za".to_vec(),
+                b"WITHSCORES".to_vec(),
+                b"BOGUS".to_vec(),
+            ],
+            vec![
+                b"ZINTER".to_vec(),
+                b"1".to_vec(),
+                b"za".to_vec(),
+                b"AGGREGATE".to_vec(),
+                b"MEDIAN".to_vec(),
+            ],
+            vec![
+                b"ZUNIONSTORE".to_vec(),
+                b"dst".to_vec(),
+                b"1".to_vec(),
+                b"za".to_vec(),
+                b"AGGREGATE".to_vec(),
+                b"MEDIAN".to_vec(),
+            ],
+        ];
+        for argv in cases {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("syntax must be rejected");
+            assert_eq!(err, CommandError::SyntaxError, "argv={argv:?}");
+        }
+    }
+
+    #[test]
     fn eval_executes_lua() {
         let mut store = Store::new();
         let out = dispatch_argv(
@@ -28945,6 +29085,134 @@ mod tests {
         )
         .expect("eval");
         assert_eq!(out, RespFrame::Integer(1));
+    }
+
+    /// Lock the contract for the structured corpus seeds in
+    /// `fuzz/corpus/fuzz_lua_eval/`. The fuzz target dispatches the
+    /// first byte two ways (`mode % 2`):
+    ///
+    ///   0 → fuzz_raw_lua (body fed to eval_script)
+    ///   1 → fuzz_structured_lua (arbitrary)
+    ///
+    /// The seed generator `fuzz/scripts/gen_lua_eval_seeds.py`
+    /// writes mode-byte = 0x00 seeds covering each meaningful Lua
+    /// path the harness exercises. Verifies:
+    ///
+    ///   1. Every seed exercises `eval_script` without panicking.
+    ///   2. Representative deterministic seeds produce the exact
+    ///      expected `RespFrame` so the corpus locks the eval
+    ///      result.
+    #[test]
+    fn fuzz_lua_eval_corpus_matches_documented_contract() {
+        use std::path::Path;
+
+        let corpus_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus/fuzz_lua_eval");
+        if !corpus_root.exists() {
+            return;
+        }
+
+        fn read_body(corpus_root: &Path, name: &str) -> Vec<u8> {
+            let bytes = std::fs::read(corpus_root.join(name))
+                .unwrap_or_else(|err| panic!("read seed {name}: {err}"));
+            assert!(
+                !bytes.is_empty(),
+                "seed {name} is shorter than the mode byte"
+            );
+            assert_eq!(
+                bytes[0], 0x00,
+                "seed {name} mode byte must be 0x00 (fuzz_raw_lua path)"
+            );
+            bytes[1..].to_vec()
+        }
+
+        // The fuzz harness wires keys=["key"] and argv=["arg"];
+        // mirror that here so seeds exercise the same code path.
+        let keys = vec![b"key".to_vec()];
+        let argv = vec![b"arg".to_vec()];
+
+        // The new structured seeds (whose names appear in the
+        // generator script) have the mode-byte 0x00 prefix. Older
+        // seeds without the prefix are intentionally left in tree
+        // — libfuzzer treats them as additional starting points
+        // for mutation; they exercise the syntax-error path
+        // instead of the valid-script path. Filter to seeds that
+        // match the documented contract.
+        let mode_prefixed: &[&str] = &[
+            "empty.lua",
+            "return_integer.lua",
+            "return_string.lua",
+            "return_bool.lua",
+            "return_nil.lua",
+            "arithmetic.lua",
+            "modulo.lua",
+            "string_length.lua",
+            "string_concat.lua",
+            "if_else.lua",
+            "numeric_for_sum.lua",
+            "local_alias.lua",
+            "table_index.lua",
+            "ipairs_iter.lua",
+            "pairs_iter.lua",
+            "keys_argv_echo.lua",
+            "redis_call_set_get.lua",
+            "redis_status_reply.lua",
+            "redis_error_reply.lua",
+            "redis_sha1hex.lua",
+            "cjson_roundtrip.lua",
+            "pcall_redis_call_failure.lua",
+            "shebang_header_redis7.lua",
+            "syntax_error_paren.lua",
+            "undefined_global.lua",
+            "explicit_error.lua",
+            "infinite_while_true.lua",
+            "table_index_out_of_range.lua",
+            "long_concat.lua",
+            "nested_function.lua",
+        ];
+        assert!(
+            mode_prefixed.len() >= 14,
+            "fuzz_lua_eval mode-prefixed seed list must have >= 14 entries; got {}",
+            mode_prefixed.len()
+        );
+        for name in mode_prefixed {
+            let body = read_body(&corpus_root, name);
+            let mut store = Store::new();
+            // Just exercise — don't bind. Invariant is "no panic".
+            let _ = eval_script(&body, &keys, &argv, &mut store, 0);
+        }
+
+        // Representative deterministic seeds: pin the eval result
+        // so the corpus exercises what the file names claim.
+        let cases: &[(&str, RespFrame)] = &[
+            ("return_integer.lua", RespFrame::Integer(42)),
+            ("arithmetic.lua", RespFrame::Integer(7)),
+            ("modulo.lua", RespFrame::Integer(1)),
+            ("string_length.lua", RespFrame::Integer(3)),
+            (
+                "string_concat.lua",
+                RespFrame::BulkString(Some(b"abc".to_vec())),
+            ),
+            ("if_else.lua", RespFrame::BulkString(Some(b"less".to_vec()))),
+            ("numeric_for_sum.lua", RespFrame::Integer(15)),
+            ("local_alias.lua", RespFrame::Integer(8)),
+            (
+                "table_index.lua",
+                RespFrame::BulkString(Some(b"b".to_vec())),
+            ),
+            ("ipairs_iter.lua", RespFrame::Integer(60)),
+            ("nested_function.lua", RespFrame::Integer(11)),
+        ];
+        for (name, expected) in cases {
+            let body = read_body(&corpus_root, name);
+            let mut store = Store::new();
+            let result = eval_script(&body, &keys, &argv, &mut store, 0)
+                .unwrap_or_else(|err| panic!("seed {name} must eval cleanly: {err}"));
+            assert_eq!(
+                &result, expected,
+                "seed {name} eval result drifted (got {result:?}, expected {expected:?})"
+            );
+        }
     }
 
     #[test]
