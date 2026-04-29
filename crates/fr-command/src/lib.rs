@@ -8285,8 +8285,11 @@ fn bitpos(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     //   argc == 5 → start + end (BYTE semantics)
     //   argc == 6 → start + end + BIT|BYTE modifier
     //   anything else → syntax error
-    if argv.len() < 3 || argv.len() > 6 {
+    if argv.len() < 3 {
         return Err(CommandError::WrongArity("BITPOS"));
+    }
+    if argv.len() > 6 {
+        return Err(CommandError::SyntaxError);
     }
     let bit_val = parse_i64_arg(&argv[2])?;
     if bit_val != 0 && bit_val != 1 {
@@ -25612,6 +25615,27 @@ mod tests {
         )
         .expect("bitpos 1");
         assert_eq!(pos, RespFrame::Integer(15));
+    }
+
+    #[test]
+    fn bitpos_too_many_arguments_is_syntax_error() {
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[
+                b"BITPOS".to_vec(),
+                b"bm".to_vec(),
+                b"1".to_vec(),
+                b"0".to_vec(),
+                b"1".to_vec(),
+                b"BIT".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("BITPOS with more than six arguments should fail");
+
+        assert_eq!(err, CommandError::SyntaxError);
     }
 
     #[test]

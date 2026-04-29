@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{InstanceLink, Role, SentinelRedisInstance, PING_PERIOD_MS};
+use crate::{InstanceLink, PING_PERIOD_MS, Role, SentinelRedisInstance};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HealthCheckResult {
