@@ -29224,6 +29224,127 @@ mod tests {
     ///      expected `RespFrame` so the corpus locks the eval
     ///      result.
     /// Lock the contract for the structured corpus seeds in
+    /// `fuzz/corpus/fuzz_client_tracking/`. The fuzz target parses
+    /// each input via `argv_from_raw` (whitespace-split tokens)
+    /// and feeds the argv through `parse_client_tracking_state`.
+    /// The accept-class invariant is canonical round-trip: parse →
+    /// canonical-render → reparse must produce the same state.
+    ///
+    /// The seed generator
+    /// (`fuzz/scripts/gen_client_tracking_seeds.py`) covers each
+    /// CLIENT TRACKING option combination + each documented
+    /// rejection branch.
+    #[test]
+    fn fuzz_client_tracking_corpus_matches_documented_contract() {
+        use crate::parse_client_tracking_state;
+        use std::path::Path;
+
+        let corpus_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/fuzz_client_tracking");
+        if !corpus_root.exists() {
+            return;
+        }
+
+        // Mirror argv_from_raw: split on whitespace + NUL into
+        // tokens, no quoting.
+        fn argv_from(body: &[u8]) -> Vec<Vec<u8>> {
+            let mut argv = Vec::new();
+            let mut current: Vec<u8> = Vec::new();
+            for &byte in body {
+                if byte == 0 || byte.is_ascii_whitespace() {
+                    if !current.is_empty() {
+                        argv.push(std::mem::take(&mut current));
+                    }
+                } else {
+                    current.push(byte);
+                }
+            }
+            if !current.is_empty() {
+                argv.push(current);
+            }
+            argv
+        }
+
+        fn read_argv(corpus_root: &Path, name: &str) -> Vec<Vec<u8>> {
+            let bytes = std::fs::read(corpus_root.join(name))
+                .unwrap_or_else(|err| panic!("read seed {name}: {err}"));
+            argv_from(&bytes)
+        }
+
+        // Accept-class: every seed must parse cleanly.
+        let accepts: &[&str] = &[
+            "tracking_off.txt",
+            "tracking_on_plain.txt",
+            "tracking_on_bcast.txt",
+            "tracking_on_optin.txt",
+            "tracking_on_optout.txt",
+            "tracking_on_noloop.txt",
+            "tracking_on_bcast_one_prefix.txt",
+            "tracking_on_bcast_two_prefixes.txt",
+            "tracking_on_bcast_three_prefixes.txt",
+            "tracking_on_bcast_noloop.txt",
+            "tracking_on_optin_noloop.txt",
+            "tracking_on_optout_noloop.txt",
+            "tracking_on_redirect.txt",
+            "tracking_on_redirect_bcast_prefix.txt",
+            "tracking_on_redirect_optin_noloop.txt",
+            "tracking_lowercase.txt",
+            "tracking_mixed_case.txt",
+            "tracking_uppercase_prefix_value.txt",
+            "tracking_on_bcast_prefix_with_colon.txt",
+        ];
+        assert!(
+            accepts.len() >= 14,
+            "fuzz_client_tracking accept seeds must have >= 14 entries"
+        );
+        for name in accepts {
+            let argv = read_argv(&corpus_root, name);
+            parse_client_tracking_state(&argv)
+                .unwrap_or_else(|err| panic!("seed {name} must parse: {err:?}"));
+        }
+
+        // Reject-class: each must surface an error.
+        let rejects: &[&str] = &[
+            "tracking_no_mode_arg.txt",
+            "tracking_on_bcast_optin_conflict.txt",
+            "tracking_on_bcast_optout_conflict.txt",
+            "tracking_on_optin_optout_conflict.txt",
+            "tracking_on_prefix_without_bcast.txt",
+            "tracking_on_redirect_missing_arg.txt",
+            "tracking_on_redirect_zero.txt",
+            "tracking_on_prefix_missing_arg.txt",
+            "tracking_bogus_mode.txt",
+            "tracking_on_redirect_negative_id.txt",
+            "tracking_on_redirect_nonnumeric.txt",
+        ];
+        for name in rejects {
+            let argv = read_argv(&corpus_root, name);
+            assert!(
+                parse_client_tracking_state(&argv).is_err(),
+                "seed {name} must reject (got Ok)"
+            );
+        }
+
+        // Specific reject-wording pins for the documented branches.
+        let bcast_optin_argv = read_argv(&corpus_root, "tracking_on_bcast_optin_conflict.txt");
+        let err = parse_client_tracking_state(&bcast_optin_argv)
+            .expect_err("BCAST+OPTIN conflict must reject");
+        assert!(
+            format!("{err:?}").contains("BCAST"),
+            "BCAST+OPTIN error wording must mention BCAST: {err:?}"
+        );
+
+        let prefix_no_bcast =
+            read_argv(&corpus_root, "tracking_on_prefix_without_bcast.txt");
+        let err = parse_client_tracking_state(&prefix_no_bcast)
+            .expect_err("PREFIX-without-BCAST must reject");
+        assert!(
+            format!("{err:?}").contains("PREFIX"),
+            "PREFIX-without-BCAST wording must mention PREFIX: {err:?}"
+        );
+    }
+
+    /// Lock the contract for the structured corpus seeds in
     /// `fuzz/corpus/fuzz_client_reply/`. The fuzz target parses
     /// each input as newline-separated argv and feeds every
     /// command through `apply_client_reply_state`, asserting the
