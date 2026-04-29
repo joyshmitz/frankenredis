@@ -52,6 +52,8 @@ pub enum UpstreamStreamError {
     ExpectedListpackString,
     /// The master field count or per-entry field count is negative or > isize::MAX.
     InvalidFieldCount,
+    /// The stream listpack header live/deleted counts disagreed with records found.
+    InconsistentEntryCount,
     /// The `lp_count` trailer disagreed with how many elements the entry consumed.
     InconsistentEntryTrailer,
     /// A consumer-local PEL referenced an ID absent from the group's global PEL.
@@ -484,8 +486,11 @@ fn decode_stream_listpack(
     out: &mut Vec<StreamEntry>,
 ) -> Result<(), UpstreamStreamError> {
     let mut idx = 0usize;
-    let _count = take_int(lp, &mut idx)?;
-    let _deleted = take_int(lp, &mut idx)?;
+    let declared_live_count = take_usize(lp, &mut idx)?;
+    let declared_deleted_count = take_usize(lp, &mut idx)?;
+    let declared_total_count = declared_live_count
+        .checked_add(declared_deleted_count)
+        .ok_or(UpstreamStreamError::InconsistentEntryCount)?;
     let master_field_count = take_usize(lp, &mut idx)?;
     let mut master_fields: Vec<Vec<u8>> = Vec::with_capacity(master_field_count);
     for _ in 0..master_field_count {
@@ -497,7 +502,12 @@ fn decode_stream_listpack(
         return Err(UpstreamStreamError::InconsistentEntryTrailer);
     }
 
+    let mut decoded_total_count = 0usize;
+    let mut decoded_live_count = 0usize;
     while idx < lp.len() {
+        decoded_total_count = decoded_total_count
+            .checked_add(1)
+            .ok_or(UpstreamStreamError::InconsistentEntryCount)?;
         let flags = take_int(lp, &mut idx)?;
         let ms_delta = take_int(lp, &mut idx)?;
         let seq_delta = take_int(lp, &mut idx)?;
@@ -536,9 +546,15 @@ fn decode_stream_listpack(
         if deleted {
             continue;
         }
+        decoded_live_count = decoded_live_count
+            .checked_add(1)
+            .ok_or(UpstreamStreamError::InconsistentEntryCount)?;
         let ms = combine_u64_i64(master_ms, ms_delta);
         let seq = combine_u64_i64(master_seq, seq_delta);
         out.push((ms, seq, fields));
+    }
+    if decoded_total_count != declared_total_count || decoded_live_count != declared_live_count {
+        return Err(UpstreamStreamError::InconsistentEntryCount);
     }
     Ok(())
 }
@@ -755,6 +771,31 @@ mod tests {
             lp_str(b"f2"),
             lp_str(b"V2"),
             lp_u7(10), // wrong: expected 8
+        ];
+        assemble_listpack(&entries)
+    }
+
+    /// Same shape as build_unique_fields_listpack, but with a corrupted
+    /// live-entry count in the listpack header. Upstream's deep stream
+    /// integrity pass walks exactly count+deleted records, so accepting
+    /// surplus records here would load a malformed stream the oracle rejects.
+    fn build_inconsistent_header_count_listpack() -> Vec<u8> {
+        let entries: Vec<Vec<u8>> = vec![
+            lp_u7(0),      // wrong: one live entry follows
+            lp_u7(0),      // deleted = 0
+            lp_u7(2),      // master_field_count = 2
+            lp_str(b"f1"), // master field 1
+            lp_str(b"f2"), // master field 2
+            lp_u7(0),      // master terminator
+            lp_u7(0),      // entry.flags
+            lp_u7(5),      // ms_delta
+            lp_u7(0),      // seq_delta
+            lp_u7(2),      // per-entry field_count
+            lp_str(b"f1"),
+            lp_str(b"V1"),
+            lp_str(b"f2"),
+            lp_str(b"V2"),
+            lp_u7(8), // lp_count trailer
         ];
         assemble_listpack(&entries)
     }
@@ -1173,6 +1214,15 @@ mod tests {
         let err = decode_upstream_stream_skeleton(UPSTREAM_RDB_TYPE_STREAM_LISTPACKS, &payload)
             .unwrap_err();
         assert_eq!(err, UpstreamStreamError::InconsistentEntryTrailer);
+    }
+
+    #[test]
+    fn decode_rejects_inconsistent_header_entry_count() {
+        let lp = build_inconsistent_header_count_listpack();
+        let payload = build_type15_payload_with_listpack(&lp, 1000, 0);
+        let err = decode_upstream_stream_skeleton(UPSTREAM_RDB_TYPE_STREAM_LISTPACKS, &payload)
+            .unwrap_err();
+        assert_eq!(err, UpstreamStreamError::InconsistentEntryCount);
     }
 
     #[test]
