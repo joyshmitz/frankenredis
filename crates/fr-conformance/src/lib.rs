@@ -8437,7 +8437,30 @@ mod tests {
             Self::spawn_with(oracle_root, data_dir)
         }
 
+        /// Spawn a vendored redis-server with `--appendonly yes` rooted
+        /// at `data_dir`. After population + a clean shutdown, the
+        /// caller can read `<data_dir>/appendonlydir/*` to drive the
+        /// r73v sub-task (b) AOF cross-impl round-trip gate.
+        /// (br-frankenredis-ri1u)
+        fn spawn_with_aof(
+            oracle_root: &std::path::Path,
+            data_dir: &std::path::Path,
+        ) -> Option<Self> {
+            if std::env::var_os("FR_CONFORMANCE_SKIP_LIVE_ORACLE").is_some() {
+                return None;
+            }
+            Self::spawn_with_flags(oracle_root, data_dir, true)
+        }
+
         fn spawn_with(oracle_root: &std::path::Path, tmp_dir: &std::path::Path) -> Option<Self> {
+            Self::spawn_with_flags(oracle_root, tmp_dir, false)
+        }
+
+        fn spawn_with_flags(
+            oracle_root: &std::path::Path,
+            tmp_dir: &std::path::Path,
+            appendonly: bool,
+        ) -> Option<Self> {
             let binary = oracle_root.join("src").join("redis-server");
             if !binary.exists() {
                 return None;
@@ -8456,7 +8479,7 @@ mod tests {
                 .arg("--dir")
                 .arg(tmp_dir)
                 .arg("--appendonly")
-                .arg("no")
+                .arg(if appendonly { "yes" } else { "no" })
                 .arg("--save")
                 .arg("") // disable RDB snapshots so we don't litter artifacts
                 .arg("--daemonize")
@@ -11823,6 +11846,354 @@ mod tests {
             RespFrame::BulkString(Some(payload.clone())),
             "upstream loaded fr-emitted LZF dump.rdb but value drifted",
         );
+    }
+
+    /// Sub-task (b) of br-frankenredis-r73v: AOF cross-impl round-trip
+    /// gate. Mirror of the RDB version
+    /// (`live_redis_rdb_reemit_loadrdb_matches_upstream`) at the AOF
+    /// layer: a freshly-spawned upstream oracle's `appendonlydir/`
+    /// (manifest + base RDB + incremental RESP AOF), decoded through
+    /// `fr_persist::{parse_aof_manifest, decode_rdb, decode_aof_replay_stream}`
+    /// and re-emitted via `fr_persist::{format_aof_manifest, encode_aof_stream,
+    /// encode_rdb_with_options}`, must drop into a fresh
+    /// `appendonlydir/` and load back into a second upstream oracle
+    /// with the same in-memory state.
+    ///
+    /// Flow:
+    ///   1. Spawn oracle_a with `--appendonly yes` rooted at `tmp_a`.
+    ///   2. Configure `appendfsync always` so every write hits disk
+    ///      synchronously; populate shapes.
+    ///   3. SHUTDOWN NOSAVE oracle_a, wait for the child to exit
+    ///      cleanly (final manifest + AOF flush is part of the
+    ///      shutdown path).
+    ///   4. Read every file under `tmp_a/appendonlydir/`.
+    ///   5. Decode the manifest. Decode each base RDB and each AOF
+    ///      tail through fr-persist.
+    ///   6. Re-emit the AOF tail bytes via `encode_aof_stream` and the
+    ///      base RDB via `encode_rdb` (both round-trip-stable). Write
+    ///      a fresh manifest pointing at them in `tmp_b/appendonlydir/`.
+    ///   7. Spawn oracle_b at `tmp_b`. Confirm GET/LLEN/SCARD/HGETALL/
+    ///      ZRANGE return identical state to what oracle_a held.
+    ///
+    /// Streams + HashWithTtls follow the same RDB-private-encoding
+    /// caveat noted on the RDB version of this gate; covering them
+    /// here would require the byte-identical re-emit work in
+    /// br-frankenredis-91kt (now landed in eaecea1) plus end-to-end
+    /// integration. Scope this test to string/list/set/hash/zset.
+    /// (br-frankenredis-ri1u)
+    #[test]
+    fn live_redis_aof_reemit_loadrdb_matches_upstream() {
+        use fr_persist::{
+            AofManifest, AofManifestFileType, decode_aof_replay_stream, decode_rdb,
+            encode_aof_stream, encode_rdb, format_aof_manifest, parse_aof_manifest, read_aof_file,
+        };
+
+        let cfg = HarnessConfig::default_paths();
+        // Phase 1: spawn oracle_a in its own data dir.
+        let tmp_a_dir = std::env::temp_dir().join(format!(
+            "fr_ri1u_oracle_a_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&tmp_a_dir).expect("create tmp_a_dir");
+        let Some(oracle_a) = VendoredRedis::spawn_with_aof(&cfg.oracle_root, &tmp_a_dir) else {
+            eprintln!("[SKIP] vendored redis-server unavailable; AOF round-trip gate skipped");
+            let _ = std::fs::remove_dir_all(&tmp_a_dir);
+            return;
+        };
+
+        let oracle_a_cfg = oracle_a.oracle_config();
+        let mut conn_a = connect_live_redis(&oracle_a_cfg).expect("connect oracle_a for AOF");
+
+        fn argv(parts: &[&[u8]]) -> Vec<Vec<u8>> {
+            parts.iter().map(|p| p.to_vec()).collect()
+        }
+        fn send_command(
+            conn: &mut std::net::TcpStream,
+            parts: Vec<Vec<u8>>,
+            ctx: &str,
+        ) -> RespFrame {
+            let frame = RespFrame::Array(Some(
+                parts
+                    .into_iter()
+                    .map(|a| RespFrame::BulkString(Some(a)))
+                    .collect(),
+            ));
+            send_frame(conn, &frame).unwrap_or_else(|e| panic!("send {ctx}: {e}"));
+            read_resp_frame_from_stream(conn).unwrap_or_else(|e| panic!("read {ctx}: {e}"))
+        }
+
+        // Force every write to hit disk before we move on. Combined
+        // with SHUTDOWN NOSAVE this guarantees the manifest + AOF
+        // files are stable when we read them.
+        send_command(
+            &mut conn_a,
+            argv(&[b"CONFIG", b"SET", b"appendfsync", b"always"]),
+            "set appendfsync always",
+        );
+
+        send_command(
+            &mut conn_a,
+            argv(&[b"SET", b"str_raw", b"hello world"]),
+            "set str_raw",
+        );
+        send_command(
+            &mut conn_a,
+            argv(&[b"RPUSH", b"list_small", b"a", b"b", b"c"]),
+            "rpush list_small",
+        );
+        send_command(
+            &mut conn_a,
+            argv(&[b"SADD", b"set_mixed", b"alpha", b"beta", b"1", b"42"]),
+            "sadd set_mixed",
+        );
+        send_command(
+            &mut conn_a,
+            argv(&[b"HSET", b"hash_obj", b"f1", b"v1", b"f2", b"v2"]),
+            "hset hash_obj",
+        );
+        send_command(
+            &mut conn_a,
+            argv(&[
+                b"ZADD",
+                b"zset_obj",
+                b"1.0",
+                b"a",
+                b"2.5",
+                b"b",
+                b"7.25",
+                b"c",
+            ]),
+            "zadd zset_obj",
+        );
+
+        // Pre-state probes — used to check parity post-load.
+        let pre_str = send_command(&mut conn_a, argv(&[b"GET", b"str_raw"]), "get str_raw");
+        let pre_llen = send_command(
+            &mut conn_a,
+            argv(&[b"LLEN", b"list_small"]),
+            "llen list_small",
+        );
+        let pre_lrange = send_command(
+            &mut conn_a,
+            argv(&[b"LRANGE", b"list_small", b"0", b"-1"]),
+            "lrange list_small",
+        );
+        let pre_scard = send_command(
+            &mut conn_a,
+            argv(&[b"SCARD", b"set_mixed"]),
+            "scard set_mixed",
+        );
+        let pre_smembers = canonical_bulk_string_array(&send_command(
+            &mut conn_a,
+            argv(&[b"SMEMBERS", b"set_mixed"]),
+            "smembers set_mixed",
+        ))
+        .expect("smembers should be bulk-string array");
+        let pre_hgetall = canonical_hgetall_pairs(&send_command(
+            &mut conn_a,
+            argv(&[b"HGETALL", b"hash_obj"]),
+            "hgetall hash_obj",
+        ))
+        .expect("hgetall should be even-length bulk array");
+        let pre_zrange = send_command(
+            &mut conn_a,
+            argv(&[b"ZRANGE", b"zset_obj", b"0", b"-1", b"WITHSCORES"]),
+            "zrange zset_obj",
+        );
+
+        // Trigger BGREWRITEAOF so upstream rebuilds the AOF into a
+        // consolidated base RDB + (typically empty) incr tail. The
+        // rewrite is async; poll INFO PERSISTENCE until
+        // aof_rewrite_in_progress flips back to 0.
+        send_command(&mut conn_a, argv(&[b"BGREWRITEAOF"]), "bgrewriteaof");
+        let rewrite_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() >= rewrite_deadline {
+                panic!("BGREWRITEAOF didn't complete within 5s on oracle_a");
+            }
+            let info = send_command(
+                &mut conn_a,
+                argv(&[b"INFO", b"persistence"]),
+                "info persistence",
+            );
+            let RespFrame::BulkString(Some(text_bytes)) = info else {
+                panic!("INFO must reply with a bulk string");
+            };
+            let text = String::from_utf8_lossy(&text_bytes);
+            if text.contains("aof_rewrite_in_progress:0") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // SHUTDOWN NOSAVE flushes the manifest + AOF files. The
+        // server then exits; the connection drops without a reply.
+        let shutdown_frame = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"SHUTDOWN".to_vec())),
+            RespFrame::BulkString(Some(b"NOSAVE".to_vec())),
+        ]));
+        let _ = send_frame(&mut conn_a, &shutdown_frame);
+        drop(conn_a);
+        // Allow oracle_a's child to flush + exit. Drop's `kill` is a
+        // belt-and-braces guard — by the time we reach this point the
+        // server should already have exited cleanly.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        drop(oracle_a);
+
+        // Phase 2: read appendonlydir/* from oracle_a's tmp dir.
+        let aof_dir_a = tmp_a_dir.join("appendonlydir");
+        assert!(
+            aof_dir_a.is_dir(),
+            "oracle_a should have created {}",
+            aof_dir_a.display(),
+        );
+        let manifest_path_a = aof_dir_a.join("appendonly.aof.manifest");
+        let manifest_text = std::fs::read_to_string(&manifest_path_a)
+            .unwrap_or_else(|e| panic!("read manifest {}: {e}", manifest_path_a.display()));
+        let manifest_a = parse_aof_manifest(&manifest_text).expect("parse oracle_a's AOF manifest");
+        // Either the base or an incremental file must be present —
+        // empty manifests would mean oracle_a never wrote anything.
+        assert!(
+            !manifest_a.is_empty(),
+            "oracle_a's AOF manifest should not be empty after BGREWRITEAOF",
+        );
+
+        // Phase 3: re-emit into a fresh dir B.
+        let tmp_b_dir = std::env::temp_dir().join(format!(
+            "fr_ri1u_oracle_b_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let aof_dir_b = tmp_b_dir.join("appendonlydir");
+        fs::create_dir_all(&aof_dir_b).expect("create tmp_b_dir/appendonlydir");
+
+        // Re-emit each manifest entry. For each base RDB we
+        // decode_rdb → encode_rdb (canonical types). For each AOF
+        // tail we decode_aof_replay_stream → encode_aof_stream over
+        // the records portion (preserving any RDB preamble that
+        // upstream emits at the head of the file).
+        let mut new_manifest = AofManifest::default();
+        for entry in manifest_a.replay_entries() {
+            let src = aof_dir_a.join(&entry.file_name);
+            match entry.file_type {
+                AofManifestFileType::Base => {
+                    let bytes = std::fs::read(&src)
+                        .unwrap_or_else(|e| panic!("read oracle_a base {}: {e}", src.display()));
+                    let (entries, aux) = decode_rdb(&bytes).unwrap_or_else(|e| {
+                        panic!("decode oracle_a base RDB {}: {e:?}", src.display())
+                    });
+                    let aux_refs: Vec<(&str, &str)> =
+                        aux.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                    let re_emitted = encode_rdb(&entries, &aux_refs);
+                    let dst = aof_dir_b.join(&entry.file_name);
+                    std::fs::write(&dst, &re_emitted).expect("write re-emitted base");
+                    new_manifest.base = Some(entry.clone());
+                    new_manifest.curr_base_file_seq =
+                        new_manifest.curr_base_file_seq.max(entry.file_seq);
+                }
+                AofManifestFileType::Incremental => {
+                    let bytes = std::fs::read(&src)
+                        .unwrap_or_else(|e| panic!("read oracle_a incr {}: {e}", src.display()));
+                    // The incr file may be empty after BGREWRITEAOF
+                    // (upstream emits an empty placeholder). Pass
+                    // through unchanged in that case — there's
+                    // nothing to decode.
+                    let re_emitted = if bytes.is_empty() {
+                        Vec::new()
+                    } else {
+                        let stream = decode_aof_replay_stream(&bytes).unwrap_or_else(|e| {
+                            panic!("decode oracle_a incr {}: {e:?}", src.display())
+                        });
+                        let records: Vec<_> =
+                            stream.records.into_iter().map(|r| r.record).collect();
+                        encode_aof_stream(&records)
+                    };
+                    let dst = aof_dir_b.join(&entry.file_name);
+                    std::fs::write(&dst, &re_emitted).expect("write re-emitted incr");
+                    new_manifest.incremental.push(entry.clone());
+                    new_manifest.curr_incr_file_seq =
+                        new_manifest.curr_incr_file_seq.max(entry.file_seq);
+                }
+                AofManifestFileType::History => {
+                    // Skip history entries — upstream keeps these as
+                    // pruning hints, but they're not required for
+                    // load. Sanity: they should be readable as AOF
+                    // streams too.
+                    let _ = read_aof_file(&src);
+                    new_manifest.history.push(entry.clone());
+                }
+            }
+        }
+
+        // Drop the re-emitted manifest into place.
+        let manifest_path_b = aof_dir_b.join("appendonly.aof.manifest");
+        let new_manifest_text = format_aof_manifest(&new_manifest);
+        std::fs::write(&manifest_path_b, new_manifest_text.as_bytes())
+            .expect("write re-emitted manifest");
+
+        // Phase 4: spawn oracle_b at tmp_b_dir.
+        let Some(oracle_b) = VendoredRedis::spawn_with_aof(&cfg.oracle_root, &tmp_b_dir) else {
+            panic!("oracle_b should boot at {}", tmp_b_dir.display());
+        };
+        let oracle_b_cfg = oracle_b.oracle_config();
+        let mut conn_b = connect_live_redis(&oracle_b_cfg).expect("connect oracle_b for AOF");
+
+        // Phase 5: state-equivalence check.
+        let post_str = send_command(&mut conn_b, argv(&[b"GET", b"str_raw"]), "post get");
+        let post_llen = send_command(&mut conn_b, argv(&[b"LLEN", b"list_small"]), "post llen");
+        let post_lrange = send_command(
+            &mut conn_b,
+            argv(&[b"LRANGE", b"list_small", b"0", b"-1"]),
+            "post lrange",
+        );
+        let post_scard = send_command(&mut conn_b, argv(&[b"SCARD", b"set_mixed"]), "post scard");
+        let post_smembers = canonical_bulk_string_array(&send_command(
+            &mut conn_b,
+            argv(&[b"SMEMBERS", b"set_mixed"]),
+            "post smembers",
+        ))
+        .expect("post smembers");
+        let post_hgetall = canonical_hgetall_pairs(&send_command(
+            &mut conn_b,
+            argv(&[b"HGETALL", b"hash_obj"]),
+            "post hgetall",
+        ))
+        .expect("post hgetall");
+        let post_zrange = send_command(
+            &mut conn_b,
+            argv(&[b"ZRANGE", b"zset_obj", b"0", b"-1", b"WITHSCORES"]),
+            "post zrange",
+        );
+
+        assert_eq!(pre_str, post_str, "GET drifted across AOF round-trip");
+        assert_eq!(pre_llen, post_llen, "LLEN drifted across AOF round-trip");
+        assert_eq!(
+            pre_lrange, post_lrange,
+            "LRANGE drifted across AOF round-trip"
+        );
+        assert_eq!(pre_scard, post_scard, "SCARD drifted across AOF round-trip");
+        assert_eq!(
+            pre_smembers, post_smembers,
+            "SMEMBERS drifted across AOF round-trip (sorted)"
+        );
+        assert_eq!(
+            pre_hgetall, post_hgetall,
+            "HGETALL drifted across AOF round-trip (sorted-by-field)"
+        );
+        assert_eq!(
+            pre_zrange, post_zrange,
+            "ZRANGE drifted across AOF round-trip"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp_a_dir);
+        let _ = std::fs::remove_dir_all(&tmp_b_dir);
     }
 
     #[test]
