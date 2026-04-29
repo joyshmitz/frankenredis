@@ -2074,16 +2074,13 @@ impl ServerState {
             dispatch_argv(&record.argv, &mut replayed_store, replay_now_ms)
                 .map_err(|_| PersistError::InvalidFrame)?;
         }
-        // Preserve flags that the boot path set on `self.store` BEFORE
-        // load_aof was invoked — `replayed_store` is a fresh
+        // Preserve server context that the boot path set on `self.store`
+        // BEFORE load_aof was invoked — `replayed_store` is a fresh
         // `Store::new()` with all defaults, so swapping it in wholesale
-        // would clobber e.g. `aof_enabled = true` that
-        // `set_aof_path` just established. Without this, WAITAOF after
-        // a successful AOF load erroneously trips
-        // "ERR WAITAOF cannot be used when numlocal is set but
-        // appendonly is disabled." even on servers booted with --aof.
+        // would clobber e.g. `aof_enabled = true` from `set_aof_path`
+        // plus INFO/CLUSTER identity fields such as run_id and tcp_port.
         // (br-frankenredis-7epx)
-        replayed_store.set_aof_enabled(self.store.aof_enabled);
+        preserve_store_load_context(&mut replayed_store, &self.store);
         self.store = replayed_store;
         self.aof_records = records;
         Ok(count)
@@ -2492,6 +2489,18 @@ impl ExecutionSource {
     }
 }
 
+fn preserve_store_load_context(replacement: &mut Store, original: &Store) {
+    replacement.set_aof_enabled(original.aof_enabled);
+    replacement
+        .server_run_id
+        .clone_from(&original.server_run_id);
+    replacement
+        .cluster_shard_id
+        .clone_from(&original.cluster_shard_id);
+    replacement.server_pid = original.server_pid;
+    replacement.server_port = original.server_port;
+}
+
 const MAX_COMMAND_ARITY: usize = 1024 * 1024;
 
 impl Runtime {
@@ -2578,19 +2587,14 @@ impl Runtime {
         self.server.aof_records = records;
         self.server.aof_selected_db = self.session.selected_db;
         self.session.selected_db = original_db;
-        // Preserve flags that the boot path established on `original_store`
-        // before the AOF replay swapped in a fresh `Store::new()` (e.g.
-        // `aof_enabled = true` from `set_aof_path`). Without this, the
-        // post-replay store's aof_enabled defaults to false, so WAITAOF
-        // on a server booted with --aof erroneously trips
-        // "ERR WAITAOF cannot be used when numlocal is set but
-        // appendonly is disabled." The error path above (line ~2570)
-        // already restores `original_store` wholesale; we just need to
-        // mirror the relevant flag onto the success-path store.
+        // Preserve server context that the boot path established on
+        // `original_store` before AOF replay swapped in a fresh
+        // `Store::new()` (e.g. `aof_enabled = true` from `set_aof_path`
+        // plus INFO/CLUSTER identity fields such as run_id and tcp_port).
+        // The error path restores `original_store` wholesale; the success
+        // path mirrors the non-dataset context onto the replayed store.
         // (br-frankenredis-7epx)
-        self.server
-            .store
-            .set_aof_enabled(original_store.aof_enabled);
+        preserve_store_load_context(&mut self.server.store, &original_store);
         Ok(count)
     }
 
@@ -2605,7 +2609,7 @@ impl Runtime {
         let count = entries.len();
         let mut store = Store::new();
         apply_rdb_entries_to_store(&mut store, &entries, now_ms)?;
-        store.set_aof_enabled(self.server.store.aof_enabled);
+        preserve_store_load_context(&mut store, &self.server.store);
         self.server.store = store;
         Ok(count)
     }
@@ -11048,7 +11052,10 @@ mod tests {
         EventLoopMode, EventLoopPhase, FdRegistrationError, LoopBootstrap, PendingWriteError,
         ReadPathError, ReadinessCallback, TickBudget,
     };
-    use fr_persist::{AofRecord, PersistError, RdbValue, decode_aof_stream, write_aof_file};
+    use fr_persist::{
+        AofRecord, PersistError, RdbEntry, RdbValue, decode_aof_stream, write_aof_file,
+        write_rdb_file,
+    };
     use fr_protocol::{RespFrame, parse_frame};
     use fr_store::sha1_hex_public;
 
@@ -18303,6 +18310,67 @@ mod tests {
         assert_eq!(fresh, RespFrame::BulkString(Some(b"value".to_vec())));
 
         let _ = std::fs::remove_file(&aof_path);
+    }
+
+    #[test]
+    fn load_aof_preserves_store_backed_server_context() {
+        let dir = std::env::temp_dir().join("fr_runtime_aof_preserve_server_context_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let aof_path = dir.join("preserve_context.aof");
+        let records = vec![AofRecord {
+            argv: vec![b"SET".to_vec(), b"fresh".to_vec(), b"value".to_vec()],
+        }];
+        write_aof_file(&aof_path, &records).expect("write test aof");
+
+        let mut rt = Runtime::default_strict();
+        rt.set_server_port(6380);
+        let run_id = rt.server.store.server_run_id.clone();
+        rt.set_aof_path(aof_path);
+
+        let loaded = rt.load_aof(50).expect("load should succeed");
+        assert_eq!(loaded, records.len());
+        assert_eq!(rt.server_port(), 6380);
+        assert_eq!(rt.server.store.server_run_id, run_id);
+
+        let info = rt.execute_frame(command(&[b"INFO", b"server"]), 100);
+        let RespFrame::BulkString(Some(info_bytes)) = info else {
+            unreachable!("expected INFO server bulk response");
+        };
+        let info = String::from_utf8(info_bytes).expect("utf8 info");
+        assert!(info.contains("tcp_port:6380\r\n"), "{info}");
+        assert!(info.contains(&format!("run_id:{run_id}\r\n")), "{info}");
+    }
+
+    #[test]
+    fn load_rdb_preserves_store_backed_server_context() {
+        let dir = std::env::temp_dir().join("fr_runtime_rdb_preserve_server_context_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let rdb_path = dir.join("preserve_context.rdb");
+        let entries = vec![RdbEntry {
+            db: 0,
+            key: b"fresh".to_vec(),
+            value: RdbValue::String(b"value".to_vec()),
+            expire_ms: None,
+        }];
+        write_rdb_file(&rdb_path, &entries, &[]).expect("write test rdb");
+
+        let mut rt = Runtime::default_strict();
+        rt.set_server_port(6381);
+        let run_id = rt.server.store.server_run_id.clone();
+        rt.set_rdb_path(rdb_path);
+
+        let loaded = rt.load_rdb(50).expect("load should succeed");
+        assert_eq!(loaded, entries.len());
+        assert_eq!(rt.server_port(), 6381);
+        assert_eq!(rt.server.store.server_run_id, run_id);
+
+        let info = rt.execute_frame(command(&[b"INFO", b"server"]), 100);
+        let RespFrame::BulkString(Some(info_bytes)) = info else {
+            unreachable!("expected INFO server bulk response");
+        };
+        let info = String::from_utf8(info_bytes).expect("utf8 info");
+        assert!(info.contains("tcp_port:6381\r\n"), "{info}");
+        assert!(info.contains(&format!("run_id:{run_id}\r\n")), "{info}");
     }
 
     #[test]
