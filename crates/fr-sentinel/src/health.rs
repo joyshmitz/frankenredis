@@ -131,13 +131,7 @@ pub fn parse_info_response(info: &str) -> ParsedInfo {
                     result.master_port = value.parse().ok();
                 }
                 "master_link_status" => {
-                    if let Some(up) = match value {
-                        "up" => Some(true),
-                        "down" => Some(false),
-                        _ => None,
-                    } {
-                        result.master_link_status = Some(up);
-                    }
+                    result.master_link_status = Some(value.eq_ignore_ascii_case("up"));
                 }
                 "master_link_down_since_seconds" => {
                     result.master_link_down_since = value
@@ -306,7 +300,7 @@ connected_slaves:0
     }
 
     #[test]
-    fn parse_info_ignores_malformed_master_link_status_lines() {
+    fn parse_info_marks_non_up_master_link_status_down() {
         let info = r#"
 # Replication
 role:slave
@@ -314,10 +308,13 @@ master_link_status:up
 master_link_status:up:with-extra-colon
 "#;
         let parsed = parse_info_response(info);
-        assert_eq!(parsed.master_link_status, Some(true));
+        assert_eq!(parsed.master_link_status, Some(false));
 
         let malformed_only = parse_info_response("role:slave\nmaster_link_status:maybe\n");
-        assert_eq!(malformed_only.master_link_status, None);
+        assert_eq!(malformed_only.master_link_status, Some(false));
+
+        let uppercase_up = parse_info_response("role:slave\nmaster_link_status:UP\n");
+        assert_eq!(uppercase_up.master_link_status, Some(true));
     }
 
     #[test]

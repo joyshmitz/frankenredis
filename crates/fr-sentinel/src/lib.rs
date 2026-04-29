@@ -528,6 +528,13 @@ mod tests {
         assert_eq!(slave.master_link_status, Some(false));
         assert_eq!(slave.master_link_down_since, Some(42_000));
 
+        let malformed_link = parse_info_response(&read_seed(
+            &corpus_root,
+            "info_slave_malformed_link_status.txt",
+        )?);
+        assert_eq!(malformed_link.master_link_status, Some(false));
+        assert_eq!(malformed_link.master_link_down_since, Some(7_000));
+
         let noisy = parse_info_response(&read_seed(&corpus_root, "info_noise_colons.txt")?);
         assert_eq!(noisy.role, Some(Role::Master));
         assert_eq!(noisy.connected_slaves, Some(0));
