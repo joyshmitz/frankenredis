@@ -1007,8 +1007,8 @@ mod tests {
     /// Verifies every seed's `replay_phase_trace(trace)` matches an
     /// independent replay model — same invariant the fuzz target
     /// ultimately depends on. Pinned outcomes for the canonical
-    /// 1-iteration / 2-iteration / empty traces. Asserts ≥14 seeds
-    /// against silent regression.
+    /// 1-iteration / 2-iteration / empty traces. Asserts the full
+    /// seed-file set against silent regression.
     #[test]
     fn fuzz_eventloop_validators_corpus_matches_documented_contract() -> Result<(), String> {
         use std::path::Path;
@@ -1080,17 +1080,21 @@ mod tests {
         {
             let entry =
                 entry.map_err(|err| format!("read fuzz_eventloop_validators entry: {err}"))?;
+            let is_file = entry
+                .file_type()
+                .map_err(|err| format!("read fuzz_eventloop_validators file type: {err}"))?
+                .is_file();
             let name = entry.file_name().into_string().map_err(|name| {
                 format!("fuzz_eventloop_validators seed filename is not UTF-8: {name:?}")
             })?;
-            if name.ends_with(".bin") {
+            if is_file {
                 entries.push(name);
             }
         }
         entries.sort();
         assert!(
-            entries.len() >= 14,
-            "fuzz_eventloop_validators corpus must have >= 14 .bin seeds; got {}",
+            entries.len() >= 17,
+            "fuzz_eventloop_validators corpus must have >= 17 seed files; got {}",
             entries.len()
         );
 
