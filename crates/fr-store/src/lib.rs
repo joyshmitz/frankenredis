@@ -560,6 +560,14 @@ struct Entry {
     lfu_last_touch_min: u64,
     /// Monotonic modification counter (bumped on every write, used by WATCH).
     modification_count: u64,
+    /// Upstream Redis 7.2 promotes a String value's encoding from
+    /// embstr to raw on the first in-place mutation (APPEND,
+    /// SETRANGE, GETSET-with-overwrite). The encoding is sticky —
+    /// even if a later operation shrinks the string back below the
+    /// 44-byte embstr threshold, OBJECT ENCODING continues to
+    /// report 'raw'. Mirrored here as a per-entry flag.
+    /// (br-frankenredis-84bv)
+    force_raw_encoding: bool,
 }
 
 impl Entry {
@@ -571,6 +579,7 @@ impl Entry {
             lfu_freq: 0,
             lfu_last_touch_min: now_ms / 60_000,
             modification_count: 0,
+            force_raw_encoding: false,
         }
     }
 
@@ -2105,6 +2114,8 @@ impl Store {
                 v.extend_from_slice(value);
                 let len = v.len();
                 entry.touch_write(now_ms);
+                // (br-frankenredis-84bv)
+                entry.force_raw_encoding = true;
                 Ok(len)
             }
             _ => Err(StoreError::WrongType),
@@ -2329,6 +2340,8 @@ impl Store {
                 _ => return Err(StoreError::WrongType),
             };
             entry.touch_write(now_ms);
+            // (br-frankenredis-84bv)
+            entry.force_raw_encoding = true;
             Ok(len)
         }) {
             Some(result) => {
@@ -2341,10 +2354,10 @@ impl Store {
                 let mut current = vec![0; needed];
                 current[offset..offset + value.len()].copy_from_slice(value);
                 let new_len = current.len();
-                self.internal_entries_insert(
-                    key.to_vec(),
-                    Entry::new(Value::String(current), None, now_ms),
-                );
+                let mut entry = Entry::new(Value::String(current), None, now_ms);
+                // (br-frankenredis-84bv)
+                entry.force_raw_encoding = true;
+                self.internal_entries_insert(key.to_vec(), entry);
                 self.dirty = self.dirty.saturating_add(1);
                 Ok(new_len)
             }
@@ -2810,12 +2823,13 @@ impl Store {
             Value::String(v) => {
                 // Redis returns "int" for strings that are the canonical
                 // representation of an i64 (round-trip: parse then format must match)
-                if let Ok(s) = std::str::from_utf8(v)
+                if !entry.force_raw_encoding
+                    && let Ok(s) = std::str::from_utf8(v)
                     && let Ok(n) = s.parse::<i64>()
                     && n.to_string() == s
                 {
                     "int"
-                } else if v.len() <= 44 {
+                } else if !entry.force_raw_encoding && v.len() <= 44 {
                     "embstr"
                 } else {
                     "raw"
