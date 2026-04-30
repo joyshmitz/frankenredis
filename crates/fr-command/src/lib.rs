@@ -8070,8 +8070,17 @@ fn spop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         return Err(CommandError::WrongArity("SPOP"));
     }
     if argv.len() == 3 {
-        let count =
-            usize::try_from(parse_u64_arg(&argv[2])?).map_err(|_| CommandError::InvalidInteger)?;
+        // Upstream t_set.c::spopCommand uses the
+        // 'value is out of range, must be positive' error for
+        // both unparseable and negative counts.
+        // (br-frankenredis-spopary)
+        let bad =
+            || CommandError::Custom("ERR value is out of range, must be positive".to_string());
+        let parsed = parse_i64_arg(&argv[2]).map_err(|_| bad())?;
+        if parsed < 0 {
+            return Err(bad());
+        }
+        let count = usize::try_from(parsed).map_err(|_| bad())?;
         let members = store.spop_count(&argv[1], count, now_ms)?;
         let arr = members
             .into_iter()
