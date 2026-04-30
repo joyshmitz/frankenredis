@@ -10478,18 +10478,23 @@ slave_priority:{}\r\n",
 
     fn handle_exec_command(&mut self, argv: &[Vec<u8>], now_ms: u64, packet_id: u64) -> RespFrame {
         if argv.len() != 1 {
+            // Upstream multi.c::execCommand: EXEC with wrong arity
+            // ALWAYS surfaces 'EXECABORT Transaction discarded
+            // because of: wrong number of arguments for exec
+            // command' — both inside a MULTI (where it discards
+            // the queue) and outside (where there's no queue to
+            // discard). (br-frankenredis-execary)
             if self.session.transaction_state.in_transaction {
                 self.session.transaction_state.in_transaction = false;
                 self.session.transaction_state.exec_abort = false;
                 self.session.transaction_state.command_queue.clear();
                 self.session.transaction_state.watched_keys.clear();
                 self.session.transaction_state.watch_dirty = false;
-                return RespFrame::Error(
-                    "EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command"
-                        .to_string(),
-                );
             }
-            return wrong_arity_error("exec");
+            return RespFrame::Error(
+                "EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command"
+                    .to_string(),
+            );
         }
         if !self.session.transaction_state.in_transaction {
             return RespFrame::Error("ERR EXEC without MULTI".to_string());
