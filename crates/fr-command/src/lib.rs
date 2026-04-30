@@ -6020,11 +6020,28 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     }
 
     if sub.eq_ignore_ascii_case("SETID") {
-        if argv.len() != 5 {
-            return Err(CommandError::WrongSubcommandArity {
-                command: "XGROUP",
-                subcommand: sub.to_string(),
-            });
+        // XGROUP SETID key groupname id|$ [ENTRIESREAD entries-read]
+        // Upstream uses addReplySubcommandSyntaxError for any argc
+        // outside {5, 7} or for an unrecognised options token.
+        // (br-frankenredis-xgroupsetid)
+        let setid_subcommand_syntax = || {
+            CommandError::Custom(format!(
+                "ERR unknown subcommand or wrong number of arguments for '{sub}'. Try XGROUP HELP."
+            ))
+        };
+        if argv.len() != 5 && argv.len() != 7 {
+            return Err(setid_subcommand_syntax());
+        }
+        if argv.len() == 7 {
+            if !eq_ascii_command(&argv[5], b"ENTRIESREAD") {
+                return Err(setid_subcommand_syntax());
+            }
+            // Upstream parses ENTRIESREAD via getLongLongFromObjectOrReply
+            // (raw 'value is not an integer or out of range' on bad
+            // input) but ignores the actual value here — fr currently
+            // doesn't track per-group entries-read state, so we still
+            // accept the value while validating its shape.
+            let _ = parse_i64_arg(&argv[6])?;
         }
         let last_delivered_id = if eq_ascii_command(&argv[4], b"$") {
             store.xlast_id(&argv[2], now_ms)?.unwrap_or((0, 0))
@@ -25434,13 +25451,15 @@ mod tests {
             0,
         )
         .expect_err("xgroup setid arity");
-        assert!(matches!(
+        // Upstream uses addReplySubcommandSyntaxError for any argc
+        // outside {5, 7}. (br-frankenredis-xgroupsetid)
+        assert_eq!(
             arity,
-            CommandError::WrongSubcommandArity {
-                command: "XGROUP",
-                ..
-            }
-        ));
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP."
+                    .to_string()
+            )
+        );
 
         store.set(b"str".to_vec(), b"value".to_vec(), None, 0);
         let wrongtype = dispatch_argv(
