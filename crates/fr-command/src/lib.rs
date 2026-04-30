@@ -3627,8 +3627,12 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
 
     let remaining = argv.len() - i;
+    // Upstream t_zset.c::zaddGenericCommand returns
+    // 'ERR syntax error' when the score/member tail count is zero
+    // or odd, NOT a wrong-arity reply. Mirror that wording.
+    // (br-frankenredis-zaddary)
     if remaining < 2 || !remaining.is_multiple_of(2) {
-        return Err(CommandError::WrongArity("ZADD"));
+        return Err(CommandError::SyntaxError);
     }
 
     if incr && remaining != 2 {
