@@ -13611,9 +13611,11 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             if argv.len() != 5 {
                 return Err(CommandError::SyntaxError);
             }
-            // Parse the samples count to validate it, but we ignore it
+            // Upstream object.c::memoryCommand validates SAMPLES as a
+            // non-negative integer (0 means "use the default" — does
+            // not error). Negatives are rejected. (br-frankenredis-musamp0)
             let samples = parse_i64_arg(&argv[4])?;
-            if samples <= 0 {
+            if samples < 0 {
                 return Err(CommandError::SyntaxError);
             }
         }
@@ -13623,7 +13625,12 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         }
     } else if sub.eq_ignore_ascii_case("DOCTOR") {
         if argv.len() != 2 {
-            return Err(CommandError::SyntaxError);
+            // (br-frankenredis-marg) — upstream emits the standard
+            // subcommand wrong-arity reply.
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MEMORY",
+                subcommand: "DOCTOR".to_string(),
+            });
         }
         // Mirror upstream object.c::getMemoryDoctorReport. Upstream's
         // "empty" branch fires when total_allocated < 5 MB; fr does
@@ -13644,19 +13651,31 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         Ok(RespFrame::BulkString(Some(body.to_vec())))
     } else if sub.eq_ignore_ascii_case("MALLOC-STATS") {
         if argv.len() != 2 {
-            return Err(CommandError::SyntaxError);
+            // (br-frankenredis-marg)
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MEMORY",
+                subcommand: "MALLOC-STATS".to_string(),
+            });
         }
         Ok(RespFrame::BulkString(Some(
             b"Memory allocator stats not available".to_vec(),
         )))
     } else if sub.eq_ignore_ascii_case("PURGE") {
         if argv.len() != 2 {
-            return Err(CommandError::SyntaxError);
+            // (br-frankenredis-marg)
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MEMORY",
+                subcommand: "PURGE".to_string(),
+            });
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("STATS") {
         if argv.len() != 2 {
-            return Err(CommandError::SyntaxError);
+            // (br-frankenredis-marg)
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MEMORY",
+                subcommand: "STATS".to_string(),
+            });
         }
         // Upstream object.c::memoryCommand emits a RESP map (or
         // RESP2 alternating-key/value array) with 27 fixed fields
@@ -13742,7 +13761,11 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         Ok(RespFrame::Array(Some(items)))
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
-            return Err(CommandError::SyntaxError);
+            // (br-frankenredis-marg)
+            return Err(CommandError::WrongSubcommandArity {
+                command: "MEMORY",
+                subcommand: "HELP".to_string(),
+            });
         }
         Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(
@@ -27809,29 +27832,55 @@ mod tests {
         let mut store = Store::new();
         store.set(b"k".to_vec(), b"v".to_vec(), None, 0);
 
-        for argv in [
-            vec![b"MEMORY".to_vec(), b"DOCTOR".to_vec(), b"extra".to_vec()],
-            vec![
-                b"MEMORY".to_vec(),
-                b"MALLOC-STATS".to_vec(),
-                b"extra".to_vec(),
-            ],
-            vec![b"MEMORY".to_vec(), b"PURGE".to_vec(), b"extra".to_vec()],
-            vec![b"MEMORY".to_vec(), b"STATS".to_vec(), b"extra".to_vec()],
-            vec![b"MEMORY".to_vec(), b"HELP".to_vec(), b"extra".to_vec()],
+        // (br-frankenredis-marg) — DOCTOR/MALLOC-STATS/PURGE/STATS/
+        // HELP with extra args use the subcommand-specific
+        // wrong-arity reply. (br-frankenredis-musamp0) — USAGE
+        // SAMPLES 0 is accepted; only negative values surface
+        // SyntaxError.
+        let wrong_arity_cases = [
+            (
+                vec![b"MEMORY".to_vec(), b"DOCTOR".to_vec(), b"extra".to_vec()],
+                "DOCTOR",
+            ),
+            (
+                vec![
+                    b"MEMORY".to_vec(),
+                    b"MALLOC-STATS".to_vec(),
+                    b"extra".to_vec(),
+                ],
+                "MALLOC-STATS",
+            ),
+            (
+                vec![b"MEMORY".to_vec(), b"PURGE".to_vec(), b"extra".to_vec()],
+                "PURGE",
+            ),
+            (
+                vec![b"MEMORY".to_vec(), b"STATS".to_vec(), b"extra".to_vec()],
+                "STATS",
+            ),
+            (
+                vec![b"MEMORY".to_vec(), b"HELP".to_vec(), b"extra".to_vec()],
+                "HELP",
+            ),
+        ];
+        for (argv, sub) in &wrong_arity_cases {
+            let err = dispatch_argv(argv, &mut store, 0).expect_err("memory wrong-arity");
+            assert_eq!(
+                err,
+                CommandError::WrongSubcommandArity {
+                    command: "MEMORY",
+                    subcommand: sub.to_string(),
+                },
+                "argv={argv:?}"
+            );
+        }
+        let syntax_cases = [
             vec![
                 b"MEMORY".to_vec(),
                 b"USAGE".to_vec(),
                 b"k".to_vec(),
                 b"SAMPLES".to_vec(),
                 b"-1".to_vec(),
-            ],
-            vec![
-                b"MEMORY".to_vec(),
-                b"USAGE".to_vec(),
-                b"k".to_vec(),
-                b"SAMPLES".to_vec(),
-                b"0".to_vec(),
             ],
             vec![
                 b"MEMORY".to_vec(),
@@ -27846,10 +27895,25 @@ mod tests {
                 b"k".to_vec(),
                 b"SAMPLES".to_vec(),
             ],
-        ] {
-            let err = dispatch_argv(&argv, &mut store, 0).expect_err("memory syntax error");
+        ];
+        for argv in &syntax_cases {
+            let err = dispatch_argv(argv, &mut store, 0).expect_err("memory syntax error");
             assert_eq!(err, CommandError::SyntaxError, "argv={argv:?}");
         }
+        // SAMPLES 0 is now accepted (matches upstream).
+        let usage_zero = dispatch_argv(
+            &[
+                b"MEMORY".to_vec(),
+                b"USAGE".to_vec(),
+                b"k".to_vec(),
+                b"SAMPLES".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("memory usage samples 0");
+        assert!(matches!(usage_zero, RespFrame::Integer(_)));
 
         // MEMORY with unknown subcommand returns an error frame (not CommandError)
         let bogus = dispatch_argv(&[b"MEMORY".to_vec(), b"BOGUS".to_vec()], &mut store, 0)
