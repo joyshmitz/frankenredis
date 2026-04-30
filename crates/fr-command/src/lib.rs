@@ -8558,9 +8558,15 @@ fn lpos(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             if i >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            let c = parse_i64_arg(&argv[i])?;
+            // Upstream t_list.c::lposCommand uses
+            // getPositiveLongFromObjectOrReply with the
+            // "COUNT can't be negative" error for both unparseable
+            // integers and explicit-negative values.
+            // (br-frankenredis-lposcount)
+            let bad = || CommandError::Custom("ERR COUNT can't be negative".to_string());
+            let c = parse_i64_arg(&argv[i]).map_err(|_| bad())?;
             if c < 0 {
-                return Ok(RespFrame::Error("ERR COUNT can't be negative".to_string()));
+                return Err(bad());
             }
             count = Some(c as u64);
         } else if opt.eq_ignore_ascii_case("MAXLEN") {
