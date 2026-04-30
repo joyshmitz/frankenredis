@@ -7295,6 +7295,8 @@ fn zrangestore_cmd(
     } else if bylex {
         let min_lex = &argv[3];
         let max_lex = &argv[4];
+        validate_lex_bound(min_lex)?;
+        validate_lex_bound(max_lex)?;
         let (lo, hi) = if rev {
             (max_lex.as_slice(), min_lex.as_slice())
         } else {
@@ -8594,6 +8596,8 @@ fn zrangebylex(
     if argv.len() < 4 {
         return Err(CommandError::WrongArity("ZRANGEBYLEX"));
     }
+    validate_lex_bound(&argv[2])?;
+    validate_lex_bound(&argv[3])?;
     let (_, limit_offset, limit_count) = parse_zrangebyscore_opts(argv, 4)?;
     let mut members = store.zrangebylex(&argv[1], &argv[2], &argv[3], now_ms)?;
     if let Some(offset) = limit_offset {
@@ -8619,6 +8623,8 @@ fn zrevrangebylex(
     if argv.len() < 4 {
         return Err(CommandError::WrongArity("ZREVRANGEBYLEX"));
     }
+    validate_lex_bound(&argv[2])?;
+    validate_lex_bound(&argv[3])?;
     let (_, limit_offset, limit_count) = parse_zrangebyscore_opts(argv, 4)?;
     let mut members = store.zrevrangebylex(&argv[1], &argv[2], &argv[3], now_ms)?;
     if let Some(offset) = limit_offset {
@@ -8639,8 +8645,25 @@ fn zlexcount(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     if argv.len() != 4 {
         return Err(CommandError::WrongArity("ZLEXCOUNT"));
     }
+    validate_lex_bound(&argv[2])?;
+    validate_lex_bound(&argv[3])?;
     let count = store.zlexcount(&argv[1], &argv[2], &argv[3], now_ms)?;
     Ok(RespFrame::Integer(i64::try_from(count).unwrap_or(i64::MAX)))
+}
+
+/// Mirror upstream Redis 7.2 t_zset.c::zslParseLexRangeItem: lex
+/// bounds must start with '[' (inclusive), '(' (exclusive), or be
+/// exactly '-' (min) or '+' (max). Plain strings are rejected with
+/// "ERR min or max not valid string range item". (br-frankenredis-moer)
+fn validate_lex_bound(arg: &[u8]) -> Result<(), CommandError> {
+    let valid = arg == b"-" || arg == b"+" || arg.first().is_some_and(|c| *c == b'[' || *c == b'(');
+    if valid {
+        Ok(())
+    } else {
+        Err(CommandError::Custom(
+            "ERR min or max not valid string range item".to_string(),
+        ))
+    }
 }
 
 // ── HyperLogLog command handlers ──────────────────────────────────────
