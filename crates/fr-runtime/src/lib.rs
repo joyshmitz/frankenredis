@@ -1063,12 +1063,26 @@ impl AuthState {
                 user.denied_categories.clear();
             } else if let Some(cat) = rule_str.strip_prefix("+@") {
                 // +@category — allow all commands in this category.
+                // Upstream acl.c::ACLSetUser rejects unknown
+                // categories with the descriptive error.
+                // (br-frankenredis-aclsetcat)
                 let cat_lower = cat.to_ascii_lowercase();
+                if !is_known_acl_category(&cat_lower) {
+                    return Err(format!(
+                        "ERR Error in ACL SETUSER modifier '{rule_str}': Unknown command or category name in ACL"
+                    ));
+                }
                 user.allowed_categories.insert(cat_lower.clone());
                 user.denied_categories.remove(&cat_lower);
             } else if let Some(cat) = rule_str.strip_prefix("-@") {
                 // -@category — deny all commands in this category.
+                // (br-frankenredis-aclsetcat)
                 let cat_lower = cat.to_ascii_lowercase();
+                if !is_known_acl_category(&cat_lower) {
+                    return Err(format!(
+                        "ERR Error in ACL SETUSER modifier '{rule_str}': Unknown command or category name in ACL"
+                    ));
+                }
                 user.denied_categories.insert(cat_lower.clone());
                 user.allowed_categories.remove(&cat_lower);
             } else if let Some(cmd) = rule_str.strip_prefix('+') {
@@ -10861,6 +10875,40 @@ fn parse_memory_size_arg(arg: &[u8]) -> Result<u64, ()> {
     };
     let val: u64 = digits.parse().map_err(|_| ())?;
     val.checked_mul(mul).ok_or(())
+}
+
+/// Mirror the canonical Redis 7.2 ACL category names accepted by
+/// ACL SETUSER's +@/-@ modifiers. Unknown categories surface a
+/// descriptive error in upstream acl.c::ACLSetUser; fr previously
+/// silently accepted any name. (br-frankenredis-aclsetcat)
+fn is_known_acl_category(name: &str) -> bool {
+    matches!(
+        name,
+        "all"
+            | "admin"
+            | "bitmap"
+            | "blocking"
+            | "connection"
+            | "dangerous"
+            | "fast"
+            | "geo"
+            | "generic"
+            | "hash"
+            | "hyperloglog"
+            | "keyspace"
+            | "list"
+            | "pubsub"
+            | "read"
+            | "scripting"
+            | "server"
+            | "set"
+            | "sortedset"
+            | "slow"
+            | "stream"
+            | "string"
+            | "transaction"
+            | "write"
+    )
 }
 
 fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
