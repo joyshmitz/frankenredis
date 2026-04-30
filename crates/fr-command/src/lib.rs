@@ -2609,12 +2609,26 @@ fn hgetall(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame
         return Err(CommandError::WrongArity("HGETALL"));
     }
     let pairs = store.hgetall(&argv[1], now_ms)?;
-    let mut frames = Vec::with_capacity(pairs.len() * 2);
-    for (field, value) in pairs {
-        frames.push(RespFrame::BulkString(Some(field)));
-        frames.push(RespFrame::BulkString(Some(value)));
+    // Upstream Redis 7.2 returns an Array (alternating k/v) in RESP2
+    // and a Map (k → v) in RESP3 — see networking.c::addReplyMap*.
+    // Mirror that here. (br-frankenredis-9itc partial)
+    if store.dispatch_client_ctx.resp_protocol_version == 3 {
+        let mut entries = Vec::with_capacity(pairs.len());
+        for (field, value) in pairs {
+            entries.push((
+                RespFrame::BulkString(Some(field)),
+                RespFrame::BulkString(Some(value)),
+            ));
+        }
+        Ok(RespFrame::Map(Some(entries)))
+    } else {
+        let mut frames = Vec::with_capacity(pairs.len() * 2);
+        for (field, value) in pairs {
+            frames.push(RespFrame::BulkString(Some(field)));
+            frames.push(RespFrame::BulkString(Some(value)));
+        }
+        Ok(RespFrame::Array(Some(frames)))
     }
-    Ok(RespFrame::Array(Some(frames)))
 }
 
 fn hkeys(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
