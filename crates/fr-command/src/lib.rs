@@ -5621,35 +5621,39 @@ fn xclaim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         return Err(CommandError::WrongArity("XCLAIM"));
     }
 
-    let min_idle_raw = parse_i64_arg(&argv[4])?;
-    if min_idle_raw < 0 {
-        return Err(CommandError::InvalidInteger);
-    }
-    let min_idle_time_ms = u64::try_from(min_idle_raw).unwrap_or(u64::MAX);
+    // Upstream t_stream.c::xclaimCommand parses min-idle-time via
+    // getLongLongFromObjectOrReply with the 'Invalid min-idle-time
+    // argument for XCLAIM' error string, then clamps negative values
+    // silently to 0. (br-frankenredis-xclaim)
+    let min_idle_raw = parse_i64_arg(&argv[4]).map_err(|_| {
+        CommandError::Custom("ERR Invalid min-idle-time argument for XCLAIM".to_string())
+    })?;
+    let min_idle_time_ms = if min_idle_raw < 0 {
+        0
+    } else {
+        u64::try_from(min_idle_raw).unwrap_or(u64::MAX)
+    };
 
+    // Upstream's ID-collection loop breaks on the first arg that
+    // doesn't parse as a stream ID, then continues to option parsing
+    // (the NULL client passed to streamParseStrictIDOrReply suppresses
+    // the parse-time error reply). So an unrecognised trailing token
+    // surfaces as 'Unrecognized XCLAIM option <X>', not as 'Invalid
+    // stream ID …'. (br-frankenredis-xclaim)
     let mut ids = Vec::new();
     let mut idx = 5usize;
     while idx < argv.len() {
-        let arg = &argv[idx];
-        if eq_ascii_command(arg, b"IDLE")
-            || eq_ascii_command(arg, b"TIME")
-            || eq_ascii_command(arg, b"RETRYCOUNT")
-            || eq_ascii_command(arg, b"FORCE")
-            || eq_ascii_command(arg, b"JUSTID")
-            || eq_ascii_command(arg, b"LASTID")
-        {
-            break;
+        match parse_stream_id(&argv[idx]) {
+            Ok(id) => {
+                ids.push(id);
+                idx += 1;
+            }
+            Err(_) => break,
         }
-        let id = match parse_stream_id(arg) {
-            Ok(id) => id,
-            Err(reply) => return Ok(reply),
-        };
-        ids.push(id);
-        idx += 1;
     }
-    if ids.is_empty() {
-        return Err(CommandError::WrongArity("XCLAIM"));
-    }
+    // Upstream tolerates an empty IDs vector — the for-loop break
+    // simply hands the first unparseable token to the option parser
+    // for the 'Unrecognized XCLAIM option …' fallthrough.
 
     let mut idle_ms: Option<u64> = None;
     let mut time_ms: Option<u64> = None;
@@ -5658,14 +5662,29 @@ fn xclaim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     let mut justid = false;
     let mut last_id: Option<StreamId> = None;
 
+    // Upstream's option parser emits 'Unrecognized XCLAIM option <opt>'
+    // for any unknown token AND for known options without a value
+    // (the `&& moreargs` guards mean IDLE/TIME/RETRYCOUNT/LASTID
+    // without an arg fall through to the catch-all). The numeric
+    // option arguments use the per-option 'Invalid X option argument
+    // for XCLAIM' wording. (br-frankenredis-xclaim)
+    let unrecognized = |opt: &[u8]| {
+        CommandError::Custom(format!(
+            "ERR Unrecognized XCLAIM option '{}'",
+            String::from_utf8_lossy(opt)
+        ))
+    };
+    let invalid_opt_arg = |label: &str| {
+        CommandError::Custom(format!("ERR Invalid {label} option argument for XCLAIM"))
+    };
     while idx < argv.len() {
         if eq_ascii_command(&argv[idx], b"IDLE") {
             if idx + 1 >= argv.len() {
-                return Err(CommandError::WrongArity("XCLAIM"));
+                return Err(unrecognized(&argv[idx]));
             }
-            let parsed = parse_i64_arg(&argv[idx + 1])?;
+            let parsed = parse_i64_arg(&argv[idx + 1]).map_err(|_| invalid_opt_arg("IDLE"))?;
             if parsed < 0 {
-                return Err(CommandError::InvalidInteger);
+                return Err(invalid_opt_arg("IDLE"));
             }
             idle_ms = Some(u64::try_from(parsed).unwrap_or(u64::MAX));
             idx += 2;
@@ -5673,11 +5692,11 @@ fn xclaim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         }
         if eq_ascii_command(&argv[idx], b"TIME") {
             if idx + 1 >= argv.len() {
-                return Err(CommandError::WrongArity("XCLAIM"));
+                return Err(unrecognized(&argv[idx]));
             }
-            let parsed = parse_i64_arg(&argv[idx + 1])?;
+            let parsed = parse_i64_arg(&argv[idx + 1]).map_err(|_| invalid_opt_arg("TIME"))?;
             if parsed < 0 {
-                return Err(CommandError::InvalidInteger);
+                return Err(invalid_opt_arg("TIME"));
             }
             time_ms = Some(u64::try_from(parsed).unwrap_or(u64::MAX));
             idx += 2;
@@ -5685,11 +5704,12 @@ fn xclaim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         }
         if eq_ascii_command(&argv[idx], b"RETRYCOUNT") {
             if idx + 1 >= argv.len() {
-                return Err(CommandError::WrongArity("XCLAIM"));
+                return Err(unrecognized(&argv[idx]));
             }
-            let parsed = parse_i64_arg(&argv[idx + 1])?;
+            let parsed =
+                parse_i64_arg(&argv[idx + 1]).map_err(|_| invalid_opt_arg("RETRYCOUNT"))?;
             if parsed < 0 {
-                return Err(CommandError::InvalidInteger);
+                return Err(invalid_opt_arg("RETRYCOUNT"));
             }
             retry_count = Some(u64::try_from(parsed).unwrap_or(u64::MAX));
             idx += 2;
@@ -5707,7 +5727,7 @@ fn xclaim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         }
         if eq_ascii_command(&argv[idx], b"LASTID") {
             if idx + 1 >= argv.len() {
-                return Err(CommandError::WrongArity("XCLAIM"));
+                return Err(unrecognized(&argv[idx]));
             }
             let parsed = match parse_stream_id(&argv[idx + 1]) {
                 Ok(id) => id,
@@ -5717,7 +5737,7 @@ fn xclaim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
             idx += 2;
             continue;
         }
-        return Err(CommandError::SyntaxError);
+        return Err(unrecognized(&argv[idx]));
     }
 
     if idle_ms.is_some() && time_ms.is_some() {
