@@ -10227,7 +10227,10 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
 
     let mut info = String::new();
 
-    // Server section
+    // Server section. Field order + names mirror upstream
+    // Redis 7.2 server.c::genRedisInfoString. Adds atomicvar_api,
+    // process_supervised, server_time_usec, io_threads_active,
+    // listener0 fields previously missing. (br-frankenredis-infoserver)
     if section_requested("server") {
         info.push_str("# Server\r\n");
         info.push_str(&format!(
@@ -10242,10 +10245,16 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("arch_bits:64\r\n");
         info.push_str("monotonic_clock:POSIX clock_gettime\r\n");
         info.push_str("multiplexing_api:epoll\r\n");
+        info.push_str("atomicvar_api:c11-builtin\r\n");
         info.push_str("gcc_version:0.0.0\r\n");
         info.push_str(&format!("process_id:{}\r\n", store.server_pid));
+        info.push_str("process_supervised:no\r\n");
         info.push_str(&format!("run_id:{}\r\n", store.server_run_id));
         info.push_str(&format!("tcp_port:{}\r\n", store.server_port));
+        info.push_str(&format!(
+            "server_time_usec:{}\r\n",
+            now_ms.saturating_mul(1000)
+        ));
         let uptime_s = now_ms / 1000;
         info.push_str(&format!("uptime_in_seconds:{uptime_s}\r\n"));
         info.push_str(&format!("uptime_in_days:{}\r\n", uptime_s / 86400));
@@ -10259,6 +10268,11 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             .unwrap_or_else(|_| "/usr/local/bin/frankenredis".to_string());
         info.push_str(&format!("executable:{exe}\r\n"));
         info.push_str("config_file:\r\n");
+        info.push_str("io_threads_active:0\r\n");
+        info.push_str(&format!(
+            "listener0:name=tcp,bind=*,bind=-::*,port={}\r\n",
+            store.server_port
+        ));
         info.push_str("\r\n");
     }
 
@@ -10289,8 +10303,6 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             store.stat_blocked_clients
         ));
         info.push_str("total_blocking_keys_on_nokey:0\r\n");
-        info.push_str("pubsub_clients:0\r\n");
-        info.push_str("watching_clients:0\r\n");
         info.push_str("\r\n");
     }
 
