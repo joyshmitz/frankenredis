@@ -5774,6 +5774,12 @@ impl Runtime {
         let mut auth_credentials: Option<(&[u8], &[u8])> = None;
         let mut next_client_name: Option<Option<Vec<u8>>> = None;
         let mut options = argv[2..].iter();
+        // Upstream networking.c::helloCommand emits
+        // "ERR Syntax error in HELLO option '<OPT>'" with the
+        // (case-preserved) option name when an option is malformed
+        // or unknown. (br-frankenredis-helloopt)
+        let hello_opt_err =
+            |opt: &str| RespFrame::Error(format!("ERR Syntax error in HELLO option '{opt}'"));
         while let Some(option_arg) = options.next() {
             let option = match std::str::from_utf8(option_arg) {
                 Ok(option) => option,
@@ -5781,17 +5787,17 @@ impl Runtime {
             };
             if option.eq_ignore_ascii_case("AUTH") {
                 let Some(username) = options.next() else {
-                    return CommandError::SyntaxError.to_resp();
+                    return hello_opt_err(option);
                 };
                 let Some(password) = options.next() else {
-                    return CommandError::SyntaxError.to_resp();
+                    return hello_opt_err(option);
                 };
                 auth_credentials = Some((username.as_slice(), password.as_slice()));
                 continue;
             }
             if option.eq_ignore_ascii_case("SETNAME") {
                 let Some(name) = options.next() else {
-                    return CommandError::SyntaxError.to_resp();
+                    return hello_opt_err(option);
                 };
                 if !Self::client_name_is_valid(name) {
                     return RespFrame::Error(
@@ -5806,16 +5812,19 @@ impl Runtime {
                 });
                 continue;
             }
-            return CommandError::SyntaxError.to_resp();
+            return hello_opt_err(option);
         }
 
         if let Some((username, password)) = auth_credentials {
-            match self.authenticate_user(username, password) {
-                Ok(()) => {}
-                Err(AuthFailure::NotConfigured) => {
-                    return RespFrame::Error(AUTH_NOT_CONFIGURED_ERROR.to_string());
+            // HELLO 3 AUTH <user> <pass> follows the same 2-arg
+            // semantics as `AUTH <user> <pass>`: nopass-user accepts
+            // any password regardless of requirepass state.
+            // (br-frankenredis-authnopass)
+            match self.authenticate_user_by_acl(username, password) {
+                Ok(()) => {
+                    self.session.authenticated_user = Some(username.to_vec());
                 }
-                Err(AuthFailure::WrongPass) => {
+                Err(AuthFailure::WrongPass) | Err(AuthFailure::NotConfigured) => {
                     self.record_acl_log_event(
                         "auth",
                         "AUTH".to_string(),
@@ -12105,16 +12114,17 @@ mod tests {
         let mut rt = Runtime::default_strict();
         rt.add_user(b"alice".to_vec(), b"secret2".to_vec());
 
+        // (br-frankenredis-helloopt)
         let missing_pass = rt.execute_frame(command(&[b"HELLO", b"3", b"AUTH", b"alice"]), 0);
         assert_eq!(
             missing_pass,
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error("ERR Syntax error in HELLO option 'AUTH'".to_string())
         );
 
         let missing_user_and_pass = rt.execute_frame(command(&[b"HELLO", b"3", b"AUTH"]), 0);
         assert_eq!(
             missing_user_and_pass,
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error("ERR Syntax error in HELLO option 'AUTH'".to_string())
         );
     }
 
