@@ -8207,8 +8207,15 @@ fn srandmember(
     store: &mut Store,
     now_ms: u64,
 ) -> Result<RespFrame, CommandError> {
-    if argv.len() < 2 || argv.len() > 3 {
+    // Upstream commands.def declares SRANDMEMBER with arity = -2,
+    // so any extra trailing args land in srandmemberCommand's
+    // syntaxerr branch rather than the table-level arity check.
+    // (br-frankenredis-randextra)
+    if argv.len() < 2 {
         return Err(CommandError::WrongArity("SRANDMEMBER"));
+    }
+    if argv.len() > 3 {
+        return Err(CommandError::SyntaxError);
     }
     if argv.len() == 2 {
         // No count: return single element or nil
@@ -8366,8 +8373,15 @@ fn zrandmember(
     now_ms: u64,
 ) -> Result<RespFrame, CommandError> {
     // ZRANDMEMBER key [count [WITHSCORES]]
-    if argv.len() < 2 || argv.len() > 4 {
+    // Upstream commands.def declares ZRANDMEMBER with arity = -2,
+    // so any extra trailing args after WITHSCORES land in
+    // zrandmemberCommand's syntaxerr branch, not the table-level
+    // arity check. (br-frankenredis-randextra)
+    if argv.len() < 2 {
         return Err(CommandError::WrongArity("ZRANDMEMBER"));
+    }
+    if argv.len() > 4 {
+        return Err(CommandError::SyntaxError);
     }
     if argv.len() == 2 {
         // No count: return single element or nil
