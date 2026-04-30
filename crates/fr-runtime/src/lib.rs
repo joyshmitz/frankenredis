@@ -9054,7 +9054,12 @@ impl Runtime {
 
         if sub.eq_ignore_ascii_case("CHANNELS") {
             if argv.len() != 2 && argv.len() != 3 {
-                return CommandError::SyntaxError.to_resp();
+                // (br-frankenredis-pubsubary) — upstream emits the
+                // subcommand-specific arity error rather than the
+                // generic SyntaxError.
+                return RespFrame::Error(
+                    "ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.".to_string(),
+                );
             }
             let mut channels: Vec<Vec<u8>> =
                 self.server.pubsub_channel_subs.keys().cloned().collect();
@@ -9086,7 +9091,10 @@ impl Runtime {
 
         if sub.eq_ignore_ascii_case("NUMPAT") {
             if argv.len() != 2 {
-                return CommandError::SyntaxError.to_resp();
+                // (br-frankenredis-pubsubary)
+                return RespFrame::Error(
+                    "ERR unknown subcommand or wrong number of arguments for 'NUMPAT'. Try PUBSUB HELP.".to_string(),
+                );
             }
             return RespFrame::Integer(
                 self.server
@@ -9099,7 +9107,10 @@ impl Runtime {
 
         if sub.eq_ignore_ascii_case("SHARDCHANNELS") {
             if argv.len() != 2 && argv.len() != 3 {
-                return CommandError::SyntaxError.to_resp();
+                // (br-frankenredis-pubsubary)
+                return RespFrame::Error(
+                    "ERR unknown subcommand or wrong number of arguments for 'SHARDCHANNELS'. Try PUBSUB HELP.".to_string(),
+                );
             }
             let mut channels: Vec<Vec<u8>> =
                 self.server.pubsub_shard_subs.keys().cloned().collect();
@@ -12605,13 +12616,15 @@ mod tests {
             rt.execute_frame(command(&[b"PUBSUB", b"HELP", b"extra"]), 1),
             RespFrame::Error("ERR syntax error".to_string())
         );
+        // (br-frankenredis-pubsubary) — upstream emits the
+        // subcommand-specific arity error rather than syntax error.
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"CHANNELS", b"a*", b"extra"]), 2),
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error("ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.".to_string())
         );
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"NUMPAT", b"extra"]), 3),
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error("ERR unknown subcommand or wrong number of arguments for 'NUMPAT'. Try PUBSUB HELP.".to_string())
         );
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"BOGUS"]), 4),
