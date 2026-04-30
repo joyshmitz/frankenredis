@@ -10262,7 +10262,11 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("\r\n");
     }
 
-    // Clients section
+    // Clients section. Field names + ordering mirror upstream
+    // Redis 7.2 server.c::genRedisInfoString. Removed the
+    // never-emitted-by-upstream `total_clients_connected_including_replicas`
+    // field and renamed `total_blocking_clients[_on_nokey]` to
+    // `total_blocking_keys[_on_nokey]`. (br-frankenredis-infoclients)
     if section_requested("clients") {
         let connected = store.stat_connected_clients.max(1); // at least 1 (the current client)
         info.push_str("# Clients\r\n");
@@ -10271,9 +10275,6 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str(&format!("maxclients:{}\r\n", store.server_maxclients));
         info.push_str("client_recent_max_input_buffer:0\r\n");
         info.push_str("client_recent_max_output_buffer:0\r\n");
-        info.push_str(&format!(
-            "total_clients_connected_including_replicas:{connected}\r\n"
-        ));
         info.push_str(&format!(
             "blocked_clients:{}\r\n",
             store.stat_blocked_clients
@@ -10284,10 +10285,12 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         ));
         info.push_str("clients_in_timeout_table:0\r\n");
         info.push_str(&format!(
-            "total_blocking_clients:{}\r\n",
+            "total_blocking_keys:{}\r\n",
             store.stat_blocked_clients
         ));
-        info.push_str("total_blocking_clients_on_nokey:0\r\n");
+        info.push_str("total_blocking_keys_on_nokey:0\r\n");
+        info.push_str("pubsub_clients:0\r\n");
+        info.push_str("watching_clients:0\r\n");
         info.push_str("\r\n");
     }
 
