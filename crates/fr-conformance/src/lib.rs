@@ -9017,17 +9017,16 @@ mod tests {
     /// vendored redis-server oracle. Covers
     /// GEOADD/GEODIST/GEORADIUS/GEOSEARCH/GEOPOS/GEOHASH.
     ///
-    /// Precision-sensitive cases (GEOPOS, GEORADIUS WITHCOORD,
-    /// GEOSEARCH WITHCOORD) are XFAIL-filtered: upstream returns 20
-    /// digits of lat/lon because its geohashEncode uses `long double`
-    /// (80-bit extended) on x86_64 while we store the geohash in an
-    /// f64 score and decode with f64, giving ~17 digits. Behavior
-    /// matches; only trailing-decimal precision differs. GEOHASH's
-    /// 11-char base32 identifier also diverges at the last char
-    /// because our encoder rounds differently than upstream's at
-    /// the least-significant bit. Both are tracked under
-    /// br-frankenredis-kro2 as precision follow-ups rather than
-    /// behavioral bugs.
+    /// GEOPOS / WITHCOORD coordinate emission was XFAILed historically
+    /// because fr's f64 Display (Ryu shortest, ~16 digits) diverged
+    /// from upstream's `%.17Lf`-with-trim. fr-command::format_coord_human
+    /// now mirrors upstream LD_STR_HUMAN exactly and the side-by-side
+    /// comparison against vendored Redis 7.2.4 is byte-equal, so those
+    /// cases are no longer XFAIL'd. (br-frankenredis-nz2v)
+    ///
+    /// GEOHASH's 11-char base32 identifier still diverges at the last
+    /// char because our encoder rounds differently than upstream's at
+    /// the least-significant bit; tracked under br-frankenredis-kro2.
     /// (br-frankenredis-ufar)
     #[test]
     fn live_redis_core_geo_matches_runtime() {
@@ -9043,14 +9042,7 @@ mod tests {
                 return;
             }
         };
-        const XFAIL: &[&str] = &[
-            "geopos_existing_members",
-            "geopos_multiple_mixed",
-            "geopos_negative_coords",
-            "georadius_withcoord",
-            "geosearch_fromlonlat_byradius_withcoord_withdist",
-            "geohash_known_members",
-        ];
+        const XFAIL: &[&str] = &["geohash_known_members"];
         let stable: Vec<String> = fixture
             .cases
             .iter()

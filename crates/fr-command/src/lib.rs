@@ -3470,6 +3470,38 @@ fn geo_invalid_pair_error(longitude: f64, latitude: f64) -> RespFrame {
     ))
 }
 
+/// Formats an f64 the way upstream's GEOPOS / GEOSEARCH WITHCOORD do:
+/// snprintf("%.17Lf", ...) followed by trailing-zero trimming
+/// (LD_STR_HUMAN — see legacy_redis_code/redis/src/util.c::ld2string).
+/// f64 doubles get implicitly promoted to long double in upstream and
+/// then printed with 17 fractional digits; on platforms where long
+/// double == double the value space is identical and the 17-digit
+/// expansion is exactly the round-to-nearest decimal of the IEEE-754
+/// bit pattern. Rust's {:.17} on f64 matches this expansion. The trim
+/// matches the upstream behavior of dropping trailing zeros and the
+/// dangling '.', plus normalizing "-0" to "0". (br-frankenredis-nz2v)
+fn format_coord_human(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_positive() {
+            "inf".to_string()
+        } else {
+            "-inf".to_string()
+        };
+    }
+    let mut s = format!("{value:.17}");
+    if s.contains('.') {
+        let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+        s.truncate(trimmed.len());
+    }
+    if s == "-0" {
+        s = "0".to_string();
+    }
+    s
+}
+
 #[inline]
 fn geo_unit_to_meters(unit: &[u8]) -> Option<f64> {
     if eq_ascii_command(unit, b"M") {
@@ -4078,8 +4110,8 @@ fn geopos(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         let frame = match store.zscore(&argv[1], member, now_ms)? {
             Some(score) => match geo_decode_score(score) {
                 Some((longitude, latitude)) => RespFrame::Array(Some(vec![
-                    RespFrame::BulkString(Some(longitude.to_string().into_bytes())),
-                    RespFrame::BulkString(Some(latitude.to_string().into_bytes())),
+                    RespFrame::BulkString(Some(format_coord_human(longitude).into_bytes())),
+                    RespFrame::BulkString(Some(format_coord_human(latitude).into_bytes())),
                 ])),
                 None => RespFrame::Array(None),
             },
@@ -4186,8 +4218,8 @@ fn geo_search_reply(
             }
             if withcoord {
                 parts.push(RespFrame::Array(Some(vec![
-                    RespFrame::BulkString(Some(lon.to_string().into_bytes())),
-                    RespFrame::BulkString(Some(lat.to_string().into_bytes())),
+                    RespFrame::BulkString(Some(format_coord_human(*lon).into_bytes())),
+                    RespFrame::BulkString(Some(format_coord_human(*lat).into_bytes())),
                 ])));
             }
             RespFrame::Array(Some(parts))
@@ -16299,9 +16331,9 @@ mod tests {
         SCRIPT_NOSCRIPT_ERROR, classify_command, client_wrong_subcommand_arity,
         cluster_disabled_error, cluster_reset_with_keys_error, cluster_wrong_subcommand_arity,
         dispatch_argv, drain_pubsub_messages, eq_ascii_command, eval_script, execute_migrate,
-        format_eval_read_only_script_error, frame_to_argv, hello_bulk, hello_simple,
-        is_write_command, parse_blocking_deadline_milliseconds, parse_migrate_request,
-        pubsub_message_to_frame, pubsub_message_to_frame_for_protocol,
+        format_coord_human, format_eval_read_only_script_error, frame_to_argv, hello_bulk,
+        hello_simple, is_write_command, parse_blocking_deadline_milliseconds,
+        parse_migrate_request, pubsub_message_to_frame, pubsub_message_to_frame_for_protocol,
     };
 
     fn classify_command_linear(cmd: &[u8]) -> Option<CommandId> {
@@ -31400,6 +31432,73 @@ mod tests {
         } else {
             panic!("expected array, got {out:?}"); // ubs:ignore — AI triage
         }
+    }
+
+    #[test]
+    fn format_coord_human_handles_special_cases() {
+        // Upstream Redis 7.2 emits GEOPOS / GEOSEARCH WITHCOORD coords
+        // via addReplyHumanLongDouble (LD_STR_HUMAN — `%.17Lf` followed
+        // by trailing-zero trim, with -0 normalized to 0). We mirror
+        // the trim/special-case behavior; the per-value 17-digit
+        // expansion is exercised end-to-end by
+        // geopos_emits_seventeen_significant_digit_human_coords.
+        // (br-frankenredis-nz2v)
+        assert_eq!(format_coord_human(1.0), "1");
+        assert_eq!(format_coord_human(-1.0), "-1");
+        assert_eq!(format_coord_human(0.0), "0");
+        assert_eq!(format_coord_human(-0.0), "0");
+        assert_eq!(format_coord_human(0.5), "0.5");
+        assert!(format_coord_human(f64::NAN) == "nan");
+        assert_eq!(format_coord_human(f64::INFINITY), "inf");
+        assert_eq!(format_coord_human(f64::NEG_INFINITY), "-inf");
+    }
+
+    #[test]
+    fn geopos_emits_seventeen_significant_digit_human_coords() {
+        // Pins the upstream-compatible wire format: GEOPOS coordinates
+        // round-trip through the geohash quantization grid, so the
+        // emitted decimals always show the 17-digit %.17Lf expansion of
+        // the bit pattern rather than Ryu's 16-digit shortest form.
+        // (br-frankenredis-nz2v)
+        let mut store = Store::new();
+        let added = dispatch_argv(
+            &[
+                b"GEOADD".to_vec(),
+                b"geo".to_vec(),
+                b"1".to_vec(),
+                b"2".to_vec(),
+                b"point".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("geoadd");
+        assert_eq!(added, RespFrame::Integer(1));
+        let pos = dispatch_argv(
+            &[b"GEOPOS".to_vec(), b"geo".to_vec(), b"point".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("geopos");
+        let RespFrame::Array(Some(items)) = pos else {
+            panic!("geopos should return array"); // ubs:ignore — AI triage
+        };
+        let RespFrame::Array(Some(coords)) = &items[0] else {
+            panic!("expected coord array"); // ubs:ignore — AI triage
+        };
+        let lon = match &coords[0] {
+            RespFrame::BulkString(Some(b)) => std::str::from_utf8(b).unwrap().to_string(),
+            other => panic!("unexpected longitude frame: {other:?}"),
+        };
+        let lat = match &coords[1] {
+            RespFrame::BulkString(Some(b)) => std::str::from_utf8(b).unwrap().to_string(),
+            other => panic!("unexpected latitude frame: {other:?}"),
+        };
+        // The coordinates the geohash quantizer round-trips for (1, 2)
+        // are upstream's verified 17-digit human form, identical byte-
+        // for-byte to what redis 7.2.4 reports.
+        assert_eq!(lon, "0.99999994039535522");
+        assert_eq!(lat, "2.0000001856465488");
     }
 
     #[test]
