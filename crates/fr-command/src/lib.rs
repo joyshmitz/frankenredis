@@ -7877,28 +7877,28 @@ fn spublish_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Comman
 }
 
 fn parse_score_bound(arg: &[u8]) -> Result<ScoreBound, CommandError> {
-    let text = std::str::from_utf8(arg)
-        .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?
-        .trim();
+    // Upstream Redis 7.2 t_zset.c::zslParseRange emits "ERR min or
+    // max is not a float" for malformed score bounds in ZRANGEBYSCORE
+    // / ZRANGE-BYSCORE / ZCOUNT / ZRANGESTORE-BYSCORE. The generic
+    // ValueNotFloat error wording diverges from that. Map to the
+    // upstream wording at parse time so every score-range caller
+    // benefits. (br-frankenredis-uczv)
+    let bad = || CommandError::Custom("ERR min or max is not a float".to_string());
+    let text = std::str::from_utf8(arg).map_err(|_| bad())?.trim();
     if text.eq_ignore_ascii_case("-inf") {
         Ok(ScoreBound::Inclusive(f64::NEG_INFINITY))
     } else if text.eq_ignore_ascii_case("+inf") || text.eq_ignore_ascii_case("inf") {
         Ok(ScoreBound::Inclusive(f64::INFINITY))
     } else if let Some(rest) = text.strip_prefix('(') {
-        let val = rest
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?;
+        let val = rest.trim().parse::<f64>().map_err(|_| bad())?;
         if val.is_nan() {
-            return Err(CommandError::Store(fr_store::StoreError::ValueNotFloat));
+            return Err(bad());
         }
         Ok(ScoreBound::Exclusive(val))
     } else {
-        let val = text
-            .parse::<f64>()
-            .map_err(|_| CommandError::Store(fr_store::StoreError::ValueNotFloat))?;
+        let val = text.parse::<f64>().map_err(|_| bad())?;
         if val.is_nan() {
-            return Err(CommandError::Store(fr_store::StoreError::ValueNotFloat));
+            return Err(bad());
         }
         Ok(ScoreBound::Inclusive(val))
     }
@@ -10041,16 +10041,19 @@ fn parse_zset_algebra_options(
             if i + numkeys > argv.len() {
                 return Err(CommandError::SyntaxError);
             }
+            // Upstream t_zset.c::zunionInterDiffGenericCommand emits
+            // "ERR weight value is not a float" for both
+            // unparseable and NaN weights. (br-frankenredis-uczv)
+            let bad_weight =
+                || CommandError::Custom("ERR weight value is not a float".to_string());
             for slot in weights.iter_mut().take(numkeys) {
                 let w = std::str::from_utf8(&argv[i])
-                    .map_err(|_| CommandError::InvalidInteger)?
+                    .map_err(|_| bad_weight())?
                     .trim()
                     .parse::<f64>()
-                    .map_err(|_| CommandError::InvalidInteger)?;
+                    .map_err(|_| bad_weight())?;
                 if w.is_nan() {
-                    return Err(CommandError::Custom(
-                        "ERR weight value is not a float".to_string(),
-                    ));
+                    return Err(bad_weight());
                 }
                 *slot = w;
                 i += 1;
@@ -14395,7 +14398,19 @@ fn zintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             if idx >= argv.len() {
                 return Ok(RespFrame::Error("ERR syntax error".to_string()));
             }
-            limit = parse_u64_arg(&argv[idx])?;
+            // Upstream t_zset.c::zinterCardCommand validates LIMIT as
+            // a non-negative long-long and emits "ERR LIMIT can't be
+            // negative" for both negative integers and non-numeric
+            // arguments. (br-frankenredis-uczv)
+            let parsed = parse_i64_arg(&argv[idx]).map_err(|_| {
+                CommandError::Custom("ERR LIMIT can't be negative".to_string())
+            })?;
+            if parsed < 0 {
+                return Err(CommandError::Custom(
+                    "ERR LIMIT can't be negative".to_string(),
+                ));
+            }
+            limit = parsed as u64;
         } else {
             return Ok(RespFrame::Error("ERR syntax error".to_string()));
         }
