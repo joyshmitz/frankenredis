@@ -1055,6 +1055,12 @@ impl AuthState {
             } else if rule_str.eq_ignore_ascii_case("resetchannels") {
                 user.all_channels = false;
                 user.channel_patterns.clear();
+            } else if rule_str.eq_ignore_ascii_case("clearselectors") {
+                // Upstream acl.c::ACLSetUser CLEARSELECTORS clears
+                // any selector blocks attached to the user. fr's
+                // ACL doesn't model selectors as a separate
+                // structure yet — treat as a no-op so clients can
+                // reset without errors. (br-frankenredis-aclclrsel)
             } else if rule_str == "-@all" || rule_str.eq_ignore_ascii_case("nocommands") {
                 user.all_commands = false;
                 user.allowed_commands.clear();
@@ -5935,6 +5941,25 @@ impl Runtime {
                 Some(u) => {
                     let dryrun_argv = &argv[3..];
                     let cmd_name = String::from_utf8_lossy(&dryrun_argv[0]);
+                    // Upstream acl.c::aclCommand DRYRUN validates the
+                    // command exists and has the right arity BEFORE
+                    // running the ACL permission check, returning the
+                    // 'Command not found' / 'wrong number of
+                    // arguments' error directly. (br-frankenredis-aclrun)
+                    if !fr_command::is_known_command(&dryrun_argv[0]) {
+                        return RespFrame::Error(format!(
+                            "ERR Command '{}' not found",
+                            cmd_name.to_ascii_uppercase()
+                        ));
+                    }
+                    if let Err(_) =
+                        fr_command::check_command_arity(&dryrun_argv[0], dryrun_argv.len())
+                    {
+                        return RespFrame::Error(format!(
+                            "ERR wrong number of arguments for '{}' command",
+                            cmd_name.to_ascii_lowercase()
+                        ));
+                    }
                     // Upstream acl.c::aclCommand DRYRUN returns the denial
                     // message as a BulkString via addReplyBulkSds, not an
                     // Error. The phrasing comes from getAclErrorMessage:
