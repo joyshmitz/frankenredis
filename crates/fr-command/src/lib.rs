@@ -13425,6 +13425,15 @@ struct ScanArgs {
     novalues: bool,
 }
 
+/// `[cursor=0, []]` reply mirroring upstream's shared.emptyscan,
+/// used when a collection scan targets a missing key.
+fn empty_scan_reply() -> RespFrame {
+    RespFrame::Array(Some(vec![
+        RespFrame::BulkString(Some(b"0".to_vec())),
+        RespFrame::Array(Some(vec![])),
+    ]))
+}
+
 fn parse_scan_args(argv: &[Vec<u8>], start_idx: usize) -> Result<ScanArgs, CommandError> {
     // Error-reply wording MUST match upstream db.c::scanGenericCommand
     // (br-frankenredis-hjzc).
@@ -13557,6 +13566,17 @@ fn hscan(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     let key = &argv[1];
     let cursor = parse_scan_cursor(&argv[2], NegativeScanCursor::StartAtZero)?;
 
+    // Upstream t_hash.c::hscanCommand looks up the key (returning
+    // shared.emptyscan for a missing key) BEFORE delegating to
+    // scanGenericCommand for arg parsing — so unknown trailing args
+    // never trigger an error when the key is missing or has wrong
+    // type. (br-frankenredis-scankey)
+    match store.key_type(key, now_ms) {
+        None => return Ok(empty_scan_reply()),
+        Some("hash") => {}
+        Some(_) => return Err(CommandError::Store(StoreError::WrongType)),
+    }
+
     let args = parse_scan_args(argv, 3)?;
     let (next_cursor, pairs) = store
         .hscan(key, cursor, args.pattern.as_deref(), args.count, now_ms)
@@ -13590,6 +13610,13 @@ fn sscan(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     let key = &argv[1];
     let cursor = parse_scan_cursor(&argv[2], NegativeScanCursor::StartAtZero)?;
 
+    // (br-frankenredis-scankey)
+    match store.key_type(key, now_ms) {
+        None => return Ok(empty_scan_reply()),
+        Some("set") => {}
+        Some(_) => return Err(CommandError::Store(StoreError::WrongType)),
+    }
+
     let args = parse_scan_args(argv, 3)?;
     let (next_cursor, members) = store
         .sscan(key, cursor, args.pattern.as_deref(), args.count, now_ms)
@@ -13611,6 +13638,13 @@ fn zscan(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     }
     let key = &argv[1];
     let cursor = parse_scan_cursor(&argv[2], NegativeScanCursor::StartAtZero)?;
+
+    // (br-frankenredis-scankey)
+    match store.key_type(key, now_ms) {
+        None => return Ok(empty_scan_reply()),
+        Some("zset") => {}
+        Some(_) => return Err(CommandError::Store(StoreError::WrongType)),
+    }
 
     let args = parse_scan_args(argv, 3)?;
     let (next_cursor, pairs) = store
