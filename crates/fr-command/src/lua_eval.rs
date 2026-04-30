@@ -3632,9 +3632,12 @@ fn command_error_string(err: CommandError) -> String {
 /// Mirror upstream script_lua.c::luaPushErrorBuff: derive a
 /// `<CODE> <msg>` body for the {err=...} table that
 /// luaReplyToRedisReply emits. Upstream prepends '-' to the raw
-/// argument when missing; if the body has no space after the code,
-/// the entire body becomes the message and the code defaults to
-/// "ERR". Trailing CR/LF are trimmed. (br-frankenredis-xvlj)
+/// argument when missing, then splits "<CODE> <rest>" by the first
+/// space — so any error_reply whose first word is followed by a
+/// space gets that word as the code (regardless of whether the
+/// caller supplied the leading '-'). If there is no space at all,
+/// the code falls back to "ERR" with the entire body as the
+/// message. Trailing CR/LF are trimmed. (br-frankenredis-xvlj)
 fn lua_format_error_reply_payload(input: &[u8]) -> Vec<u8> {
     let body: &[u8] = if input.first() == Some(&b'-') {
         &input[1..]
@@ -3642,8 +3645,8 @@ fn lua_format_error_reply_payload(input: &[u8]) -> Vec<u8> {
         input
     };
     let (code, msg): (&[u8], &[u8]) = match body.iter().position(|&b| b == b' ') {
-        Some(idx) if input.first() == Some(&b'-') => (&body[..idx], &body[idx + 1..]),
-        _ => (b"ERR", body),
+        Some(idx) => (&body[..idx], &body[idx + 1..]),
+        None => (b"ERR", body),
     };
     let mut out = Vec::with_capacity(code.len() + 1 + msg.len());
     out.extend_from_slice(code);

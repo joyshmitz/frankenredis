@@ -4826,21 +4826,26 @@ fn geosearchstore(
     geo_store_results(store, &dest, &results, unit_mult, storedist, now_ms)
 }
 
+/// Parse a stream ID matching upstream Redis 7.2 strict semantics
+/// (see `t_stream.c::streamGenericParseIDOrReply` with strict=1):
+///   - "ms-seq"  → (ms, seq)
+///   - "ms"      → (ms, 0)  (bare-integer shorthand: missing seq
+///                          defaults to 0; matches upstream's
+///                          most common `missing_seq` value for
+///                          XACK/XSETID/XADD-explicit-id paths.)
+/// The non-strict "+" / "-" special IDs are accepted only by
+/// dedicated range-parsing helpers, not this function.
+/// (br-frankenredis-s0v0)
 fn parse_stream_id(arg: &[u8]) -> Result<StreamId, RespFrame> {
-    let text = std::str::from_utf8(arg).map_err(|_| {
+    let invalid = || {
         RespFrame::Error("ERR Invalid stream ID specified as stream command argument".to_string())
-    })?;
-    let Some((ms, seq)) = text.split_once('-') else {
-        return Err(RespFrame::Error(
-            "ERR Invalid stream ID specified as stream command argument".to_string(),
-        ));
     };
-    let ms = ms.parse::<u64>().map_err(|_| {
-        RespFrame::Error("ERR Invalid stream ID specified as stream command argument".to_string())
-    })?;
-    let seq = seq.parse::<u64>().map_err(|_| {
-        RespFrame::Error("ERR Invalid stream ID specified as stream command argument".to_string())
-    })?;
+    let text = std::str::from_utf8(arg).map_err(|_| invalid())?;
+    let (ms_text, seq) = match text.split_once('-') {
+        Some((ms, seq)) => (ms, seq.parse::<u64>().map_err(|_| invalid())?),
+        None => (text, 0),
+    };
+    let ms = ms_text.parse::<u64>().map_err(|_| invalid())?;
     Ok((ms, seq))
 }
 
@@ -5873,7 +5878,11 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
             Ok(false) => Ok(RespFrame::Error(
                 "BUSYGROUP Consumer Group name already exists".to_string(),
             )),
-            Err(StoreError::KeyNotFound) => Err(CommandError::NoSuchKey),
+            // Upstream xgroupCommand emits the verbose "requires the
+            // key to exist" message for every XGROUP subcommand on a
+            // missing stream key (see legacy_redis_code/redis/src/
+            // t_stream.c::xgroupCommand). (br-frankenredis-qcmh)
+            Err(StoreError::KeyNotFound) => Ok(xgroup_key_required_error()),
             Err(err) => Err(CommandError::Store(err)),
         };
     }
@@ -5885,8 +5894,17 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
                 subcommand: sub.to_string(),
             });
         }
+        // Upstream xgroupCommand DESTROY rejects missing keys with
+        // the verbose "requires the key to exist" error rather than
+        // silently returning 0. (br-frankenredis-qcmh)
+        match store.xlen(&argv[2], now_ms) {
+            Ok(_) => {}
+            Err(StoreError::KeyNotFound) => return Ok(xgroup_key_required_error()),
+            Err(err) => return Err(CommandError::Store(err)),
+        }
         return match store.xgroup_destroy(&argv[2], &argv[3], now_ms) {
             Ok(removed) => Ok(RespFrame::Integer(if removed { 1 } else { 0 })),
+            Err(StoreError::KeyNotFound) => Ok(xgroup_key_required_error()),
             Err(err) => Err(CommandError::Store(err)),
         };
     }
@@ -5914,7 +5932,8 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         return match store.xgroup_setid(&argv[2], &argv[3], last_delivered_id, now_ms) {
             Ok(true) => Ok(RespFrame::SimpleString("OK".to_string())),
             Ok(false) => Ok(xgroup_nogroup_error(&argv[2], &argv[3])),
-            Err(StoreError::KeyNotFound) => Err(CommandError::NoSuchKey),
+            // (br-frankenredis-qcmh)
+            Err(StoreError::KeyNotFound) => Ok(xgroup_key_required_error()),
             Err(err) => Err(CommandError::Store(err)),
         };
     }
@@ -5926,14 +5945,17 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
                 subcommand: sub.to_string(),
             });
         }
+        // (br-frankenredis-qcmh)
         match store.xlen(&argv[2], now_ms) {
             Ok(0) => return Ok(xgroup_key_required_error()),
             Ok(_) => {}
+            Err(StoreError::KeyNotFound) => return Ok(xgroup_key_required_error()),
             Err(err) => return Err(CommandError::Store(err)),
         }
         return match store.xgroup_createconsumer(&argv[2], &argv[3], &argv[4], now_ms) {
             Ok(Some(created)) => Ok(RespFrame::Integer(if created { 1 } else { 0 })),
             Ok(None) => Ok(xgroup_nogroup_error(&argv[2], &argv[3])),
+            Err(StoreError::KeyNotFound) => Ok(xgroup_key_required_error()),
             Err(err) => Err(CommandError::Store(err)),
         };
     }
@@ -5945,11 +5967,18 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
                 subcommand: sub.to_string(),
             });
         }
+        // (br-frankenredis-qcmh)
+        match store.xlen(&argv[2], now_ms) {
+            Ok(_) => {}
+            Err(StoreError::KeyNotFound) => return Ok(xgroup_key_required_error()),
+            Err(err) => return Err(CommandError::Store(err)),
+        }
         return match store.xgroup_delconsumer(&argv[2], &argv[3], &argv[4], now_ms) {
             Ok(Some(deleted_pending)) => Ok(RespFrame::Integer(
                 i64::try_from(deleted_pending).unwrap_or(i64::MAX),
             )),
             Ok(None) => Ok(xgroup_nogroup_error(&argv[2], &argv[3])),
+            Err(StoreError::KeyNotFound) => Ok(xgroup_key_required_error()),
             Err(err) => Err(CommandError::Store(err)),
         };
     }
@@ -5984,15 +6013,38 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     })
 }
 
-fn xreadgroup_nogroup_error(key: &[u8], group: &[u8]) -> RespFrame {
+/// Upstream Redis 7.2 XREADGROUP / XCLAIM / XAUTOCLAIM / XPENDING /
+/// XACK emit "NOGROUP No such key '<k>' or consumer group '<g>'"
+/// from their shared streamCG-lookup error path (see
+/// legacy_redis_code/redis/src/t_stream.c lines 2275, 2945, 3136,
+/// 3388, 3880). The text is identical regardless of whether it
+/// was the key or the group that was actually missing.
+/// (br-frankenredis-ud94)
+fn xstream_nogroup_error(key: &[u8], group: &[u8]) -> RespFrame {
     let key = String::from_utf8_lossy(key);
     let group = String::from_utf8_lossy(group);
     RespFrame::Error(format!(
-        "NOGROUP No such consumer group '{group}' for key name '{key}'"
+        "NOGROUP No such key '{key}' or consumer group '{group}'"
+    ))
+}
+
+fn xreadgroup_nogroup_error(key: &[u8], group: &[u8]) -> RespFrame {
+    // XREADGROUP appends " in XREADGROUP with GROUP option" to the
+    // shared NOGROUP wording (legacy_redis_code/redis/src/t_stream.c
+    // around line 4495 where the streamLookupCG failure is reported
+    // for XREADGROUP specifically). (br-frankenredis-ud94)
+    let key = String::from_utf8_lossy(key);
+    let group = String::from_utf8_lossy(group);
+    RespFrame::Error(format!(
+        "NOGROUP No such key '{key}' or consumer group '{group}' in XREADGROUP with GROUP option"
     ))
 }
 
 fn xgroup_nogroup_error(key: &[u8], group: &[u8]) -> RespFrame {
+    // XGROUP SETID / DELCONSUMER / CREATECONSUMER report
+    // "No such consumer group" because the key existence check has
+    // already passed by the time the lookup is hit. (Upstream
+    // t_stream.c:2632, 3880 in nested branches.)
     let key = String::from_utf8_lossy(key);
     let group = String::from_utf8_lossy(group);
     RespFrame::Error(format!(
@@ -6007,27 +6059,15 @@ fn xgroup_key_required_error() -> RespFrame {
 }
 
 fn xclaim_nogroup_error(key: &[u8], group: &[u8]) -> RespFrame {
-    let key = String::from_utf8_lossy(key);
-    let group = String::from_utf8_lossy(group);
-    RespFrame::Error(format!(
-        "NOGROUP No such consumer group '{group}' for key name '{key}'"
-    ))
+    xstream_nogroup_error(key, group)
 }
 
 fn xautoclaim_nogroup_error(key: &[u8], group: &[u8]) -> RespFrame {
-    let key = String::from_utf8_lossy(key);
-    let group = String::from_utf8_lossy(group);
-    RespFrame::Error(format!(
-        "NOGROUP No such consumer group '{group}' for key name '{key}'"
-    ))
+    xstream_nogroup_error(key, group)
 }
 
 fn xpending_nogroup_error(key: &[u8], group: &[u8]) -> RespFrame {
-    let key = String::from_utf8_lossy(key);
-    let group = String::from_utf8_lossy(group);
-    RespFrame::Error(format!(
-        "NOGROUP No such consumer group '{group}' for key name '{key}'"
-    ))
+    xstream_nogroup_error(key, group)
 }
 
 fn xinfo_nogroup_consumers_error(key: &[u8], group: &[u8]) -> RespFrame {
@@ -22750,10 +22790,11 @@ mod tests {
             0,
         )
         .expect("xreadgroup missing group");
+        // (br-frankenredis-ud94)
         assert_eq!(
             nogroup,
             RespFrame::Error(
-                "NOGROUP No such consumer group 'g-missing' for key name 's'".to_string()
+                "NOGROUP No such key 's' or consumer group 'g-missing' in XREADGROUP with GROUP option".to_string()
             )
         );
 
@@ -23486,9 +23527,10 @@ mod tests {
             0,
         )
         .expect("xpending missing group");
+        // (br-frankenredis-ud94)
         assert_eq!(
             missing,
-            RespFrame::Error("NOGROUP No such consumer group 'g1' for key name 's'".to_string())
+            RespFrame::Error("NOGROUP No such key 's' or consumer group 'g1'".to_string())
         );
     }
 
@@ -23768,9 +23810,10 @@ mod tests {
             0,
         )
         .expect("xclaim nogroup");
+        // (br-frankenredis-ud94)
         assert_eq!(
             xclaim_missing,
-            RespFrame::Error("NOGROUP No such consumer group 'g1' for key name 's'".to_string())
+            RespFrame::Error("NOGROUP No such key 's' or consumer group 'g1'".to_string())
         );
 
         let xautoclaim_missing = dispatch_argv(
@@ -23786,9 +23829,10 @@ mod tests {
             0,
         )
         .expect("xautoclaim nogroup");
+        // (br-frankenredis-ud94)
         assert_eq!(
             xautoclaim_missing,
-            RespFrame::Error("NOGROUP No such consumer group 'g1' for key name 's'".to_string())
+            RespFrame::Error("NOGROUP No such key 's' or consumer group 'g1'".to_string())
         );
     }
 
@@ -24340,8 +24384,14 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("xgroup missing key");
-        assert!(matches!(missing, CommandError::NoSuchKey));
+        .expect("xgroup missing key");
+        // Upstream xgroupCommand emits the verbose "requires the key
+        // to exist" message rather than the generic "ERR no such
+        // key". (br-frankenredis-qcmh)
+        assert_eq!(
+            missing,
+            RespFrame::Error("ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.".to_string())
+        );
 
         let mkstream = dispatch_argv(
             &[
@@ -24704,8 +24754,12 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("xgroup setid missing key");
-        assert!(matches!(missing, CommandError::NoSuchKey));
+        .expect("xgroup setid missing key");
+        // (br-frankenredis-qcmh)
+        assert_eq!(
+            missing,
+            RespFrame::Error("ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.".to_string())
+        );
 
         dispatch_argv(
             &[
@@ -30204,8 +30258,10 @@ mod tests {
             ("return redis.error_reply('-NOMSG')", "ERR NOMSG"),
             (
                 "return redis.error_reply('NOAUTH custom message')",
-                "ERR NOAUTH custom message",
+                "NOAUTH custom message",
             ),
+            ("return redis.error_reply('custom error')", "custom error"),
+            ("return redis.error_reply('my error')", "my error"),
         ];
         let mut store = Store::new();
         for (script, expected) in cases {

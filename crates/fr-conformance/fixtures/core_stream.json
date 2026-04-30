@@ -1738,7 +1738,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR no such key"
+        "value": "ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically."
       }
     },
     {
@@ -1871,7 +1871,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR no such key"
+        "value": "ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically."
       }
     },
     {
@@ -2595,7 +2595,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "NOGROUP No such consumer group 'missing_group' for key name 'group_read_stream'"
+        "value": "NOGROUP No such key 'group_read_stream' or consumer group 'missing_group' in XREADGROUP with GROUP option"
       }
     },
     {
@@ -3676,7 +3676,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "NOGROUP No such consumer group 'nosuchgroup' for key name 'xpend_ng'"
+        "value": "NOGROUP No such key 'xpend_ng' or consumer group 'nosuchgroup'"
       }
     },
     {
@@ -3959,7 +3959,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "NOGROUP No such consumer group 'nosuchgrp' for key name 'xpend'"
+        "value": "NOGROUP No such key 'xpend' or consumer group 'nosuchgrp'"
       }
     },
     {
@@ -4270,7 +4270,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "NOGROUP No such consumer group 'nosuchgrp' for key name 'xac'"
+        "value": "NOGROUP No such key 'xac' or consumer group 'nosuchgrp'"
       }
     },
     {
