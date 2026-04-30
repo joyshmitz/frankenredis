@@ -7121,9 +7121,12 @@ impl Runtime {
                 continue;
             }
             if parameter.eq_ignore_ascii_case("maxmemory") {
-                let parsed = match parse_i64_arg(&pair[1]) {
-                    Ok(value) if value >= 0 => value as usize,
-                    _ => {
+                // Match upstream's memtoull semantics: accept suffix
+                // forms (100mb, 1gb, etc.) in addition to plain
+                // integers. (br-frankenredis-ky4n)
+                let parsed = match parse_memory_size_arg(&pair[1]) {
+                    Ok(value) => value as usize,
+                    Err(()) => {
                         return RespFrame::Error(
                             "ERR CONFIG SET failed (possibly related to argument 'maxmemory') - argument must be a memory value"
                                 .to_string(),
@@ -10749,6 +10752,38 @@ fn digest_bytes(bytes: &[u8]) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+/// Parse a memory size value matching upstream Redis 7.2's
+/// `util.c::memtoull`: accepts a decimal integer optionally
+/// followed by a unit suffix (case-insensitive). 1024-base units:
+/// kb, mb, gb. 1000-base units: k, m, g. 'b' or no suffix means
+/// raw bytes. Negative values and other suffixes are rejected.
+/// (br-frankenredis-ky4n)
+fn parse_memory_size_arg(arg: &[u8]) -> Result<u64, ()> {
+    let text = std::str::from_utf8(arg).map_err(|_| ())?;
+    if text.is_empty() || text.starts_with('-') {
+        return Err(());
+    }
+    let split_idx = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    if split_idx == 0 {
+        return Err(());
+    }
+    let (digits, suffix) = text.split_at(split_idx);
+    let mul: u64 = match suffix.to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" => 1_000,
+        "kb" => 1_024,
+        "m" => 1_000_000,
+        "mb" => 1_024 * 1_024,
+        "g" => 1_000_000_000,
+        "gb" => 1_024 * 1_024 * 1_024,
+        _ => return Err(()),
+    };
+    let val: u64 = digits.parse().map_err(|_| ())?;
+    val.checked_mul(mul).ok_or(())
 }
 
 fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
