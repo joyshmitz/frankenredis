@@ -9242,8 +9242,16 @@ impl Runtime {
     }
 
     fn handle_flushdb_command(&mut self, argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
-        if argv.len() > 2 {
-            return Err(CommandError::WrongArity("FLUSHDB"));
+        // Mirror upstream Redis 7.2 db.c::flushdbCommand → flushCommandCommon:
+        // only ASYNC and SYNC are accepted as the optional flag; any other
+        // arg or arity > 2 emits a plain syntax error rather than a
+        // wrong-arity reply. (br-frankenredis-flushflag)
+        if argv.len() > 2
+            || (argv.len() == 2
+                && !argv[1].eq_ignore_ascii_case(b"ASYNC")
+                && !argv[1].eq_ignore_ascii_case(b"SYNC"))
+        {
+            return Err(CommandError::SyntaxError);
         }
         self.server.store.flush_database(self.session.selected_db);
         Ok(RespFrame::SimpleString("OK".to_string()))

@@ -2528,20 +2528,29 @@ fn dbsize(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     Ok(RespFrame::Integer(size))
 }
 
+/// Mirror upstream Redis 7.2 FLUSHDB / FLUSHALL: only ASYNC and
+/// SYNC are accepted as the optional flag; any other argument or
+/// arity > 2 emits a plain syntax error rather than a wrong-arity
+/// reply (matches db.c::flushdbCommand → flushCommandCommon).
+/// (br-frankenredis-flushflag)
 fn flushdb(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
-    if argv.len() > 2 {
-        return Err(CommandError::WrongArity("FLUSHDB"));
+    if argv.len() > 2 || (argv.len() == 2 && !is_flush_mode_arg(&argv[1])) {
+        return Err(CommandError::SyntaxError);
     }
     store.flushdb();
     Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
 fn flushall(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
-    if argv.len() > 2 {
-        return Err(CommandError::WrongArity("FLUSHALL"));
+    if argv.len() > 2 || (argv.len() == 2 && !is_flush_mode_arg(&argv[1])) {
+        return Err(CommandError::SyntaxError);
     }
     store.flushdb();
     Ok(RespFrame::SimpleString("OK".to_string()))
+}
+
+fn is_flush_mode_arg(arg: &[u8]) -> bool {
+    eq_ascii_command(arg, b"ASYNC") || eq_ascii_command(arg, b"SYNC")
 }
 
 fn hset(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
@@ -15008,9 +15017,18 @@ fn latency_graph(event: &str, samples: &[fr_store::LatencySample]) -> String {
 }
 
 fn latency_doctor_report(store: &Store) -> String {
+    // Mirror upstream Redis 7.2 latency.c::latencyCommand DOCTOR:
+    // when latency-monitor-threshold == 0 (the default), emit the
+    // canonical "I'm sorry, Dave..." disabled-monitoring message.
+    // Otherwise, when there are no latency reports, emit the
+    // "no latency reports to analyze" message. Else emit the
+    // event-summary report. (br-frankenredis-latdoc)
+    if store.latency_tracker.threshold_ms == 0 {
+        return "I'm sorry, Dave, I can't do that. Latency monitoring is disabled in this Redis instance. You may use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it. If we weren't in a deep space mission I'd suggest to take a look at https://redis.io/topics/latency-monitor.\n".to_string();
+    }
     let latest = store.latency_latest();
     if latest.is_empty() {
-        return "I have no latency reports to analyze. Be happy!".to_string();
+        return "Dave, no latency issues detected.\n".to_string();
     }
 
     let mut report = String::from("I have reports for the following latency events:\n");
@@ -15109,8 +15127,10 @@ fn latency_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Command
         let event = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         let history = store.latency_history(event);
         if history.is_empty() {
+            // Upstream prefixes this error with "ERR" via addReplyError.
+            // (br-frankenredis-latgrapherr)
             return Ok(RespFrame::Error(format!(
-                "No samples available for event '{event}'"
+                "ERR No samples available for event '{event}'"
             )));
         }
         Ok(RespFrame::BulkString(Some(
@@ -31124,20 +31144,27 @@ mod tests {
             0,
         )
         .expect("latency graph empty");
+        // (br-frankenredis-latgrapherr)
         assert_eq!(
             graph_empty,
-            RespFrame::Error("No samples available for event 'command'".to_string())
+            RespFrame::Error("ERR No samples available for event 'command'".to_string())
         );
         let doctor_empty = dispatch_argv(&[b"LATENCY".to_vec(), b"DOCTOR".to_vec()], &mut empty, 0)
             .expect("latency doctor empty");
-        assert_eq!(
-            doctor_empty,
-            RespFrame::BulkString(Some(
-                b"I have no latency reports to analyze. Be happy!".to_vec(),
-            ))
+        // Default latency-monitor-threshold is 0 → upstream emits the
+        // HAL-style disabled message. (br-frankenredis-latdoc)
+        let RespFrame::BulkString(Some(body)) = doctor_empty else {
+            panic!("expected bulk string");
+        };
+        let body_str = String::from_utf8_lossy(&body);
+        assert!(
+            body_str
+                .starts_with("I'm sorry, Dave, I can't do that. Latency monitoring is disabled"),
+            "{body_str}"
         );
 
         let mut store = Store::new();
+        store.latency_tracker.threshold_ms = 100;
         store.record_latency_sample("command", 3, 10);
         store.record_latency_sample("command", 7, 12);
 

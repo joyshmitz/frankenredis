@@ -407,7 +407,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'flushdb' command"
+        "value": "ERR syntax error"
       }
     },
     {
@@ -854,7 +854,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR wrong number of arguments for 'flushall' command"
+        "value": "ERR syntax error"
       }
     },
     {
