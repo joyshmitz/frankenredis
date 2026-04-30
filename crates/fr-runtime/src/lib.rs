@@ -8278,11 +8278,24 @@ impl Runtime {
                 } else if argv.len() >= 4 && eq_ascii_token(&argv[2], b"ID") {
                     let mut requested_ids = HashSet::new();
                     for id_arg in &argv[3..] {
+                        // Upstream networking.c::clientCommand parses
+                        // the ID via getLongLongFromObjectOrReply with
+                        // 'Invalid client ID' — only non-numeric input
+                        // errors. Numeric values that don't match any
+                        // client (incl. 0 / negative) silently filter
+                        // out; lookupClientByID returns NULL.
+                        // (br-frankenredis-clkill follow-up)
                         let parsed_id = match parse_i64_arg(id_arg) {
-                            Ok(id) if id > 0 => id as u64,
-                            _ => return RespFrame::Error("ERR Invalid client ID".to_string()),
+                            Ok(id) => id,
+                            Err(_) => {
+                                return RespFrame::Error(
+                                    "ERR Invalid client ID".to_string(),
+                                );
+                            }
                         };
-                        requested_ids.insert(parsed_id);
+                        if parsed_id > 0 {
+                            requested_ids.insert(parsed_id as u64);
+                        }
                     }
                     sessions
                         .values()
