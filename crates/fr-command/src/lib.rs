@@ -8493,16 +8493,27 @@ fn getbit(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     if argv.len() != 3 {
         return Err(CommandError::WrongArity("GETBIT"));
     }
-    let offset = parse_i64_arg(&argv[2]).map_err(|_| {
-        CommandError::Custom("ERR bit offset is not an integer or out of range".to_string())
-    })?;
-    if offset < 0 {
-        return Err(CommandError::Custom(
-            "ERR bit offset is not an integer or out of range".to_string(),
-        ));
-    }
+    let offset = parse_bit_offset_or_reply(&argv[2])?;
     let bit = store.getbit(&argv[1], offset as usize, now_ms)?;
     Ok(RespFrame::Integer(if bit { 1 } else { 0 }))
+}
+
+/// Mirror upstream bitops.c::getBitOffsetFromArgument: a bit offset
+/// must parse as a non-negative i64 AND `offset >> 3` must stay
+/// below proto_max_bulk_len (default 512MB → bits < 4 GiB).
+/// (br-frankenredis-bitoff)
+fn parse_bit_offset_or_reply(arg: &[u8]) -> Result<i64, CommandError> {
+    let err =
+        || CommandError::Custom("ERR bit offset is not an integer or out of range".to_string());
+    let offset = parse_i64_arg(arg).map_err(|_| err())?;
+    // Upstream's default proto_max_bulk_len is 512 * 1024 * 1024 bytes.
+    // The check is `(loffset >> 3) >= server.proto_max_bulk_len`, i.e.
+    // bit-offsets >= 512 MiB << 3 = 2^32 are rejected.
+    const MAX_BIT_OFFSET_EXCLUSIVE: i64 = 512 * 1024 * 1024 * 8;
+    if offset < 0 || offset >= MAX_BIT_OFFSET_EXCLUSIVE {
+        return Err(err());
+    }
+    Ok(offset)
 }
 
 fn bitcount(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
