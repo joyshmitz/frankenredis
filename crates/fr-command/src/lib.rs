@@ -7134,11 +7134,19 @@ fn cluster_cmd(
     }
     if sub.eq_ignore_ascii_case("ADDSLOTSRANGE") || sub.eq_ignore_ascii_case("DELSLOTSRANGE") {
         // CLUSTER ADDSLOTSRANGE <start> <end> [<start> <end> ...]
-        if argv.len() < 4 || !argv.len().is_multiple_of(2) {
+        // Upstream commands.def declares arity = -4 (≥4 args incl
+        // CLUSTER + sub). The multiple-of-2 pair check happens
+        // inside the cluster handler AFTER the cluster-enabled gate
+        // — so in standalone mode 'cluster support disabled' fires
+        // before the pair check. (br-frankenredis-clusterord)
+        if argv.len() < 4 {
             return Err(cluster_wrong_subcommand_arity(sub));
         }
         if !store.cluster_enabled {
             return Err(cluster_disabled_error());
+        }
+        if !argv.len().is_multiple_of(2) {
+            return Err(cluster_wrong_subcommand_arity(sub));
         }
         let slots = cluster_collect_slot_ranges(&argv[2..])?;
         if sub.eq_ignore_ascii_case("ADDSLOTSRANGE") {
@@ -7201,10 +7209,17 @@ fn cluster_cmd(
         // advance that still parses for clients that inspect the reply.
         return Ok(RespFrame::SimpleString("BUMPED 1".to_string()));
     }
-    if sub.eq_ignore_ascii_case("SET-CONFIG-EPOCH") || sub.eq_ignore_ascii_case("SLOTSTATE") {
-        // Real config-epoch / slot-state machinery not yet implemented;
-        // keep the blanket disabled error so clients fail-loud rather
-        // than think a no-op succeeded. (jsr7 follow-up)
+    if sub.eq_ignore_ascii_case("SET-CONFIG-EPOCH") {
+        // Upstream commands.def declares CLUSTER SET-CONFIG-EPOCH
+        // with arity = 3, so missing/extra args trigger the
+        // table-level WrongArity check before clusterCommand runs.
+        // (br-frankenredis-clusterord)
+        if argv.len() != 3 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        return Err(cluster_disabled_error());
+    }
+    if sub.eq_ignore_ascii_case("SLOTSTATE") {
         return Err(cluster_disabled_error());
     }
     if sub.eq_ignore_ascii_case("SETSLOT") {
