@@ -3467,24 +3467,26 @@ fn geo_decode_score(score: f64) -> Option<(f64, f64)> {
 
 #[inline]
 fn parse_geo_f64(arg: &[u8]) -> Result<f64, RespFrame> {
-    let text = std::str::from_utf8(arg)
-        .map_err(|_| RespFrame::Error("ERR value is not a valid float".to_string()))?;
+    parse_geo_f64_with_msg(arg, "value is not a valid float")
+}
+
+/// Parse a Redis-compatible f64 with caller-supplied error message
+/// body (mirrors upstream's `getDoubleFromObjectOrReply(c,obj,&out,msg)`).
+/// The "ERR " prefix is added here so callers can pass the bare msg
+/// (e.g. "need numeric radius"). (br-frankenredis-geosearch)
+fn parse_geo_f64_with_msg(arg: &[u8], msg: &str) -> Result<f64, RespFrame> {
+    let err = || RespFrame::Error(format!("ERR {msg}"));
+    let text = std::str::from_utf8(arg).map_err(|_| err())?;
     let bytes = text.as_bytes();
     if bytes.is_empty()
         || bytes[0].is_ascii_whitespace()
         || bytes[bytes.len() - 1].is_ascii_whitespace()
     {
-        return Err(RespFrame::Error(
-            "ERR value is not a valid float".to_string(),
-        ));
+        return Err(err());
     }
-    let val = text
-        .parse::<f64>()
-        .map_err(|_| RespFrame::Error("ERR value is not a valid float".to_string()))?;
+    let val = text.parse::<f64>().map_err(|_| err())?;
     if val.is_nan() {
-        return Err(RespFrame::Error(
-            "ERR value is not a valid float".to_string(),
-        ));
+        return Err(err());
     }
     Ok(val)
 }
@@ -4551,7 +4553,10 @@ fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             if i + 2 >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            let r = match parse_geo_f64(&argv[i + 1]) {
+            // Upstream geo.c::extractDistanceOrReply: non-numeric →
+            // 'need numeric radius', explicit-negative → 'radius
+            // cannot be negative'. (br-frankenredis-geosearch)
+            let r = match parse_geo_f64_with_msg(&argv[i + 1], "need numeric radius") {
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
@@ -4579,17 +4584,21 @@ fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             if i + 3 >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            let w = match parse_geo_f64(&argv[i + 1]) {
+            // Upstream geo.c::extractBoxOrReply: non-numeric →
+            // 'need numeric width' / 'need numeric height',
+            // negative → 'height or width cannot be negative'.
+            // (br-frankenredis-geosearch)
+            let w = match parse_geo_f64_with_msg(&argv[i + 1], "need numeric width") {
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
-            let h = match parse_geo_f64(&argv[i + 2]) {
+            let h = match parse_geo_f64_with_msg(&argv[i + 2], "need numeric height") {
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
             if w < 0.0 || h < 0.0 {
                 return Ok(RespFrame::Error(
-                    "ERR width or height cannot be negative".to_string(),
+                    "ERR height or width cannot be negative".to_string(),
                 ));
             }
             let um = match geo_unit_to_meters(&argv[i + 3]) {
@@ -4751,7 +4760,8 @@ fn geosearchstore(
             if i + 2 >= synth.len() {
                 return Err(CommandError::SyntaxError);
             }
-            let r = match parse_geo_f64(&synth[i + 1]) {
+            // (br-frankenredis-geosearch)
+            let r = match parse_geo_f64_with_msg(&synth[i + 1], "need numeric radius") {
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
@@ -4781,17 +4791,18 @@ fn geosearchstore(
             if i + 3 >= synth.len() {
                 return Err(CommandError::SyntaxError);
             }
-            let w = match parse_geo_f64(&synth[i + 1]) {
+            // (br-frankenredis-geosearch)
+            let w = match parse_geo_f64_with_msg(&synth[i + 1], "need numeric width") {
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
-            let h = match parse_geo_f64(&synth[i + 2]) {
+            let h = match parse_geo_f64_with_msg(&synth[i + 2], "need numeric height") {
                 Ok(v) => v,
                 Err(e) => return Ok(e),
             };
             if w < 0.0 || h < 0.0 {
                 return Ok(RespFrame::Error(
-                    "ERR width or height cannot be negative".to_string(),
+                    "ERR height or width cannot be negative".to_string(),
                 ));
             }
             let um = match geo_unit_to_meters(&synth[i + 3]) {
