@@ -4169,8 +4169,15 @@ fn geopos(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
 }
 
 fn geodist(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
-    if argv.len() != 4 && argv.len() != 5 {
+    // Upstream commands.def declares GEODIST with arity = -4, so
+    // the table-level check fires for argc<4. Trailing args after
+    // the optional unit hit geo.c::geodistCommand's syntaxerr
+    // branch. (br-frankenredis-geodist)
+    if argv.len() < 4 {
         return Err(CommandError::WrongArity("GEODIST"));
+    }
+    if argv.len() > 5 {
+        return Err(CommandError::SyntaxError);
     }
     let to_meter = if argv.len() == 5 {
         match geo_unit_to_meters(&argv[4]) {
