@@ -6266,34 +6266,51 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     }
 
     // XINFO STREAM key [FULL [COUNT count]]
-    let full_mode = argv.len() >= 4 && eq_ascii_command(&argv[3], b"FULL");
-    if !full_mode && argv.len() != 3 {
+    if argv.len() < 3 {
         return Err(CommandError::WrongSubcommandArity {
             command: "XINFO",
             subcommand: sub.to_string(),
         });
     }
+    // Upstream t_stream.c::xinfoCommand looks up the key BEFORE
+    // dispatching to the STREAM/FULL branch, so any missing key
+    // (or wrong-type key) replies with 'no such key' /
+    // 'WRONGTYPE…' regardless of any unrecognised trailing args.
+    // (br-frankenredis-xinfokey)
+    let Some((len, first, last)) = store.xinfo_stream(&argv[2], now_ms)? else {
+        return Err(CommandError::NoSuchKey);
+    };
+    // Upstream xinfoReplyWithStreamInfo uses addReplySubcommandSyntaxError
+    // for any unrecognised tail, which renders as 'unknown subcommand
+    // or wrong number of arguments for <SUB>. Try XINFO HELP.'.
+    // (br-frankenredis-xinfokey)
+    let xinfo_subcommand_syntax_error = || {
+        CommandError::Custom(format!(
+            "ERR unknown subcommand or wrong number of arguments for '{sub}'. Try XINFO HELP."
+        ))
+    };
+    let full_mode = argv.len() >= 4 && eq_ascii_command(&argv[3], b"FULL");
+    if !full_mode && argv.len() != 3 {
+        return Err(xinfo_subcommand_syntax_error());
+    }
     if full_mode && argv.len() != 4 && argv.len() != 6 {
-        return Err(CommandError::WrongSubcommandArity {
-            command: "XINFO",
-            subcommand: sub.to_string(),
-        });
+        return Err(xinfo_subcommand_syntax_error());
     }
     let full_count: usize = if full_mode && argv.len() == 6 {
         if !eq_ascii_command(&argv[4], b"COUNT") {
-            return Err(CommandError::SyntaxError);
+            return Err(xinfo_subcommand_syntax_error());
         }
+        // Upstream parses COUNT via getLongLongFromObjectOrReply
+        // (which uses 'value is not an integer or out of range')
+        // and silently treats negative counts as the default 10.
         let n = parse_i64_arg(&argv[5])?;
         if n < 0 {
-            return Err(CommandError::InvalidInteger);
+            10
+        } else {
+            usize::try_from(n).map_err(|_| CommandError::InvalidInteger)?
         }
-        usize::try_from(n).map_err(|_| CommandError::InvalidInteger)?
     } else {
         10 // Redis default COUNT for FULL is 10
-    };
-
-    let Some((len, first, last)) = store.xinfo_stream(&argv[2], now_ms)? else {
-        return Err(CommandError::NoSuchKey);
     };
 
     let last_generated_id = last
