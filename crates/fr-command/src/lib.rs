@@ -15122,9 +15122,16 @@ fn eval_cmd(
     now_ms: u64,
     read_only_script: bool,
 ) -> Result<RespFrame, CommandError> {
-    // EVAL script numkeys [key ...] [arg ...]
+    // EVAL[_RO] script numkeys [key ...] [arg ...]
     if argv.len() < 3 {
-        return Err(CommandError::WrongArity("EVAL"));
+        // Upstream commands.def declares EVAL/EVAL_RO with arity = -3
+        // and the WrongArity reply includes the lowercase command
+        // name. (br-frankenredis-evalary)
+        return Err(CommandError::WrongArity(if read_only_script {
+            "EVAL_RO"
+        } else {
+            "EVAL"
+        }));
     }
     let script = &argv[1];
     let (_numkeys, keys, args) = parse_eval_args(argv)?;
@@ -15158,9 +15165,14 @@ fn evalsha_cmd(
     now_ms: u64,
     read_only_script: bool,
 ) -> Result<RespFrame, CommandError> {
-    // EVALSHA sha1 numkeys [key ...] [arg ...]
+    // EVALSHA[_RO] sha1 numkeys [key ...] [arg ...]
     if argv.len() < 3 {
-        return Err(CommandError::WrongArity("EVALSHA"));
+        // (br-frankenredis-evalary)
+        return Err(CommandError::WrongArity(if read_only_script {
+            "EVALSHA_RO"
+        } else {
+            "EVALSHA"
+        }));
     }
     let sha1 = &argv[1];
     let (_numkeys, keys, args) = parse_eval_args(argv)?;
