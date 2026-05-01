@@ -6369,9 +6369,15 @@ impl Runtime {
                 self.server.next_acl_log_entry_id = 0;
                 RespFrame::SimpleString("OK".to_string())
             } else {
+                // Upstream acl.c::aclCommand 'log' branch parses count
+                // via getLongFromObjectOrReply (NULL msg → standard
+                // 'value is not an integer or out of range') and
+                // silently clamps negative counts to 0.
+                // (br-frankenredis-acllogneg)
                 let count = match parse_i64_arg(&argv[2]) {
-                    Ok(c) if c >= 0 => c as usize,
-                    _ => return CommandError::InvalidInteger.to_resp(),
+                    Ok(c) if c < 0 => 0_usize,
+                    Ok(c) => c as usize,
+                    Err(_) => return CommandError::InvalidInteger.to_resp(),
                 };
                 self.acl_log_entries_response(Some(count), now_ms)
             }
