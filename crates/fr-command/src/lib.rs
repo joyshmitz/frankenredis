@@ -7711,7 +7711,13 @@ fn function_cmd(
             if arg.eq_ignore_ascii_case("LIBRARYNAME") {
                 i += 1;
                 if i >= argv.len() {
-                    return Err(CommandError::SyntaxError);
+                    // Upstream functions.c::functionListCommand emits
+                    // 'library name argument was not given' when the
+                    // LIBRARYNAME option is missing its argument.
+                    // (br-frankenredis-funclist)
+                    return Err(CommandError::Custom(
+                        "ERR library name argument was not given".to_string(),
+                    ));
                 }
                 let pat = std::str::from_utf8(&argv[i])
                     .map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -13701,8 +13707,18 @@ fn empty_scan_reply() -> RespFrame {
 }
 
 fn parse_scan_args(argv: &[Vec<u8>], start_idx: usize) -> Result<ScanArgs, CommandError> {
+    parse_scan_args_with_novalues(argv, start_idx, true)
+}
+
+fn parse_scan_args_with_novalues(
+    argv: &[Vec<u8>],
+    start_idx: usize,
+    accept_novalues: bool,
+) -> Result<ScanArgs, CommandError> {
     // Error-reply wording MUST match upstream db.c::scanGenericCommand
-    // (br-frankenredis-hjzc).
+    // (br-frankenredis-hjzc). NOVALUES is a Redis 7.4-only option
+    // accepted by HSCAN; ZSCAN/SSCAN/SCAN reject it as a syntax
+    // error. (br-frankenredis-scannv)
     let mut pattern: Option<Vec<u8>> = None;
     let mut count: usize = 10;
     let mut type_filter: Option<Vec<u8>> = None;
@@ -13733,7 +13749,7 @@ fn parse_scan_args(argv: &[Vec<u8>], start_idx: usize) -> Result<ScanArgs, Comma
             }
             type_filter = Some(argv[i + 1].clone());
             i += 2;
-        } else if kw.eq_ignore_ascii_case("NOVALUES") {
+        } else if accept_novalues && kw.eq_ignore_ascii_case("NOVALUES") {
             novalues = true;
             i += 1;
         } else {
@@ -13798,7 +13814,9 @@ fn scan(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
     let cursor = parse_scan_cursor(&argv[1], NegativeScanCursor::WrapUnsigned)?;
 
-    let args = parse_scan_args(argv, 2)?;
+    // Upstream SCAN doesn't recognise NOVALUES — only HSCAN does.
+    // (br-frankenredis-scannv)
+    let args = parse_scan_args_with_novalues(argv, 2, false)?;
     let (next_cursor, keys) = store.scan(cursor, args.pattern.as_deref(), args.count, now_ms);
 
     // Apply TYPE filter if specified
@@ -13883,7 +13901,8 @@ fn sscan(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         Some(_) => return Err(CommandError::Store(StoreError::WrongType)),
     }
 
-    let args = parse_scan_args(argv, 3)?;
+    // (br-frankenredis-scannv) SSCAN doesn't accept NOVALUES.
+    let args = parse_scan_args_with_novalues(argv, 3, false)?;
     let (next_cursor, members) = store
         .sscan(key, cursor, args.pattern.as_deref(), args.count, now_ms)
         .map_err(CommandError::Store)?;
@@ -13912,7 +13931,8 @@ fn zscan(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         Some(_) => return Err(CommandError::Store(StoreError::WrongType)),
     }
 
-    let args = parse_scan_args(argv, 3)?;
+    // (br-frankenredis-scannv) ZSCAN doesn't accept NOVALUES.
+    let args = parse_scan_args_with_novalues(argv, 3, false)?;
     let (next_cursor, pairs) = store
         .zscan(key, cursor, args.pattern.as_deref(), args.count, now_ms)
         .map_err(CommandError::Store)?;
