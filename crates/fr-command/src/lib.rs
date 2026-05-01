@@ -8882,6 +8882,13 @@ fn hincrbyfloat(
             StoreError::IncrFloatNaN => {
                 CommandError::Custom("ERR value is NaN or Infinity".to_string())
             }
+            // Upstream t_hash.c::hincrbyfloatCommand uses
+            // 'hash value is not a float' (not the generic 'value
+            // is not a valid float') when the existing field can't
+            // be parsed as a float. (br-frankenredis-hincrfloat)
+            StoreError::ValueNotFloat => {
+                CommandError::Custom("ERR hash value is not a float".to_string())
+            }
             other => CommandError::Store(other),
         })?;
     Ok(RespFrame::BulkString(Some(
