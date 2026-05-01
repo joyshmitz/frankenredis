@@ -1142,8 +1142,12 @@ pub struct DispatchAclPermissions {
     pub all_channels: bool,
 }
 
-pub const SCRIPT_PROPAGATE_REPLICA: u8 = 0b0001;
-pub const SCRIPT_PROPAGATE_AOF: u8 = 0b0010;
+// Match upstream server.h: PROPAGATE_AOF=1, PROPAGATE_REPL=2.
+// Lua-visible redis.REPL_AOF / REPL_SLAVE / REPL_REPLICA / REPL_ALL
+// constants depend on these values being correct.
+// (br-frankenredis-replconst)
+pub const SCRIPT_PROPAGATE_AOF: u8 = 0b0001;
+pub const SCRIPT_PROPAGATE_REPLICA: u8 = 0b0010;
 pub const SCRIPT_PROPAGATE_ALL: u8 = SCRIPT_PROPAGATE_REPLICA | SCRIPT_PROPAGATE_AOF;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

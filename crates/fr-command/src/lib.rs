@@ -31381,7 +31381,9 @@ mod tests {
             0,
         )
         .expect("eval should succeed");
-        assert_eq!(reply, RespFrame::Integer(2));
+        // Upstream PROPAGATE_REPL = 2, so REPL_REPLICA + REPL_SLAVE = 4.
+        // (br-frankenredis-replconst)
+        assert_eq!(reply, RespFrame::Integer(4));
 
         let actual: Vec<(Vec<Vec<u8>>, u8)> = store
             .script_propagation_records

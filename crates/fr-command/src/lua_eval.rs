@@ -1753,14 +1753,18 @@ impl<'a> LuaState<'a> {
             LuaValue::Str(b"LOG_WARNING".to_vec()),
             LuaValue::Number(3.0),
         );
-        // Replication mode constants
+        // Replication mode constants. Upstream server.h defines
+        // PROPAGATE_AOF=1 and PROPAGATE_REPL=2; script_lua.c then
+        // exports REPL_AOF=PROPAGATE_AOF and REPL_SLAVE=REPL_REPLICA=
+        // PROPAGATE_REPL. fr previously had AOF and SLAVE/REPLICA
+        // swapped. (br-frankenredis-replconst)
         redis_table.set(LuaValue::Str(b"REPL_NONE".to_vec()), LuaValue::Number(0.0));
-        redis_table.set(LuaValue::Str(b"REPL_SLAVE".to_vec()), LuaValue::Number(1.0));
+        redis_table.set(LuaValue::Str(b"REPL_AOF".to_vec()), LuaValue::Number(1.0));
+        redis_table.set(LuaValue::Str(b"REPL_SLAVE".to_vec()), LuaValue::Number(2.0));
         redis_table.set(
             LuaValue::Str(b"REPL_REPLICA".to_vec()),
-            LuaValue::Number(1.0),
+            LuaValue::Number(2.0),
         );
-        redis_table.set(LuaValue::Str(b"REPL_AOF".to_vec()), LuaValue::Number(2.0));
         redis_table.set(LuaValue::Str(b"REPL_ALL".to_vec()), LuaValue::Number(3.0));
         self.globals
             .insert("redis".to_string(), LuaValue::Table(redis_table));
