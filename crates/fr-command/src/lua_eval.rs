@@ -2465,25 +2465,48 @@ impl<'a> LuaState<'a> {
             "redis.call" => self.redis_call(args, false),
             "redis.pcall" => self.redis_call(args, true),
             "redis.error_reply" => {
-                let msg = args
-                    .first()
-                    .map(|a| a.to_display_string())
-                    .unwrap_or_default();
-                let final_msg = lua_format_error_reply_payload(&msg);
-                Ok(vec![LuaValue::Table({
+                // Upstream script_lua.c::luaRedisErrorReplyCommand
+                // requires exactly one string argument; non-string
+                // (number/table/nil/bool) or no args replies via
+                // luaPushError + `return 1`, NOT `luaError`. So the
+                // wrong-type response is a return value, not a raise,
+                // and carries no 'script: <sha>' suffix.
+                // (br-frankenredis-replyargtype)
+                let make_err_table = |bytes: Vec<u8>| {
                     let t = LuaTable::new();
-                    t.set(LuaValue::Str(b"err".to_vec()), LuaValue::Str(final_msg));
-                    t
-                })])
+                    t.set(LuaValue::Str(b"err".to_vec()), LuaValue::Str(bytes));
+                    LuaValue::Table(t)
+                };
+                let Some(LuaValue::Str(bytes)) = args.first() else {
+                    return Ok(vec![make_err_table(b"ERR wrong number or type of arguments".to_vec())]);
+                };
+                // Upstream pre-pends '-' to the user-supplied error
+                // body before handing it to luaPushErrorBuff, which
+                // gives the body a chance to declare its own code.
+                let with_dash: Vec<u8> = if bytes.first() == Some(&b'-') {
+                    bytes.clone()
+                } else {
+                    let mut v = Vec::with_capacity(bytes.len() + 1);
+                    v.push(b'-');
+                    v.extend_from_slice(bytes);
+                    v
+                };
+                let final_msg = lua_format_error_reply_payload(&with_dash);
+                Ok(vec![make_err_table(final_msg)])
             }
             "redis.status_reply" => {
-                let msg = args
-                    .first()
-                    .map(|a| a.to_display_string())
-                    .unwrap_or_default();
+                // (br-frankenredis-replyargtype)
+                let Some(LuaValue::Str(bytes)) = args.first() else {
+                    let t = LuaTable::new();
+                    t.set(
+                        LuaValue::Str(b"err".to_vec()),
+                        LuaValue::Str(b"ERR wrong number or type of arguments".to_vec()),
+                    );
+                    return Ok(vec![LuaValue::Table(t)]);
+                };
                 Ok(vec![LuaValue::Table({
                     let t = LuaTable::new();
-                    t.set(LuaValue::Str(b"ok".to_vec()), LuaValue::Str(msg));
+                    t.set(LuaValue::Str(b"ok".to_vec()), LuaValue::Str(bytes.clone()));
                     t
                 })])
             }
@@ -2523,10 +2546,12 @@ impl<'a> LuaState<'a> {
                 Ok(vec![LuaValue::Nil])
             }
             "redis.sha1hex" => {
-                let data = args
-                    .first()
-                    .map(|a| a.to_display_string())
-                    .unwrap_or_default();
+                // Upstream script_lua.c::luaRedisSha1hexCommand
+                // requires exactly one argument. (br-frankenredis-replyargtype)
+                let Some(arg) = args.first() else {
+                    return Err("wrong number of arguments".to_string());
+                };
+                let data = arg.to_display_string();
                 let hex = fr_store::sha1_hex_public(&data);
                 Ok(vec![LuaValue::Str(hex.into_bytes())])
             }
@@ -3577,7 +3602,11 @@ impl<'a> LuaState<'a> {
 
     fn redis_call(&mut self, args: &[LuaValue], is_pcall: bool) -> Result<Vec<LuaValue>, String> {
         if args.is_empty() {
-            return Err("wrong number of arguments for 'redis.call'".to_string());
+            // Upstream script_lua.c::luaRedisGenericCommand emits
+            // 'Please specify at least one argument for this redis
+            // lib call' when no command name is provided.
+            // (br-frankenredis-replyargtype)
+            return Err("Please specify at least one argument for this redis lib call".to_string());
         }
 
         // Build argv for dispatch
@@ -3658,6 +3687,11 @@ fn command_error_string(err: CommandError) -> String {
 /// the code falls back to "ERR" with the entire body as the
 /// message. Trailing CR/LF are trimmed. (br-frankenredis-xvlj)
 fn lua_format_error_reply_payload(input: &[u8]) -> Vec<u8> {
+    // Mirror script_lua.c::luaPushErrorBuff. The two-stage logic
+    // matters because callers (like luaRedisErrorReplyCommand)
+    // pre-pend '-' to user input before invoking it; the
+    // 'else' arm here is reserved for callers that genuinely have no
+    // RESP code (e.g. the C-side error-string wrappers).
     let body: &[u8] = if input.first() == Some(&b'-') {
         &input[1..]
     } else {
