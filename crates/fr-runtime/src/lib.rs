@@ -221,6 +221,16 @@ fn config_wrong_subcommand_arity(subcommand: &str) -> RespFrame {
     ))
 }
 
+/// Mirror upstream config.c::performInterfaceSet/configSetCommand
+/// error wrapper: every per-field validation error wraps with
+/// `ERR CONFIG SET failed (possibly related to argument '<field>') -
+/// <detail>`. The detail varies by validation kind. (br-frankenredis-7rj0)
+fn config_set_failed(field: &str, detail: &str) -> RespFrame {
+    RespFrame::Error(format!(
+        "ERR CONFIG SET failed (possibly related to argument '{field}') - {detail}"
+    ))
+}
+
 fn histogram_percentile_us(hist: &CommandHistogram, percentile: f64) -> f64 {
     if hist.calls == 0 {
         return 0.0;
@@ -7408,27 +7418,41 @@ impl Runtime {
                 continue;
             }
             if parameter.eq_ignore_ascii_case("maxclients") {
+                // (br-frankenredis-7rj0)
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) if value >= 1 => value as usize,
                     Ok(_) => {
-                        return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'maxclients'".to_string(),
+                        return config_set_failed(
+                            "maxclients",
+                            "argument must be between 1 and 4294967295 inclusive",
                         );
                     }
-                    Err(err) => return err.to_resp(),
+                    Err(_) => {
+                        return config_set_failed(
+                            "maxclients",
+                            "argument couldn't be parsed into an integer",
+                        );
+                    }
                 };
                 next_maxclients = Some(parsed);
                 continue;
             }
             if parameter.eq_ignore_ascii_case("timeout") {
+                // (br-frankenredis-7rj0)
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) if value >= 0 => value as u64,
                     Ok(_) => {
-                        return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'timeout'".to_string(),
+                        return config_set_failed(
+                            "timeout",
+                            "argument must be between 0 and 9223372036854775807 inclusive",
                         );
                     }
-                    Err(err) => return err.to_resp(),
+                    Err(_) => {
+                        return config_set_failed(
+                            "timeout",
+                            "argument couldn't be parsed into an integer",
+                        );
+                    }
                 };
                 next_client_timeout_sec = Some(parsed);
                 static_override_updates.push(("timeout".to_string(), parsed.to_string()));
@@ -7770,9 +7794,8 @@ impl Runtime {
                 } else if value_str.eq_ignore_ascii_case("no") {
                     false
                 } else {
-                    return RespFrame::Error(format!(
-                        "ERR Invalid argument '{value_str}' for CONFIG SET 'appendonly'"
-                    ));
+                    // (br-frankenredis-7rj0)
+                    return config_set_failed("appendonly", "argument must be 'yes' or 'no'");
                 });
                 continue;
             }
@@ -7788,9 +7811,11 @@ impl Runtime {
                 } else if value_str.eq_ignore_ascii_case("always") {
                     AppendFsyncMode::Always
                 } else {
-                    return RespFrame::Error(format!(
-                        "ERR Invalid argument '{value_str}' for CONFIG SET 'appendfsync'"
-                    ));
+                    // (br-frankenredis-7rj0)
+                    return config_set_failed(
+                        "appendfsync",
+                        "argument(s) must be one of the following: everysec, always, no",
+                    );
                 };
                 next_appendfsync = Some(mode);
                 static_override_updates.push((
@@ -7929,9 +7954,10 @@ impl Runtime {
                         next_keyspace_events = Some(flags);
                     }
                     None => {
-                        return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'notify-keyspace-events'"
-                                .to_string(),
+                        // (br-frankenredis-7rj0)
+                        return config_set_failed(
+                            "notify-keyspace-events",
+                            "Invalid event class character. Use 'Ag$lshzxeKEtmdn'.",
                         );
                     }
                 }
@@ -7942,11 +7968,18 @@ impl Runtime {
             {
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) if (-5..=i64::MAX).contains(&value) => value,
-                    Ok(_) | Err(_) => {
-                        return RespFrame::Error(format!(
-                            "ERR Invalid argument '{}' for CONFIG SET '{parameter}'",
-                            String::from_utf8_lossy(&pair[1])
-                        ));
+                    Ok(_) => {
+                        // (br-frankenredis-7rj0)
+                        return config_set_failed(
+                            parameter,
+                            "argument must be between -5 and 9223372036854775807 inclusive",
+                        );
+                    }
+                    Err(_) => {
+                        return config_set_failed(
+                            parameter,
+                            "argument couldn't be parsed into an integer",
+                        );
                     }
                 };
                 next_list_max_listpack_size = Some(parsed);
@@ -7968,11 +8001,18 @@ impl Runtime {
             {
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) if value >= 0 => value as usize,
-                    Ok(_) | Err(_) => {
-                        return RespFrame::Error(format!(
-                            "ERR Invalid argument '{}' for CONFIG SET '{parameter}'",
-                            String::from_utf8_lossy(&pair[1])
-                        ));
+                    Ok(_) => {
+                        // (br-frankenredis-7rj0)
+                        return config_set_failed(
+                            parameter,
+                            "argument must be between 0 and 9223372036854775807 inclusive",
+                        );
+                    }
+                    Err(_) => {
+                        return config_set_failed(
+                            parameter,
+                            "argument couldn't be parsed into an integer",
+                        );
                     }
                 };
                 // Normalize ziplist aliases to their listpack equivalents.
@@ -8007,7 +8047,51 @@ impl Runtime {
             // Accept known CONFIG parameters and store the overridden value so
             // CONFIG GET returns the SET value rather than the compiled-in default.
             if let Some(canonical) = canonical_static_config_param(parameter) {
-                let value = String::from_utf8_lossy(&pair[1]).to_string();
+                // (br-frankenredis-7rj0) — fields that are silently
+                // accepted via the static-override fallthrough still
+                // need basic shape validation when the upstream
+                // config.c::performInterfaceSet declares the type.
+                let value_bytes = &pair[1];
+                if matches!(
+                    canonical,
+                    "tcp-keepalive"
+                        | "tcp-backlog"
+                        | "io-threads"
+                        | "lfu-log-factor"
+                ) {
+                    match parse_i64_arg(value_bytes) {
+                        Ok(v) if v >= 0 => {}
+                        Ok(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument must be between 0 and 2147483647 inclusive",
+                            );
+                        }
+                        Err(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument couldn't be parsed into an integer",
+                            );
+                        }
+                    }
+                }
+                if canonical == "save" {
+                    // Upstream parses save as a sequence of
+                    // <seconds> <changes> pairs. Empty value is OK
+                    // (disables snapshotting). Otherwise must be
+                    // pairs of non-negative integers.
+                    let s = String::from_utf8_lossy(value_bytes);
+                    if !s.trim().is_empty() {
+                        let parts: Vec<&str> = s.split_whitespace().collect();
+                        let valid = !parts.is_empty()
+                            && parts.len().is_multiple_of(2)
+                            && parts.iter().all(|p| p.parse::<i64>().is_ok_and(|v| v >= 0));
+                        if !valid {
+                            return config_set_failed("save", "Invalid save parameters");
+                        }
+                    }
+                }
+                let value = String::from_utf8_lossy(value_bytes).to_string();
                 static_override_updates.push((canonical.to_string(), value));
                 continue;
             }
