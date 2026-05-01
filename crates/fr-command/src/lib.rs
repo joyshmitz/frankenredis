@@ -5891,6 +5891,11 @@ fn xautoclaim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
 }
 
 fn xpending(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
+    // Upstream commands.def declares XPENDING with arity = -3, so the
+    // table-level WrongArity check fires for argc < 3. (br-frankenredis-xpending)
+    if argv.len() < 3 {
+        return Err(CommandError::WrongArity("XPENDING"));
+    }
     if argv.len() == 3 {
         let Some((total, min_id, max_id, per_consumer)) =
             store.xpending_summary(&argv[1], &argv[2], now_ms)?
@@ -5919,20 +5924,22 @@ fn xpending(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     }
 
     // Extended form: XPENDING key group [[IDLE min-idle-time] start end count [consumer]]
-    // Without IDLE: 6 or 7 args. With IDLE: 8 or 9 args.
+    // Upstream allows argc ∈ {3, 6, 7, 8, 9} and emits SyntaxError
+    // for anything else. Trailing args past the canonical positions
+    // are silently ignored. (br-frankenredis-xpending)
+    if !matches!(argv.len(), 3 | 6 | 7 | 8 | 9) {
+        return Err(CommandError::SyntaxError);
+    }
     let mut min_idle_ms: u64 = 0;
     let (start_idx, consumer_idx) = if argv.len() >= 4 && eq_ascii_command(&argv[3], b"IDLE") {
         // IDLE form: argv[3]=IDLE, argv[4]=min-idle-time, argv[5]=start, argv[6]=end, argv[7]=count, [argv[8]=consumer]
-        if argv.len() != 8 && argv.len() != 9 {
-            return Err(CommandError::WrongArity("XPENDING"));
+        if argv.len() < 8 {
+            return Err(CommandError::SyntaxError);
         }
         min_idle_ms = parse_i64_arg(&argv[4]).map(|v| v.max(0) as u64)?;
-        (5, if argv.len() == 9 { Some(8) } else { None })
+        (5, if argv.len() >= 9 { Some(8) } else { None })
     } else {
-        if argv.len() != 6 && argv.len() != 7 {
-            return Err(CommandError::WrongArity("XPENDING"));
-        }
-        (3, if argv.len() == 7 { Some(6) } else { None })
+        (3, if argv.len() >= 7 { Some(6) } else { None })
     };
 
     let start = match parse_stream_range_bound(&argv[start_idx], true) {
