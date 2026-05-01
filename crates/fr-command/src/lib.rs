@@ -3326,6 +3326,19 @@ fn parse_f64_arg(arg: &[u8]) -> Result<f64, CommandError> {
     if val.is_nan() {
         return Err(CommandError::Store(fr_store::StoreError::ValueNotFloat));
     }
+    // Mirror upstream util.c::string2d, which rejects overflow-to-
+    // HUGE_VAL (errno == ERANGE) cases. Rust's parse::<f64> silently
+    // saturates "1e500" to f64::INFINITY without indicating overflow,
+    // so reject any value that lands on ±infinity unless the original
+    // text was an explicit infinity literal ('inf', '+inf', '-inf',
+    // 'infinity', etc.). (br-frankenredis-floatovf)
+    if val.is_infinite() {
+        let lc = text.to_ascii_lowercase();
+        let stripped = lc.strip_prefix('+').or_else(|| lc.strip_prefix('-')).unwrap_or(&lc);
+        if stripped != "inf" && stripped != "infinity" {
+            return Err(CommandError::Store(fr_store::StoreError::ValueNotFloat));
+        }
+    }
     Ok(val)
 }
 
