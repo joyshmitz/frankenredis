@@ -6711,6 +6711,17 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     }
     let _ = max_deleted_id;
 
+    // Upstream t_stream.c::xsetidCommand rejects with the verbose
+    // 'smaller than the target stream top item' wording when
+    // last-id < current top stream id. (br-frankenredis-xsetid-top)
+    if let Ok(Some(top)) = store.xlast_id(key, now_ms)
+        && last_id < top
+    {
+        return Ok(RespFrame::Error(
+            "ERR The ID specified in XSETID is smaller than the target stream top item"
+                .to_string(),
+        ));
+    }
     match store.xsetid(key, last_id, now_ms) {
         Ok(true) => Ok(RespFrame::SimpleString("OK".to_string())),
         Ok(false) => Ok(RespFrame::Error("ERR no such key".to_string())),
