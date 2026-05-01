@@ -9362,11 +9362,17 @@ impl Runtime {
         }
 
         if sub.eq_ignore_ascii_case("NUMPAT") {
+            // Upstream commands.def declares PUBSUB NUMPAT with
+            // arity = 2 (exact), so extra args trigger the
+            // table-level WrongArity check rather than the
+            // subcommand-syntax-error fallthrough.
+            // (br-frankenredis-pubsubarity)
             if argv.len() != 2 {
-                // (br-frankenredis-pubsubary)
-                return RespFrame::Error(
-                    "ERR unknown subcommand or wrong number of arguments for 'NUMPAT'. Try PUBSUB HELP.".to_string(),
-                );
+                return CommandError::WrongSubcommandArity {
+                    command: "PUBSUB",
+                    subcommand: "NUMPAT".to_string(),
+                }
+                .to_resp();
             }
             return RespFrame::Integer(
                 self.server
@@ -12934,9 +12940,12 @@ mod tests {
             rt.execute_frame(command(&[b"PUBSUB", b"CHANNELS", b"a*", b"extra"]), 2),
             RespFrame::Error("ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.".to_string())
         );
+        // Upstream commands.def declares PUBSUB NUMPAT with arity =
+        // 2 (exact), so extra args trigger the table-level
+        // WrongArity wording. (br-frankenredis-pubsubarity)
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"NUMPAT", b"extra"]), 3),
-            RespFrame::Error("ERR unknown subcommand or wrong number of arguments for 'NUMPAT'. Try PUBSUB HELP.".to_string())
+            RespFrame::Error("ERR wrong number of arguments for 'pubsub|numpat' command".to_string())
         );
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"BOGUS"]), 4),

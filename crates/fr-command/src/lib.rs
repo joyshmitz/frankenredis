@@ -5146,6 +5146,23 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         idx += 2;
     }
 
+    // Upstream t_stream.c::xaddCommand validates the explicit
+    // stream-id BEFORE handling NOMKSTREAM / key existence — so an
+    // explicit '0-0' against a missing-NOMKSTREAM key still emits
+    // 'ERR The ID specified in XADD must be greater than 0-0'.
+    // (br-frankenredis-xaddorder)
+    if !eq_ascii_command(&argv[id_idx], b"*")
+        && parse_partial_auto_id(&argv[id_idx]).is_none()
+    {
+        if let Ok(id) = parse_stream_id(&argv[id_idx]) {
+            if id == (0, 0) {
+                return Ok(RespFrame::Error(
+                    "ERR The ID specified in XADD must be greater than 0-0".to_string(),
+                ));
+            }
+        }
+    }
+
     let (stream_exists, last_id) = if nomkstream {
         store.xlast_id_with_existence(&argv[1], now_ms)?
     } else {
