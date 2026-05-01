@@ -15159,6 +15159,9 @@ fn eval_cmd(
         }));
     }
     let script = &argv[1];
+    if let Some(msg) = script_shebang_invalid_error(script) {
+        return Ok(RespFrame::Error(msg.to_string()));
+    }
     let (_numkeys, keys, args) = parse_eval_args(argv)?;
     if store.script_nesting_level >= 1 {
         return Err(script_noscript_command_error());
@@ -15243,6 +15246,20 @@ fn script_shebang_has_no_writes_flag(script: &[u8]) -> bool {
         return script_shebang_line_has_no_writes(script);
     };
     script_shebang_line_has_no_writes(&script[..first_line_end])
+}
+
+/// Mirror upstream eval.c::evalExtractShebangFlags's invalid-shebang
+/// branch: if the script body starts with '#!' but the first line is
+/// not terminated by a newline, the shebang is malformed and EVAL
+/// must reject before parsing any flags. (br-frankenredis-shebang)
+fn script_shebang_invalid_error(script: &[u8]) -> Option<&'static str> {
+    if !script.starts_with(b"#!") {
+        return None;
+    }
+    if !script.contains(&b'\n') {
+        return Some("ERR Invalid script shebang");
+    }
+    None
 }
 
 fn script_shebang_line_has_no_writes(line: &[u8]) -> bool {
