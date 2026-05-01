@@ -1102,13 +1102,26 @@ impl AuthState {
                 user.denied_categories.insert(cat_lower.clone());
                 user.allowed_categories.remove(&cat_lower);
             } else if let Some(cmd) = rule_str.strip_prefix('+') {
-                // +command — allow this specific command.
+                // +command — allow this specific command. Upstream
+                // acl.c::ACLSetUser rejects unknown command names
+                // with 'Unknown command or category name in ACL'.
+                // (br-frankenredis-aclcmd)
                 let cmd_lower = cmd.to_ascii_lowercase();
+                if !fr_command::is_known_command(cmd_lower.as_bytes()) {
+                    return Err(format!(
+                        "ERR Error in ACL SETUSER modifier '{rule_str}': Unknown command or category name in ACL"
+                    ));
+                }
                 user.allowed_commands.insert(cmd_lower.clone());
                 user.denied_commands.remove(&cmd_lower);
             } else if let Some(cmd) = rule_str.strip_prefix('-') {
-                // -command — deny this specific command.
+                // -command — deny this specific command. (br-frankenredis-aclcmd)
                 let cmd_lower = cmd.to_ascii_lowercase();
+                if !fr_command::is_known_command(cmd_lower.as_bytes()) {
+                    return Err(format!(
+                        "ERR Error in ACL SETUSER modifier '{rule_str}': Unknown command or category name in ACL"
+                    ));
+                }
                 user.denied_commands.insert(cmd_lower.clone());
                 user.allowed_commands.remove(&cmd_lower);
             } else if let Some(pass) = rule_str.strip_prefix('>') {
@@ -1127,8 +1140,13 @@ impl AuthState {
                     user.passwords.push(hash_hex);
                     user.nopass = false;
                 } else {
+                    // Upstream acl.c::ACLStringSetUser emits the
+                    // verbose 'The password hash must be exactly 64
+                    // characters and contain only lowercase
+                    // hexadecimal characters' for malformed #-hash
+                    // tokens. (br-frankenredis-aclhash)
                     return Err(format!(
-                        "ERR Error in ACL SETUSER modifier '{}': Syntax error",
+                        "ERR Error in ACL SETUSER modifier '{}': The password hash must be exactly 64 characters and contain only lowercase hexadecimal characters",
                         rule_str
                     ));
                 }
@@ -1141,8 +1159,9 @@ impl AuthState {
                         return Err(acl_setuser_missing_password_error(rule_str));
                     }
                 } else {
+                    // (br-frankenredis-aclhash)
                     return Err(format!(
-                        "ERR Error in ACL SETUSER modifier '{}': Syntax error",
+                        "ERR Error in ACL SETUSER modifier '{}': The password hash must be exactly 64 characters and contain only lowercase hexadecimal characters",
                         rule_str
                     ));
                 }
