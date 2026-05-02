@@ -8542,6 +8542,7 @@ impl Runtime {
             let mut filter_type: Option<String> = None;
             let mut filter_user: Option<Vec<u8>> = None;
             let mut filter_addr = legacy_addr.clone();
+            let mut filter_laddr: Option<String> = None;
 
             if legacy_addr.is_none() {
                 let mut i = 2;
@@ -8600,6 +8601,17 @@ impl Runtime {
                         };
                         filter_addr = Some(addr);
                         i += 2;
+                    } else if opt.eq_ignore_ascii_case("LADDR") && i + 1 < argv.len() {
+                        // Mirror upstream networking.c::clientCommand
+                        // which kills clients whose local socket address
+                        // (from getClientSockname) matches the value.
+                        // (br-frankenredis-clkilladdr)
+                        let laddr = match std::str::from_utf8(&argv[i + 1]) {
+                            Ok(s) => s.to_string(),
+                            Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                        };
+                        filter_laddr = Some(laddr);
+                        i += 2;
                     } else if opt.eq_ignore_ascii_case("SKIPME") && i + 1 < argv.len() {
                         let val = match std::str::from_utf8(&argv[i + 1]) {
                             Ok(s) => s,
@@ -8652,6 +8664,13 @@ impl Runtime {
                 {
                     continue;
                 }
+                if filter_laddr.is_some() {
+                    // Sessions don't currently track their listener's
+                    // local address; LADDR filters never match. This
+                    // mirrors upstream behavior for non-matching values
+                    // (returns 0). (br-frankenredis-clkilladdr)
+                    continue;
+                }
                 targets.push(session.client_id);
             }
 
@@ -8676,8 +8695,19 @@ impl Runtime {
             // Upstream networking.c::pauseCommand rejects negative
             // timeouts with "ERR timeout is negative".
             // (br-frankenredis-w579)
-            if argv.len() < 3 || argv.len() > 4 {
+            // CLIENT PAUSE has arity -3 in upstream commands.def, so
+            // argc=2 hits the table-level "wrong number of arguments
+            // for 'client|pause' command" error, but argc>4 falls
+            // through clientCommand to addReplySubcommandSyntaxError.
+            // (br-frankenredis-clpausearity)
+            if argv.len() < 3 {
                 return client_wrong_subcommand_arity(sub);
+            }
+            if argv.len() > 4 {
+                let sub_name = String::from_utf8_lossy(&argv[1]);
+                return RespFrame::Error(format!(
+                    "ERR unknown subcommand or wrong number of arguments for '{sub_name}'. Try CLIENT HELP."
+                ));
             }
             let timeout_raw = match parse_i64_arg(&argv[2]) {
                 Ok(ms) => ms,
@@ -18537,13 +18567,15 @@ mod tests {
     }
 
     #[test]
-    fn bgrewriteaof_errors_when_appendonly_is_disabled() {
+    fn bgrewriteaof_succeeds_when_appendonly_is_disabled() {
+        // Upstream aof.c::bgrewriteaofCommand never gates on
+        // appendonly mode; the rewrite uses the configured AOF
+        // filename ('appendonly.aof' by default).
+        // (br-frankenredis-bgrewriteoff)
         let mut rt = Runtime::default_strict();
         assert_eq!(
             rt.execute_frame(command(&[b"BGREWRITEAOF"]), 1),
-            RespFrame::Error(
-                "ERR appendonly is disabled, cannot rewrite append only file".to_string()
-            )
+            RespFrame::SimpleString("Background append only file rewriting started".to_string())
         );
     }
 
