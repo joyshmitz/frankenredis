@@ -5100,11 +5100,12 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             };
             trim_minid = Some(min_id);
             idx += 1;
-        } else if eq_ascii_command(&argv[idx], b"LIMIT") {
+        } else if eq_ascii_command(&argv[idx], b"LIMIT") && idx + 1 < argv.len() {
+            // Upstream t_stream.c::streamParseAddOrTrimArgsOrReply
+            // only consumes LIMIT when a value follows; otherwise the
+            // token falls through and becomes the candidate stream ID,
+            // which fails ID parsing. (br-frankenredis-xaddlimit)
             idx += 1;
-            if idx >= argv.len() {
-                return Err(CommandError::SyntaxError);
-            }
             let n = parse_i64_arg(&argv[idx])?;
             if n < 0 {
                 return Ok(RespFrame::Error(
@@ -5144,6 +5145,28 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     }
     let id_idx = idx;
     idx += 1;
+
+    // Upstream t_stream.c::xaddCommand validates the explicit
+    // stream-id BEFORE checking field-value pair arity, so a token
+    // like 'LIMIT' that fell through option parsing emits
+    // 'Invalid stream ID specified...' rather than wrong-arity.
+    // (br-frankenredis-xaddidvalid)
+    if !eq_ascii_command(&argv[id_idx], b"*")
+        && parse_partial_auto_id(&argv[id_idx]).is_none()
+    {
+        match parse_stream_id(&argv[id_idx]) {
+            Ok(id) if id == (0, 0) => {
+                // Upstream xaddCommand also requires the ID to be
+                // strictly greater than 0-0. (br-frankenredis-xaddorder)
+                return Ok(RespFrame::Error(
+                    "ERR The ID specified in XADD must be greater than 0-0".to_string(),
+                ));
+            }
+            Ok(_) => {}
+            Err(reply) => return Ok(reply),
+        }
+    }
+
     // Must have at least one field-value pair after the ID
     if idx >= argv.len() || !(argv.len() - idx).is_multiple_of(2) {
         return Err(CommandError::WrongArity("XADD"));
@@ -5153,23 +5176,6 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     while idx + 1 < argv.len() {
         fields.push((argv[idx].clone(), argv[idx + 1].clone()));
         idx += 2;
-    }
-
-    // Upstream t_stream.c::xaddCommand validates the explicit
-    // stream-id BEFORE handling NOMKSTREAM / key existence — so an
-    // explicit '0-0' against a missing-NOMKSTREAM key still emits
-    // 'ERR The ID specified in XADD must be greater than 0-0'.
-    // (br-frankenredis-xaddorder)
-    if !eq_ascii_command(&argv[id_idx], b"*")
-        && parse_partial_auto_id(&argv[id_idx]).is_none()
-    {
-        if let Ok(id) = parse_stream_id(&argv[id_idx]) {
-            if id == (0, 0) {
-                return Ok(RespFrame::Error(
-                    "ERR The ID specified in XADD must be greater than 0-0".to_string(),
-                ));
-            }
-        }
     }
 
     let (stream_exists, last_id) = if nomkstream {
