@@ -2434,6 +2434,11 @@ impl Store {
                 }
                 let changed = old_len != v.len() || old_bit != value;
                 entry.touch_write(now_ms);
+                // Upstream bitops.c::setbitCommand calls
+                // dbUnshareStringValue which always converts the
+                // value to raw, regardless of length.
+                // (br-frankenredis-setbitenc)
+                entry.force_raw_encoding = true;
                 Ok((old_bit, changed))
             }
             _ => Err(StoreError::WrongType),
@@ -2451,10 +2456,11 @@ impl Store {
                 if value {
                     v[byte_idx] |= 1 << bit_idx;
                 }
-                self.internal_entries_insert(
-                    key.to_vec(),
-                    Entry::new(Value::String(v), None, now_ms),
-                );
+                let mut entry = Entry::new(Value::String(v), None, now_ms);
+                // (br-frankenredis-setbitenc) — newly-created keys
+                // also use raw encoding via dbAdd in upstream.
+                entry.force_raw_encoding = true;
+                self.internal_entries_insert(key.to_vec(), entry);
                 self.dirty = self.dirty.saturating_add(1);
                 Ok(old_bit)
             }
