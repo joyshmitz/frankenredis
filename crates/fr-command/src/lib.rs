@@ -6810,6 +6810,16 @@ fn xack_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     }
     let key = &argv[1];
     let group = &argv[2];
+    // Upstream t_stream.c::xackCommand looks up the key + group
+    // BEFORE validating IDs and short-circuits to 0 when either is
+    // missing. The IDs are only parsed once both exist, so an
+    // invalid ID against a missing key/group reports 0 rather than
+    // 'Invalid stream ID specified...'. (br-frankenredis-xackorder)
+    match store.xpending_summary(key, group, now_ms) {
+        Ok(None) => return Ok(RespFrame::Integer(0)),
+        Ok(Some(_)) => {}
+        Err(e) => return Err(CommandError::Store(e)),
+    }
     let mut ids = Vec::with_capacity(argv.len() - 3);
     for arg in &argv[3..] {
         let id = match parse_stream_id(arg) {
