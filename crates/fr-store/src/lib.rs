@@ -8775,10 +8775,12 @@ impl Store {
         if len == 0 {
             self.entries.remove(dest);
         } else {
-            self.internal_entries_insert(
-                dest.to_vec(),
-                Entry::new(Value::String(result), None, now_ms),
-            );
+            // Upstream creates the destination via dbAdd which uses
+            // raw encoding regardless of length.
+            // (br-frankenredis-bitopenc)
+            let mut entry = Entry::new(Value::String(result), None, now_ms);
+            entry.force_raw_encoding = true;
+            self.internal_entries_insert(dest.to_vec(), entry);
         }
         self.dirty = self.dirty.saturating_add(1);
         Ok(len)
