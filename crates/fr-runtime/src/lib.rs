@@ -353,6 +353,16 @@ const CONFIG_STATIC_PARAMS: &[(&str, &str)] = &[
     ("aof-load-truncated", "yes"),
     ("aof-use-rdb-preamble", "yes"),
     ("aof-timestamp-enabled", "no"),
+    ("aof-rewrite-incremental-fsync", "yes"),
+    ("rdb-save-incremental-fsync", "yes"),
+    // Boolean settings (createBoolConfig in upstream config.c)
+    // (br-frankenredis-cfgmemvalue)
+    ("activerehashing", "yes"),
+    ("cluster-require-full-coverage", "yes"),
+    ("cluster-replica-no-failover", "no"),
+    ("disable-thp", "yes"),
+    ("dynamic-hz", "yes"),
+    ("replica-announced", "yes"),
     // Replication
     ("replicaof", ""),
     ("masterauth", ""),
@@ -7666,9 +7676,9 @@ impl Runtime {
                     Ok(s) if s.eq_ignore_ascii_case("yes") => true,
                     Ok(s) if s.eq_ignore_ascii_case("no") => false,
                     _ => {
-                        return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'stop-writes-on-bgsave-error'"
-                                .to_string(),
+                        return config_set_failed(
+                            "stop-writes-on-bgsave-error",
+                            "argument must be 'yes' or 'no'",
                         );
                     }
                 };
@@ -7688,9 +7698,9 @@ impl Runtime {
                     Ok(s) if s.eq_ignore_ascii_case("yes") => true,
                     Ok(s) if s.eq_ignore_ascii_case("no") => false,
                     _ => {
-                        return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'cluster-allow-reads-when-down'"
-                                .to_string(),
+                        return config_set_failed(
+                            "cluster-allow-reads-when-down",
+                            "argument must be 'yes' or 'no'",
                         );
                     }
                 };
@@ -7971,6 +7981,7 @@ impl Runtime {
                 || parameter.eq_ignore_ascii_case("cluster-enabled")
                 || parameter.eq_ignore_ascii_case("databases")
                 || parameter.eq_ignore_ascii_case("daemonize")
+                || parameter.eq_ignore_ascii_case("disable-thp")
                 || parameter.eq_ignore_ascii_case("enable-protected-configs")
                 || parameter.eq_ignore_ascii_case("enable-debug-command")
                 || parameter.eq_ignore_ascii_case("enable-module-command")
@@ -8215,6 +8226,49 @@ impl Runtime {
                 // need basic shape validation when the upstream
                 // config.c::performInterfaceSet declares the type.
                 let value_bytes = &pair[1];
+                // Boolean configs declared via createBoolConfig in
+                // upstream config.c must accept only yes/no.
+                // (br-frankenredis-cfgmemvalue)
+                if matches!(
+                    canonical,
+                    "activerehashing"
+                        | "aof-load-truncated"
+                        | "aof-rewrite-incremental-fsync"
+                        | "aof-timestamp-enabled"
+                        | "aof-use-rdb-preamble"
+                        | "cluster-replica-no-failover"
+                        | "cluster-require-full-coverage"
+                        | "dynamic-hz"
+                        | "lazyfree-lazy-eviction"
+                        | "lazyfree-lazy-expire"
+                        | "lazyfree-lazy-server-del"
+                        | "lazyfree-lazy-user-del"
+                        | "lazyfree-lazy-user-flush"
+                        | "list-compress-depth"
+                        | "no-appendfsync-on-rewrite"
+                        | "protected-mode"
+                        | "rdb-del-sync-files"
+                        | "rdb-save-incremental-fsync"
+                        | "rdbcompression"
+                        | "repl-disable-tcp-nodelay"
+                        | "repl-diskless-sync"
+                        | "replica-announced"
+                        | "replica-lazy-flush"
+                        | "replica-read-only"
+                        | "replica-serve-stale-data"
+                        | "tracking-bcast-on"
+                        | "use-exit-on-panic"
+                ) {
+                    match std::str::from_utf8(value_bytes) {
+                        Ok(s) if s.eq_ignore_ascii_case("yes") || s.eq_ignore_ascii_case("no") => {}
+                        _ => {
+                            return config_set_failed(
+                                canonical,
+                                "argument must be 'yes' or 'no'",
+                            );
+                        }
+                    }
+                }
                 if matches!(
                     canonical,
                     "tcp-keepalive"
