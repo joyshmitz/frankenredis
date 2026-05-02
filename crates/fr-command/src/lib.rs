@@ -5438,8 +5438,14 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
 
     if is_maxlen {
         let max_len_raw = parse_i64_arg(&argv[threshold_idx])?;
+        // Upstream streamParseAddOrTrimArgsOrReply emits the
+        // bespoke 'The MAXLEN argument must be >= 0.' wording for
+        // negative MAXLEN, not the generic integer-out-of-range.
+        // (br-frankenredis-xtrimmaxlenneg)
         if max_len_raw < 0 {
-            return Err(CommandError::InvalidInteger);
+            return Ok(RespFrame::Error(
+                "ERR The MAXLEN argument must be >= 0.".to_string(),
+            ));
         }
         let max_len = usize::try_from(max_len_raw).unwrap_or(usize::MAX);
         if approx_noop {
@@ -6722,17 +6728,18 @@ fn xrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
             return Err(CommandError::SyntaxError);
         }
         let parsed = parse_i64_arg(&argv[5])?;
-        if parsed < 0 {
-            return Err(CommandError::InvalidInteger);
+        // Upstream parses COUNT via getLongFromObjectOrReply with no
+        // sign check, then walks the radix tree decrementing count
+        // for each emitted entry; a negative count never enters the
+        // emit path so the reply is an empty array.
+        // (br-frankenredis-xrangenegcount)
+        if parsed <= 0 {
+            return Ok(RespFrame::Array(Some(Vec::new())));
         }
         Some(usize::try_from(parsed).unwrap_or(usize::MAX))
     } else {
         None
     };
-
-    if matches!(count, Some(0)) {
-        return Ok(RespFrame::Array(None));
-    }
 
     let records = store.xrange(&argv[1], start, end, count, now_ms)?;
     let mut out = Vec::with_capacity(records.len());
@@ -6774,17 +6781,14 @@ fn xrevrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             return Err(CommandError::SyntaxError);
         }
         let parsed = parse_i64_arg(&argv[5])?;
-        if parsed < 0 {
-            return Err(CommandError::InvalidInteger);
+        // (br-frankenredis-xrangenegcount) — see xrange.
+        if parsed <= 0 {
+            return Ok(RespFrame::Array(Some(Vec::new())));
         }
         Some(usize::try_from(parsed).unwrap_or(usize::MAX))
     } else {
         None
     };
-
-    if matches!(count, Some(0)) {
-        return Ok(RespFrame::Array(None));
-    }
 
     let records = store.xrevrange(&argv[1], end, start, count, now_ms)?;
     let mut out = Vec::with_capacity(records.len());
@@ -22544,7 +22548,10 @@ mod tests {
             0,
         )
         .expect("xrange count zero");
-        assert_eq!(count_zero, RespFrame::Array(None));
+        // Upstream returns an empty array (not nil) for COUNT <= 0
+        // because the radix-tree walk simply never enters the emit
+        // path. (br-frankenredis-xrangenegcount)
+        assert_eq!(count_zero, RespFrame::Array(Some(Vec::new())));
     }
 
     #[test]
@@ -22746,7 +22753,9 @@ mod tests {
             0,
         )
         .expect("xrevrange count zero");
-        assert_eq!(count_zero, RespFrame::Array(None));
+        // (br-frankenredis-xrangenegcount) — upstream returns empty
+        // array for COUNT <= 0.
+        assert_eq!(count_zero, RespFrame::Array(Some(Vec::new())));
 
         store.set(b"k".to_vec(), b"v".to_vec(), None, 0);
         let wrongtype = dispatch_argv(
@@ -23345,7 +23354,7 @@ mod tests {
         .expect("xtrim approx missing key");
         assert_eq!(approx, RespFrame::Integer(0));
 
-        let invalid_integer = dispatch_argv(
+        let neg_maxlen = dispatch_argv(
             &[
                 b"XTRIM".to_vec(),
                 b"stream".to_vec(),
@@ -23355,8 +23364,13 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("xtrim invalid integer");
-        assert!(matches!(invalid_integer, CommandError::InvalidInteger));
+        .expect("xtrim negative maxlen");
+        // Upstream emits the bespoke 'The MAXLEN argument must be >= 0.'
+        // wording. (br-frankenredis-xtrimmaxlenneg)
+        assert_eq!(
+            neg_maxlen,
+            RespFrame::Error("ERR The MAXLEN argument must be >= 0.".to_string())
+        );
 
         let arity = dispatch_argv(
             &[b"XTRIM".to_vec(), b"stream".to_vec(), b"MAXLEN".to_vec()],
