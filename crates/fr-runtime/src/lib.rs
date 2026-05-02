@@ -7773,34 +7773,72 @@ impl Runtime {
                 continue;
             }
             if parameter.eq_ignore_ascii_case("client-query-buffer-limit") {
-                // (br-frankenredis-ky4n follow-up)
+                // Upstream config.c marks this as MEMORY_CONFIG with
+                // a 1MB lower bound. (br-frankenredis-cfgmemvalue)
                 let parsed = match parse_memory_size_arg(&pair[1]) {
                     Ok(value) => value as usize,
                     Err(()) => {
-                        return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'client-query-buffer-limit'"
-                                .to_string(),
+                        return config_set_failed(
+                            "client-query-buffer-limit",
+                            "argument must be a memory value",
                         );
                     }
                 };
+                if parsed < 1024 * 1024 {
+                    return config_set_failed(
+                        "client-query-buffer-limit",
+                        "argument must be between 1048576 and 9223372036854775807 inclusive",
+                    );
+                }
                 next_query_buffer_limit = Some(parsed);
                 static_override_updates
                     .push(("client-query-buffer-limit".to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("proto-max-bulk-len") {
-                // (br-frankenredis-ky4n follow-up)
+                // Upstream config.c marks this as MEMORY_CONFIG with
+                // a 1MB lower bound. (br-frankenredis-cfgmemvalue)
                 let parsed = match parse_memory_size_arg(&pair[1]) {
                     Ok(value) => value as usize,
                     Err(()) => {
-                        return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'proto-max-bulk-len'".to_string(),
+                        return config_set_failed(
+                            "proto-max-bulk-len",
+                            "argument must be a memory value",
                         );
                     }
                 };
+                if parsed < 1024 * 1024 {
+                    return config_set_failed(
+                        "proto-max-bulk-len",
+                        "argument must be between 1048576 and 9223372036854775807 inclusive",
+                    );
+                }
                 next_proto_max_bulk_len = Some(parsed);
                 static_override_updates
                     .push(("proto-max-bulk-len".to_string(), parsed.to_string()));
+                continue;
+            }
+            // Additional MEMORY_CONFIG params from upstream config.c.
+            // (br-frankenredis-cfgmemvalue)
+            if parameter.eq_ignore_ascii_case("stream-node-max-bytes")
+                || parameter.eq_ignore_ascii_case("hll-sparse-max-bytes")
+                || parameter.eq_ignore_ascii_case("active-defrag-ignore-bytes")
+            {
+                let canonical: &'static str =
+                    if parameter.eq_ignore_ascii_case("stream-node-max-bytes") {
+                        "stream-node-max-bytes"
+                    } else if parameter.eq_ignore_ascii_case("hll-sparse-max-bytes") {
+                        "hll-sparse-max-bytes"
+                    } else {
+                        "active-defrag-ignore-bytes"
+                    };
+                let parsed = match parse_memory_size_arg(&pair[1]) {
+                    Ok(value) => value as usize,
+                    Err(()) => {
+                        return config_set_failed(canonical, "argument must be a memory value");
+                    }
+                };
+                static_override_updates.push((canonical.to_string(), parsed.to_string()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("client-output-buffer-limit") {
@@ -18064,22 +18102,20 @@ mod tests {
     }
 
     #[test]
-    fn config_set_proto_max_bulk_len_updates_live_parser_limit() {
+    fn config_set_proto_max_bulk_len_rejects_below_one_mib() {
+        // Upstream config.c declares proto-max-bulk-len with a 1MB
+        // lower bound, so values below 1048576 are rejected with
+        // the table-level range error. (br-frankenredis-cfgmemvalue)
         let mut rt = Runtime::default_strict();
-
         assert_eq!(
             rt.execute_frame(
                 command(&[b"CONFIG", b"SET", b"proto-max-bulk-len", b"1"]),
                 0
             ),
-            RespFrame::SimpleString("OK".to_string())
-        );
-
-        let encoded = rt.execute_bytes(b"$2\r\nhi\r\n", 1);
-        let parsed = parse_frame(&encoded).expect("parse runtime error reply");
-        assert_eq!(
-            parsed.frame,
-            RespFrame::Error("ERR Protocol error: bulk length exceeds limit".to_string())
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'proto-max-bulk-len') - argument must be between 1048576 and 9223372036854775807 inclusive"
+                    .to_string()
+            )
         );
     }
 
