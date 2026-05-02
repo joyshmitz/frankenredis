@@ -4343,8 +4343,10 @@ fn parse_geo_search_flags(
                 return Err(CommandError::SyntaxError);
             }
             let n = parse_i64_arg(&argv[i])?;
+            // Upstream geo.c::geoSearchGeneric uses the literal
+            // wording 'COUNT must be > 0'. (br-frankenredis-geocount)
             if n <= 0 {
-                return Err(CommandError::SyntaxError);
+                return Err(CommandError::Custom("ERR COUNT must be > 0".to_string()));
             }
             count = Some(usize::try_from(n).map_err(|_| CommandError::InvalidInteger)?);
         } else if eq_ascii_command(&argv[i], b"ANY") {
@@ -4368,7 +4370,11 @@ fn parse_geo_search_flags(
         } else if let Some(m) = geo_unit_to_meters(&argv[i]) {
             to_meter = m;
         } else {
-            // unknown flag, ignore for forward compatibility
+            // Mirror upstream geo.c::geoSearchGeneric which falls
+            // through to addReplyErrorObject(c, shared.syntaxerr) for
+            // any unrecognised token in the trailing-flags loop.
+            // (br-frankenredis-geounknown)
+            return Err(CommandError::SyntaxError);
         }
         i += 1;
     }
@@ -4540,7 +4546,10 @@ fn georadiusbymember(
 fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     // GEOSEARCH key FROMMEMBER member | FROMLONLAT lon lat BYRADIUS radius m|km|ft|mi | BYBOX width height m|km|ft|mi
     //   [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]
-    if argv.len() < 4 {
+    // Upstream commands.def declares GEOSEARCH with arity -7
+    // (minimum: GEOSEARCH key FROM... BY... + radius/box args).
+    // (br-frankenredis-geosearcharity)
+    if argv.len() < 7 {
         return Err(CommandError::WrongArity("GEOSEARCH"));
     }
     let mut i = 2;
