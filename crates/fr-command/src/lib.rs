@@ -4712,7 +4712,12 @@ fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
                 center_lon = Some(lon);
                 center_lat = Some(lat);
             }
-            if center_lon.is_none() {
+            // Upstream geo.c::geoSearchGeneric only emits 'could not
+            // decode requested zset member' when the source key
+            // exists but the member does not. A missing source key
+            // proceeds with frommember set, then returns an empty
+            // result. (br-frankenredis-geofromnonexistent)
+            if center_lon.is_none() && store.exists(&argv[1], now_ms) {
                 return Ok(RespFrame::Error(
                     "ERR could not decode requested zset member".to_string(),
                 ));
@@ -4811,13 +4816,15 @@ fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     if !has_center || !has_shape {
         return Err(CommandError::WrongArity("GEOSEARCH"));
     }
-    let (Some(cx), Some(cy)) = (center_lon, center_lat) else {
-        return Err(CommandError::WrongArity("GEOSEARCH"));
-    };
-
-    // Parse remaining flags
+    // Parse remaining flags (must run even when the source key is
+    // missing so that syntax errors in the trailing options still
+    // surface). (br-frankenredis-geofromnonexistent)
     let (withcoord, withdist, withhash, count, _any, asc, _) =
         parse_geo_search_flags(argv, i, unit_mult)?;
+    let (Some(cx), Some(cy)) = (center_lon, center_lat) else {
+        // Missing source key with FROMMEMBER — return empty set.
+        return Ok(RespFrame::Array(Some(Vec::new())));
+    };
 
     if let Some(rm) = radius_m {
         let results = geo_search_core(store, &argv[1], cx, cy, rm, count, asc, now_ms)?;
