@@ -418,6 +418,7 @@ const KEY_FLAGS_OW_UPDATE: &[&str] = &["OW", "update"];
 const KEY_FLAGS_OW_INSERT: &[&str] = &["OW", "insert"];
 const KEY_FLAGS_RM_DELETE: &[&str] = &["RM", "delete"];
 const KEY_FLAGS_RW_ACCESS_DELETE: &[&str] = &["RW", "access", "delete"];
+const KEY_FLAGS_RW_INSERT: &[&str] = &["RW", "insert"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CommandKeyReference {
@@ -434,7 +435,8 @@ enum CommandKeyLookupError {
 }
 
 fn command_uses_custom_key_specs(cmd_name: &str) -> bool {
-    cmd_name.eq_ignore_ascii_case("EVAL")
+    cmd_name.eq_ignore_ascii_case("APPEND")
+        || cmd_name.eq_ignore_ascii_case("EVAL")
         || cmd_name.eq_ignore_ascii_case("EVALSHA")
         || cmd_name.eq_ignore_ascii_case("EVAL_RO")
         || cmd_name.eq_ignore_ascii_case("EVALSHA_RO")
@@ -627,6 +629,113 @@ fn command_key_references_with_exact_flags(
             CommandKeyReference {
                 index: 2,
                 flags: KEY_FLAGS_OW_UPDATE,
+            },
+        ]));
+    }
+
+    // APPEND: upstream commands/append.json key_specs flags = ['RW', 'INSERT'].
+    // (br-frankenredis-keyflagsupd)
+    if cmd_name.eq_ignore_ascii_case("APPEND") && argv.len() >= 2 {
+        return Ok(Some(vec![CommandKeyReference {
+            index: 1,
+            flags: KEY_FLAGS_RW_INSERT,
+        }]));
+    }
+
+    // SORT: source key is RO/access, optional STORE dst is OW/update.
+    // (br-frankenredis-keyflagsupd)
+    if cmd_name.eq_ignore_ascii_case("SORT") || cmd_name.eq_ignore_ascii_case("SORT_RO") {
+        if argv.len() < 2 {
+            return Ok(None);
+        }
+        let mut refs = vec![CommandKeyReference {
+            index: 1,
+            flags: KEY_FLAGS_RO_ACCESS,
+        }];
+        if cmd_name.eq_ignore_ascii_case("SORT") {
+            let mut i = 2;
+            while i < argv.len() {
+                if argv[i].eq_ignore_ascii_case(b"STORE") && i + 1 < argv.len() {
+                    refs.push(CommandKeyReference {
+                        index: i + 1,
+                        flags: KEY_FLAGS_OW_UPDATE,
+                    });
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        return Ok(Some(refs));
+    }
+
+    // BITOP: dst is OW/update, source keys are RO/access.
+    // (br-frankenredis-keyflagsupd)
+    if cmd_name.eq_ignore_ascii_case("BITOP") && argv.len() >= 4 {
+        let mut refs = vec![CommandKeyReference {
+            index: 2,
+            flags: KEY_FLAGS_OW_UPDATE,
+        }];
+        for i in 3..argv.len() {
+            refs.push(CommandKeyReference {
+                index: i,
+                flags: KEY_FLAGS_RO_ACCESS,
+            });
+        }
+        return Ok(Some(refs));
+    }
+
+    // LMPOP / ZMPOP / BLMPOP / BZMPOP: source keys are RW/access/delete
+    // (popping may empty the key). (br-frankenredis-keyflagsupd)
+    if cmd_name.eq_ignore_ascii_case("LMPOP")
+        || cmd_name.eq_ignore_ascii_case("ZMPOP")
+        || cmd_name.eq_ignore_ascii_case("BLMPOP")
+        || cmd_name.eq_ignore_ascii_case("BZMPOP")
+    {
+        let timeout_offset = usize::from(
+            cmd_name.eq_ignore_ascii_case("BLMPOP") || cmd_name.eq_ignore_ascii_case("BZMPOP"),
+        );
+        let numkeys_idx = 1 + timeout_offset;
+        if argv.len() <= numkeys_idx {
+            return Ok(None);
+        }
+        let Ok(numkeys_str) = std::str::from_utf8(&argv[numkeys_idx]) else {
+            return Ok(None);
+        };
+        let Ok(numkeys) = numkeys_str.parse::<usize>() else {
+            return Ok(None);
+        };
+        if numkeys == 0 || argv.len() < numkeys_idx + 1 + numkeys {
+            return Ok(None);
+        }
+        return Ok(Some(
+            (0..numkeys)
+                .map(|offset| CommandKeyReference {
+                    index: numkeys_idx + 1 + offset,
+                    flags: KEY_FLAGS_RW_ACCESS_DELETE,
+                })
+                .collect(),
+        ));
+    }
+
+    // LMOVE / BLMOVE / RPOPLPUSH / BRPOPLPUSH: src is RW/access/delete,
+    // dst is RW/insert. (br-frankenredis-keyflagsupd)
+    if cmd_name.eq_ignore_ascii_case("LMOVE")
+        || cmd_name.eq_ignore_ascii_case("BLMOVE")
+        || cmd_name.eq_ignore_ascii_case("RPOPLPUSH")
+        || cmd_name.eq_ignore_ascii_case("BRPOPLPUSH")
+    {
+        if argv.len() < 3 {
+            return Ok(None);
+        }
+        return Ok(Some(vec![
+            CommandKeyReference {
+                index: 1,
+                flags: KEY_FLAGS_RW_ACCESS_DELETE,
+            },
+            CommandKeyReference {
+                index: 2,
+                flags: KEY_FLAGS_RW_INSERT,
             },
         ]));
     }
