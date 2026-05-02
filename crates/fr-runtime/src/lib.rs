@@ -9113,16 +9113,19 @@ impl Runtime {
     }
 
     fn handle_bgrewriteaof_requested(&mut self, now_ms: u64) -> RespFrame {
-        let Some(path) = &self.server.aof_path else {
-            self.server.aof_rewrite_scheduled = false;
-            return RespFrame::Error(
-                "ERR appendonly is disabled, cannot rewrite append only file".to_string(),
-            );
-        };
-        // Rewrite the AOF file with a snapshot of the current store state.
+        // Upstream aof.c::bgrewriteaofCommand always succeeds — it
+        // doesn't gate on appendonly mode. The rewrite uses
+        // server.aof_filename ('appendonly.aof' by default) even
+        // when AOF persistence isn't currently active.
+        // (br-frankenredis-bgrewriteoff)
+        let path = self
+            .server
+            .aof_path
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("appendonly.aof"));
         let commands = self.server.store.to_aof_commands(now_ms);
         let records = argv_to_aof_records(commands);
-        if let Err(_e) = write_aof_file(path, &records) {
+        if let Err(_e) = write_aof_file(&path, &records) {
             self.server.aof_rewrite_scheduled = false;
             self.server.store.record_aof_bgrewrite_status(false);
             return RespFrame::Error("ERR error rewriting AOF file".to_string());
@@ -9785,70 +9788,90 @@ impl Runtime {
         let is_persistence = section_requested("persistence");
         let is_replication = section_requested("replication");
         let is_keyspace = section_requested("keyspace");
-        let is_latencystats = section_requested("latencystats");
+        // Upstream INFO emits Latencystats only when explicitly
+        // requested or as part of `all`/`everything`. The bare
+        // `INFO`/`default` form skips it. (br-frankenredis-infoorder)
+        let is_explicit_all = sections.iter().any(|section| {
+            section.eq_ignore_ascii_case("all") || section.eq_ignore_ascii_case("everything")
+        });
+        let is_latencystats = is_explicit_all
+            || sections
+                .iter()
+                .any(|section| section.eq_ignore_ascii_case("latencystats"));
 
         let mut info = Vec::new();
+
+        // Upstream INFO emits sections in this fixed order:
+        //   Server, Clients, Memory, Persistence, Stats, Replication,
+        //   CPU, Commandstats, Latencystats, Errorstats, Cluster, Keyspace.
+        // fr-command owns the {server, clients, memory, stats, cpu,
+        // modules, errorstats, cluster} subset; fr-runtime owns the
+        // {persistence, replication, latencystats, keyspace} subset.
+        // To match the upstream interleave we delegate to fr-command
+        // in pieces, slotting the runtime sections in between.
+        // (br-frankenredis-infoorder)
+
+        let dispatch_command_section = |this: &mut Self, name: &str, info: &mut Vec<u8>| -> Result<(), CommandError> {
+            let argv: Vec<Vec<u8>> = vec![b"INFO".to_vec(), name.as_bytes().to_vec()];
+            let namespaced = this.namespace_argv_for_selected_db(&argv);
+            let mut reply = this.dispatch_with_client_context(&namespaced, now_ms)?;
+            this.strip_db_prefixes_from_frame(&mut reply);
+            if let RespFrame::BulkString(Some(bytes)) = reply {
+                info.extend_from_slice(&bytes);
+            }
+            Ok(())
+        };
+
+        let want = |name: &str| {
+            is_all
+                || sections
+                    .iter()
+                    .any(|section| section.eq_ignore_ascii_case(name))
+        };
+
+        if want("server") {
+            dispatch_command_section(self, "server", &mut info)?;
+        }
+        if want("clients") {
+            dispatch_command_section(self, "clients", &mut info)?;
+        }
+        if want("memory") {
+            dispatch_command_section(self, "memory", &mut info)?;
+        }
         if is_persistence
             && let RespFrame::BulkString(Some(bytes)) = self.handle_info_persistence_section()
         {
             info.extend_from_slice(&bytes);
+        }
+        if want("stats") {
+            dispatch_command_section(self, "stats", &mut info)?;
         }
         if is_replication
             && let RespFrame::BulkString(Some(bytes)) = self.handle_info_replication_section()
         {
             info.extend_from_slice(&bytes);
         }
-        if is_keyspace
-            && let RespFrame::BulkString(Some(bytes)) = self.handle_info_keyspace_section(now_ms)
-        {
-            info.extend_from_slice(&bytes);
+        if want("cpu") {
+            dispatch_command_section(self, "cpu", &mut info)?;
+        }
+        if want("modules") {
+            dispatch_command_section(self, "modules", &mut info)?;
+        }
+        if want("errorstats") {
+            dispatch_command_section(self, "errorstats", &mut info)?;
         }
         if is_latencystats
             && let RespFrame::BulkString(Some(bytes)) = self.handle_info_latencystats_section()
         {
             info.extend_from_slice(&bytes);
         }
-
-        const COMMAND_INFO_SECTIONS: &[&str] = &[
-            "server",
-            "clients",
-            "memory",
-            "stats",
-            "cpu",
-            "modules",
-            "errorstats",
-            "cluster",
-        ];
-
-        let mut delegated = vec![b"INFO".to_vec()];
-        if is_all {
-            delegated.extend(
-                COMMAND_INFO_SECTIONS
-                    .iter()
-                    .map(|section| section.as_bytes().to_vec()),
-            );
-        } else {
-            for section in &sections {
-                if COMMAND_INFO_SECTIONS
-                    .iter()
-                    .any(|known| section.eq_ignore_ascii_case(known))
-                    && !delegated
-                        .iter()
-                        .skip(1)
-                        .any(|arg| eq_ascii_token(arg, section.as_bytes()))
-                {
-                    delegated.push(section.as_bytes().to_vec());
-                }
-            }
+        if want("cluster") {
+            dispatch_command_section(self, "cluster", &mut info)?;
         }
-
-        if delegated.len() > 1 {
-            let namespaced = self.namespace_argv_for_selected_db(&delegated);
-            let mut reply = self.dispatch_with_client_context(&namespaced, now_ms)?;
-            self.strip_db_prefixes_from_frame(&mut reply);
-            if let RespFrame::BulkString(Some(bytes)) = reply {
-                info.extend_from_slice(&bytes);
-            }
+        if is_keyspace
+            && let RespFrame::BulkString(Some(bytes)) = self.handle_info_keyspace_section(now_ms)
+        {
+            info.extend_from_slice(&bytes);
         }
 
         if info.is_empty() {

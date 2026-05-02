@@ -7612,6 +7612,15 @@ fn zrangestore_cmd(
         return Err(CommandError::SyntaxError);
     }
 
+    // Mirror upstream t_zset.c::zrangeGenericCommand which rejects LIMIT
+    // unless paired with BYSCORE or BYLEX.
+    if limit_offset.is_some() && !byscore && !bylex {
+        return Ok(RespFrame::Error(
+            "ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX"
+                .to_string(),
+        ));
+    }
+
     let pairs: Vec<(Vec<u8>, f64)> = if byscore {
         let min = parse_score_bound(&argv[3])?;
         let max = parse_score_bound(&argv[4])?;
@@ -10297,6 +10306,10 @@ fn lmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                 return Ok(bad_count());
             }
             count = usize::try_from(val).map_err(|_| CommandError::InvalidInteger)?;
+            idx += 1;
+            if idx < argv.len() {
+                return Err(CommandError::SyntaxError);
+            }
         } else {
             return Err(CommandError::SyntaxError);
         }
@@ -10376,6 +10389,10 @@ fn zmpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                 return Ok(bad_count());
             }
             count = usize::try_from(val).map_err(|_| CommandError::InvalidInteger)?;
+            idx += 1;
+            if idx < argv.len() {
+                return Err(CommandError::SyntaxError);
+            }
         } else {
             return Err(CommandError::SyntaxError);
         }
