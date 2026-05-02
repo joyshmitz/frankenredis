@@ -16317,10 +16317,31 @@ fn bitfield_ro_cmd(
                 .map_err(CommandError::Store)?;
             results.push(RespFrame::Integer(val));
             i += 3;
-        } else {
+        } else if sub.eq_ignore_ascii_case("OVERFLOW") {
+            // Upstream bitops.c::bitfieldGeneric processes OVERFLOW
+            // for both BITFIELD and BITFIELD_RO (it's a per-operation
+            // modifier; ineffective when no SET/INCRBY follows).
+            // (br-frankenredis-bitfieldroovrflw)
+            if i + 1 >= argv.len() {
+                return Ok(RespFrame::Error("ERR syntax error".to_string()));
+            }
+            let owtype =
+                std::str::from_utf8(&argv[i + 1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+            if !owtype.eq_ignore_ascii_case("WRAP")
+                && !owtype.eq_ignore_ascii_case("SAT")
+                && !owtype.eq_ignore_ascii_case("FAIL")
+            {
+                return Ok(RespFrame::Error(
+                    "ERR Invalid OVERFLOW type specified".to_string(),
+                ));
+            }
+            i += 2;
+        } else if sub.eq_ignore_ascii_case("SET") || sub.eq_ignore_ascii_case("INCRBY") {
             return Ok(RespFrame::Error(
                 "ERR BITFIELD_RO only supports the GET subcommand".to_string(),
             ));
+        } else {
+            return Ok(RespFrame::Error("ERR syntax error".to_string()));
         }
     }
     Ok(RespFrame::Array(Some(results)))
