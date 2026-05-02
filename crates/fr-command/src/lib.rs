@@ -419,6 +419,7 @@ const KEY_FLAGS_OW_INSERT: &[&str] = &["OW", "insert"];
 const KEY_FLAGS_RM_DELETE: &[&str] = &["RM", "delete"];
 const KEY_FLAGS_RW_ACCESS_DELETE: &[&str] = &["RW", "access", "delete"];
 const KEY_FLAGS_RW_INSERT: &[&str] = &["RW", "insert"];
+const KEY_FLAGS_RW_DELETE: &[&str] = &["RW", "delete"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CommandKeyReference {
@@ -436,6 +437,22 @@ enum CommandKeyLookupError {
 
 fn command_uses_custom_key_specs(cmd_name: &str) -> bool {
     cmd_name.eq_ignore_ascii_case("APPEND")
+        || cmd_name.eq_ignore_ascii_case("BLPOP")
+        || cmd_name.eq_ignore_ascii_case("BRPOP")
+        || cmd_name.eq_ignore_ascii_case("BZPOPMIN")
+        || cmd_name.eq_ignore_ascii_case("BZPOPMAX")
+        || cmd_name.eq_ignore_ascii_case("HDEL")
+        || cmd_name.eq_ignore_ascii_case("LPOP")
+        || cmd_name.eq_ignore_ascii_case("LREM")
+        || cmd_name.eq_ignore_ascii_case("RPOP")
+        || cmd_name.eq_ignore_ascii_case("SPOP")
+        || cmd_name.eq_ignore_ascii_case("SREM")
+        || cmd_name.eq_ignore_ascii_case("ZPOPMAX")
+        || cmd_name.eq_ignore_ascii_case("ZPOPMIN")
+        || cmd_name.eq_ignore_ascii_case("ZREM")
+        || cmd_name.eq_ignore_ascii_case("ZREMRANGEBYRANK")
+        || cmd_name.eq_ignore_ascii_case("ZREMRANGEBYSCORE")
+        || cmd_name.eq_ignore_ascii_case("ZREMRANGEBYLEX")
         || cmd_name.eq_ignore_ascii_case("EVAL")
         || cmd_name.eq_ignore_ascii_case("EVALSHA")
         || cmd_name.eq_ignore_ascii_case("EVAL_RO")
@@ -738,6 +755,61 @@ fn command_key_references_with_exact_flags(
                 flags: KEY_FLAGS_RW_INSERT,
             },
         ]));
+    }
+
+    // Element-pop ops (LPOP, RPOP, SPOP, ZPOPMIN, ZPOPMAX, blocking
+    // variants): RW/access/delete. (br-frankenredis-keyflagsupd2)
+    if cmd_name.eq_ignore_ascii_case("LPOP")
+        || cmd_name.eq_ignore_ascii_case("RPOP")
+        || cmd_name.eq_ignore_ascii_case("SPOP")
+        || cmd_name.eq_ignore_ascii_case("ZPOPMIN")
+        || cmd_name.eq_ignore_ascii_case("ZPOPMAX")
+    {
+        if argv.len() < 2 {
+            return Ok(None);
+        }
+        return Ok(Some(vec![CommandKeyReference {
+            index: 1,
+            flags: KEY_FLAGS_RW_ACCESS_DELETE,
+        }]));
+    }
+    // Blocking pop ops with timeout — keys are at indexes 1..argc-1.
+    // (br-frankenredis-keyflagsupd2)
+    if cmd_name.eq_ignore_ascii_case("BLPOP")
+        || cmd_name.eq_ignore_ascii_case("BRPOP")
+        || cmd_name.eq_ignore_ascii_case("BZPOPMIN")
+        || cmd_name.eq_ignore_ascii_case("BZPOPMAX")
+    {
+        if argv.len() < 3 {
+            return Ok(None);
+        }
+        let last = argv.len() - 1;
+        return Ok(Some(
+            (1..last)
+                .map(|index| CommandKeyReference {
+                    index,
+                    flags: KEY_FLAGS_RW_ACCESS_DELETE,
+                })
+                .collect(),
+        ));
+    }
+    // Element-remove ops without access (no value emitted): RW/delete.
+    // HDEL, SREM, LREM, ZREM, ZREMRANGEBY*. (br-frankenredis-keyflagsupd2)
+    if cmd_name.eq_ignore_ascii_case("HDEL")
+        || cmd_name.eq_ignore_ascii_case("SREM")
+        || cmd_name.eq_ignore_ascii_case("LREM")
+        || cmd_name.eq_ignore_ascii_case("ZREM")
+        || cmd_name.eq_ignore_ascii_case("ZREMRANGEBYRANK")
+        || cmd_name.eq_ignore_ascii_case("ZREMRANGEBYSCORE")
+        || cmd_name.eq_ignore_ascii_case("ZREMRANGEBYLEX")
+    {
+        if argv.len() < 2 {
+            return Ok(None);
+        }
+        return Ok(Some(vec![CommandKeyReference {
+            index: 1,
+            flags: KEY_FLAGS_RW_DELETE,
+        }]));
     }
 
     if cmd_name.eq_ignore_ascii_case("XREAD") || cmd_name.eq_ignore_ascii_case("XREADGROUP") {
