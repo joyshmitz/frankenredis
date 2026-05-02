@@ -363,6 +363,16 @@ const CONFIG_STATIC_PARAMS: &[(&str, &str)] = &[
     ("disable-thp", "yes"),
     ("dynamic-hz", "yes"),
     ("replica-announced", "yes"),
+    // Defrag (createIntConfig). (br-frankenredis-cfgmemvalue)
+    ("active-defrag-max-scan-fields", "1000"),
+    ("active-defrag-ignore-bytes", "104857600"),
+    // Enum settings. (br-frankenredis-cfgmemvalue)
+    ("sanitize-dump-payload", "no"),
+    ("shutdown-on-sigint", "default"),
+    ("shutdown-on-sigterm", "default"),
+    ("tls-protocols", ""),
+    // HLL.
+    ("hll-sparse-max-bytes", "3000"),
     // Replication
     ("replicaof", ""),
     ("masterauth", ""),
@@ -7386,9 +7396,16 @@ impl Runtime {
                 continue;
             }
             if parameter.eq_ignore_ascii_case("slowlog-log-slower-than") {
+                // Upstream config.c declares as INTEGER_CONFIG.
+                // (br-frankenredis-cfgmemvalue)
                 let parsed = match parse_i64_arg(&pair[1]) {
                     Ok(value) => value,
-                    Err(err) => return err.to_resp(),
+                    Err(_) => {
+                        return config_set_failed(
+                            "slowlog-log-slower-than",
+                            "argument couldn't be parsed into an integer",
+                        );
+                    }
                 };
                 next_slowlog_slower_than = Some(parsed);
                 continue;
@@ -7769,15 +7786,22 @@ impl Runtime {
                 continue;
             }
             if parameter.eq_ignore_ascii_case("cluster-migration-barrier") {
+                // Upstream config.c declares as INTEGER_CONFIG range
+                // [0, INT_MAX]. (br-frankenredis-cfgmemvalue)
                 let parsed = match parse_i64_arg(&pair[1]) {
-                    Ok(value) if value >= 0 => value as u64,
+                    Ok(value) if (0..=i32::MAX as i64).contains(&value) => value as u64,
                     Ok(_) => {
-                        return RespFrame::Error(
-                            "ERR Invalid argument for CONFIG SET 'cluster-migration-barrier'"
-                                .to_string(),
+                        return config_set_failed(
+                            "cluster-migration-barrier",
+                            "argument must be between 0 and 2147483647 inclusive",
                         );
                     }
-                    Err(err) => return err.to_resp(),
+                    Err(_) => {
+                        return config_set_failed(
+                            "cluster-migration-barrier",
+                            "argument couldn't be parsed into an integer",
+                        );
+                    }
                 };
                 next_cluster_migration_barrier = Some(parsed);
                 static_override_updates
@@ -8000,6 +8024,125 @@ impl Runtime {
                 return RespFrame::Error(format!(
                     "ERR CONFIG SET failed (possibly related to argument '{parameter}') - can't set immutable config"
                 ));
+            }
+            // Range-validated INTEGER_CONFIG fields with bespoke
+            // bounds. (br-frankenredis-cfgmemvalue)
+            if parameter.eq_ignore_ascii_case("maxmemory-eviction-tenacity")
+                || parameter.eq_ignore_ascii_case("active-defrag-cycle-min")
+                || parameter.eq_ignore_ascii_case("active-defrag-cycle-max")
+            {
+                let (canonical, lo, hi): (&'static str, i64, i64) =
+                    if parameter.eq_ignore_ascii_case("maxmemory-eviction-tenacity") {
+                        ("maxmemory-eviction-tenacity", 0, 100)
+                    } else if parameter.eq_ignore_ascii_case("active-defrag-cycle-min") {
+                        ("active-defrag-cycle-min", 1, 99)
+                    } else {
+                        ("active-defrag-cycle-max", 1, 99)
+                    };
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(v) if (lo..=hi).contains(&v) => v,
+                    Ok(_) => {
+                        return config_set_failed(
+                            canonical,
+                            &format!("argument must be between {lo} and {hi} inclusive"),
+                        );
+                    }
+                    Err(_) => {
+                        return config_set_failed(
+                            canonical,
+                            "argument couldn't be parsed into an integer",
+                        );
+                    }
+                };
+                static_override_updates.push((canonical.to_string(), parsed.to_string()));
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("active-defrag-max-scan-fields") {
+                let parsed = match parse_i64_arg(&pair[1]) {
+                    Ok(v) if v >= 0 => v,
+                    Ok(_) => {
+                        return config_set_failed(
+                            "active-defrag-max-scan-fields",
+                            "argument must be between 0 and 9223372036854775807 inclusive",
+                        );
+                    }
+                    Err(_) => {
+                        return config_set_failed(
+                            "active-defrag-max-scan-fields",
+                            "argument couldn't be parsed into an integer",
+                        );
+                    }
+                };
+                static_override_updates
+                    .push(("active-defrag-max-scan-fields".to_string(), parsed.to_string()));
+                continue;
+            }
+            // Enum validation. (br-frankenredis-cfgmemvalue)
+            if parameter.eq_ignore_ascii_case("sanitize-dump-payload") {
+                let value_str = match std::str::from_utf8(&pair[1]) {
+                    Ok(v) => v,
+                    Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                };
+                if !matches!(
+                    value_str.to_ascii_lowercase().as_str(),
+                    "no" | "yes" | "clients"
+                ) {
+                    return config_set_failed(
+                        "sanitize-dump-payload",
+                        "argument(s) must be one of the following: no, yes, clients",
+                    );
+                }
+                static_override_updates.push((
+                    "sanitize-dump-payload".to_string(),
+                    value_str.to_ascii_lowercase(),
+                ));
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("shutdown-on-sigint")
+                || parameter.eq_ignore_ascii_case("shutdown-on-sigterm")
+            {
+                let canonical = if parameter.eq_ignore_ascii_case("shutdown-on-sigint") {
+                    "shutdown-on-sigint"
+                } else {
+                    "shutdown-on-sigterm"
+                };
+                let value_str = match std::str::from_utf8(&pair[1]) {
+                    Ok(v) => v,
+                    Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                };
+                // The upstream enum values include flag-style combinations,
+                // but the base set is {default, save, nosave, now, force}.
+                let lower = value_str.to_ascii_lowercase();
+                if !lower.split_whitespace().all(|tok| {
+                    matches!(tok, "default" | "save" | "nosave" | "now" | "force")
+                }) {
+                    return config_set_failed(
+                        canonical,
+                        "argument(s) must be one of the following: default, save, nosave, now, force",
+                    );
+                }
+                static_override_updates.push((canonical.to_string(), lower));
+                continue;
+            }
+            if parameter.eq_ignore_ascii_case("repl-diskless-load") {
+                let value_str = match std::str::from_utf8(&pair[1]) {
+                    Ok(v) => v,
+                    Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                };
+                if !matches!(
+                    value_str.to_ascii_lowercase().as_str(),
+                    "disabled" | "on-empty-db" | "swapdb"
+                ) {
+                    return config_set_failed(
+                        "repl-diskless-load",
+                        "argument(s) must be one of the following: disabled, on-empty-db, swapdb",
+                    );
+                }
+                static_override_updates.push((
+                    "repl-diskless-load".to_string(),
+                    value_str.to_ascii_lowercase(),
+                ));
+                continue;
             }
             // Upstream config.c declares loglevel as an enum
             // (debug, verbose, notice, warning, nothing). Without
