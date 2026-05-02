@@ -8051,33 +8051,51 @@ impl Runtime {
                 continue;
             }
             // Encoding threshold parameters — update Store fields for live effect.
-            if parameter.eq_ignore_ascii_case("hash-max-listpack-entries")
-                || parameter.eq_ignore_ascii_case("hash-max-listpack-value")
-                || parameter.eq_ignore_ascii_case("hash-max-ziplist-entries")
+            // Upstream config.c::redis-conf-table marks
+            // hash-max-listpack-value / zset-max-listpack-value (and
+            // their ziplist aliases) as MEMORY_CONFIG and the rest
+            // as INTEGER_CONFIG. Memory params accept suffix values
+            // (64K, 1m, 1g, ...) and report 'argument must be a
+            // memory value' on parse failure. set-max-listpack-value
+            // is INTEGER_CONFIG. (br-frankenredis-cfgmemvalue)
+            let is_memory_threshold = parameter
+                .eq_ignore_ascii_case("hash-max-listpack-value")
                 || parameter.eq_ignore_ascii_case("hash-max-ziplist-value")
+                || parameter.eq_ignore_ascii_case("zset-max-listpack-value")
+                || parameter.eq_ignore_ascii_case("zset-max-ziplist-value");
+            let is_integer_threshold = parameter.eq_ignore_ascii_case("hash-max-listpack-entries")
+                || parameter.eq_ignore_ascii_case("hash-max-ziplist-entries")
                 || parameter.eq_ignore_ascii_case("list-max-listpack-entries")
                 || parameter.eq_ignore_ascii_case("list-max-listpack-value")
                 || parameter.eq_ignore_ascii_case("set-max-intset-entries")
                 || parameter.eq_ignore_ascii_case("set-max-listpack-entries")
+                || parameter.eq_ignore_ascii_case("set-max-listpack-value")
                 || parameter.eq_ignore_ascii_case("zset-max-listpack-entries")
-                || parameter.eq_ignore_ascii_case("zset-max-listpack-value")
-                || parameter.eq_ignore_ascii_case("zset-max-ziplist-entries")
-                || parameter.eq_ignore_ascii_case("zset-max-ziplist-value")
-            {
-                let parsed = match parse_i64_arg(&pair[1]) {
-                    Ok(value) if value >= 0 => value as usize,
-                    Ok(_) => {
-                        // (br-frankenredis-7rj0)
-                        return config_set_failed(
-                            parameter,
-                            "argument must be between 0 and 9223372036854775807 inclusive",
-                        );
+                || parameter.eq_ignore_ascii_case("zset-max-ziplist-entries");
+            if is_memory_threshold || is_integer_threshold {
+                let parsed = if is_memory_threshold {
+                    match parse_memory_size_arg(&pair[1]) {
+                        Ok(value) => value as usize,
+                        Err(()) => {
+                            return config_set_failed(parameter, "argument must be a memory value");
+                        }
                     }
-                    Err(_) => {
-                        return config_set_failed(
-                            parameter,
-                            "argument couldn't be parsed into an integer",
-                        );
+                } else {
+                    match parse_i64_arg(&pair[1]) {
+                        Ok(value) if value >= 0 => value as usize,
+                        Ok(_) => {
+                            // (br-frankenredis-7rj0)
+                            return config_set_failed(
+                                parameter,
+                                "argument must be between 0 and 9223372036854775807 inclusive",
+                            );
+                        }
+                        Err(_) => {
+                            return config_set_failed(
+                                parameter,
+                                "argument couldn't be parsed into an integer",
+                            );
+                        }
                     }
                 };
                 // Normalize ziplist aliases to their listpack equivalents.
@@ -8098,6 +8116,8 @@ impl Runtime {
                     "set-max-intset-entries"
                 } else if parameter.eq_ignore_ascii_case("set-max-listpack-entries") {
                     "set-max-listpack-entries"
+                } else if parameter.eq_ignore_ascii_case("set-max-listpack-value") {
+                    "set-max-listpack-value"
                 } else if parameter.eq_ignore_ascii_case("zset-max-listpack-entries")
                     || parameter.eq_ignore_ascii_case("zset-max-ziplist-entries")
                 {
