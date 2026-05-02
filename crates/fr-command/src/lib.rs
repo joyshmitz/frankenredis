@@ -3645,6 +3645,19 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         i += 1;
     }
 
+    // Upstream t_zset.c::zaddGenericCommand checks the score/member
+    // tail arity BEFORE checking flag conflicts, so a payload like
+    // 'ZADD z NX XX' (no score/member pair) emits the generic
+    // syntax error rather than the conflict-specific wording.
+    // (br-frankenredis-zaddorder)
+    let remaining = argv.len() - i;
+    // Upstream returns 'ERR syntax error' when the score/member
+    // tail count is zero or odd, NOT a wrong-arity reply.
+    // (br-frankenredis-zaddary)
+    if remaining < 2 || !remaining.is_multiple_of(2) {
+        return Err(CommandError::SyntaxError);
+    }
+
     // NX and XX are mutually exclusive
     if nx && xx {
         return Ok(RespFrame::Error(
@@ -3656,15 +3669,6 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         return Ok(RespFrame::Error(
             "ERR GT, LT, and/or NX options at the same time are not compatible".to_string(),
         ));
-    }
-
-    let remaining = argv.len() - i;
-    // Upstream t_zset.c::zaddGenericCommand returns
-    // 'ERR syntax error' when the score/member tail count is zero
-    // or odd, NOT a wrong-arity reply. Mirror that wording.
-    // (br-frankenredis-zaddary)
-    if remaining < 2 || !remaining.is_multiple_of(2) {
-        return Err(CommandError::SyntaxError);
     }
 
     if incr && remaining != 2 {

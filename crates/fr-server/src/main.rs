@@ -2834,7 +2834,10 @@ fn check_subscription_mode_gate(frame: &RespFrame, _in_sub_mode: bool) -> Option
     {
         return None; // allowed
     }
-    let cmd_str = String::from_utf8_lossy(cmd);
+    // Upstream networking.c uses c->cmd->name (the canonical
+    // lowercase name from the command table) when formatting the
+    // subscribe-mode rejection. (br-frankenredis-pubsublower)
+    let cmd_str = String::from_utf8_lossy(cmd).to_ascii_lowercase();
     Some(RespFrame::Error(format!(
         "ERR Can't execute '{cmd_str}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
     )))
