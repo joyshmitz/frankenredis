@@ -4627,8 +4627,15 @@ fn georadiusbymember(
     if argv.len() < 5 {
         return Err(CommandError::WrongArity("GEORADIUSBYMEMBER"));
     }
+    // Upstream geo.c::georadiusbymemberCommand only emits 'could
+    // not decode requested zset member' when the source key exists
+    // but the member is missing. A missing source key returns an
+    // empty array. (br-frankenredis-geofromnonexistent)
     let score = store.zscore(&argv[1], &argv[2], now_ms)?;
     let Some(score) = score else {
+        if !store.exists(&argv[1], now_ms) {
+            return Ok(RespFrame::Array(Some(Vec::new())));
+        }
         return Ok(RespFrame::Error(
             "ERR could not decode requested zset member".to_string(),
         ));
@@ -4922,7 +4929,10 @@ fn geosearchstore(
                 center_lon = Some(lon);
                 center_lat = Some(lat);
             }
-            if center_lon.is_none() {
+            // (br-frankenredis-geofromnonexistent) — missing source
+            // key proceeds with frommember set; only error when the
+            // key exists but the member is missing.
+            if center_lon.is_none() && store.exists(&synth[1], now_ms) {
                 return Ok(RespFrame::Error(
                     "ERR could not decode requested zset member".to_string(),
                 ));
@@ -5019,13 +5029,22 @@ fn geosearchstore(
         i += 1;
     }
 
-    let (Some(cx), Some(cy)) = (center_lon, center_lat) else {
-        return Ok(RespFrame::Error(
-            "ERR exactly one of FROMMEMBER or FROMLONLAT must be provided".to_string(),
-        ));
-    };
-
+    // (br-frankenredis-geofromnonexistent) — parse trailing flags
+    // before the missing-center check so syntax errors surface even
+    // when the source key is absent.
     let (_, _, _, count, _any, asc, _) = parse_geo_search_flags(&synth, i, unit_mult)?;
+
+    let (Some(cx), Some(cy)) = (center_lon, center_lat) else {
+        if !has_center {
+            return Ok(RespFrame::Error(
+                "ERR exactly one of FROMMEMBER or FROMLONLAT must be provided".to_string(),
+            ));
+        }
+        // FROMMEMBER with missing source key: store nothing,
+        // return 0.
+        store.del(std::slice::from_ref(&synth[0]), now_ms);
+        return Ok(RespFrame::Integer(0));
+    };
 
     let results = if let Some(rm) = radius_m {
         geo_search_core(store, &synth[1], cx, cy, rm, count, asc, now_ms)?
