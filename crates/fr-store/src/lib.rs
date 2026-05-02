@@ -577,6 +577,12 @@ struct Entry {
     /// report 'raw'. Mirrored here as a per-entry flag.
     /// (br-frankenredis-84bv)
     force_raw_encoding: bool,
+    /// Skip the int-encoding shortcut even when the stored bytes
+    /// look like a canonical i64. Used by INCRBYFLOAT — upstream
+    /// stores the result via createStringObject which always
+    /// produces embstr/raw, never int. The embstr-vs-raw threshold
+    /// still applies normally. (br-frankenredis-incrfloatenc)
+    force_string_encoding: bool,
 }
 
 impl Entry {
@@ -589,6 +595,7 @@ impl Entry {
             lfu_last_touch_min: now_ms / 60_000,
             modification_count: 0,
             force_raw_encoding: false,
+            force_string_encoding: false,
         }
     }
 
@@ -2265,14 +2272,18 @@ impl Store {
         if next.is_nan() || next.is_infinite() {
             return Err(StoreError::IncrFloatNaN);
         }
-        self.internal_entries_insert(
-            key.to_vec(),
-            Entry::new(
-                Value::String(next.to_string().into_bytes()),
-                expires_at_ms,
-                now_ms,
-            ),
+        // Upstream t_string.c::incrbyfloatCommand stores the result
+        // via createStringObject which always produces embstr/raw,
+        // never int. Even when the result text round-trips as an
+        // integer (e.g. "1"), OBJECT ENCODING reports embstr.
+        // (br-frankenredis-incrfloatenc)
+        let mut entry = Entry::new(
+            Value::String(next.to_string().into_bytes()),
+            expires_at_ms,
+            now_ms,
         );
+        entry.force_string_encoding = true;
+        self.internal_entries_insert(key.to_vec(), entry);
         self.dirty = self.dirty.saturating_add(1);
         Ok(next)
     }
@@ -2857,6 +2868,7 @@ impl Store {
                 // Redis returns "int" for strings that are the canonical
                 // representation of an i64 (round-trip: parse then format must match)
                 if !entry.force_raw_encoding
+                    && !entry.force_string_encoding
                     && let Ok(s) = std::str::from_utf8(v)
                     && let Ok(n) = s.parse::<i64>()
                     && n.to_string() == s
