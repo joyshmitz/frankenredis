@@ -9152,9 +9152,14 @@ impl Runtime {
             if argv.len() != 3 && argv.len() != 4 {
                 return client_wrong_subcommand_arity(sub);
             }
+            // Upstream networking.c::clientCommand parses the id with
+            // getLongLongFromObjectOrReply (rejects non-numeric / overflow)
+            // and then quietly replies 0 if no client matches, including for
+            // ids <= 0 which can never identify an active client.
             let target_id = match parse_i64_arg(&argv[2]) {
                 Ok(id) if id > 0 => id as u64,
-                _ => return CommandError::InvalidInteger.to_resp(),
+                Ok(_) => return RespFrame::Integer(0),
+                Err(_) => return CommandError::InvalidInteger.to_resp(),
             };
             let mode = if argv.len() == 4 {
                 let mode = match std::str::from_utf8(&argv[3]) {
@@ -15349,6 +15354,27 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"CLIENT", b"UNBLOCK", b"1", b"wat"]), 1),
             RespFrame::Error("ERR CLIENT UNBLOCK reason should be TIMEOUT or ERROR".to_string())
+        );
+    }
+
+    #[test]
+    fn client_unblock_non_positive_ids_return_zero() {
+        // Upstream Redis 7.2 networking.c::clientCommand silently returns 0
+        // when the requested client-id cannot identify any live connection,
+        // which includes 0 and negative ids (frankenredis-8ge7).
+        let mut rt = Runtime::default_strict();
+        for arg in [b"0".as_ref(), b"-1".as_ref(), b"-9999".as_ref()] {
+            assert_eq!(
+                rt.execute_frame(command(&[b"CLIENT", b"UNBLOCK", arg]), 1),
+                RespFrame::Integer(0),
+                "id={:?}",
+                std::str::from_utf8(arg).unwrap()
+            );
+        }
+        // Non-numeric still surfaces InvalidInteger.
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"UNBLOCK", b"abc"]), 1),
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
         );
     }
 
