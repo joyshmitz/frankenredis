@@ -10354,6 +10354,11 @@ impl Runtime {
             self.server.store.stat_rdb_saves
         ));
         info.push_str("rdb_last_cow_size:0\r\n");
+        // Upstream populates these from server.rdb_last_load_keys_*
+        // (server.c::genRedisInfoString); fr does not yet track keys
+        // expired/loaded during the most recent RDB load, so report 0.
+        info.push_str("rdb_last_load_keys_expired:0\r\n");
+        info.push_str("rdb_last_load_keys_loaded:0\r\n");
         info.push_str(&format!(
             "aof_enabled:{}\r\n",
             usize::from(self.server.aof_path.is_some())
@@ -10382,6 +10387,12 @@ impl Runtime {
                 "err"
             }
         ));
+        // aof_rewrites / aof_rewrites_consecutive_failures sit between
+        // aof_last_bgrewrite_status and aof_last_write_status in upstream
+        // server.c::genRedisInfoString. fr does not yet track AOF rewrite
+        // counts, so report zero.
+        info.push_str("aof_rewrites:0\r\n");
+        info.push_str("aof_rewrites_consecutive_failures:0\r\n");
         info.push_str(&format!(
             "aof_last_write_status:{}\r\n",
             if self.server.store.stat_aof_last_write_ok {
@@ -10391,6 +10402,10 @@ impl Runtime {
             }
         ));
         info.push_str("aof_last_cow_size:0\r\n");
+        // Module fork tracking is module-only in upstream; fr has no module
+        // subsystem so always report no module fork in flight.
+        info.push_str("module_fork_in_progress:0\r\n");
+        info.push_str("module_fork_last_cow_size:0\r\n");
         info.push_str("\r\n");
         RespFrame::BulkString(Some(info.into_bytes()))
     }
@@ -19053,6 +19068,43 @@ mod tests {
         };
         let info = String::from_utf8(info_bytes).expect("utf8 info");
         assert!(info.contains("aof_enabled:1\r\n"), "{info}");
+    }
+
+    #[test]
+    fn info_persistence_reports_upstream_required_fields_in_order() {
+        // (frankenredis-i5ue) Upstream Redis 7.2 server.c::genRedisInfoString
+        // emits these fields; fr was missing them entirely. Pin both presence
+        // and the upstream relative ordering so render drift surfaces in CI.
+        let mut rt = Runtime::default_strict();
+        let info = rt.execute_frame(command(&[b"INFO", b"persistence"]), 0);
+        let RespFrame::BulkString(Some(info_bytes)) = info else {
+            unreachable!("expected bulk INFO response");
+        };
+        let info = String::from_utf8(info_bytes).expect("utf8 info");
+
+        for field in [
+            "rdb_last_load_keys_expired:0\r\n",
+            "rdb_last_load_keys_loaded:0\r\n",
+            "aof_rewrites:0\r\n",
+            "aof_rewrites_consecutive_failures:0\r\n",
+            "module_fork_in_progress:0\r\n",
+            "module_fork_last_cow_size:0\r\n",
+        ] {
+            assert!(info.contains(field), "missing {field:?} in {info}");
+        }
+
+        // Upstream order anchors: rdb_last_cow_size precedes the new
+        // rdb_last_load_keys_* pair, and aof_last_bgrewrite_status precedes
+        // the aof_rewrites* pair which precedes aof_last_write_status.
+        let pos = |needle: &str| info.find(needle).expect(needle);
+        assert!(pos("rdb_last_cow_size:") < pos("rdb_last_load_keys_expired:"));
+        assert!(pos("rdb_last_load_keys_expired:") < pos("rdb_last_load_keys_loaded:"));
+        assert!(pos("rdb_last_load_keys_loaded:") < pos("aof_enabled:"));
+        assert!(pos("aof_last_bgrewrite_status:") < pos("aof_rewrites:"));
+        assert!(pos("aof_rewrites:") < pos("aof_rewrites_consecutive_failures:"));
+        assert!(pos("aof_rewrites_consecutive_failures:") < pos("aof_last_write_status:"));
+        assert!(pos("aof_last_cow_size:") < pos("module_fork_in_progress:"));
+        assert!(pos("module_fork_in_progress:") < pos("module_fork_last_cow_size:"));
     }
 
     #[test]
