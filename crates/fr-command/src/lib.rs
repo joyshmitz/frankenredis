@@ -39318,6 +39318,23 @@ mod tests {
     }
 
     #[test]
+    fn spop_bad_or_negative_count_uses_positive_range_error() {
+        let mut store = Store::new();
+        for count in [b"bad".as_slice(), b"-1".as_slice()] {
+            let err = dispatch_argv(
+                &[b"SPOP".to_vec(), b"s".to_vec(), count.to_vec()],
+                &mut store,
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                CommandError::Custom("ERR value is out of range, must be positive".to_string())
+            );
+        }
+    }
+
+    #[test]
     fn zpopmin_with_count() {
         let mut store = Store::new();
         dispatch_argv(
