@@ -25105,6 +25105,49 @@ mod tests {
     }
 
     #[test]
+    fn xpending_and_xautoclaim_missing_group_use_upstream_nogroup_wording() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1000-0".to_vec(),
+                b"field".to_vec(),
+                b"value".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("seed stream without group");
+
+        let expected =
+            RespFrame::Error("NOGROUP No such key 's' or consumer group 'g1'".to_string());
+
+        let xpending = dispatch_argv(
+            &[b"XPENDING".to_vec(), b"s".to_vec(), b"g1".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("xpending missing group");
+        assert_eq!(xpending, expected);
+
+        let xautoclaim = dispatch_argv(
+            &[
+                b"XAUTOCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g1".to_vec(),
+                b"c1".to_vec(),
+                b"0".to_vec(),
+                b"0-0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xautoclaim missing group");
+        assert_eq!(xautoclaim, expected);
+    }
+
+    #[test]
     fn xclaim_transfers_pending_entries_and_supports_justid() {
         let mut store = Store::new();
         for (id, value) in [("1000-0", "v0"), ("1000-1", "v1")] {
