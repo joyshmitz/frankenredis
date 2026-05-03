@@ -596,18 +596,25 @@ impl AclUser {
         })
     }
 
-    /// Check if a specific command is allowed for this user.
-    fn is_command_allowed(&self, cmd_name: &str) -> bool {
-        let cmd_lower = cmd_name.to_ascii_lowercase();
-
-        // Explicit per-command deny always wins.
-        if self.denied_commands.contains(&cmd_lower) {
+    /// Check if a command invocation is allowed for this user.
+    fn is_command_allowed_for_argv(&self, argv: &[Vec<u8>]) -> bool {
+        let selectors = fr_command::acl_command_selectors_for_argv(argv);
+        if selectors.is_empty() {
             return false;
         }
 
+        // Explicit per-command deny always wins.
+        for selector in &selectors {
+            if self.denied_commands.contains(selector) {
+                return false;
+            }
+        }
+
         // Explicit per-command allow always wins (after deny check).
-        if self.allowed_commands.contains(&cmd_lower) {
-            return true;
+        for selector in &selectors {
+            if self.allowed_commands.contains(selector) {
+                return true;
+            }
         }
 
         // Hot-path short-circuit: when this user has no category-level
@@ -621,8 +628,8 @@ impl AclUser {
         }
 
         // Check category-level permissions.
-        // Get the categories this command belongs to.
-        let cmd_categories = command_acl_categories(cmd_lower.as_str());
+        // Get the categories this command or subcommand belongs to.
+        let cmd_categories = command_acl_categories(&selectors[0]);
 
         // If any denied category contains this command, deny it.
         for denied_cat in &self.denied_categories {
@@ -774,8 +781,7 @@ impl AclUser {
             return Some(AclCommandPermissionError::Command);
         };
 
-        let cmd_name = String::from_utf8_lossy(cmd);
-        if !self.is_command_allowed(&cmd_name) {
+        if !self.is_command_allowed_for_argv(argv) {
             return Some(AclCommandPermissionError::Command);
         }
 
@@ -1140,7 +1146,7 @@ impl AuthState {
                 // with 'Unknown command or category name in ACL'.
                 // (br-frankenredis-aclcmd)
                 let cmd_lower = cmd.to_ascii_lowercase();
-                if fr_command::get_command_flags(cmd_lower.as_bytes()).is_none() {
+                if !fr_command::is_known_acl_command_selector(&cmd_lower) {
                     return Err(format!(
                         "ERR Error in ACL SETUSER modifier '{rule_str}': Unknown command or category name in ACL"
                     ));
@@ -1150,7 +1156,7 @@ impl AuthState {
             } else if let Some(cmd) = rule_str.strip_prefix('-') {
                 // -command — deny this specific command. (br-frankenredis-aclcmd)
                 let cmd_lower = cmd.to_ascii_lowercase();
-                if fr_command::get_command_flags(cmd_lower.as_bytes()).is_none() {
+                if !fr_command::is_known_acl_command_selector(&cmd_lower) {
                     return Err(format!(
                         "ERR Error in ACL SETUSER modifier '{rule_str}': Unknown command or category name in ACL"
                     ));
@@ -19832,6 +19838,112 @@ mod tests {
     }
 
     #[test]
+    fn acl_per_subcommand_allow_specific_selector() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"sub",
+                    b"on",
+                    b">pass",
+                    b"-@all",
+                    b"+acl|cat",
+                    b"allkeys"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"sub", b"pass"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let cat_reply = rt.execute_frame(command(&[b"ACL", b"CAT"]), 2);
+        assert!(
+            matches!(cat_reply, RespFrame::Array(Some(_))),
+            "ACL CAT should be allowed by +acl|cat, got {cat_reply:?}"
+        );
+
+        let whoami_reply = rt.execute_frame(command(&[b"ACL", b"WHOAMI"]), 3);
+        assert_eq!(
+            whoami_reply,
+            RespFrame::Error(
+                "NOPERM this user has no permissions to run the 'ACL' command".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn acl_per_subcommand_rejects_unknown_selector() {
+        let mut rt = Runtime::default_strict();
+
+        let reply = rt.execute_frame(
+            command(&[
+                b"ACL",
+                b"SETUSER",
+                b"sub",
+                b"on",
+                b">pass",
+                b"-@all",
+                b"+acl|nosuch",
+                b"allkeys",
+            ]),
+            0,
+        );
+
+        assert!(
+            matches!(&reply, RespFrame::Error(err) if err.contains("Unknown command or category name in ACL")),
+            "unknown ACL subcommand selector should be rejected, got {reply:?}"
+        );
+    }
+
+    #[test]
+    fn acl_per_subcommand_deny_selector_overrides_parent_allow() {
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"sub",
+                    b"on",
+                    b">pass",
+                    b"-@all",
+                    b"+acl",
+                    b"-acl|cat",
+                    b"allkeys"
+                ]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"AUTH", b"sub", b"pass"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let cat_reply = rt.execute_frame(command(&[b"ACL", b"CAT"]), 2);
+        assert_eq!(
+            cat_reply,
+            RespFrame::Error(
+                "NOPERM this user has no permissions to run the 'ACL' command".to_string()
+            )
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"ACL", b"WHOAMI"]), 3),
+            RespFrame::BulkString(Some(b"sub".to_vec()))
+        );
+    }
+
+    #[test]
     fn acl_cat_returns_redis_canonical_category_order() {
         let mut rt = Runtime::default_strict();
 
@@ -20075,6 +20187,71 @@ mod tests {
         } else {
             unreachable!("Expected array reply from GETUSER, got: {reply:?}");
         }
+    }
+
+    #[test]
+    fn acl_subcommand_selectors_are_accepted_and_enforced() {
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(
+                command(&[
+                    b"ACL",
+                    b"SETUSER",
+                    b"inspector",
+                    b"on",
+                    b">pass",
+                    b"-@all",
+                    b"+client|info",
+                    b"allkeys",
+                ]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"DRYRUN", b"inspector", b"CLIENT", b"INFO"]),
+                1
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let denied = rt.execute_frame(
+            command(&[
+                b"ACL",
+                b"DRYRUN",
+                b"inspector",
+                b"CLIENT",
+                b"KILL",
+                b"TYPE",
+                b"normal",
+            ]),
+            2,
+        );
+        assert!(
+            matches!(&denied, RespFrame::BulkString(Some(msg)) if std::str::from_utf8(msg).is_ok_and(|s| s.contains("no permissions"))),
+            "CLIENT KILL should remain denied for +client|info-only user, got: {denied:?}"
+        );
+
+        let getuser = rt.execute_frame(command(&[b"ACL", b"GETUSER", b"inspector"]), 3);
+        let RespFrame::Array(Some(fields)) = getuser else {
+            unreachable!("expected ACL GETUSER array");
+        };
+        let commands = fields
+            .windows(2)
+            .find_map(|pair| match pair {
+                [
+                    RespFrame::BulkString(Some(name)),
+                    RespFrame::BulkString(Some(value)),
+                ] if name == b"commands" => Some(String::from_utf8_lossy(value).into_owned()),
+                _ => None,
+            })
+            .expect("ACL GETUSER commands field");
+        assert!(
+            commands.contains("+client|info"),
+            "commands field should preserve +client|info, got: {commands}"
+        );
     }
 
     #[test]

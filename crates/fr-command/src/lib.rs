@@ -12173,6 +12173,33 @@ pub fn command_acl_categories(command: &str) -> &'static [&'static str] {
         .unwrap_or(&[])
 }
 
+/// Return whether an ACL command selector is recognized by Redis metadata.
+#[must_use]
+pub fn is_known_acl_command_selector(command: &str) -> bool {
+    get_command_flags(command.as_bytes()).is_some() || !command_acl_categories(command).is_empty()
+}
+
+/// Return ACL selectors for a command invocation, most-specific first.
+#[must_use]
+pub fn acl_command_selectors_for_argv(argv: &[Vec<u8>]) -> Vec<String> {
+    let Some(raw_command) = argv.first() else {
+        return Vec::new();
+    };
+    let command = String::from_utf8_lossy(raw_command).to_ascii_lowercase();
+    let mut selectors = Vec::with_capacity(2);
+
+    if let Some(raw_subcommand) = argv.get(1) {
+        let subcommand = String::from_utf8_lossy(raw_subcommand).to_ascii_lowercase();
+        let subcommand_selector = format!("{command}|{subcommand}");
+        if is_known_acl_command_selector(&subcommand_selector) {
+            selectors.push(subcommand_selector);
+        }
+    }
+
+    selectors.push(command);
+    selectors
+}
+
 fn merge_command_table_acl_categories(categories: &mut Vec<&'static str>, flags: &str) {
     let has_flag = |target: &str| flags.split_whitespace().any(|flag| flag == target);
 
@@ -12208,20 +12235,29 @@ fn push_unique_acl_category(categories: &mut Vec<&'static str>, category: &'stat
     }
 }
 
-fn dispatch_acl_is_command_allowed(cmd_name: &str, permissions: &DispatchAclPermissions) -> bool {
-    let cmd_lower = cmd_name.to_ascii_lowercase();
-
-    if permissions.denied_commands.contains(&cmd_lower) {
+fn dispatch_acl_is_command_allowed(argv: &[Vec<u8>], permissions: &DispatchAclPermissions) -> bool {
+    let selectors = acl_command_selectors_for_argv(argv);
+    if selectors.is_empty() {
         return false;
     }
-    if permissions.allowed_commands.contains(&cmd_lower) {
-        return true;
+
+    for selector in &selectors {
+        if permissions.denied_commands.contains(selector) {
+            return false;
+        }
     }
+
+    for selector in &selectors {
+        if permissions.allowed_commands.contains(selector) {
+            return true;
+        }
+    }
+
     if permissions.denied_categories.is_empty() && permissions.allowed_categories.is_empty() {
         return permissions.all_commands;
     }
 
-    let cmd_categories = command_acl_categories(cmd_lower.as_str());
+    let cmd_categories = command_acl_categories(&selectors[0]);
     for denied_cat in &permissions.denied_categories {
         if cmd_categories.contains(&denied_cat.as_str()) {
             return false;
@@ -12290,8 +12326,7 @@ fn dispatch_acl_permission_error_for_argv(
     permissions: &DispatchAclPermissions,
 ) -> Option<DispatchAclPermissionError> {
     let cmd = argv.first()?;
-    let cmd_name = String::from_utf8_lossy(cmd);
-    if !dispatch_acl_is_command_allowed(&cmd_name, permissions) {
+    if !dispatch_acl_is_command_allowed(argv, permissions) {
         return Some(DispatchAclPermissionError::Command);
     }
     if check_command_arity(cmd, argv.len()).is_err() {
@@ -17745,13 +17780,14 @@ mod tests {
         CLIENT_TRACKING_OPT_SWITCH_REQUIRES_DISABLE, CLIENT_TRACKING_OPTIN_OPTOUT_CONFLICT,
         CLIENT_TRACKING_PREFIX_REQUIRES_BCAST, CLIENT_TRACKING_REDIRECT_MISSING,
         CLIENT_UNBLOCK_REASON_INVALID, COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec,
-        SCRIPT_NOSCRIPT_ERROR, classify_command, client_wrong_subcommand_arity,
-        cluster_disabled_error, cluster_reset_with_keys_error, cluster_wrong_subcommand_arity,
-        command_acl_categories, commands_in_acl_category, dispatch_argv, drain_pubsub_messages,
-        eq_ascii_command, eval_script, execute_migrate, format_coord_human,
-        format_eval_read_only_script_error, frame_to_argv, hello_bulk, hello_simple,
-        is_write_command, parse_blocking_deadline_milliseconds, parse_migrate_request,
-        pubsub_message_to_frame, pubsub_message_to_frame_for_protocol,
+        SCRIPT_NOSCRIPT_ERROR, acl_command_selectors_for_argv, classify_command,
+        client_wrong_subcommand_arity, cluster_disabled_error, cluster_reset_with_keys_error,
+        cluster_wrong_subcommand_arity, command_acl_categories, commands_in_acl_category,
+        dispatch_argv, drain_pubsub_messages, eq_ascii_command, eval_script, execute_migrate,
+        format_coord_human, format_eval_read_only_script_error, frame_to_argv, hello_bulk,
+        hello_simple, is_known_acl_command_selector, is_write_command,
+        parse_blocking_deadline_milliseconds, parse_migrate_request, pubsub_message_to_frame,
+        pubsub_message_to_frame_for_protocol,
     };
 
     fn classify_command_linear(cmd: &[u8]) -> Option<CommandId> {
@@ -36753,6 +36789,22 @@ mod tests {
         assert!(command_acl_categories("acl").contains(&"admin"));
         assert!(command_acl_categories("acl").contains(&"dangerous"));
         assert!(!command_acl_categories("eval_ro").contains(&"read"));
+    }
+
+    #[test]
+    fn acl_command_selectors_prefer_known_subcommands() {
+        assert!(is_known_acl_command_selector("client|info"));
+        assert!(is_known_acl_command_selector("get"));
+        assert!(!is_known_acl_command_selector("client|notreal"));
+
+        assert_eq!(
+            acl_command_selectors_for_argv(&[b"CLIENT".to_vec(), b"INFO".to_vec()]),
+            vec!["client|info".to_string(), "client".to_string()]
+        );
+        assert_eq!(
+            acl_command_selectors_for_argv(&[b"GET".to_vec(), b"k".to_vec()]),
+            vec!["get".to_string()]
+        );
     }
 
     #[test]
