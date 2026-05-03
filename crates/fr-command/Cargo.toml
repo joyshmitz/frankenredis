@@ -8,5 +8,8 @@ fr-protocol = { version = "0.1.0", path = "../fr-protocol" }
 fr-sentinel = { version = "0.1.0", path = "../fr-sentinel" }
 fr-store = { version = "0.1.0", path = "../fr-store" }
 
+[build-dependencies]
+serde_json.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true

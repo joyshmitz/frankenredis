@@ -12112,6 +12112,8 @@ enum DispatchAclPermissionError {
 
 static ACL_CATEGORY_MAPS: OnceLock<AclCategoryMaps> = OnceLock::new();
 
+include!(concat!(env!("OUT_DIR"), "/acl_categories.rs"));
+
 fn acl_category_maps() -> &'static AclCategoryMaps {
     ACL_CATEGORY_MAPS.get_or_init(|| {
         let mut by_category: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
@@ -12120,19 +12122,17 @@ fn acl_category_maps() -> &'static AclCategoryMaps {
         }
 
         let mut by_command: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
-        for &(name, _arity, flags, _first, _last, _step) in COMMAND_TABLE.iter() {
-            let mut categories = Vec::new();
-            for &cat in ACL_CATEGORIES {
-                if command_matches_acl_category(name, flags, cat) {
-                    categories.push(cat);
-                    if let Some(list) = by_category.get_mut(cat) {
-                        list.push(name);
-                    }
+        for &(name, categories) in UPSTREAM_ACL_CATEGORY_ENTRIES {
+            for &cat in categories {
+                if let Some(list) = by_category.get_mut(cat) {
+                    list.push(name);
                 }
             }
-            if !categories.is_empty() {
-                by_command.insert(name, categories);
-            }
+            by_command.insert(name, categories.to_vec());
+        }
+        for &(name, _arity, flags, _first, _last, _step) in COMMAND_TABLE {
+            let categories = by_command.entry(name).or_default();
+            merge_command_table_acl_categories(categories, flags);
         }
 
         AclCategoryMaps {
@@ -12171,6 +12171,41 @@ pub fn command_acl_categories(command: &str) -> &'static [&'static str] {
         .get(cmd_lower.as_str())
         .map(|cats| cats.as_slice())
         .unwrap_or(&[])
+}
+
+fn merge_command_table_acl_categories(categories: &mut Vec<&'static str>, flags: &str) {
+    let has_flag = |target: &str| flags.split_whitespace().any(|flag| flag == target);
+
+    if has_flag("fast") {
+        categories.retain(|cat| *cat != "slow");
+        push_unique_acl_category(categories, "fast");
+    } else {
+        categories.retain(|cat| *cat != "fast");
+        push_unique_acl_category(categories, "slow");
+    }
+
+    if has_flag("readonly") && !categories.contains(&"scripting") {
+        push_unique_acl_category(categories, "read");
+    }
+    if has_flag("write") {
+        push_unique_acl_category(categories, "write");
+    }
+    if has_flag("admin") {
+        push_unique_acl_category(categories, "admin");
+        push_unique_acl_category(categories, "dangerous");
+    }
+    if has_flag("pubsub") {
+        push_unique_acl_category(categories, "pubsub");
+    }
+    if has_flag("blocking") {
+        push_unique_acl_category(categories, "blocking");
+    }
+}
+
+fn push_unique_acl_category(categories: &mut Vec<&'static str>, category: &'static str) {
+    if !categories.contains(&category) {
+        categories.push(category);
+    }
 }
 
 fn dispatch_acl_is_command_allowed(cmd_name: &str, permissions: &DispatchAclPermissions) -> bool {
@@ -12275,310 +12310,6 @@ fn dispatch_acl_permission_error_for_argv(
     }
     dispatch_acl_channel_permission_error_for_argv(argv, permissions)
         .map(DispatchAclPermissionError::Channel)
-}
-
-fn command_matches_acl_category(name: &str, flags: &str, category: &str) -> bool {
-    // Direct flag match (e.g., "write", "fast", "admin", "scripting", "pubsub")
-    let flag_list: Vec<&str> = flags.split_whitespace().collect();
-
-    match category {
-        // Access-type categories from flags
-        "read" => flag_list.contains(&"readonly"),
-        "write" => flag_list.contains(&"write"),
-        "fast" => flag_list.contains(&"fast"),
-        // Upstream implicit "slow" category: any command lacking the
-        // 'fast' flag is automatically slow (commands.def assigns
-        // SLOW for everything except a small set of O(1) commands).
-        // (br-frankenredis-ifuw)
-        "slow" => !flag_list.contains(&"fast"),
-        "admin" => flag_list.contains(&"admin"),
-        "pubsub" => flag_list.contains(&"pubsub"),
-        "scripting" => flag_list.contains(&"scripting"),
-        "dangerous" => {
-            flag_list.contains(&"admin")
-                || flag_list.contains(&"dangerous")
-                || matches!(
-                    name,
-                    "flushdb"
-                        | "flushall"
-                        | "keys"
-                        | "shutdown"
-                        | "debug"
-                        | "sort"
-                        | "migrate"
-                        | "restore"
-                        | "replicaof"
-                        | "slaveof"
-                        | "cluster"
-                        | "acl"
-                        | "slowlog"
-                        | "latency"
-                        | "object"
-                        | "module"
-                        | "swapdb"
-                        | "failover"
-                        | "pfdebug"
-                        | "pfselftest"
-                        | "psync"
-                        | "replconf"
-                )
-        }
-        "blocking" => matches!(
-            name,
-            "blpop"
-                | "brpop"
-                | "blmove"
-                | "blmpop"
-                | "brpoplpush"
-                | "bzpopmin"
-                | "bzpopmax"
-                | "bzmpop"
-                | "wait"
-                | "waitaof"
-        ),
-        "connection" => matches!(
-            name,
-            "auth" | "hello" | "ping" | "echo" | "quit" | "reset" | "select" | "client"
-        ),
-        "transaction" => matches!(name, "multi" | "exec" | "discard" | "watch" | "unwatch"),
-        "server" => matches!(
-            name,
-            "info"
-                | "config"
-                | "acl"
-                | "command"
-                | "time"
-                | "dbsize"
-                | "flushdb"
-                | "flushall"
-                | "save"
-                | "bgsave"
-                | "bgrewriteaof"
-                | "lastsave"
-                | "slowlog"
-                | "debug"
-                | "role"
-                | "shutdown"
-                | "latency"
-                | "lolwut"
-                | "memory"
-                | "replconf"
-                | "psync"
-                | "replicaof"
-                | "slaveof"
-                | "cluster"
-                | "swapdb"
-                | "object"
-        ),
-        "generic" | "keyspace" => matches!(
-            name,
-            "del"
-                | "exists"
-                | "type"
-                | "keys"
-                | "randomkey"
-                | "scan"
-                | "rename"
-                | "renamenx"
-                | "expire"
-                | "pexpire"
-                | "expireat"
-                | "pexpireat"
-                | "persist"
-                | "ttl"
-                | "pttl"
-                | "expiretime"
-                | "pexpiretime"
-                | "dump"
-                | "restore"
-                | "unlink"
-                | "touch"
-                | "sort"
-                | "sort_ro"
-                | "copy"
-                | "move"
-                | "object"
-                | "wait"
-                | "waitaof"
-        ),
-        // Data-type categories
-        "string" => matches!(
-            name,
-            "set"
-                | "get"
-                | "append"
-                | "strlen"
-                | "getrange"
-                | "setrange"
-                | "incr"
-                | "decr"
-                | "incrby"
-                | "decrby"
-                | "incrbyfloat"
-                | "mget"
-                | "mset"
-                | "msetnx"
-                | "setnx"
-                | "setex"
-                | "psetex"
-                | "getset"
-                | "getdel"
-                | "getex"
-                | "substr"
-                | "lcs"
-        ),
-        "hash" => matches!(
-            name,
-            "hset"
-                | "hget"
-                | "hdel"
-                | "hexists"
-                | "hlen"
-                | "hgetall"
-                | "hkeys"
-                | "hvals"
-                | "hmget"
-                | "hmset"
-                | "hincrby"
-                | "hincrbyfloat"
-                | "hsetnx"
-                | "hstrlen"
-                | "hrandfield"
-                | "hscan"
-        ),
-        "list" => matches!(
-            name,
-            "lpush"
-                | "rpush"
-                | "lpushx"
-                | "rpushx"
-                | "lpop"
-                | "rpop"
-                | "llen"
-                | "lrange"
-                | "lindex"
-                | "lset"
-                | "linsert"
-                | "lrem"
-                | "ltrim"
-                | "lpos"
-                | "lmove"
-                | "lmpop"
-                | "rpoplpush"
-                | "blpop"
-                | "brpop"
-                | "blmove"
-                | "blmpop"
-                | "brpoplpush"
-        ),
-        "set" => matches!(
-            name,
-            "sadd"
-                | "srem"
-                | "smembers"
-                | "scard"
-                | "sismember"
-                | "smismember"
-                | "sinter"
-                | "sinterstore"
-                | "sintercard"
-                | "sunion"
-                | "sunionstore"
-                | "sdiff"
-                | "sdiffstore"
-                | "spop"
-                | "srandmember"
-                | "smove"
-                | "sscan"
-        ),
-        "sortedset" => matches!(
-            name,
-            "zadd"
-                | "zrem"
-                | "zscore"
-                | "zmscore"
-                | "zcard"
-                | "zrank"
-                | "zrevrank"
-                | "zrange"
-                | "zrevrange"
-                | "zrangebyscore"
-                | "zrevrangebyscore"
-                | "zrangebylex"
-                | "zrevrangebylex"
-                | "zcount"
-                | "zlexcount"
-                | "zincrby"
-                | "zpopmin"
-                | "zpopmax"
-                | "zrandmember"
-                | "zunionstore"
-                | "zinterstore"
-                | "zdiff"
-                | "zdiffstore"
-                | "zinter"
-                | "zunion"
-                | "zintercard"
-                | "zmpop"
-                | "zremrangebyrank"
-                | "zremrangebyscore"
-                | "zremrangebylex"
-                | "zscan"
-                | "zrangestore"
-                | "bzpopmin"
-                | "bzpopmax"
-                | "bzmpop"
-        ),
-        "bitmap" => matches!(
-            name,
-            "setbit"
-                | "getbit"
-                | "bitcount"
-                | "bitpos"
-                | "bitop"
-                | "bitfield"
-                // Upstream acl.c::aclCategoryMap maps BITFIELD_RO
-                // under @bitmap too. (br-frankenredis-faqe)
-                | "bitfield_ro"
-        ),
-        // Upstream @hyperloglog covers the introspection-only
-        // PFSELFTEST + PFDEBUG in addition to the three user-facing
-        // commands. (br-frankenredis-faqe)
-        "hyperloglog" => matches!(
-            name,
-            "pfadd" | "pfcount" | "pfmerge" | "pfselftest" | "pfdebug"
-        ),
-        "geo" => matches!(
-            name,
-            "geoadd"
-                | "geopos"
-                | "geodist"
-                | "geohash"
-                | "georadius"
-                | "georadiusbymember"
-                | "geosearch"
-                | "geosearchstore"
-        ),
-        "stream" => matches!(
-            name,
-            "xadd"
-                | "xlen"
-                | "xdel"
-                | "xtrim"
-                | "xread"
-                | "xreadgroup"
-                | "xclaim"
-                | "xautoclaim"
-                | "xpending"
-                | "xack"
-                | "xsetid"
-                | "xinfo"
-                | "xgroup"
-                | "xrange"
-                | "xrevrange"
-        ),
-        _ => false,
-    }
 }
 
 fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
@@ -18016,10 +17747,11 @@ mod tests {
         CLIENT_UNBLOCK_REASON_INVALID, COMMAND_TABLE, CommandError, CommandId, MigrateKeySpec,
         SCRIPT_NOSCRIPT_ERROR, classify_command, client_wrong_subcommand_arity,
         cluster_disabled_error, cluster_reset_with_keys_error, cluster_wrong_subcommand_arity,
-        dispatch_argv, drain_pubsub_messages, eq_ascii_command, eval_script, execute_migrate,
-        format_coord_human, format_eval_read_only_script_error, frame_to_argv, hello_bulk,
-        hello_simple, is_write_command, parse_blocking_deadline_milliseconds,
-        parse_migrate_request, pubsub_message_to_frame, pubsub_message_to_frame_for_protocol,
+        command_acl_categories, commands_in_acl_category, dispatch_argv, drain_pubsub_messages,
+        eq_ascii_command, eval_script, execute_migrate, format_coord_human,
+        format_eval_read_only_script_error, frame_to_argv, hello_bulk, hello_simple,
+        is_write_command, parse_blocking_deadline_milliseconds, parse_migrate_request,
+        pubsub_message_to_frame, pubsub_message_to_frame_for_protocol,
     };
 
     fn classify_command_linear(cmd: &[u8]) -> Option<CommandId> {
@@ -25661,9 +25393,7 @@ mod tests {
             let reply = dispatch_argv(&argv, &mut store, 0).expect("xclaim returns frame");
             assert_eq!(
                 reply,
-                RespFrame::Error(
-                    "NOGROUP No such key 'xs' or consumer group 'g'".to_string()
-                ),
+                RespFrame::Error("NOGROUP No such key 'xs' or consumer group 'g'".to_string()),
                 "xclaim with missing group must NOGROUP, got {reply:?} for {argv:?}"
             );
         }
@@ -25684,9 +25414,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             reply,
-            RespFrame::Error(
-                "NOGROUP No such key 'nokey' or consumer group 'g'".to_string()
-            )
+            RespFrame::Error("NOGROUP No such key 'nokey' or consumer group 'g'".to_string())
         );
 
         // Wrong-type key surfaces WRONGTYPE per upstream checkType, not
@@ -25710,10 +25438,7 @@ mod tests {
             0,
         )
         .expect_err("wrongtype");
-        assert!(matches!(
-            err,
-            CommandError::Store(StoreError::WrongType)
-        ));
+        assert!(matches!(err, CommandError::Store(StoreError::WrongType)));
     }
 
     #[test]
@@ -36993,6 +36718,41 @@ mod tests {
         };
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"group".to_vec()))));
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"string".to_vec()))));
+    }
+
+    #[test]
+    fn acl_cat_categories_follow_vendored_redis_metadata() {
+        assert_eq!(commands_in_acl_category("slow").len(), 271);
+        assert_eq!(commands_in_acl_category("keyspace").len(), 34);
+        assert_eq!(commands_in_acl_category("admin").len(), 65);
+        assert_eq!(commands_in_acl_category("connection").len(), 38);
+        assert_eq!(commands_in_acl_category("dangerous").len(), 75);
+        assert_eq!(commands_in_acl_category("read").len(), 87);
+
+        let connection = commands_in_acl_category("connection");
+        assert!(connection.contains(&"command|docs"));
+        assert!(connection.contains(&"client|info"));
+
+        let keyspace = commands_in_acl_category("keyspace");
+        assert!(keyspace.contains(&"object|encoding"));
+        assert!(keyspace.contains(&"restore-asking"));
+
+        let admin = commands_in_acl_category("admin");
+        assert!(admin.contains(&"config|set"));
+        assert!(admin.contains(&"slowlog|get"));
+        assert!(!admin.contains(&"sentinel|master"));
+
+        let dangerous = commands_in_acl_category("dangerous");
+        assert!(dangerous.contains(&"config|set"));
+        assert!(dangerous.contains(&"acl|setuser"));
+
+        let read = commands_in_acl_category("read");
+        assert!(read.contains(&"get"));
+        assert!(!read.contains(&"eval_ro"));
+
+        assert!(command_acl_categories("acl").contains(&"admin"));
+        assert!(command_acl_categories("acl").contains(&"dangerous"));
+        assert!(!command_acl_categories("eval_ro").contains(&"read"));
     }
 
     #[test]
