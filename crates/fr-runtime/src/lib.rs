@@ -1140,7 +1140,7 @@ impl AuthState {
                 // with 'Unknown command or category name in ACL'.
                 // (br-frankenredis-aclcmd)
                 let cmd_lower = cmd.to_ascii_lowercase();
-                if !fr_command::is_known_command(cmd_lower.as_bytes()) {
+                if fr_command::get_command_flags(cmd_lower.as_bytes()).is_none() {
                     return Err(format!(
                         "ERR Error in ACL SETUSER modifier '{rule_str}': Unknown command or category name in ACL"
                     ));
@@ -1150,7 +1150,7 @@ impl AuthState {
             } else if let Some(cmd) = rule_str.strip_prefix('-') {
                 // -command — deny this specific command. (br-frankenredis-aclcmd)
                 let cmd_lower = cmd.to_ascii_lowercase();
-                if !fr_command::is_known_command(cmd_lower.as_bytes()) {
+                if fr_command::get_command_flags(cmd_lower.as_bytes()).is_none() {
                     return Err(format!(
                         "ERR Error in ACL SETUSER modifier '{rule_str}': Unknown command or category name in ACL"
                     ));

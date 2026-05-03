@@ -293,7 +293,7 @@ pub fn run_fixture(
             },
             new_events,
         );
-        let frame_ok = frame_matches_expected(&actual, &case.expect);
+        let frame_ok = conformance_case_frame_matches_expected(&case, &actual);
         let passed = frame_ok && threat_result.is_ok() && log_result.is_ok();
         if !passed {
             let expected = expected_to_frame(&case.expect);
@@ -1983,6 +1983,29 @@ fn live_oracle_frames_match(
         || live_oracle_acl_log_drift_matches(case, runtime_actual, redis_actual)
 }
 
+fn conformance_case_frame_matches_expected(case: &ConformanceCase, actual: &RespFrame) -> bool {
+    frame_matches_expected(actual, &case.expect)
+        || fixture_acl_cat_command_set_matches(case, actual, &case.expect)
+}
+
+fn fixture_acl_cat_command_set_matches(
+    case: &ConformanceCase,
+    actual: &RespFrame,
+    expected: &ExpectedFrame,
+) -> bool {
+    if !is_acl_cat_category_case(case) {
+        return false;
+    }
+    let expected = expected_to_frame(expected);
+    let Some(actual_sorted) = canonical_flat_bulk_set(actual) else {
+        return false;
+    };
+    let Some(expected_sorted) = canonical_flat_bulk_set(&expected) else {
+        return false;
+    };
+    actual_sorted == expected_sorted
+}
+
 fn resp3_push_array_equivalent(left: &RespFrame, right: &RespFrame) -> bool {
     if left == right {
         return true;
@@ -2115,6 +2138,19 @@ fn live_oracle_acl_cat_order_matches(
     runtime_actual: &RespFrame,
     redis_actual: &RespFrame,
 ) -> bool {
+    if !is_acl_cat_category_case(case) {
+        return false;
+    }
+    let Some(ours_sorted) = canonical_flat_bulk_set(runtime_actual) else {
+        return false;
+    };
+    let Some(theirs_sorted) = canonical_flat_bulk_set(redis_actual) else {
+        return false;
+    };
+    ours_sorted == theirs_sorted
+}
+
+fn is_acl_cat_category_case(case: &ConformanceCase) -> bool {
     let first = case
         .argv
         .first()
@@ -2130,16 +2166,7 @@ fn live_oracle_acl_cat_order_matches(
     }
     // `ACL CAT` without a category just lists categories. Only the
     // 3-arg form enumerates commands in a category.
-    if case.argv.len() != 3 {
-        return false;
-    }
-    let Some(ours_sorted) = canonical_flat_bulk_set(runtime_actual) else {
-        return false;
-    };
-    let Some(theirs_sorted) = canonical_flat_bulk_set(redis_actual) else {
-        return false;
-    };
-    ours_sorted == theirs_sorted
+    case.argv.len() == 3
 }
 
 fn canonical_flat_bulk_set(frame: &RespFrame) -> Option<Vec<Vec<u8>>> {
