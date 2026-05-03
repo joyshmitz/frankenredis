@@ -10,8 +10,8 @@ use fr_store::{
     HashFieldTtl, HashFieldTtlCondition, HashFieldTtlSet, HashFieldTtlUnit, MaxmemoryPolicy,
     PendingAclLogEvent, PttlValue, PubSubMessage, ScoreBound, Store, StoreError,
     StreamAutoClaimOptions, StreamAutoClaimReply, StreamClaimOptions, StreamClaimReply,
-    StreamGroupReadCursor, StreamGroupReadOptions, StreamId, ValueType, glob_match, read_rss_bytes,
-    sha1_hex_public,
+    StreamGroupReadCursor, StreamGroupReadOptions, StreamId, StreamPendingRecord, ValueType,
+    glob_match, read_rss_bytes, sha1_hex_public,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::io::{ErrorKind, Read, Write};
@@ -5973,12 +5973,11 @@ fn stream_consumer_info_to_frame(
 /// Consumer rows nested under `XINFO STREAM ... FULL`.
 ///
 /// Upstream t_stream.c::xinfoReplyWithStreamInfo emits these as maps with
-/// seen/active timestamps and PEL details. fr-store currently exposes only
-/// idle-style consumer info, so preserve the upstream field contract and use
-/// empty PEL arrays until the store tracks full per-consumer metadata.
-/// (frankenredis-hgqc)
+/// seen/active timestamps and per-consumer PEL details.
+/// (frankenredis-hgqc, frankenredis-xjmm)
 fn stream_full_consumer_info_to_frame(
     info: (Vec<u8>, usize, u64),
+    pending: Vec<RespFrame>,
     now_ms: u64,
     resp_protocol_version: i64,
 ) -> RespFrame {
@@ -6003,7 +6002,7 @@ fn stream_full_consumer_info_to_frame(
         ),
         (
             RespFrame::BulkString(Some(b"pending".to_vec())),
-            RespFrame::Array(Some(Vec::new())),
+            RespFrame::Array(Some(pending)),
         ),
     ];
 
@@ -6023,6 +6022,7 @@ fn stream_full_group_info_to_frame(
     name: Vec<u8>,
     pending_count: usize,
     last_delivered_id: StreamId,
+    pending_frames: Vec<RespFrame>,
     consumer_frames: Vec<RespFrame>,
     resp_protocol_version: i64,
 ) -> RespFrame {
@@ -6049,7 +6049,7 @@ fn stream_full_group_info_to_frame(
         ),
         (
             RespFrame::BulkString(Some(b"pending".to_vec())),
-            RespFrame::Array(Some(Vec::new())),
+            RespFrame::Array(Some(pending_frames)),
         ),
         (
             RespFrame::BulkString(Some(b"consumers".to_vec())),
@@ -6067,6 +6067,39 @@ fn stream_full_group_info_to_frame(
         }
         RespFrame::Array(Some(flat))
     }
+}
+
+fn stream_full_count_limit(full_count: usize) -> usize {
+    if full_count == 0 {
+        usize::MAX
+    } else {
+        full_count
+    }
+}
+
+fn stream_pending_delivery_time(now_ms: u64, idle_ms: u64) -> i64 {
+    i64::try_from(now_ms.saturating_sub(idle_ms)).unwrap_or(i64::MAX)
+}
+
+fn stream_full_group_pending_to_frame(
+    (id, consumer, idle_ms, deliveries): StreamPendingRecord,
+    now_ms: u64,
+) -> RespFrame {
+    RespFrame::Array(Some(vec![
+        RespFrame::BulkString(Some(format_stream_id(id))),
+        RespFrame::BulkString(Some(consumer)),
+        RespFrame::Integer(stream_pending_delivery_time(now_ms, idle_ms)),
+        RespFrame::Integer(i64::try_from(deliveries).unwrap_or(i64::MAX)),
+    ]))
+}
+
+fn stream_full_consumer_pending_to_frame(record: StreamPendingRecord, now_ms: u64) -> RespFrame {
+    let (id, _consumer, idle_ms, deliveries) = record;
+    RespFrame::Array(Some(vec![
+        RespFrame::BulkString(Some(format_stream_id(id))),
+        RespFrame::Integer(stream_pending_delivery_time(now_ms, idle_ms)),
+        RespFrame::Integer(i64::try_from(deliveries).unwrap_or(i64::MAX)),
+    ]))
 }
 
 fn xread(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
@@ -7096,30 +7129,63 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
 
     if full_mode {
         // FULL mode: include entries and detailed group info
+        let count_limit = stream_full_count_limit(full_count);
         let entries_frames: Vec<RespFrame> = store
             .xrange(&argv[2], (0, 0), (u64::MAX, u64::MAX), None, now_ms)?
             .into_iter()
-            .take(full_count)
+            .take(count_limit)
             .map(|(id, fields)| stream_record_to_frame(id, fields))
             .collect();
 
         let groups = store.xinfo_groups(&argv[2], now_ms)?.unwrap_or_default();
         let mut group_frames = Vec::with_capacity(groups.len());
         for (name, _consumers_count, pending_count, last_delivered_id) in &groups {
+            let group_pending = store
+                .xpending_entries(
+                    &argv[2],
+                    name,
+                    ((0, 0), (u64::MAX, u64::MAX)),
+                    count_limit,
+                    None,
+                    now_ms,
+                    0,
+                )?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|record| stream_full_group_pending_to_frame(record, now_ms))
+                .collect();
             let consumers_info = store
                 .xinfo_consumers(&argv[2], name, now_ms)
                 .ok()
                 .flatten()
                 .unwrap_or_default();
             let resp_v = store.dispatch_client_ctx.resp_protocol_version;
-            let consumer_frames: Vec<RespFrame> = consumers_info
-                .into_iter()
-                .map(|info| stream_full_consumer_info_to_frame(info, now_ms, resp_v))
-                .collect();
+            let mut consumer_frames = Vec::with_capacity(consumers_info.len());
+            for info in consumers_info {
+                let consumer = info.0.clone();
+                let pending = store
+                    .xpending_entries(
+                        &argv[2],
+                        name,
+                        ((0, 0), (u64::MAX, u64::MAX)),
+                        count_limit,
+                        Some(&consumer),
+                        now_ms,
+                        0,
+                    )?
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|record| stream_full_consumer_pending_to_frame(record, now_ms))
+                    .collect();
+                consumer_frames.push(stream_full_consumer_info_to_frame(
+                    info, pending, now_ms, resp_v,
+                ));
+            }
             group_frames.push(stream_full_group_info_to_frame(
                 name.clone(),
                 *pending_count,
                 *last_delivered_id,
+                group_pending,
                 consumer_frames,
                 resp_v,
             ));
@@ -40152,6 +40218,22 @@ mod tests {
             0,
         )
         .unwrap();
+        dispatch_argv(
+            &[
+                b"XREADGROUP".to_vec(),
+                b"GROUP".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"COUNT".to_vec(),
+                b"1".to_vec(),
+                b"STREAMS".to_vec(),
+                b"xs".to_vec(),
+                b">".to_vec(),
+            ],
+            &mut store,
+            10,
+        )
+        .unwrap();
         let out = dispatch_argv(
             &[
                 b"XINFO".to_vec(),
@@ -40160,7 +40242,7 @@ mod tests {
                 b"FULL".to_vec(),
             ],
             &mut store,
-            0,
+            25,
         )
         .unwrap();
         let RespFrame::Map(Some(pairs)) = out else {
@@ -40208,6 +40290,27 @@ mod tests {
                 b"consumers".as_slice(),
             ]
         );
+        let group_pending_value = group_pairs
+            .iter()
+            .find_map(|(k, v)| match k {
+                RespFrame::BulkString(Some(name)) if name == b"pending" => Some(v),
+                _ => None,
+            })
+            .expect("group pending entry");
+        let RespFrame::Array(Some(group_pending)) = group_pending_value else {
+            panic!("group pending should be an array, got {group_pending_value:?}"); // ubs:ignore — AI triage
+        };
+        let [RespFrame::Array(Some(group_pending_row))] = group_pending.as_slice() else {
+            panic!("group pending should contain one row, got {group_pending:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(group_pending_row.len(), 4);
+        assert_eq!(
+            group_pending_row.get(1),
+            Some(&RespFrame::BulkString(Some(b"c".to_vec())))
+        );
+        assert_eq!(group_pending_row.get(2), Some(&RespFrame::Integer(10)));
+        assert_eq!(group_pending_row.get(3), Some(&RespFrame::Integer(1)));
+
         let consumers_value = group_pairs
             .iter()
             .find_map(|(k, v)| match k {
@@ -40238,6 +40341,50 @@ mod tests {
                 b"pending".as_slice(),
             ]
         );
+        let consumer_pending_value = consumer_pairs
+            .iter()
+            .find_map(|(k, v)| match k {
+                RespFrame::BulkString(Some(name)) if name == b"pending" => Some(v),
+                _ => None,
+            })
+            .expect("consumer pending entry");
+        let RespFrame::Array(Some(consumer_pending)) = consumer_pending_value else {
+            panic!("consumer pending should be an array, got {consumer_pending_value:?}"); // ubs:ignore — AI triage
+        };
+        let [RespFrame::Array(Some(consumer_pending_row))] = consumer_pending.as_slice() else {
+            panic!("consumer pending should contain one row, got {consumer_pending:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(consumer_pending_row.len(), 3);
+        assert_eq!(consumer_pending_row.get(1), Some(&RespFrame::Integer(10)));
+        assert_eq!(consumer_pending_row.get(2), Some(&RespFrame::Integer(1)));
+
+        let count_zero = dispatch_argv(
+            &[
+                b"XINFO".to_vec(),
+                b"STREAM".to_vec(),
+                b"xs".to_vec(),
+                b"FULL".to_vec(),
+                b"COUNT".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            25,
+        )
+        .unwrap();
+        let RespFrame::Map(Some(count_zero_pairs)) = count_zero else {
+            panic!("expected COUNT 0 RESP3 Map, got {count_zero:?}"); // ubs:ignore — AI triage
+        };
+        let entries_value = count_zero_pairs
+            .iter()
+            .find_map(|(k, v)| match k {
+                RespFrame::BulkString(Some(name)) if name == b"entries" => Some(v),
+                _ => None,
+            })
+            .expect("entries entry");
+        let RespFrame::Array(Some(entries)) = entries_value else {
+            panic!("COUNT 0 entries should be an array, got {entries_value:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(entries.len(), 1, "COUNT 0 should mean unlimited");
 
         // RESP2 emits flat alternating array of the same pairs.
         store.dispatch_client_ctx.resp_protocol_version = 2;
@@ -40249,7 +40396,7 @@ mod tests {
                 b"FULL".to_vec(),
             ],
             &mut store,
-            0,
+            25,
         )
         .unwrap();
         let RespFrame::Array(Some(flat)) = out else {
