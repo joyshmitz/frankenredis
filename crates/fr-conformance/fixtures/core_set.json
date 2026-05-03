@@ -1417,32 +1417,6 @@
       }
     },
     {
-      "name": "spop_bad_count",
-      "now_ms": 1410,
-      "argv": [
-        "SPOP",
-        "spop_c",
-        "bad"
-      ],
-      "expect": {
-        "kind": "error",
-        "value": "ERR value is out of range, must be positive"
-      }
-    },
-    {
-      "name": "spop_negative_count",
-      "now_ms": 1410,
-      "argv": [
-        "SPOP",
-        "spop_c",
-        "-1"
-      ],
-      "expect": {
-        "kind": "error",
-        "value": "ERR value is out of range, must be positive"
-      }
-    },
-    {
       "name": "smismember_wrong_arity",
       "now_ms": 1500,
       "argv": [

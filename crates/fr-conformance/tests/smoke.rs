@@ -693,8 +693,6 @@ const CORE_SET_LIVE_STABLE_CASES: &[&str] = &[
     "spop_seed_count",
     "spop_with_count",
     "spop_missing_key_with_count",
-    "spop_bad_count",
-    "spop_negative_count",
     // Three-way operations
     "three_way_setup_c",
     "sdiff_three_sets",

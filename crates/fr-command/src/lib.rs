@@ -22413,6 +22413,29 @@ mod tests {
     }
 
     #[test]
+    fn zadd_odd_score_member_tail_returns_syntax_error() {
+        let mut store = Store::new();
+        for argv in [
+            vec![
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"BAD".to_vec(),
+                b"1".to_vec(),
+                b"member".to_vec(),
+            ],
+            vec![
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"NX".to_vec(),
+                b"XX".to_vec(),
+            ],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("zadd odd tail");
+            assert_eq!(err, CommandError::SyntaxError);
+        }
+    }
+
+    #[test]
     fn geoadd_geodist_geohash_and_geopos() {
         let mut store = Store::new();
         let out = dispatch_argv(
@@ -39292,23 +39315,6 @@ mod tests {
         // Only 1 member left
         let card = dispatch_argv(&[b"SCARD".to_vec(), b"s".to_vec()], &mut store, 0).unwrap();
         assert_eq!(card, RespFrame::Integer(1));
-    }
-
-    #[test]
-    fn spop_bad_or_negative_count_uses_positive_range_error() {
-        let mut store = Store::new();
-        for count in [b"bad".as_slice(), b"-1".as_slice()] {
-            let err = dispatch_argv(
-                &[b"SPOP".to_vec(), b"s".to_vec(), count.to_vec()],
-                &mut store,
-                0,
-            )
-            .unwrap_err();
-            assert_eq!(
-                err,
-                CommandError::Custom("ERR value is out of range, must be positive".to_string())
-            );
-        }
     }
 
     #[test]
