@@ -8087,9 +8087,13 @@ impl Runtime {
             if parameter.eq_ignore_ascii_case("appendfilename")
                 || parameter.eq_ignore_ascii_case("appenddirname")
                 || parameter.eq_ignore_ascii_case("always-show-logo")
+                || parameter.eq_ignore_ascii_case("aof_rewrite_cpulist")
+                || parameter.eq_ignore_ascii_case("bgsave_cpulist")
+                || parameter.eq_ignore_ascii_case("bio_cpulist")
                 || parameter.eq_ignore_ascii_case("bind")
                 || parameter.eq_ignore_ascii_case("cluster-config-file")
                 || parameter.eq_ignore_ascii_case("cluster-enabled")
+                || parameter.eq_ignore_ascii_case("cluster-port")
                 || parameter.eq_ignore_ascii_case("databases")
                 || parameter.eq_ignore_ascii_case("daemonize")
                 || parameter.eq_ignore_ascii_case("disable-thp")
@@ -8102,8 +8106,15 @@ impl Runtime {
                 || parameter.eq_ignore_ascii_case("pidfile")
                 || parameter.eq_ignore_ascii_case("port")
                 || parameter.eq_ignore_ascii_case("rdbchecksum")
+                || parameter.eq_ignore_ascii_case("replicaof")
                 || parameter.eq_ignore_ascii_case("set-proc-title")
+                || parameter.eq_ignore_ascii_case("server_cpulist")
+                || parameter.eq_ignore_ascii_case("slaveof")
+                || parameter.eq_ignore_ascii_case("socket-mark-id")
                 || parameter.eq_ignore_ascii_case("supervised")
+                || parameter.eq_ignore_ascii_case("syslog-enabled")
+                || parameter.eq_ignore_ascii_case("syslog-facility")
+                || parameter.eq_ignore_ascii_case("syslog-ident")
                 || parameter.eq_ignore_ascii_case("tcp-backlog")
                 || parameter.eq_ignore_ascii_case("unixsocket")
                 || parameter.eq_ignore_ascii_case("unixsocketperm")
@@ -8478,8 +8489,12 @@ impl Runtime {
                         | "aof-rewrite-incremental-fsync"
                         | "aof-timestamp-enabled"
                         | "aof-use-rdb-preamble"
+                        | "cluster-allow-replica-migration"
                         | "cluster-replica-no-failover"
                         | "cluster-require-full-coverage"
+                        | "cluster-slave-no-failover"
+                        | "crash-log-enabled"
+                        | "crash-memcheck-enabled"
                         | "dynamic-hz"
                         | "lazyfree-lazy-eviction"
                         | "lazyfree-lazy-expire"
@@ -8494,10 +8509,19 @@ impl Runtime {
                         | "rdbcompression"
                         | "repl-disable-tcp-nodelay"
                         | "repl-diskless-sync"
+                        | "replica-ignore-disk-write-errors"
+                        | "replica-ignore-maxmemory"
                         | "replica-announced"
                         | "replica-lazy-flush"
                         | "replica-read-only"
                         | "replica-serve-stale-data"
+                        | "slave-ignore-maxmemory"
+                        | "slave-lazy-flush"
+                        | "slave-read-only"
+                        | "tls-cluster"
+                        | "tls-prefer-server-ciphers"
+                        | "tls-replication"
+                        | "tls-session-caching"
                         | "tracking-bcast-on"
                         | "use-exit-on-panic"
                 ) {
@@ -8526,6 +8550,114 @@ impl Runtime {
                                 "argument couldn't be parsed into an integer",
                             );
                         }
+                    }
+                }
+                if matches!(
+                    canonical,
+                    "cluster-announce-bus-port"
+                        | "cluster-announce-port"
+                        | "cluster-announce-tls-port"
+                        | "replica-announce-port"
+                        | "slave-announce-port"
+                        | "tls-port"
+                ) {
+                    match parse_i64_arg(value_bytes) {
+                        Ok(v) if (0..=65535).contains(&v) => {}
+                        Ok(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument must be between 0 and 65535 inclusive",
+                            );
+                        }
+                        Err(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument couldn't be parsed into an integer",
+                            );
+                        }
+                    }
+                }
+                if matches!(
+                    canonical,
+                    "cluster-replica-validity-factor"
+                        | "cluster-slave-validity-factor"
+                        | "repl-diskless-sync-max-replicas"
+                        | "shutdown-timeout"
+                        | "tls-session-cache-size"
+                        | "tls-session-cache-timeout"
+                ) {
+                    match parse_i64_arg(value_bytes) {
+                        Ok(v) if (0..=i64::from(i32::MAX)).contains(&v) => {}
+                        Ok(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument must be between 0 and 2147483647 inclusive",
+                            );
+                        }
+                        Err(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument couldn't be parsed into an integer",
+                            );
+                        }
+                    }
+                }
+                if canonical == "repl-ping-slave-period" {
+                    match parse_i64_arg(value_bytes) {
+                        Ok(v) if (1..=i64::from(i32::MAX)).contains(&v) => {}
+                        Ok(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument must be between 1 and 2147483647 inclusive",
+                            );
+                        }
+                        Err(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument couldn't be parsed into an integer",
+                            );
+                        }
+                    }
+                }
+                if canonical == "tracking-table-max-keys" {
+                    match parse_i64_arg(value_bytes) {
+                        Ok(v) if v >= 0 => {}
+                        Ok(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument must be between 0 and 9223372036854775807 inclusive",
+                            );
+                        }
+                        Err(_) => {
+                            return config_set_failed(
+                                canonical,
+                                "argument couldn't be parsed into an integer",
+                            );
+                        }
+                    }
+                }
+                let enum_values: Option<&[&str]> = match canonical {
+                    "oom-score-adj" => Some(&["no", "yes", "relative", "absolute"]),
+                    "propagation-error-behavior" => Some(&["ignore", "panic", "panic-on-replicas"]),
+                    "tls-auth-clients" => Some(&["no", "yes", "optional"]),
+                    _ => None,
+                };
+                if let Some(values) = enum_values {
+                    let value_str = match std::str::from_utf8(value_bytes) {
+                        Ok(v) => v,
+                        Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                    };
+                    if !values
+                        .iter()
+                        .any(|allowed| value_str.eq_ignore_ascii_case(allowed))
+                    {
+                        return config_set_failed(
+                            canonical,
+                            &format!(
+                                "argument(s) must be one of the following: {}",
+                                values.join(", ")
+                            ),
+                        );
                     }
                 }
                 if canonical == "save" {
@@ -18541,6 +18673,66 @@ mod tests {
                 "CONFIG GET {name} default mismatch"
             );
         }
+    }
+
+    #[test]
+    fn config_set_validates_upstream_static_key_types() {
+        // (frankenredis-3hj8) Adding Redis 7.2 CONFIG GET keys must not
+        // make the generic static-override fallback accept invalid values
+        // or immutable settings through CONFIG SET.
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"tls-cluster", b"maybe"]), 0),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'tls-cluster') - argument must be 'yes' or 'no'"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"tls-auth-clients", b"required"]),
+                0
+            ),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'tls-auth-clients') - argument(s) must be one of the following: no, yes, optional"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"cluster-announce-port", b"70000"]),
+                0
+            ),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'cluster-announce-port') - argument must be between 0 and 65535 inclusive"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"repl-ping-slave-period", b"0"]),
+                0
+            ),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'repl-ping-slave-period') - argument must be between 1 and 2147483647 inclusive"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"cluster-port", b"1"]), 0),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'cluster-port') - can't set immutable config"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"syslog-enabled", b"yes"]), 0),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'syslog-enabled') - can't set immutable config"
+                    .to_string()
+            )
+        );
     }
 
     #[test]

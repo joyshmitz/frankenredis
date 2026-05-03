@@ -3315,6 +3315,9 @@ const CORE_CONFIG_LIVE_STABLE_CASES: &[&str] = &[
     "config_set_hz_negative_error",
     "config_set_hz_over_max_error",
     "config_get_hz_unchanged_after_errors",
+    "config_set_syslog_enabled_immutable",
+    "config_set_cluster_announce_port_non_integer",
+    "config_set_oom_score_adj_bad_enum",
 ];
 
 #[test]

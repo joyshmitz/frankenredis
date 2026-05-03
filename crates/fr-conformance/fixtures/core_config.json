@@ -1054,6 +1054,48 @@
       }
     },
     {
+      "name": "config_set_syslog_enabled_immutable",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "syslog-enabled",
+        "yes"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'syslog-enabled') - can't set immutable config"
+      }
+    },
+    {
+      "name": "config_set_cluster_announce_port_non_integer",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "cluster-announce-port",
+        "abc"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'cluster-announce-port') - argument couldn't be parsed into an integer"
+      }
+    },
+    {
+      "name": "config_set_oom_score_adj_bad_enum",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "oom-score-adj",
+        "maybe"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'oom-score-adj') - argument(s) must be one of the following: no, yes, relative, absolute"
+      }
+    },
+    {
       "name": "config_set_unknown_param_error",
       "now_ms": 0,
       "argv": [
@@ -1207,7 +1249,7 @@
         "value": [
           {
             "kind": "bulk",
-            "value": "maxmemory"
+            "value": "MAXMEMORY"
           },
           {
             "kind": "bulk",
@@ -1883,6 +1925,30 @@
           {
             "kind": "bulk",
             "value": "10"
+          },
+          {
+            "kind": "bulk",
+            "value": "maxmemory-clients"
+          },
+          {
+            "kind": "bulk",
+            "value": "0"
+          },
+          {
+            "kind": "bulk",
+            "value": "replica-ignore-maxmemory"
+          },
+          {
+            "kind": "bulk",
+            "value": "yes"
+          },
+          {
+            "kind": "bulk",
+            "value": "slave-ignore-maxmemory"
+          },
+          {
+            "kind": "bulk",
+            "value": "yes"
           }
         ]
       }
