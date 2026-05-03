@@ -1,4 +1,4 @@
-use fr_command::{dispatch_argv, CommandError};
+use fr_command::{CommandError, dispatch_argv};
 use fr_protocol::RespFrame;
 use fr_store::Store;
 

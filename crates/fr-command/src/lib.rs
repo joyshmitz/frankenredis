@@ -411,7 +411,6 @@ pub fn command_key_indexes(argv: &[Vec<u8>]) -> Vec<usize> {
     Vec::new()
 }
 
-const KEY_FLAGS_NONE: &[&str] = &[];
 const KEY_FLAGS_RO_ACCESS: &[&str] = &["RO", "access"];
 const KEY_FLAGS_RW_ACCESS_UPDATE: &[&str] = &["RW", "access", "update"];
 const KEY_FLAGS_OW_UPDATE: &[&str] = &["OW", "update"];
@@ -439,9 +438,17 @@ enum CommandKeyLookupError {
 
 fn command_uses_custom_key_specs(cmd_name: &str) -> bool {
     cmd_name.eq_ignore_ascii_case("APPEND")
+        || cmd_name.eq_ignore_ascii_case("EXPIRE")
+        || cmd_name.eq_ignore_ascii_case("EXPIREAT")
         || cmd_name.eq_ignore_ascii_case("HSET")
         || cmd_name.eq_ignore_ascii_case("HSETNX")
         || cmd_name.eq_ignore_ascii_case("HMSET")
+        || cmd_name.eq_ignore_ascii_case("PERSIST")
+        || cmd_name.eq_ignore_ascii_case("PEXPIRE")
+        || cmd_name.eq_ignore_ascii_case("PEXPIREAT")
+        || cmd_name.eq_ignore_ascii_case("PSETEX")
+        || cmd_name.eq_ignore_ascii_case("SETEX")
+        || cmd_name.eq_ignore_ascii_case("SETNX")
         || cmd_name.eq_ignore_ascii_case("LPUSH")
         || cmd_name.eq_ignore_ascii_case("LPUSHX")
         || cmd_name.eq_ignore_ascii_case("RPUSH")
@@ -809,6 +816,45 @@ fn command_key_references_with_exact_flags(
         return Ok(Some(vec![CommandKeyReference {
             index: 1,
             flags: KEY_FLAGS_RW_UPDATE,
+        }]));
+    }
+
+    // EXPIRE / PEXPIRE / EXPIREAT / PEXPIREAT / PERSIST: RW/update
+    // (the TTL changes are recorded as updates).
+    // (br-frankenredis-keyflagsupd3)
+    if cmd_name.eq_ignore_ascii_case("EXPIRE")
+        || cmd_name.eq_ignore_ascii_case("PEXPIRE")
+        || cmd_name.eq_ignore_ascii_case("EXPIREAT")
+        || cmd_name.eq_ignore_ascii_case("PEXPIREAT")
+        || cmd_name.eq_ignore_ascii_case("PERSIST")
+    {
+        if argv.len() < 2 {
+            return Ok(None);
+        }
+        return Ok(Some(vec![CommandKeyReference {
+            index: 1,
+            flags: KEY_FLAGS_RW_UPDATE,
+        }]));
+    }
+
+    // SETEX / PSETEX: OW/update — the value is overwritten.
+    // SETNX: OW/insert. (br-frankenredis-keyflagsupd3)
+    if cmd_name.eq_ignore_ascii_case("SETEX") || cmd_name.eq_ignore_ascii_case("PSETEX") {
+        if argv.len() < 2 {
+            return Ok(None);
+        }
+        return Ok(Some(vec![CommandKeyReference {
+            index: 1,
+            flags: KEY_FLAGS_OW_UPDATE,
+        }]));
+    }
+    if cmd_name.eq_ignore_ascii_case("SETNX") {
+        if argv.len() < 2 {
+            return Ok(None);
+        }
+        return Ok(Some(vec![CommandKeyReference {
+            index: 1,
+            flags: KEY_FLAGS_OW_INSERT,
         }]));
     }
 
@@ -2604,7 +2650,7 @@ fn expire_like(
     };
     let when_ms_signed: Option<i64> = match kind {
         ExpireCommandKind::RelativeSeconds | ExpireCommandKind::AbsoluteSeconds => {
-            if raw_time > i64::MAX / 1000 || raw_time < i64::MIN / 1000 {
+            if !(i64::MIN / 1000..=i64::MAX / 1000).contains(&raw_time) {
                 return Err(invalid_expire());
             }
             let ms = raw_time.saturating_mul(1000);
@@ -3663,7 +3709,10 @@ fn parse_f64_arg(arg: &[u8]) -> Result<f64, CommandError> {
     // 'infinity', etc.). (br-frankenredis-floatovf)
     if val.is_infinite() {
         let lc = text.to_ascii_lowercase();
-        let stripped = lc.strip_prefix('+').or_else(|| lc.strip_prefix('-')).unwrap_or(&lc);
+        let stripped = lc
+            .strip_prefix('+')
+            .or_else(|| lc.strip_prefix('-'))
+            .unwrap_or(&lc);
         if stripped != "inf" && stripped != "infinity" {
             return Err(CommandError::Store(fr_store::StoreError::ValueNotFloat));
         }
@@ -4015,9 +4064,9 @@ fn zadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             .zincrby_with_options(&argv[1], member, score_delta, opts, now_ms)
             .map_err(|e| match e {
                 // (br-frankenredis-zinaN)
-                StoreError::IncrFloatNaN => CommandError::Custom(
-                    "ERR resulting score is not a number (NaN)".to_string(),
-                ),
+                StoreError::IncrFloatNaN => {
+                    CommandError::Custom("ERR resulting score is not a number (NaN)".to_string())
+                }
                 other => other.into(),
             })?;
         match result {
@@ -4407,18 +4456,20 @@ fn zincrby(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame
         return Err(CommandError::WrongArity("ZINCRBY"));
     }
     let delta = parse_f64_arg(&argv[2])?;
-    let new_score = store.zincrby(&argv[1], argv[3].clone(), delta, now_ms).map_err(|e| {
-        // Upstream t_zset.c uses 'resulting score is not a number
-        // (NaN)' for any zset increment that yields NaN, distinct
-        // from INCRBYFLOAT's 'increment would produce NaN or
-        // Infinity' wording. (br-frankenredis-zinaN)
-        match e {
-            StoreError::IncrFloatNaN => CommandError::Custom(
-                "ERR resulting score is not a number (NaN)".to_string(),
-            ),
-            other => other.into(),
-        }
-    })?;
+    let new_score = store
+        .zincrby(&argv[1], argv[3].clone(), delta, now_ms)
+        .map_err(|e| {
+            // Upstream t_zset.c uses 'resulting score is not a number
+            // (NaN)' for any zset increment that yields NaN, distinct
+            // from INCRBYFLOAT's 'increment would produce NaN or
+            // Infinity' wording. (br-frankenredis-zinaN)
+            match e {
+                StoreError::IncrFloatNaN => {
+                    CommandError::Custom("ERR resulting score is not a number (NaN)".to_string())
+                }
+                other => other.into(),
+            }
+        })?;
     Ok(RespFrame::BulkString(Some(
         new_score.to_string().into_bytes(),
     )))
@@ -5573,9 +5624,7 @@ fn xadd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     // like 'LIMIT' that fell through option parsing emits
     // 'Invalid stream ID specified...' rather than wrong-arity.
     // (br-frankenredis-xaddidvalid)
-    if !eq_ascii_command(&argv[id_idx], b"*")
-        && parse_partial_auto_id(&argv[id_idx]).is_none()
-    {
+    if !eq_ascii_command(&argv[id_idx], b"*") && parse_partial_auto_id(&argv[id_idx]).is_none() {
         match parse_stream_id(&argv[id_idx]) {
             Ok((0, 0)) => {
                 // Upstream xaddCommand also requires the ID to be
@@ -6315,8 +6364,7 @@ fn xautoclaim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             // Upstream uses getRangeLongFromObjectOrReply that
             // returns 'COUNT must be > 0' for any non-positive or
             // unparseable value. (br-frankenredis-xautoclaim)
-            let bad_count =
-                || CommandError::Custom("ERR COUNT must be > 0".to_string());
+            let bad_count = || CommandError::Custom("ERR COUNT must be > 0".to_string());
             let parsed = parse_i64_arg(&argv[idx + 1]).map_err(|_| bad_count())?;
             if parsed <= 0 {
                 return Err(bad_count());
@@ -7251,8 +7299,7 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         && last_id < top
     {
         return Ok(RespFrame::Error(
-            "ERR The ID specified in XSETID is smaller than the target stream top item"
-                .to_string(),
+            "ERR The ID specified in XSETID is smaller than the target stream top item".to_string(),
         ));
     }
     match store.xsetid(key, last_id, now_ms) {
@@ -8221,8 +8268,8 @@ fn function_cmd(
                         "ERR library name argument was not given".to_string(),
                     ));
                 }
-                let pat = std::str::from_utf8(&argv[i])
-                    .map_err(|_| CommandError::InvalidUtf8Argument)?;
+                let pat =
+                    std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
                 pattern = Some(pat.to_string());
             } else if arg.eq_ignore_ascii_case("WITHCODE") {
                 with_code = true;
@@ -8608,11 +8655,10 @@ fn transform_register_function(line: &str) -> Option<String> {
     let (name, rest) = if let Some(stripped) = after.strip_prefix('\'') {
         let end = stripped.find('\'')?;
         (&stripped[..end], &stripped[end + 1..])
-    } else if let Some(stripped) = after.strip_prefix('"') {
+    } else {
+        let stripped = after.strip_prefix('"')?;
         let end = stripped.find('"')?;
         (&stripped[..end], &stripped[end + 1..])
-    } else {
-        return None;
     };
     // Skip comma and whitespace to find 'function'
     let rest = rest.trim_start().strip_prefix(',')?;
@@ -9198,7 +9244,7 @@ fn parse_bit_offset_or_reply(arg: &[u8]) -> Result<i64, CommandError> {
     // The check is `(loffset >> 3) >= server.proto_max_bulk_len`, i.e.
     // bit-offsets >= 512 MiB << 3 = 2^32 are rejected.
     const MAX_BIT_OFFSET_EXCLUSIVE: i64 = 512 * 1024 * 1024 * 8;
-    if offset < 0 || offset >= MAX_BIT_OFFSET_EXCLUSIVE {
+    if !(0..MAX_BIT_OFFSET_EXCLUSIVE).contains(&offset) {
         return Err(err());
     }
     Ok(offset)
@@ -9716,8 +9762,8 @@ pub fn parse_migrate_request(argv: &[Vec<u8>]) -> Result<MigrateRequest, Command
     {
         let mut j = 6;
         while j < argv.len() {
-            let opt = std::str::from_utf8(&argv[j])
-                .map_err(|_| CommandError::InvalidUtf8Argument)?;
+            let opt =
+                std::str::from_utf8(&argv[j]).map_err(|_| CommandError::InvalidUtf8Argument)?;
             if opt.eq_ignore_ascii_case("COPY") || opt.eq_ignore_ascii_case("REPLACE") {
                 j += 1;
             } else if opt.eq_ignore_ascii_case("AUTH") {
@@ -14088,7 +14134,6 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                     // so the filter never matches our single dispatch
                     // session; return 0 like upstream does when no
                     // clients match. (br-frankenredis-lkoh)
-                    i += 2;
                     return Ok(RespFrame::Integer(0));
                 } else if opt.eq_ignore_ascii_case("SKIPME") && i + 1 < argv.len() {
                     let val = std::str::from_utf8(&argv[i + 1])
@@ -15908,7 +15953,9 @@ fn script_shebang_invalid_error(script: &[u8]) -> Result<(), String> {
         return Err("ERR Invalid script shebang".to_string());
     };
     let line = &script[..line_end];
-    let mut tokens = line.split(|&b| b == b' ' || b == b'\t').filter(|t| !t.is_empty());
+    let mut tokens = line
+        .split(|&b| b == b' ' || b == b'\t')
+        .filter(|t| !t.is_empty());
     let Some(engine) = tokens.next() else {
         return Err("ERR Invalid engine in script shebang".to_string());
     };
@@ -17802,17 +17849,11 @@ fn sort_lookup_get_pattern(
     }
 
     // Substitute * with element value
-    let star_pos = pattern.iter().position(|&b| b == b'*');
-    let lookup_key = match star_pos {
-        Some(pos) => {
-            let mut k = Vec::with_capacity(pattern.len() + element.len());
-            k.extend_from_slice(&pattern[..pos]);
-            k.extend_from_slice(element);
-            k.extend_from_slice(&pattern[pos + 1..]);
-            k
-        }
-        None => return None, // GET without * always returns nil
-    };
+    let pos = pattern.iter().position(|&b| b == b'*')?;
+    let mut lookup_key = Vec::with_capacity(pattern.len() + element.len());
+    lookup_key.extend_from_slice(&pattern[..pos]);
+    lookup_key.extend_from_slice(element);
+    lookup_key.extend_from_slice(&pattern[pos + 1..]);
 
     sort_resolve_key_or_hash(store, &lookup_key, now_ms)
 }
@@ -19389,6 +19430,20 @@ mod tests {
         let out = dispatch_argv(&argv, &mut store, 0).expect("flushdb");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn flush_commands_reject_invalid_optional_modes() {
+        for argv in [
+            vec![b"FLUSHDB".to_vec(), b"BOGUS".to_vec()],
+            vec![b"FLUSHDB".to_vec(), b"ASYNC".to_vec(), b"extra".to_vec()],
+            vec![b"FLUSHALL".to_vec(), b"BOGUS".to_vec()],
+            vec![b"FLUSHALL".to_vec(), b"SYNC".to_vec(), b"extra".to_vec()],
+        ] {
+            let mut store = Store::new();
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("flush should fail");
+            assert_eq!(err, CommandError::SyntaxError, "argv={argv:?}");
+        }
     }
 
     #[test]
@@ -32287,9 +32342,7 @@ mod tests {
                     b"SYNC".to_vec(),
                     b"EXTRA".to_vec(),
                 ],
-                CommandError::Custom(
-                    "ERR SCRIPT FLUSH only support SYNC|ASYNC option".to_string(),
-                ),
+                CommandError::Custom("ERR SCRIPT FLUSH only support SYNC|ASYNC option".to_string()),
             ),
             (
                 vec![b"SCRIPT".to_vec(), b"DEBUG".to_vec()],

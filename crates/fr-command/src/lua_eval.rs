@@ -2494,7 +2494,9 @@ impl<'a> LuaState<'a> {
                     LuaValue::Table(t)
                 };
                 let Some(LuaValue::Str(bytes)) = args.first() else {
-                    return Ok(vec![make_err_table(b"ERR wrong number or type of arguments".to_vec())]);
+                    return Ok(vec![make_err_table(
+                        b"ERR wrong number or type of arguments".to_vec(),
+                    )]);
                 };
                 // Upstream pre-pends '-' to the user-supplied error
                 // body before handing it to luaPushErrorBuff, which
