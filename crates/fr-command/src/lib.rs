@@ -38678,6 +38678,61 @@ mod tests {
     }
 
     #[test]
+    fn zrangestore_byscore_inverted_range_returns_empty_without_panic() {
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"src".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+                b"2".to_vec(),
+                b"b".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("seed source zset");
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"dst".to_vec(),
+                b"10".to_vec(),
+                b"stale".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("seed destination zset");
+
+        let out = dispatch_argv(
+            &[
+                b"ZRANGESTORE".to_vec(),
+                b"dst".to_vec(),
+                b"src".to_vec(),
+                b"0".to_vec(),
+                b"-1".to_vec(),
+                b"BYSCORE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("inverted BYSCORE range should not panic");
+
+        assert_eq!(out, RespFrame::Integer(0));
+        assert_eq!(
+            dispatch_argv(&[b"ZCARD".to_vec(), b"dst".to_vec()], &mut store, 0)
+                .expect("destination cardinality"),
+            RespFrame::Integer(0)
+        );
+        assert_eq!(
+            dispatch_argv(&[b"ZCARD".to_vec(), b"src".to_vec()], &mut store, 0)
+                .expect("source cardinality"),
+            RespFrame::Integer(2)
+        );
+    }
+
+    #[test]
     fn zrange_byscore() {
         let mut store = Store::new();
         dispatch_argv(
