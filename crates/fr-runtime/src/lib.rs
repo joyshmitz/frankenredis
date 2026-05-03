@@ -6050,8 +6050,7 @@ impl Runtime {
                             cmd_name.to_ascii_uppercase()
                         ));
                     }
-                    if let Err(_) =
-                        fr_command::check_command_arity(&dryrun_argv[0], dryrun_argv.len())
+                    if fr_command::check_command_arity(&dryrun_argv[0], dryrun_argv.len()).is_err()
                     {
                         return RespFrame::Error(format!(
                             "ERR wrong number of arguments for '{}' command",
@@ -6676,9 +6675,7 @@ impl Runtime {
             // dictionary key. Mirror that by rewriting the key
             // for newly-added entries when the pattern is literal.
             // (br-frankenredis-cfggetcase)
-            let is_literal = !raw_pattern
-                .chars()
-                .any(|c| matches!(c, '*' | '?' | '['));
+            let is_literal = !raw_pattern.chars().any(|c| matches!(c, '*' | '?' | '['));
             if is_literal && raw_pattern != pattern {
                 let mut idx = before;
                 while idx + 1 < entries.len() {
@@ -8086,8 +8083,10 @@ impl Runtime {
                         );
                     }
                 };
-                static_override_updates
-                    .push(("active-defrag-max-scan-fields".to_string(), parsed.to_string()));
+                static_override_updates.push((
+                    "active-defrag-max-scan-fields".to_string(),
+                    parsed.to_string(),
+                ));
                 continue;
             }
             // Enum validation. (br-frankenredis-cfgmemvalue)
@@ -8126,9 +8125,10 @@ impl Runtime {
                 // The upstream enum values include flag-style combinations,
                 // but the base set is {default, save, nosave, now, force}.
                 let lower = value_str.to_ascii_lowercase();
-                if !lower.split_whitespace().all(|tok| {
-                    matches!(tok, "default" | "save" | "nosave" | "now" | "force")
-                }) {
+                if !lower
+                    .split_whitespace()
+                    .all(|tok| matches!(tok, "default" | "save" | "nosave" | "now" | "force"))
+                {
                     return config_set_failed(
                         canonical,
                         "argument(s) must be one of the following: default, save, nosave, now, force",
@@ -8175,10 +8175,8 @@ impl Runtime {
                         "argument(s) must be one of the following: debug, verbose, notice, warning, nothing",
                     );
                 }
-                static_override_updates.push((
-                    "loglevel".to_string(),
-                    value_str.to_ascii_lowercase(),
-                ));
+                static_override_updates
+                    .push(("loglevel".to_string(), value_str.to_ascii_lowercase()));
                 continue;
             }
             if parameter.eq_ignore_ascii_case("dir") {
@@ -8315,8 +8313,7 @@ impl Runtime {
             // (64K, 1m, 1g, ...) and report 'argument must be a
             // memory value' on parse failure. set-max-listpack-value
             // is INTEGER_CONFIG. (br-frankenredis-cfgmemvalue)
-            let is_memory_threshold = parameter
-                .eq_ignore_ascii_case("hash-max-listpack-value")
+            let is_memory_threshold = parameter.eq_ignore_ascii_case("hash-max-listpack-value")
                 || parameter.eq_ignore_ascii_case("hash-max-ziplist-value")
                 || parameter.eq_ignore_ascii_case("zset-max-listpack-value")
                 || parameter.eq_ignore_ascii_case("zset-max-ziplist-value");
@@ -8430,19 +8427,13 @@ impl Runtime {
                     match std::str::from_utf8(value_bytes) {
                         Ok(s) if s.eq_ignore_ascii_case("yes") || s.eq_ignore_ascii_case("no") => {}
                         _ => {
-                            return config_set_failed(
-                                canonical,
-                                "argument must be 'yes' or 'no'",
-                            );
+                            return config_set_failed(canonical, "argument must be 'yes' or 'no'");
                         }
                     }
                 }
                 if matches!(
                     canonical,
-                    "tcp-keepalive"
-                        | "tcp-backlog"
-                        | "io-threads"
-                        | "lfu-log-factor"
+                    "tcp-keepalive" | "tcp-backlog" | "io-threads" | "lfu-log-factor"
                 ) {
                     match parse_i64_arg(value_bytes) {
                         Ok(v) if v >= 0 => {}
@@ -8772,9 +8763,7 @@ impl Runtime {
                         let parsed_id = match parse_i64_arg(id_arg) {
                             Ok(id) => id,
                             Err(_) => {
-                                return RespFrame::Error(
-                                    "ERR Invalid client ID".to_string(),
-                                );
+                                return RespFrame::Error("ERR Invalid client ID".to_string());
                             }
                         };
                         if parsed_id > 0 {
@@ -9900,9 +9889,7 @@ impl Runtime {
                 Err(_) => return Err(RespFrame::Error(invalid.to_string())),
             };
             if !(0..dbc as i64).contains(&parsed) {
-                return Err(RespFrame::Error(
-                    "ERR DB index is out of range".to_string(),
-                ));
+                return Err(RespFrame::Error("ERR DB index is out of range".to_string()));
             }
             Ok(parsed as usize)
         };
@@ -10218,16 +10205,17 @@ impl Runtime {
         // in pieces, slotting the runtime sections in between.
         // (br-frankenredis-infoorder)
 
-        let dispatch_command_section = |this: &mut Self, name: &str, info: &mut Vec<u8>| -> Result<(), CommandError> {
-            let argv: Vec<Vec<u8>> = vec![b"INFO".to_vec(), name.as_bytes().to_vec()];
-            let namespaced = this.namespace_argv_for_selected_db(&argv);
-            let mut reply = this.dispatch_with_client_context(&namespaced, now_ms)?;
-            this.strip_db_prefixes_from_frame(&mut reply);
-            if let RespFrame::BulkString(Some(bytes)) = reply {
-                info.extend_from_slice(&bytes);
-            }
-            Ok(())
-        };
+        let dispatch_command_section =
+            |this: &mut Self, name: &str, info: &mut Vec<u8>| -> Result<(), CommandError> {
+                let argv: Vec<Vec<u8>> = vec![b"INFO".to_vec(), name.as_bytes().to_vec()];
+                let namespaced = this.namespace_argv_for_selected_db(&argv);
+                let mut reply = this.dispatch_with_client_context(&namespaced, now_ms)?;
+                this.strip_db_prefixes_from_frame(&mut reply);
+                if let RespFrame::BulkString(Some(bytes)) = reply {
+                    info.extend_from_slice(&bytes);
+                }
+                Ok(())
+            };
 
         let want = |name: &str| {
             is_all
@@ -13381,7 +13369,9 @@ mod tests {
         // WrongArity wording. (br-frankenredis-pubsubarity)
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"NUMPAT", b"extra"]), 3),
-            RespFrame::Error("ERR wrong number of arguments for 'pubsub|numpat' command".to_string())
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'pubsub|numpat' command".to_string()
+            )
         );
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"BOGUS"]), 4),
@@ -18377,6 +18367,48 @@ mod tests {
                 RespFrame::BulkString(Some(b"-2".to_vec())),
             ]))
         );
+    }
+
+    #[test]
+    fn config_set_maxmemory_accepts_redis_memory_suffixes() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"100kb", b"102400"),
+            (b"100mb", b"104857600"),
+            (b"100gb", b"107374182400"),
+            (b"100k", b"100000"),
+            (b"100m", b"100000000"),
+            (b"100g", b"100000000000"),
+            (b"100b", b"100"),
+            (b"100", b"100"),
+            (b"1Gb", b"1073741824"),
+        ];
+
+        let mut rt = Runtime::default_strict();
+        for (input, expected_bytes) in cases {
+            assert_eq!(
+                rt.execute_frame(command(&[b"CONFIG", b"SET", b"maxmemory", input]), 0),
+                RespFrame::SimpleString("OK".to_string()),
+                "CONFIG SET maxmemory {}",
+                String::from_utf8_lossy(input)
+            );
+            assert_eq!(
+                rt.execute_frame(command(&[b"CONFIG", b"GET", b"maxmemory"]), 0),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"maxmemory".to_vec())),
+                    RespFrame::BulkString(Some((*expected_bytes).to_vec())),
+                ])),
+                "CONFIG GET maxmemory after {}",
+                String::from_utf8_lossy(input)
+            );
+            assert_eq!(
+                rt.server.maxmemory_bytes.to_string().as_bytes(),
+                *expected_bytes
+            );
+            assert_eq!(
+                rt.server.store.maxmemory_bytes_live.to_string().as_bytes(),
+                *expected_bytes
+            );
+        }
     }
 
     #[test]
