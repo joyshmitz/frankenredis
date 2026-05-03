@@ -5970,6 +5970,105 @@ fn stream_consumer_info_to_frame(
     }
 }
 
+/// Consumer rows nested under `XINFO STREAM ... FULL`.
+///
+/// Upstream t_stream.c::xinfoReplyWithStreamInfo emits these as maps with
+/// seen/active timestamps and PEL details. fr-store currently exposes only
+/// idle-style consumer info, so preserve the upstream field contract and use
+/// empty PEL arrays until the store tracks full per-consumer metadata.
+/// (frankenredis-hgqc)
+fn stream_full_consumer_info_to_frame(
+    info: (Vec<u8>, usize, u64),
+    now_ms: u64,
+    resp_protocol_version: i64,
+) -> RespFrame {
+    let (name, pending_count, idle_ms) = info;
+    let seen_time = now_ms.saturating_sub(idle_ms);
+    let pairs: Vec<(RespFrame, RespFrame)> = vec![
+        (
+            RespFrame::BulkString(Some(b"name".to_vec())),
+            RespFrame::BulkString(Some(name)),
+        ),
+        (
+            RespFrame::BulkString(Some(b"seen-time".to_vec())),
+            RespFrame::Integer(i64::try_from(seen_time).unwrap_or(i64::MAX)),
+        ),
+        (
+            RespFrame::BulkString(Some(b"active-time".to_vec())),
+            RespFrame::Integer(i64::try_from(seen_time).unwrap_or(i64::MAX)),
+        ),
+        (
+            RespFrame::BulkString(Some(b"pel-count".to_vec())),
+            RespFrame::Integer(i64::try_from(pending_count).unwrap_or(i64::MAX)),
+        ),
+        (
+            RespFrame::BulkString(Some(b"pending".to_vec())),
+            RespFrame::Array(Some(Vec::new())),
+        ),
+    ];
+
+    if resp_protocol_version == 3 {
+        RespFrame::Map(Some(pairs))
+    } else {
+        let mut flat = Vec::with_capacity(pairs.len() * 2);
+        for (k, v) in pairs {
+            flat.push(k);
+            flat.push(v);
+        }
+        RespFrame::Array(Some(flat))
+    }
+}
+
+fn stream_full_group_info_to_frame(
+    name: Vec<u8>,
+    pending_count: usize,
+    last_delivered_id: StreamId,
+    consumer_frames: Vec<RespFrame>,
+    resp_protocol_version: i64,
+) -> RespFrame {
+    let pairs: Vec<(RespFrame, RespFrame)> = vec![
+        (
+            RespFrame::BulkString(Some(b"name".to_vec())),
+            RespFrame::BulkString(Some(name)),
+        ),
+        (
+            RespFrame::BulkString(Some(b"last-delivered-id".to_vec())),
+            RespFrame::BulkString(Some(format_stream_id(last_delivered_id))),
+        ),
+        (
+            RespFrame::BulkString(Some(b"entries-read".to_vec())),
+            RespFrame::BulkString(None),
+        ),
+        (
+            RespFrame::BulkString(Some(b"lag".to_vec())),
+            RespFrame::BulkString(None),
+        ),
+        (
+            RespFrame::BulkString(Some(b"pel-count".to_vec())),
+            RespFrame::Integer(i64::try_from(pending_count).unwrap_or(i64::MAX)),
+        ),
+        (
+            RespFrame::BulkString(Some(b"pending".to_vec())),
+            RespFrame::Array(Some(Vec::new())),
+        ),
+        (
+            RespFrame::BulkString(Some(b"consumers".to_vec())),
+            RespFrame::Array(Some(consumer_frames)),
+        ),
+    ];
+
+    if resp_protocol_version == 3 {
+        RespFrame::Map(Some(pairs))
+    } else {
+        let mut flat = Vec::with_capacity(pairs.len() * 2);
+        for (k, v) in pairs {
+            flat.push(k);
+            flat.push(v);
+        }
+        RespFrame::Array(Some(flat))
+    }
+}
+
 fn xread(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     if argv.len() < 4 {
         return Err(CommandError::WrongArity("XREAD"));
@@ -7006,7 +7105,7 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
 
         let groups = store.xinfo_groups(&argv[2], now_ms)?.unwrap_or_default();
         let mut group_frames = Vec::with_capacity(groups.len());
-        for (name, consumers_count, pending_count, last_delivered_id) in &groups {
+        for (name, _consumers_count, pending_count, last_delivered_id) in &groups {
             let consumers_info = store
                 .xinfo_consumers(&argv[2], name, now_ms)
                 .ok()
@@ -7015,20 +7114,15 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
             let resp_v = store.dispatch_client_ctx.resp_protocol_version;
             let consumer_frames: Vec<RespFrame> = consumers_info
                 .into_iter()
-                .map(|info| stream_consumer_info_to_frame(info, resp_v))
+                .map(|info| stream_full_consumer_info_to_frame(info, now_ms, resp_v))
                 .collect();
-            group_frames.push(RespFrame::Array(Some(vec![
-                RespFrame::BulkString(Some(b"name".to_vec())),
-                RespFrame::BulkString(Some(name.clone())),
-                RespFrame::BulkString(Some(b"consumers".to_vec())),
-                RespFrame::Integer(i64::try_from(*consumers_count).unwrap_or(i64::MAX)),
-                RespFrame::BulkString(Some(b"pending".to_vec())),
-                RespFrame::Integer(i64::try_from(*pending_count).unwrap_or(i64::MAX)),
-                RespFrame::BulkString(Some(b"last-delivered-id".to_vec())),
-                RespFrame::BulkString(Some(format_stream_id(*last_delivered_id))),
-                RespFrame::BulkString(Some(b"consumers-list".to_vec())),
-                RespFrame::Array(Some(consumer_frames)),
-            ])));
+            group_frames.push(stream_full_group_info_to_frame(
+                name.clone(),
+                *pending_count,
+                *last_delivered_id,
+                consumer_frames,
+                resp_v,
+            ));
         }
 
         // Upstream t_stream.c::xinfoFullCommand uses addReplyMapLen for
@@ -40034,6 +40128,30 @@ mod tests {
             0,
         )
         .unwrap();
+        dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"xs".to_vec(),
+                b"g".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATECONSUMER".to_vec(),
+                b"xs".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
         let out = dispatch_argv(
             &[
                 b"XINFO".to_vec(),
@@ -40058,6 +40176,68 @@ mod tests {
         assert!(keys.contains(&b"length".as_slice()));
         assert!(keys.contains(&b"entries".as_slice()));
         assert!(keys.contains(&b"groups".as_slice()));
+        let groups_value = pairs
+            .iter()
+            .find_map(|(k, v)| match k {
+                RespFrame::BulkString(Some(name)) if name == b"groups" => Some(v),
+                _ => None,
+            })
+            .expect("groups entry");
+        let RespFrame::Array(Some(groups)) = groups_value else {
+            panic!("groups should be an array, got {groups_value:?}"); // ubs:ignore — AI triage
+        };
+        let [RespFrame::Map(Some(group_pairs))] = groups.as_slice() else {
+            panic!("FULL groups should contain RESP3 maps, got {groups:?}"); // ubs:ignore — AI triage
+        };
+        let group_keys: Vec<&[u8]> = group_pairs
+            .iter()
+            .filter_map(|(k, _)| match k {
+                RespFrame::BulkString(Some(name)) => Some(name.as_slice()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            group_keys,
+            vec![
+                b"name".as_slice(),
+                b"last-delivered-id".as_slice(),
+                b"entries-read".as_slice(),
+                b"lag".as_slice(),
+                b"pel-count".as_slice(),
+                b"pending".as_slice(),
+                b"consumers".as_slice(),
+            ]
+        );
+        let consumers_value = group_pairs
+            .iter()
+            .find_map(|(k, v)| match k {
+                RespFrame::BulkString(Some(name)) if name == b"consumers" => Some(v),
+                _ => None,
+            })
+            .expect("consumers entry");
+        let RespFrame::Array(Some(consumers)) = consumers_value else {
+            panic!("consumers should be an array, got {consumers_value:?}"); // ubs:ignore — AI triage
+        };
+        let [RespFrame::Map(Some(consumer_pairs))] = consumers.as_slice() else {
+            panic!("FULL consumers should contain RESP3 maps, got {consumers:?}"); // ubs:ignore — AI triage
+        };
+        let consumer_keys: Vec<&[u8]> = consumer_pairs
+            .iter()
+            .filter_map(|(k, _)| match k {
+                RespFrame::BulkString(Some(name)) => Some(name.as_slice()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            consumer_keys,
+            vec![
+                b"name".as_slice(),
+                b"seen-time".as_slice(),
+                b"active-time".as_slice(),
+                b"pel-count".as_slice(),
+                b"pending".as_slice(),
+            ]
+        );
 
         // RESP2 emits flat alternating array of the same pairs.
         store.dispatch_client_ctx.resp_protocol_version = 2;
@@ -40076,6 +40256,25 @@ mod tests {
             panic!("expected RESP2 Array, got {out:?}"); // ubs:ignore — AI triage
         };
         assert!(flat.len().is_multiple_of(2) && flat.len() >= 18);
+        let groups_pos = flat
+            .iter()
+            .position(|frame| *frame == RespFrame::BulkString(Some(b"groups".to_vec())))
+            .expect("RESP2 groups key");
+        let RespFrame::Array(Some(groups)) = &flat[groups_pos + 1] else {
+            panic!(
+                "RESP2 groups should be an array, got {:?}",
+                flat[groups_pos + 1]
+            ); // ubs:ignore — AI triage
+        };
+        let [RespFrame::Array(Some(group_flat))] = groups.as_slice() else {
+            panic!("RESP2 FULL groups should contain alternating arrays, got {groups:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(
+            group_flat.first(),
+            Some(&RespFrame::BulkString(Some(b"name".to_vec())))
+        );
+        assert!(group_flat.contains(&RespFrame::BulkString(Some(b"pel-count".to_vec()))));
+        assert!(group_flat.contains(&RespFrame::BulkString(Some(b"consumers".to_vec()))));
     }
 
     #[test]
