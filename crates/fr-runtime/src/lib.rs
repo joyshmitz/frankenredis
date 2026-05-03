@@ -8501,7 +8501,6 @@ impl Runtime {
                         | "lazyfree-lazy-server-del"
                         | "lazyfree-lazy-user-del"
                         | "lazyfree-lazy-user-flush"
-                        | "list-compress-depth"
                         | "no-appendfsync-on-rewrite"
                         | "protected-mode"
                         | "rdb-del-sync-files"
@@ -8534,7 +8533,11 @@ impl Runtime {
                 }
                 if matches!(
                     canonical,
-                    "tcp-keepalive" | "tcp-backlog" | "io-threads" | "lfu-log-factor"
+                    "tcp-keepalive"
+                        | "tcp-backlog"
+                        | "io-threads"
+                        | "lfu-log-factor"
+                        | "list-compress-depth"
                 ) {
                     match parse_i64_arg(value_bytes) {
                         Ok(v) if v >= 0 => {}
@@ -18730,6 +18733,27 @@ mod tests {
             rt.execute_frame(command(&[b"CONFIG", b"SET", b"syslog-enabled", b"yes"]), 0),
             RespFrame::Error(
                 "ERR CONFIG SET failed (possibly related to argument 'syslog-enabled') - can't set immutable config"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"list-compress-depth", b"1"]),
+                0
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"GET", b"list-compress-depth"]), 0),
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"list-compress-depth".to_vec())),
+                RespFrame::BulkString(Some(b"1".to_vec())),
+            ]))
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CONFIG", b"SET", b"list-compress-depth", b"-1"]), 0),
+            RespFrame::Error(
+                "ERR CONFIG SET failed (possibly related to argument 'list-compress-depth') - argument must be between 0 and 2147483647 inclusive"
                     .to_string()
             )
         );

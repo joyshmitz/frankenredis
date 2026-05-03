@@ -1054,6 +1054,70 @@
       }
     },
     {
+      "name": "config_set_list_compress_depth_integer",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "list-compress-depth",
+        "1"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "config_get_list_compress_depth_after_set",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "GET",
+        "list-compress-depth"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {
+            "kind": "bulk",
+            "value": "list-compress-depth"
+          },
+          {
+            "kind": "bulk",
+            "value": "1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "config_set_list_compress_depth_negative_error",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "list-compress-depth",
+        "-1"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'list-compress-depth') - argument must be between 0 and 2147483647 inclusive"
+      }
+    },
+    {
+      "name": "config_set_list_compress_depth_non_integer",
+      "now_ms": 0,
+      "argv": [
+        "CONFIG",
+        "SET",
+        "list-compress-depth",
+        "abc"
+      ],
+      "expect": {
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'list-compress-depth') - argument couldn't be parsed into an integer"
+      }
+    },
+    {
       "name": "config_set_syslog_enabled_immutable",
       "now_ms": 0,
       "argv": [
