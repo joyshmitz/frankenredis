@@ -72,9 +72,10 @@ proptest! {
 
         let len = value.len() as i64;
         let mut s = if start < 0 { len + start } else { start };
-        let e = if end < 0 { len + end } else { end };
+        let mut e = if end < 0 { len + end } else { end };
 
         if s < 0 { s = 0; }
+        if e < 0 { e = 0; }
 
         let expected = if s > e || len == 0 || s >= len {
             Vec::new()
