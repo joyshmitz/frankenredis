@@ -6598,6 +6598,7 @@ impl Store {
         max: &[u8],
         now_ms: u64,
     ) -> Result<Vec<Vec<u8>>, StoreError> {
+        validate_lex_range_bounds(min, max)?;
         self.drop_if_expired(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
@@ -6656,6 +6657,7 @@ impl Store {
         min: &[u8],
         now_ms: u64,
     ) -> Result<Vec<Vec<u8>>, StoreError> {
+        validate_lex_range_bounds(min, max)?;
         self.drop_if_expired(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
@@ -6681,6 +6683,7 @@ impl Store {
         max: &[u8],
         now_ms: u64,
     ) -> Result<usize, StoreError> {
+        validate_lex_range_bounds(min, max)?;
         self.drop_if_expired(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
@@ -6817,6 +6820,7 @@ impl Store {
         max: &[u8],
         now_ms: u64,
     ) -> Result<usize, StoreError> {
+        validate_lex_range_bounds(min, max)?;
         self.drop_if_expired(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &mut entry.value {
@@ -11609,6 +11613,22 @@ fn lex_in_range(member: &[u8], min: &[u8], max: &[u8]) -> bool {
     above_min && below_max
 }
 
+fn validate_lex_range_bounds(min: &[u8], max: &[u8]) -> Result<(), StoreError> {
+    if is_valid_lex_bound(min) && is_valid_lex_bound(max) {
+        Ok(())
+    } else {
+        Err(invalid_lex_range_error())
+    }
+}
+
+fn is_valid_lex_bound(bound: &[u8]) -> bool {
+    bound == b"-" || bound == b"+" || bound.first().is_some_and(|c| *c == b'[' || *c == b'(')
+}
+
+fn invalid_lex_range_error() -> StoreError {
+    StoreError::GenericError("ERR min or max not valid string range item".to_string())
+}
+
 // ── HyperLogLog internals ─────────────────────────────────────────────
 
 const HLL_P: u32 = 14;
@@ -15959,6 +15979,42 @@ mod tests {
         // Subset range
         let result = store.zrevrangebylex(b"z", b"[c", b"[a", 0).unwrap();
         assert_eq!(result, vec![b"c".to_vec(), b"b".to_vec(), b"a".to_vec()]);
+    }
+
+    #[test]
+    fn sorted_set_lex_ranges_reject_unprefixed_bounds() {
+        fn assert_invalid_lex_error<T: std::fmt::Debug>(result: Result<T, StoreError>) {
+            assert!(
+                matches!(
+                    result,
+                    Err(StoreError::GenericError(ref message))
+                        if message == "ERR min or max not valid string range item"
+                ),
+                "{result:?}"
+            );
+        }
+
+        let mut missing = Store::new();
+        assert_invalid_lex_error(missing.zrangebylex(b"missing", b"a", b"[z", 0));
+
+        let mut store = Store::new();
+        store
+            .zadd(
+                b"z",
+                &[
+                    (0.0, b"a".to_vec()),
+                    (0.0, b"b".to_vec()),
+                    (0.0, b"c".to_vec()),
+                ],
+                0,
+            )
+            .unwrap();
+
+        assert_invalid_lex_error(store.zrangebylex(b"z", b"a", b"[c", 0));
+        assert_invalid_lex_error(store.zrevrangebylex(b"z", b"[c", b"a", 0));
+        assert_invalid_lex_error(store.zlexcount(b"z", b"[a", b"c", 0));
+        assert_invalid_lex_error(store.zremrangebylex(b"z", b"a", b"[c", 0));
+        assert_eq!(store.zlexcount(b"z", b"[a", b"[c", 0).unwrap(), 3);
     }
 
     #[test]
