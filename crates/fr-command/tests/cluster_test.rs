@@ -1,6 +1,10 @@
-use fr_command::dispatch_argv;
+use fr_command::{dispatch_argv, CommandError};
 use fr_protocol::RespFrame;
 use fr_store::Store;
+
+fn cluster_disabled_error() -> CommandError {
+    CommandError::Custom("ERR This instance has cluster support disabled".to_string())
+}
 
 #[test]
 fn test_cluster_keyslot() {
@@ -85,7 +89,7 @@ fn test_cluster_getkeysinslot_and_countkeysinslot() {
         RespFrame::Array(Some(arr)) => {
             assert_eq!(arr.len(), 1);
         }
-        _ => panic!("expected array"),
+        other => assert_eq!(other, RespFrame::Array(Some(Vec::new()))),
     }
 
     // 3. GETKEYSINSLOT count 10
@@ -105,6 +109,67 @@ fn test_cluster_getkeysinslot_and_countkeysinslot() {
         RespFrame::Array(Some(arr)) => {
             assert_eq!(arr.len(), 2);
         }
-        _ => panic!("expected array"),
+        other => assert_eq!(other, RespFrame::Array(Some(Vec::new()))),
+    }
+}
+
+#[test]
+fn test_cluster_setslot_forms_return_cluster_disabled_when_off() {
+    let mut store = Store::new();
+
+    for argv in [
+        vec![
+            b"CLUSTER".to_vec(),
+            b"SETSLOT".to_vec(),
+            b"42".to_vec(),
+            b"STABLE".to_vec(),
+        ],
+        vec![
+            b"CLUSTER".to_vec(),
+            b"SETSLOT".to_vec(),
+            b"42".to_vec(),
+            b"NODE".to_vec(),
+            b"07c37dfeb2352e0b575fe7d96032e8c29a662a44".to_vec(),
+        ],
+        vec![
+            b"CLUSTER".to_vec(),
+            b"SETSLOT".to_vec(),
+            b"42".to_vec(),
+            b"MIGRATING".to_vec(),
+            b"07c37dfeb2352e0b575fe7d96032e8c29a662a44".to_vec(),
+        ],
+        vec![
+            b"CLUSTER".to_vec(),
+            b"SETSLOT".to_vec(),
+            b"42".to_vec(),
+            b"IMPORTING".to_vec(),
+            b"07c37dfeb2352e0b575fe7d96032e8c29a662a44".to_vec(),
+        ],
+    ] {
+        let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+        assert_eq!(err, cluster_disabled_error(), "argv={argv:?}");
+    }
+}
+
+#[test]
+fn test_cluster_failover_force_takeover_returns_cluster_disabled_when_off() {
+    let mut store = Store::new();
+
+    for argv in [
+        vec![
+            b"CLUSTER".to_vec(),
+            b"FAILOVER".to_vec(),
+            b"FORCE".to_vec(),
+            b"TAKEOVER".to_vec(),
+        ],
+        vec![
+            b"CLUSTER".to_vec(),
+            b"FAILOVER".to_vec(),
+            b"TAKEOVER".to_vec(),
+            b"FORCE".to_vec(),
+        ],
+    ] {
+        let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+        assert_eq!(err, cluster_disabled_error(), "argv={argv:?}");
     }
 }
