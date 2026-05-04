@@ -191,10 +191,23 @@ fn list_encoding_listpack_at_threshold_entries() {
 }
 
 #[test]
-fn list_encoding_quicklist_one_past_threshold_entries() {
+fn list_encoding_quicklist_one_past_threshold_bytes() {
+    // (frankenredis-llry) Upstream Redis 7.2 t_list.c::listTypeTryConversion
+    // converts purely on the byte budget (server.list_max_listpack_size,
+    // default -2 = 8 KiB). 129 small elements fit within the budget so the
+    // list stays as a single listpack — only overflowing the byte budget
+    // forces a quicklist.
     let mut store = Store::new();
-    let values: Vec<Vec<u8>> = (0..129_u32).map(|i| format!("v{i}").into_bytes()).collect();
-    store.rpush(b"l", &values, NOW).expect("rpush");
+    let small_values: Vec<Vec<u8>> =
+        (0..129_u32).map(|i| format!("v{i}").into_bytes()).collect();
+    store.rpush(b"l", &small_values, NOW).expect("rpush small");
+    assert_eq!(store.object_encoding(b"l", NOW), Some("listpack"));
+
+    // Pushing one element that pushes the total well past the 8 KiB
+    // byte budget (with the per-entry overhead) flips the encoding.
+    store
+        .rpush(b"l", &[vec![b'x'; 9_000]], NOW)
+        .expect("rpush bulk");
     assert_eq!(store.object_encoding(b"l", NOW), Some("quicklist"));
 }
 

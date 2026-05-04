@@ -3003,8 +3003,14 @@ impl Store {
                 }
             }
             Value::List(l) => {
+                // Upstream Redis 7.2 t_list.c::listTypeTryConversion gates
+                // single-listpack/quicklist conversion purely on the byte
+                // budget (server.list_max_listpack_size, default -2 = 8 KiB)
+                // and the per-element size cap. There is no entries-count
+                // config in upstream; the fr-only `list-max-listpack-entries`
+                // config remains read/write through CONFIG SET as a no-op.
+                // (frankenredis-llry)
                 if self.list_fits_legacy_listpack_size(l)
-                    && l.len() <= self.list_max_listpack_entries
                     && l.iter().all(|v| v.len() <= self.list_max_listpack_value)
                 {
                     "listpack"
@@ -12963,6 +12969,35 @@ mod tests {
         let large = vec![b'x'; 5000];
         let _ = store.rpush(b"list", &[large], 0);
 
+        assert_eq!(store.object_encoding(b"list", 0), Some("quicklist"));
+    }
+
+    #[test]
+    fn object_encoding_list_keeps_listpack_above_legacy_entry_count() {
+        // (frankenredis-llry) Upstream Redis 7.2 has no entries-count
+        // gate for the listpack/quicklist transition; the byte budget
+        // alone decides. fr historically flipped to quicklist at 129
+        // entries (the fr-only `list-max-listpack-entries` default
+        // 128). With that gate removed, a 200-element list of
+        // single-char values stays as listpack — matching vendored
+        // redis 7.2.4 for the same payload.
+        let mut store = Store::new();
+        let entries: Vec<Vec<u8>> = (0..200u16)
+            .map(|i| format!("v{i}").into_bytes())
+            .collect();
+        let _ = store.rpush(b"list", &entries, 0);
+
+        assert_eq!(store.object_encoding(b"list", 0), Some("listpack"));
+
+        // Setting list_max_listpack_entries no longer affects encoding;
+        // the byte budget remains authoritative.
+        store.list_max_listpack_entries = 1;
+        assert_eq!(store.object_encoding(b"list", 0), Some("listpack"));
+
+        // Crossing the byte budget still flips to quicklist.
+        store.list_max_listpack_size = -2; // 8 KiB
+        let big_chunk = vec![b'x'; 10_000];
+        let _ = store.rpush(b"list", &[big_chunk], 0);
         assert_eq!(store.object_encoding(b"list", 0), Some("quicklist"));
     }
 
