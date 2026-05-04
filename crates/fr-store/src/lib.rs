@@ -3005,14 +3005,13 @@ impl Store {
             Value::List(l) => {
                 // Upstream Redis 7.2 t_list.c::listTypeTryConversion gates
                 // single-listpack/quicklist conversion purely on the byte
-                // budget (server.list_max_listpack_size, default -2 = 8 KiB)
-                // and the per-element size cap. There is no entries-count
-                // config in upstream; the fr-only `list-max-listpack-entries`
-                // config remains read/write through CONFIG SET as a no-op.
-                // (frankenredis-llry)
-                if self.list_fits_legacy_listpack_size(l)
-                    && l.iter().all(|v| v.len() <= self.list_max_listpack_value)
-                {
+                // budget (server.list_max_listpack_size, default -2 = 8 KiB).
+                // Neither the entries-count cap (`list-max-listpack-entries`,
+                // frankenredis-llry) nor the per-element value cap
+                // (`list-max-listpack-value`, frankenredis-udxy) exists in
+                // upstream — both fr-only configs remain read/write through
+                // CONFIG SET as benign no-ops.
+                if self.list_fits_legacy_listpack_size(l) {
                     "listpack"
                 } else {
                     "quicklist"

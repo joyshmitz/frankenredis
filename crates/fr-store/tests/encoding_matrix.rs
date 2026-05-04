@@ -212,15 +212,27 @@ fn list_encoding_quicklist_one_past_threshold_bytes() {
 }
 
 #[test]
-fn list_encoding_quicklist_when_any_value_exceeds_64_bytes() {
+fn list_encoding_listpack_for_values_above_legacy_per_value_cap() {
+    // (frankenredis-udxy) Upstream Redis 7.2 has no per-element value
+    // cap distinct from the byte-budget — the fr-only
+    // `list-max-listpack-value` config (default 64) does not gate the
+    // listpack/quicklist transition. Differential probe vs vendored
+    // redis 7.2.4 confirmed: a 65-byte (or 100-byte, or 8000-byte)
+    // single-element list still reports "listpack" so long as the
+    // total stays under list_max_listpack_size's byte budget.
     let mut store = Store::new();
     store
         .rpush(b"l", &[b"short".to_vec()], NOW)
         .expect("rpush short");
     store
         .rpush(b"l", &[vec![b'x'; 65]], NOW)
-        .expect("rpush long");
-    assert_eq!(store.object_encoding(b"l", NOW), Some("quicklist"));
+        .expect("rpush 65 byte");
+    assert_eq!(store.object_encoding(b"l", NOW), Some("listpack"));
+
+    // Cranking the spurious config low has no effect — byte-budget
+    // alone is authoritative.
+    store.list_max_listpack_value = 1;
+    assert_eq!(store.object_encoding(b"l", NOW), Some("listpack"));
 }
 
 // ── Metamorphic invariants ──────────────────────────────────────────
