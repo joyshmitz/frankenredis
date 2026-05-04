@@ -4751,10 +4751,7 @@ mod tests {
 
     #[test]
     fn inline_parser_gate_recognizes_all_resp_prefixes() {
-        for prefix in [
-            b'+', b'-', b':', b'$', b'*', b'~', b'%', b'#', b',', b'_', b'(', b'=', b'|', b'>',
-            b'!',
-        ] {
+        for prefix in *b"+-:$*~%#,_(=|>!" {
             assert!(
                 !should_try_inline_parsing(prefix),
                 "prefix {prefix:?} should stay on RESP parser path"

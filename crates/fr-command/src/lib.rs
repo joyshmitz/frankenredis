@@ -6022,6 +6022,7 @@ fn stream_full_group_info_to_frame(
     name: Vec<u8>,
     pending_count: usize,
     last_delivered_id: StreamId,
+    lag: RespFrame,
     pending_frames: Vec<RespFrame>,
     consumer_frames: Vec<RespFrame>,
     resp_protocol_version: i64,
@@ -6039,10 +6040,7 @@ fn stream_full_group_info_to_frame(
             RespFrame::BulkString(Some(b"entries-read".to_vec())),
             RespFrame::BulkString(None),
         ),
-        (
-            RespFrame::BulkString(Some(b"lag".to_vec())),
-            RespFrame::BulkString(None),
-        ),
+        (RespFrame::BulkString(Some(b"lag".to_vec())), lag),
         (
             RespFrame::BulkString(Some(b"pel-count".to_vec())),
             RespFrame::Integer(i64::try_from(pending_count).unwrap_or(i64::MAX)),
@@ -6075,6 +6073,38 @@ fn stream_full_count_limit(full_count: usize) -> usize {
     } else {
         full_count
     }
+}
+
+fn stream_full_group_lag_frame(
+    stream_len: usize,
+    first_id: Option<StreamId>,
+    last_id: Option<StreamId>,
+    max_deleted_id: StreamId,
+    last_delivered_id: StreamId,
+) -> RespFrame {
+    let Some(first_id) = first_id else {
+        return RespFrame::Integer(0);
+    };
+    let Some(last_id) = last_id else {
+        return RespFrame::Integer(0);
+    };
+    if last_delivered_id > last_id {
+        return RespFrame::BulkString(None);
+    }
+    if last_delivered_id == last_id {
+        return RespFrame::Integer(0);
+    }
+    if max_deleted_id != (0, 0) && max_deleted_id >= first_id {
+        return RespFrame::BulkString(None);
+    }
+    let lag = if last_delivered_id < first_id {
+        stream_len
+    } else if last_delivered_id == first_id {
+        stream_len.saturating_sub(1)
+    } else {
+        return RespFrame::BulkString(None);
+    };
+    RespFrame::Integer(i64::try_from(lag).unwrap_or(i64::MAX))
 }
 
 fn stream_pending_delivery_time(now_ms: u64, idle_ms: u64) -> i64 {
@@ -7124,8 +7154,8 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     } else {
         i64::try_from(len.saturating_add(1)).unwrap_or(i64::MAX)
     };
-    let max_deleted_entry_id =
-        format_stream_id(store.stream_max_deleted_id(&argv[2]).unwrap_or((0, 0)));
+    let max_deleted_id = store.stream_max_deleted_id(&argv[2]).unwrap_or((0, 0));
+    let max_deleted_entry_id = format_stream_id(max_deleted_id);
 
     if full_mode {
         // FULL mode: include entries and detailed group info
@@ -7185,6 +7215,13 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                 name.clone(),
                 *pending_count,
                 *last_delivered_id,
+                stream_full_group_lag_frame(
+                    len,
+                    first.as_ref().map(|(id, _)| *id),
+                    last.as_ref().map(|(id, _)| *id),
+                    max_deleted_id,
+                    *last_delivered_id,
+                ),
                 group_pending,
                 consumer_frames,
                 resp_v,
@@ -17945,7 +17982,7 @@ mod tests {
         format_coord_human, format_eval_read_only_script_error, frame_to_argv, hello_bulk,
         hello_simple, is_known_acl_command_selector, is_write_command,
         parse_blocking_deadline_milliseconds, parse_migrate_request, pubsub_message_to_frame,
-        pubsub_message_to_frame_for_protocol,
+        pubsub_message_to_frame_for_protocol, stream_full_group_lag_frame,
     };
 
     fn classify_command_linear(cmd: &[u8]) -> Option<CommandId> {
@@ -40170,6 +40207,26 @@ mod tests {
             panic!("expected array, got {out:?}"); // ubs:ignore — AI triage
         };
         assert_eq!(arr.len(), 4);
+    }
+
+    #[test]
+    fn stream_full_group_lag_frame_matches_redis_estimable_cases() {
+        assert_eq!(
+            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (0, 0), (0, 0)),
+            RespFrame::Integer(3)
+        );
+        assert_eq!(
+            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (0, 0), (1, 1)),
+            RespFrame::Integer(2)
+        );
+        assert_eq!(
+            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (2, 1), (3, 1)),
+            RespFrame::Integer(0)
+        );
+        assert_eq!(
+            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (2, 1), (2, 1)),
+            RespFrame::BulkString(None)
+        );
     }
 
     #[test]
