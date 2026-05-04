@@ -1976,8 +1976,19 @@ impl Store {
             -4 => 32768,
             _ => 65536, // -5 and below
         };
-        let total: usize = list.iter().map(|v| v.len() + 11).sum(); // 11 bytes overhead per entry
-        total <= max_bytes
+        // Bounded sum: stop at the first element that pushes the
+        // accumulator past max_bytes. Mirrors upstream t_list.c::
+        // listTypeTryConversion which bails per-add rather than
+        // walking the whole list every encoding query.
+        // (frankenredis-t1z5)
+        let mut total: usize = 0;
+        for v in list {
+            total = total.saturating_add(v.len() + 11); // 11 bytes overhead per entry
+            if total > max_bytes {
+                return false;
+            }
+        }
+        true
     }
 
     /// Get a string value. Returns `None` if the key doesn't exist.
