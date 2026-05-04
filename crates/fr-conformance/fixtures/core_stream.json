@@ -5338,6 +5338,108 @@
           ]}
         ]
       }
+    },
+    {
+      "name": "xsetid_entriesadded_setup_1",
+      "now_ms": 97000,
+      "argv": ["XADD", "xiadded", "1-1", "a", "1"],
+      "expect": { "kind": "bulk", "value": "1-1" }
+    },
+    {
+      "name": "xsetid_entriesadded_setup_2",
+      "now_ms": 97000,
+      "argv": ["XADD", "xiadded", "2-1", "b", "2"],
+      "expect": { "kind": "bulk", "value": "2-1" }
+    },
+    {
+      "name": "xsetid_entriesadded_create_group",
+      "now_ms": 97000,
+      "argv": ["XGROUP", "CREATE", "xiadded", "grp1", "0", "ENTRIESREAD", "0"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "xsetid_entriesadded_ten",
+      "now_ms": 97000,
+      "argv": ["XSETID", "xiadded", "2-1", "ENTRIESADDED", "10"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "xinfo_groups_reports_xsetid_entriesadded_lag",
+      "now_ms": 97000,
+      "argv": ["XINFO", "GROUPS", "xiadded"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind":"array","value":[
+            {"kind":"bulk","value":"name"},
+            {"kind":"bulk","value":"grp1"},
+            {"kind":"bulk","value":"consumers"},
+            {"kind":"integer","value":0},
+            {"kind":"bulk","value":"pending"},
+            {"kind":"integer","value":0},
+            {"kind":"bulk","value":"last-delivered-id"},
+            {"kind":"bulk","value":"0-0"},
+            {"kind":"bulk","value":"entries-read"},
+            {"kind":"integer","value":0},
+            {"kind":"bulk","value":"lag"},
+            {"kind":"integer","value":10}
+          ]}
+        ]
+      }
+    },
+    {
+      "name": "xinfo_full_reports_xsetid_entriesadded_lag",
+      "now_ms": 97000,
+      "argv": ["XINFO", "STREAM", "xiadded", "FULL", "COUNT", "0"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind":"bulk","value":"length"},
+          {"kind":"integer","value":2},
+          {"kind":"bulk","value":"radix-tree-keys"},
+          {"kind":"integer","value":2},
+          {"kind":"bulk","value":"radix-tree-nodes"},
+          {"kind":"integer","value":3},
+          {"kind":"bulk","value":"last-generated-id"},
+          {"kind":"bulk","value":"2-1"},
+          {"kind":"bulk","value":"max-deleted-entry-id"},
+          {"kind":"bulk","value":"0-0"},
+          {"kind":"bulk","value":"entries-added"},
+          {"kind":"integer","value":10},
+          {"kind":"bulk","value":"recorded-first-entry-id"},
+          {"kind":"bulk","value":"1-1"},
+          {"kind":"bulk","value":"entries"},
+          {"kind":"array","value":[
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"1-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"a"},{"kind":"bulk","value":"1"}]}
+            ]},
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"2-1"},
+              {"kind":"array","value":[{"kind":"bulk","value":"b"},{"kind":"bulk","value":"2"}]}
+            ]}
+          ]},
+          {"kind":"bulk","value":"groups"},
+          {"kind":"array","value":[
+            {"kind":"array","value":[
+              {"kind":"bulk","value":"name"},
+              {"kind":"bulk","value":"grp1"},
+              {"kind":"bulk","value":"last-delivered-id"},
+              {"kind":"bulk","value":"0-0"},
+              {"kind":"bulk","value":"entries-read"},
+              {"kind":"integer","value":0},
+              {"kind":"bulk","value":"lag"},
+              {"kind":"integer","value":10},
+              {"kind":"bulk","value":"pel-count"},
+              {"kind":"integer","value":0},
+              {"kind":"bulk","value":"pending"},
+              {"kind":"array","value":[]},
+              {"kind":"bulk","value":"consumers"},
+              {"kind":"array","value":[]}
+            ]}
+          ]}
+        ]
+      }
     }
   ]
 }

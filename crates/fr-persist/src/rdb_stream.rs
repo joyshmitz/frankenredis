@@ -75,6 +75,7 @@ pub(crate) fn encode_upstream_stream_listpacks3(
     entries: &[StreamEntry],
     watermark: Option<(u64, u64)>,
     groups: &[RdbStreamConsumerGroup],
+    entries_added: Option<u64>,
 ) -> Option<Vec<u8>> {
     let mut buf = Vec::new();
     let mut sorted_entries = entries.to_vec();
@@ -101,7 +102,8 @@ pub(crate) fn encode_upstream_stream_listpacks3(
     super::rdb_encode_length(&mut buf, usize::try_from(first_id.1).ok()?);
     super::rdb_encode_length(&mut buf, 0); // max_deleted_entry_id.ms
     super::rdb_encode_length(&mut buf, 0); // max_deleted_entry_id.seq
-    super::rdb_encode_length(&mut buf, sorted_entries.len()); // entries_added
+    let entries_added = entries_added.unwrap_or(u64::try_from(sorted_entries.len()).ok()?);
+    super::rdb_encode_length(&mut buf, usize::try_from(entries_added).ok()?);
 
     super::rdb_encode_length(&mut buf, groups.len());
     for group in groups {
@@ -317,7 +319,7 @@ pub(crate) fn decode_upstream_stream_skeleton(
     }
 
     // (3) Stream length (total entry count).
-    let (_length, c) =
+    let (stream_length, c) =
         rdb_decode_length(&data[cursor..]).ok_or(UpstreamStreamError::InvalidLength)?;
     cursor += c;
 
@@ -330,10 +332,14 @@ pub(crate) fn decode_upstream_stream_skeleton(
     cursor += c;
 
     // (5) v2/v3 extras: first_id, max_deleted_id, entries_added.
+    let mut entries_added = u64::try_from(stream_length).unwrap_or(u64::MAX);
     if is_v2_or_later {
-        for _ in 0..5 {
+        for index in 0..5 {
             let (_v, c) =
                 rdb_decode_length(&data[cursor..]).ok_or(UpstreamStreamError::InvalidLength)?;
+            if index == 4 {
+                entries_added = u64::try_from(_v).unwrap_or(u64::MAX);
+            }
             cursor += c;
         }
     }
@@ -433,7 +439,13 @@ pub(crate) fn decode_upstream_stream_skeleton(
         upstream_type_byte: type_byte,
         upstream_payload: data[..cursor].to_vec(),
     };
-    let value = RdbValue::Stream(entries, watermark, groups, Some(metadata));
+    let value = RdbValue::Stream(
+        entries,
+        watermark,
+        groups,
+        Some(metadata),
+        Some(entries_added),
+    );
     Ok((value, cursor))
 }
 
@@ -948,7 +960,9 @@ mod tests {
 
     fn stream_parts(value: RdbValue) -> Option<StreamParts> {
         match value {
-            RdbValue::Stream(entries, watermark, groups, _) => Some((entries, watermark, groups)),
+            RdbValue::Stream(entries, watermark, groups, _, _) => {
+                Some((entries, watermark, groups))
+            }
             _ => None,
         }
     }
@@ -997,7 +1011,7 @@ mod tests {
             ],
         }];
 
-        let payload = encode_upstream_stream_listpacks3(&entries, Some((1001, 1)), &groups)
+        let payload = encode_upstream_stream_listpacks3(&entries, Some((1001, 1)), &groups, None)
             .expect("encode type21 payload");
         let (value, consumed) =
             decode_upstream_stream_skeleton(UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3, &payload)
@@ -1077,7 +1091,9 @@ mod tests {
             }],
         }];
 
-        assert!(encode_upstream_stream_listpacks3(&entries, Some((1000, 0)), &groups).is_none());
+        assert!(
+            encode_upstream_stream_listpacks3(&entries, Some((1000, 0)), &groups, None).is_none()
+        );
     }
 
     #[test]
@@ -1128,8 +1144,9 @@ mod tests {
                 Vec::new()
             };
 
-            let payload = encode_upstream_stream_listpacks3(&entries, Some(watermark), &groups)
-                .expect("encode fixture");
+            let payload =
+                encode_upstream_stream_listpacks3(&entries, Some(watermark), &groups, None)
+                    .expect("encode fixture");
             let (value, consumed) =
                 decode_upstream_stream_skeleton(UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3, &payload)
                     .expect("decode fixture");
@@ -1362,7 +1379,7 @@ mod tests {
             ],
         }];
 
-        let payload = encode_upstream_stream_listpacks3(&entries, Some((11, 0)), &groups)
+        let payload = encode_upstream_stream_listpacks3(&entries, Some((11, 0)), &groups, None)
             .expect("encode type21 payload with consumer group");
 
         // Byte-scan for the SCG_INVALID_ENTRIES_READ sentinel encoding:

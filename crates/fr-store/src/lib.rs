@@ -1182,6 +1182,8 @@ pub struct Store {
     stream_groups: HashMap<Vec<u8>, StreamGroupState>,
     /// Per-stream last-generated-id set by XSETID (may be higher than max entry).
     stream_last_ids: HashMap<Vec<u8>, StreamId>,
+    /// Per-stream cumulative entries-added counter used by XINFO.
+    stream_entries_added: HashMap<Vec<u8>, u64>,
     /// Highest stream entry ID removed via XDEL/XTRIM for each stream key.
     pub stream_max_deleted_ids: HashMap<Vec<u8>, StreamId>,
     /// Script cache: SHA1 hex string → script body.
@@ -1453,6 +1455,7 @@ impl Default for Store {
             cluster_assigned_slots: BTreeSet::new(),
             stream_groups: HashMap::new(),
             stream_last_ids: HashMap::new(),
+            stream_entries_added: HashMap::new(),
             stream_max_deleted_ids: HashMap::new(),
             script_cache: HashMap::new(),
             subscribed_channels: HashSet::new(),
@@ -1828,6 +1831,13 @@ impl Store {
         if deleted_id > *entry {
             *entry = deleted_id;
         }
+    }
+
+    fn stream_entries_added_value(&self, key: &[u8], live_len: usize) -> u64 {
+        self.stream_entries_added
+            .get(key)
+            .copied()
+            .unwrap_or_else(|| u64::try_from(live_len).unwrap_or(u64::MAX))
     }
 
     pub fn reset_slowlog(&mut self) {
@@ -2981,6 +2991,7 @@ impl Store {
         if key == newkey {
             return Ok(());
         }
+        let moved_entries_added = self.stream_entries_added.remove(key);
         let Some(entry) = self.internal_entries_remove(key) else {
             return Err(StoreError::KeyNotFound);
         };
@@ -2989,12 +3000,17 @@ impl Store {
         self.internal_entries_remove(newkey);
         self.stream_groups.remove(newkey);
         self.stream_last_ids.remove(newkey);
+        self.stream_entries_added.remove(newkey);
         self.internal_entries_insert(newkey.to_vec(), entry);
         if let Some(groups) = moved_groups {
             self.stream_groups.insert(newkey.to_vec(), groups);
         }
         if let Some(last_id) = moved_last_id {
             self.stream_last_ids.insert(newkey.to_vec(), last_id);
+        }
+        if let Some(entries_added) = moved_entries_added {
+            self.stream_entries_added
+                .insert(newkey.to_vec(), entries_added);
         }
         self.dirty = self.dirty.saturating_add(1);
         Ok(())
@@ -3009,6 +3025,7 @@ impl Store {
         if self.entries.contains_key(newkey) {
             return Ok(false);
         }
+        let moved_entries_added = self.stream_entries_added.remove(key);
         let Some(entry) = self.internal_entries_remove(key) else {
             return Err(StoreError::KeyNotFound);
         };
@@ -3020,6 +3037,10 @@ impl Store {
         }
         if let Some(last_id) = moved_last_id {
             self.stream_last_ids.insert(newkey.to_vec(), last_id);
+        }
+        if let Some(entries_added) = moved_entries_added {
+            self.stream_entries_added
+                .insert(newkey.to_vec(), entries_added);
         }
         self.dirty = self.dirty.saturating_add(1);
         Ok(true)
@@ -3195,6 +3216,7 @@ impl Store {
     fn internal_entries_insert(&mut self, key: Vec<u8>, mut entry: Entry) -> Option<Entry> {
         let db = decode_db_key(&key).map(|(db, _)| db).unwrap_or(0);
         let is_new_key = !self.entries.contains_key(&key);
+        let new_is_stream = matches!(&entry.value, Value::Stream(_));
         let old_digest = self
             .entries
             .get(&key)
@@ -3214,6 +3236,9 @@ impl Store {
             self.ordered_keys.insert(key.clone());
         }
         if let Some(old) = self.entries.insert(key.clone(), entry) {
+            if matches!(&old.value, Value::Stream(_)) && !new_is_stream {
+                self.stream_entries_added.remove(&key);
+            }
             if old.expires_at_ms.is_some() {
                 self.expires_count = self.expires_count.saturating_sub(1);
                 if db < self.database_count {
@@ -3257,6 +3282,9 @@ impl Store {
             // field_expires map doesn't accumulate orphan rows.
             // (br-frankenredis-b8ut)
             self.hash_field_ttl_clear_for_key(key);
+            if matches!(&entry.value, Value::Stream(_)) {
+                self.stream_entries_added.remove(key);
+            }
             Some(entry)
         } else {
             None
@@ -3595,6 +3623,7 @@ impl Store {
         self.entries.clear();
         self.stream_groups.clear();
         self.stream_last_ids.clear();
+        self.stream_entries_added.clear();
         self.running_digest = 0;
         self.digest_stale = false;
         self.expires_count = 0;
@@ -3615,6 +3644,7 @@ impl Store {
             self.internal_entries_remove(&key);
             self.stream_groups.remove(key.as_slice());
             self.stream_last_ids.remove(key.as_slice());
+            self.stream_entries_added.remove(key.as_slice());
         }
         self.dirty = self.dirty.saturating_add(removed.max(1));
         removed
@@ -3636,6 +3666,7 @@ impl Store {
             self.internal_entries_remove(&key);
             self.stream_groups.remove(key.as_slice());
             self.stream_last_ids.remove(key.as_slice());
+            self.stream_entries_added.remove(key.as_slice());
         }
         self.dirty = self.dirty.saturating_add(removed.max(1));
         removed
@@ -3670,7 +3701,8 @@ impl Store {
             };
             let groups = self.stream_groups.remove(key.as_slice());
             let last_id = self.stream_last_ids.remove(key.as_slice());
-            left_entries.push((key, entry, groups, last_id));
+            let entries_added = self.stream_entries_added.remove(key.as_slice());
+            left_entries.push((key, entry, groups, last_id, entries_added));
         }
 
         let mut right_entries = Vec::with_capacity(right_count);
@@ -3680,10 +3712,11 @@ impl Store {
             };
             let groups = self.stream_groups.remove(key.as_slice());
             let last_id = self.stream_last_ids.remove(key.as_slice());
-            right_entries.push((key, entry, groups, last_id));
+            let entries_added = self.stream_entries_added.remove(key.as_slice());
+            right_entries.push((key, entry, groups, last_id, entries_added));
         }
 
-        for (key, entry, groups, last_id) in left_entries {
+        for (key, entry, groups, last_id, entries_added) in left_entries {
             let mut swapped = Vec::with_capacity(
                 right_prefix.len() + key.len().saturating_sub(left_prefix.len()),
             );
@@ -3694,11 +3727,14 @@ impl Store {
                 self.stream_groups.insert(swapped.clone(), groups);
             }
             if let Some(last_id) = last_id {
-                self.stream_last_ids.insert(swapped, last_id);
+                self.stream_last_ids.insert(swapped.clone(), last_id);
+            }
+            if let Some(entries_added) = entries_added {
+                self.stream_entries_added.insert(swapped, entries_added);
             }
         }
 
-        for (key, entry, groups, last_id) in right_entries {
+        for (key, entry, groups, last_id, entries_added) in right_entries {
             let mut swapped = Vec::with_capacity(
                 left_prefix.len() + key.len().saturating_sub(right_prefix.len()),
             );
@@ -3709,7 +3745,10 @@ impl Store {
                 self.stream_groups.insert(swapped.clone(), groups);
             }
             if let Some(last_id) = last_id {
-                self.stream_last_ids.insert(swapped, last_id);
+                self.stream_last_ids.insert(swapped.clone(), last_id);
+            }
+            if let Some(entries_added) = entries_added {
+                self.stream_entries_added.insert(swapped, entries_added);
             }
         }
 
@@ -3758,7 +3797,8 @@ impl Store {
                 .unwrap_or(key.clone());
             let groups = self.stream_groups.remove(key.as_slice());
             let last_id = self.stream_last_ids.remove(key.as_slice());
-            left_entries.push((logical, entry, groups, last_id));
+            let entries_added = self.stream_entries_added.remove(key.as_slice());
+            left_entries.push((logical, entry, groups, last_id, entries_added));
         }
 
         let mut right_entries = Vec::with_capacity(right_count);
@@ -3771,28 +3811,35 @@ impl Store {
                 .unwrap_or(key.clone());
             let groups = self.stream_groups.remove(key.as_slice());
             let last_id = self.stream_last_ids.remove(key.as_slice());
-            right_entries.push((logical, entry, groups, last_id));
+            let entries_added = self.stream_entries_added.remove(key.as_slice());
+            right_entries.push((logical, entry, groups, last_id, entries_added));
         }
 
-        for (logical, entry, groups, last_id) in left_entries {
+        for (logical, entry, groups, last_id, entries_added) in left_entries {
             let swapped = encode_db_key(right_db, &logical);
             self.internal_entries_insert(swapped.clone(), entry);
             if let Some(groups) = groups {
                 self.stream_groups.insert(swapped.clone(), groups);
             }
             if let Some(last_id) = last_id {
-                self.stream_last_ids.insert(swapped, last_id);
+                self.stream_last_ids.insert(swapped.clone(), last_id);
+            }
+            if let Some(entries_added) = entries_added {
+                self.stream_entries_added.insert(swapped, entries_added);
             }
         }
 
-        for (logical, entry, groups, last_id) in right_entries {
+        for (logical, entry, groups, last_id, entries_added) in right_entries {
             let swapped = encode_db_key(left_db, &logical);
             self.internal_entries_insert(swapped.clone(), entry);
             if let Some(groups) = groups {
                 self.stream_groups.insert(swapped.clone(), groups);
             }
             if let Some(last_id) = last_id {
-                self.stream_last_ids.insert(swapped, last_id);
+                self.stream_last_ids.insert(swapped.clone(), last_id);
+            }
+            if let Some(entries_added) = entries_added {
+                self.stream_entries_added.insert(swapped, entries_added);
             }
         }
 
@@ -7029,6 +7076,7 @@ impl Store {
         key: &[u8],
         group_name: Vec<u8>,
         last_delivered_id: StreamId,
+        entries_read: Option<u64>,
         consumers: BTreeSet<Vec<u8>>,
         pending: StreamPendingEntries,
     ) {
@@ -7037,7 +7085,7 @@ impl Store {
             group_name,
             StreamGroup {
                 last_delivered_id,
-                entries_read: None,
+                entries_read,
                 consumers,
                 pending,
             },
@@ -7055,7 +7103,9 @@ impl Store {
         match self.entries.get_mut(key) {
             Some(entry) => match &mut entry.value {
                 Value::Stream(entries) => {
-                    entries.insert(id, fields.to_vec());
+                    let inserted = entries.insert(id, fields.to_vec()).is_none();
+                    let default_entries_added =
+                        u64::try_from(entries.len().saturating_sub(1)).unwrap_or(u64::MAX);
                     Self::mark_digest_stale_fields(
                         &mut self.digest_stale,
                         &mut self.digest_mutations,
@@ -7065,6 +7115,13 @@ impl Store {
                     let wm = self.stream_last_ids.entry(key.to_vec()).or_insert((0, 0));
                     if id > *wm {
                         *wm = id;
+                    }
+                    if inserted {
+                        let added = self
+                            .stream_entries_added
+                            .entry(key.to_vec())
+                            .or_insert(default_entries_added);
+                        *added = added.saturating_add(1);
                     }
                     self.dirty = self.dirty.saturating_add(1);
                     Ok(())
@@ -7078,6 +7135,7 @@ impl Store {
                 self.stream_max_deleted_ids.remove(key);
                 // Set high watermark to the first entry's ID
                 self.stream_last_ids.insert(key.to_vec(), id);
+                self.stream_entries_added.insert(key.to_vec(), 1);
                 self.internal_entries_insert(
                     key.to_vec(),
                     Entry::new(Value::Stream(entries), None, now_ms),
@@ -7829,6 +7887,16 @@ impl Store {
         self.stream_max_deleted_ids.get(key).copied()
     }
 
+    #[must_use]
+    pub fn stream_entries_added(&self, key: &[u8], live_len: usize) -> u64 {
+        self.stream_entries_added_value(key, live_len)
+    }
+
+    pub fn restore_stream_entries_added(&mut self, key: &[u8], entries_added: u64) {
+        self.stream_entries_added
+            .insert(key.to_vec(), entries_added);
+    }
+
     pub fn xgroup_create(
         &mut self,
         key: &[u8],
@@ -7864,6 +7932,7 @@ impl Store {
             }
             self.stream_groups.remove(key);
             self.stream_last_ids.remove(key);
+            self.stream_entries_added.insert(key.to_vec(), 0);
             self.internal_entries_insert(
                 key.to_vec(),
                 Entry::new(Value::Stream(BTreeMap::new()), None, now_ms),
@@ -8156,11 +8225,34 @@ impl Store {
         last_id: StreamId,
         now_ms: u64,
     ) -> Result<bool, StoreError> {
+        self.xsetid_with_metadata(key, last_id, None, None, now_ms)
+    }
+
+    pub fn xsetid_with_metadata(
+        &mut self,
+        key: &[u8],
+        last_id: StreamId,
+        entries_added: Option<u64>,
+        max_deleted_id: Option<StreamId>,
+        now_ms: u64,
+    ) -> Result<bool, StoreError> {
         self.drop_if_expired(key, now_ms);
         match self.entries.get_mut(key) {
             Some(entry) => match &entry.value {
                 Value::Stream(_) => {
                     self.stream_last_ids.insert(key.to_vec(), last_id);
+                    if let Some(entries_added) = entries_added {
+                        self.stream_entries_added
+                            .insert(key.to_vec(), entries_added);
+                    }
+                    if let Some(max_deleted_id) = max_deleted_id {
+                        if max_deleted_id == (0, 0) {
+                            self.stream_max_deleted_ids.remove(key);
+                        } else {
+                            self.stream_max_deleted_ids
+                                .insert(key.to_vec(), max_deleted_id);
+                        }
+                    }
                     entry.touch_write(now_ms);
                     self.dirty = self.dirty.saturating_add(1);
                     Ok(true)
@@ -9412,6 +9504,7 @@ impl Store {
 
         self.stream_groups.remove(destination);
         self.stream_last_ids.remove(destination);
+        self.stream_entries_added.remove(destination);
         // Copy stream consumer groups if source has them
         if let Some(groups) = self.stream_groups.get(source) {
             self.stream_groups
@@ -9420,6 +9513,10 @@ impl Store {
         // Copy stream last-generated-id if source has one
         if let Some(&last_id) = self.stream_last_ids.get(source) {
             self.stream_last_ids.insert(destination.to_vec(), last_id);
+        }
+        if let Some(&entries_added) = self.stream_entries_added.get(source) {
+            self.stream_entries_added
+                .insert(destination.to_vec(), entries_added);
         }
         self.internal_entries_insert(destination.to_vec(), entry);
         self.dirty = self.dirty.saturating_add(1);
@@ -10335,11 +10432,13 @@ impl Store {
                     .copied()
                     .or_else(|| entries.keys().next_back().copied())
                     .or(Some((0, 0)));
+                let entries_added = Some(self.stream_entries_added_value(key, entries.len()));
                 let groups = self.dump_stream_consumer_groups(key);
                 let payload = fr_persist::encode_upstream_stream_listpacks3_payload(
                     &stream_entries,
                     watermark,
                     &groups,
+                    entries_added,
                 )?;
                 buf.push(RDB_TYPE_STREAM_LISTPACKS_3);
                 buf.extend_from_slice(&payload);
@@ -10396,6 +10495,7 @@ impl Store {
         // Data boundary: exclude trailer (2-byte version + 8-byte CRC64).
         let data_end = payload.len() - DUMP_TRAILER_LEN;
         let mut restored_stream_last_id = None;
+        let mut restored_stream_entries_added = None;
         let mut restored_stream_groups = None;
         let value = match type_byte {
             RDB_TYPE_STRING => {
@@ -10474,8 +10574,13 @@ impl Store {
                 )
                 .ok_or(StoreError::InvalidDumpPayload)?;
                 cursor += consumed;
-                let fr_persist::RdbValue::Stream(stream_entries, watermark, groups, _) =
-                    stream_value
+                let fr_persist::RdbValue::Stream(
+                    stream_entries,
+                    watermark,
+                    groups,
+                    _,
+                    entries_added,
+                ) = stream_value
                 else {
                     return Err(StoreError::InvalidDumpPayload);
                 };
@@ -10484,6 +10589,7 @@ impl Store {
                     entries.insert((ms, seq), fields);
                 }
                 restored_stream_last_id = watermark.or_else(|| entries.keys().next_back().copied());
+                restored_stream_entries_added = entries_added;
                 restored_stream_groups = Some(restore_stream_groups(groups));
                 Value::Stream(entries)
             }
@@ -10569,9 +10675,14 @@ impl Store {
         self.internal_entries_remove(key);
         self.stream_groups.remove(key);
         self.stream_last_ids.remove(key);
+        self.stream_entries_added.remove(key);
         self.internal_entries_insert(key.to_vec(), Entry::new(value, expires_at_ms, now_ms));
         if let Some(last_id) = restored_stream_last_id {
             self.stream_last_ids.insert(key.to_vec(), last_id);
+        }
+        if let Some(entries_added) = restored_stream_entries_added {
+            self.stream_entries_added
+                .insert(key.to_vec(), entries_added);
         }
         if let Some(groups) = restored_stream_groups
             && !groups.is_empty()
@@ -10743,18 +10854,35 @@ impl Store {
                     }
 
                     // Emit XSETID only if the high watermark exceeds the max entry
-                    // (e.g., entries were deleted, or XSETID was explicitly called).
-                    if let Some(&watermark) = self.stream_last_ids.get(&physical_key) {
-                        let max_entry_id = entries.keys().last().copied();
-                        if max_entry_id.is_none_or(|max| watermark > max) {
-                            let (ms, seq) = watermark;
-                            let id = format!("{ms}-{seq}");
-                            commands.push(vec![
-                                b"XSETID".to_vec(),
-                                logical_key.clone(),
-                                id.into_bytes(),
-                            ]);
+                    // or stream metadata differs from the replay-derived defaults.
+                    let max_entry_id = entries.keys().last().copied();
+                    let watermark = self
+                        .stream_last_ids
+                        .get(&physical_key)
+                        .copied()
+                        .or(max_entry_id)
+                        .unwrap_or((0, 0));
+                    let entries_added =
+                        self.stream_entries_added_value(&physical_key, entries.len());
+                    let max_deleted = self.stream_max_deleted_id(&physical_key).unwrap_or((0, 0));
+                    if max_entry_id.is_none_or(|max| watermark > max)
+                        || entries_added != u64::try_from(entries.len()).unwrap_or(u64::MAX)
+                        || max_deleted != (0, 0)
+                    {
+                        let (ms, seq) = watermark;
+                        let mut xsetid = vec![
+                            b"XSETID".to_vec(),
+                            logical_key.clone(),
+                            format!("{ms}-{seq}").into_bytes(),
+                            b"ENTRIESADDED".to_vec(),
+                            entries_added.to_string().into_bytes(),
+                        ];
+                        if max_deleted != (0, 0) {
+                            let (deleted_ms, deleted_seq) = max_deleted;
+                            xsetid.push(b"MAXDELETEDID".to_vec());
+                            xsetid.push(format!("{deleted_ms}-{deleted_seq}").into_bytes());
                         }
+                        commands.push(xsetid);
                     }
 
                     // Emit XGROUP CREATE for each consumer group.
@@ -16776,6 +16904,27 @@ mod tests {
         assert_eq!(cmds[1][0], b"XSETID");
         assert_eq!(cmds[1][1], b"s");
         assert_eq!(cmds[1][2], b"999-0");
+        assert_eq!(cmds[1][3], b"ENTRIESADDED");
+        assert_eq!(cmds[1][4], b"1");
+    }
+
+    #[test]
+    fn aof_commands_stream_preserves_xsetid_entriesadded() {
+        let mut store = Store::new();
+        store
+            .xadd(b"s", (1, 0), &[(b"k".to_vec(), b"v".to_vec())], 100)
+            .unwrap();
+        store
+            .xsetid_with_metadata(b"s", (1, 0), Some(10), None, 100)
+            .unwrap();
+
+        let cmds = store.to_aof_commands(100);
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[1][0], b"XSETID");
+        assert_eq!(cmds[1][1], b"s");
+        assert_eq!(cmds[1][2], b"1-0");
+        assert_eq!(cmds[1][3], b"ENTRIESADDED");
+        assert_eq!(cmds[1][4], b"10");
     }
 
     #[test]
@@ -19097,8 +19246,28 @@ mod tests {
                         .xadd(&key, id, &fields, METAMORPHIC_NOW_MS)
                         .expect("XADD replay must stay valid");
                 } else if eq_ascii_ci(command, b"XSETID") {
+                    let mut entries_added = None;
+                    let mut max_deleted_id = None;
+                    let mut i = 3;
+                    while i < argv.len() {
+                        if eq_ascii_ci(&argv[i], b"ENTRIESADDED") {
+                            entries_added = Some(parse_u64_arg(&argv[i + 1]));
+                            i += 2;
+                        } else if eq_ascii_ci(&argv[i], b"MAXDELETEDID") {
+                            max_deleted_id = Some(parse_stream_id_arg(&argv[i + 1]));
+                            i += 2;
+                        } else {
+                            panic!("unexpected generated XSETID option {:?}", argv[i]);
+                        }
+                    }
                     store
-                        .xsetid(&key, parse_stream_id_arg(&argv[2]), METAMORPHIC_NOW_MS)
+                        .xsetid_with_metadata(
+                            &key,
+                            parse_stream_id_arg(&argv[2]),
+                            entries_added,
+                            max_deleted_id,
+                            METAMORPHIC_NOW_MS,
+                        )
                         .expect("XSETID replay must stay valid");
                 } else if eq_ascii_ci(command, b"XGROUP") {
                     if eq_ascii_ci(&argv[1], b"CREATE") {

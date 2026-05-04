@@ -6086,6 +6086,7 @@ fn stream_entries_read_frame(entries_read: Option<u64>) -> RespFrame {
 }
 
 fn stream_full_group_lag_frame(
+    stream_entries_added: u64,
     stream_len: usize,
     first_id: Option<StreamId>,
     last_id: Option<StreamId>,
@@ -6096,7 +6097,7 @@ fn stream_full_group_lag_frame(
     if let Some(entries_read) = entries_read
         && max_deleted_id == (0, 0)
     {
-        let len = i64::try_from(stream_len).unwrap_or(i64::MAX);
+        let len = i64::try_from(stream_entries_added).unwrap_or(i64::MAX);
         let read = i64::try_from(entries_read).unwrap_or(i64::MAX);
         return RespFrame::Integer(len.saturating_sub(read));
     }
@@ -7091,6 +7092,7 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         let Some((len, first, last)) = store.xinfo_stream(&argv[2], now_ms)? else {
             return Err(CommandError::NoSuchKey);
         };
+        let entries_added = store.stream_entries_added(&argv[2], len);
         let max_deleted_id = store.stream_max_deleted_id(&argv[2]).unwrap_or((0, 0));
         let resp = store.dispatch_client_ctx.resp_protocol_version;
         let mut out = Vec::with_capacity(groups.len());
@@ -7102,6 +7104,7 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                 last_delivered_id,
                 entries_read,
                 stream_full_group_lag_frame(
+                    entries_added,
                     len,
                     first.as_ref().map(|(id, _)| *id),
                     last.as_ref().map(|(id, _)| *id),
@@ -7197,6 +7200,8 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         .map(|(id, _)| format_stream_id(*id))
         .unwrap_or_else(|| b"0-0".to_vec());
     let len_i64 = i64::try_from(len).unwrap_or(i64::MAX);
+    let entries_added = store.stream_entries_added(&argv[2], len);
+    let entries_added_i64 = i64::try_from(entries_added).unwrap_or(i64::MAX);
     let radix_tree_keys = i64::try_from(len).unwrap_or(i64::MAX);
     let radix_tree_nodes = if len == 0 {
         0
@@ -7267,6 +7272,7 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                     last_delivered_id: *last_delivered_id,
                     entries_read: *entries_read,
                     lag: stream_full_group_lag_frame(
+                        entries_added,
                         len,
                         first.as_ref().map(|(id, _)| *id),
                         last.as_ref().map(|(id, _)| *id),
@@ -7308,7 +7314,7 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
             ),
             (
                 RespFrame::BulkString(Some(b"entries-added".to_vec())),
-                RespFrame::Integer(len_i64),
+                RespFrame::Integer(entries_added_i64),
             ),
             (
                 RespFrame::BulkString(Some(b"recorded-first-entry-id".to_vec())),
@@ -7372,7 +7378,7 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
         ),
         (
             RespFrame::BulkString(Some(b"entries-added".to_vec())),
-            RespFrame::Integer(len_i64),
+            RespFrame::Integer(entries_added_i64),
         ),
         (
             RespFrame::BulkString(Some(b"recorded-first-entry-id".to_vec())),
@@ -7555,6 +7561,7 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         Err(reply) => return Ok(reply),
     };
 
+    let mut entries_added: Option<u64> = None;
     let mut max_deleted_id: Option<StreamId> = None;
     let mut i = 3;
     while i < argv.len() {
@@ -7567,12 +7574,7 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
                     "ERR entries_added must be positive".to_string(),
                 ));
             }
-            // Upstream stores entries_added on the stream object; we
-            // don't track it as a distinct counter yet so accept-and-
-            // record-the-validation-only is the safe path. The limit
-            // check against `length` below would require fetching the
-            // stream length; we skip that secondary check until we
-            // model entries_added.
+            entries_added = Some(u64::try_from(value).unwrap_or(u64::MAX));
             i += 2;
         } else if kw.eq_ignore_ascii_case("MAXDELETEDID") && moreargs > 0 {
             let parsed = match parse_stream_id(&argv[i + 1]) {
@@ -7591,8 +7593,14 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             return Ok(RespFrame::Error("ERR syntax error".to_string()));
         }
     }
-    let _ = max_deleted_id;
-
+    if let Some(current_max_deleted_id) = store.stream_max_deleted_id(key)
+        && last_id < current_max_deleted_id
+    {
+        return Ok(RespFrame::Error(
+            "ERR The ID specified in XSETID is smaller than current max_deleted_entry_id"
+                .to_string(),
+        ));
+    }
     // Upstream t_stream.c::xsetidCommand rejects with the verbose
     // 'smaller than the target stream top item' wording when
     // last-id < current top stream id. (br-frankenredis-xsetid-top)
@@ -7603,7 +7611,16 @@ fn xsetid_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             "ERR The ID specified in XSETID is smaller than the target stream top item".to_string(),
         ));
     }
-    match store.xsetid(key, last_id, now_ms) {
+    if let Some(entries_added) = entries_added {
+        let live_len = store.xlen(key, now_ms)?;
+        if entries_added < u64::try_from(live_len).unwrap_or(u64::MAX) {
+            return Ok(RespFrame::Error(
+                "ERR The entries_added specified in XSETID is smaller than the target stream length"
+                    .to_string(),
+            ));
+        }
+    }
+    match store.xsetid_with_metadata(key, last_id, entries_added, max_deleted_id, now_ms) {
         Ok(true) => Ok(RespFrame::SimpleString("OK".to_string())),
         Ok(false) => Ok(RespFrame::Error("ERR no such key".to_string())),
         Err(e) => Err(e.into()),
@@ -34837,6 +34854,45 @@ mod tests {
     }
 
     #[test]
+    fn xsetid_entriesadded_below_stream_length_rejected() {
+        let mut store = Store::new();
+        for id in [b"1-0".as_slice(), b"2-0".as_slice()] {
+            dispatch_argv(
+                &[
+                    b"XADD".to_vec(),
+                    b"s".to_vec(),
+                    id.to_vec(),
+                    b"k".to_vec(),
+                    b"v".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("xadd seed");
+        }
+
+        let out = dispatch_argv(
+            &[
+                b"XSETID".to_vec(),
+                b"s".to_vec(),
+                b"2-0".to_vec(),
+                b"ENTRIESADDED".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            RespFrame::Error(
+                "ERR The entries_added specified in XSETID is smaller than the target stream length"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
     fn xsetid_maxdeletedid_above_lastid_rejected() {
         let mut store = Store::new();
         dispatch_argv(
@@ -40265,24 +40321,24 @@ mod tests {
     #[test]
     fn stream_full_group_lag_frame_matches_redis_estimable_cases() {
         assert_eq!(
-            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (0, 0), (0, 0), None),
+            stream_full_group_lag_frame(3, 3, Some((1, 1)), Some((3, 1)), (0, 0), (0, 0), None),
             RespFrame::Integer(3)
         );
         assert_eq!(
-            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (0, 0), (1, 1), None),
+            stream_full_group_lag_frame(3, 3, Some((1, 1)), Some((3, 1)), (0, 0), (1, 1), None),
             RespFrame::Integer(2)
         );
         assert_eq!(
-            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (2, 1), (3, 1), None),
+            stream_full_group_lag_frame(3, 3, Some((1, 1)), Some((3, 1)), (2, 1), (3, 1), None),
             RespFrame::Integer(0)
         );
         assert_eq!(
-            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (2, 1), (2, 1), None),
+            stream_full_group_lag_frame(3, 3, Some((1, 1)), Some((3, 1)), (2, 1), (2, 1), None),
             RespFrame::BulkString(None)
         );
         assert_eq!(
-            stream_full_group_lag_frame(3, Some((1, 1)), Some((3, 1)), (0, 0), (2, 1), Some(2)),
-            RespFrame::Integer(1)
+            stream_full_group_lag_frame(10, 3, Some((1, 1)), Some((3, 1)), (0, 0), (2, 1), Some(2)),
+            RespFrame::Integer(8)
         );
     }
 

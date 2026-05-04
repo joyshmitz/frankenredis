@@ -224,8 +224,12 @@ impl RdbEntryFuzz {
                     .map(|entry| (entry.0, entry.1))
                     .or(Some((0, 0)));
                 let groups = build_stream_groups(group.as_ref(), &stream_entries);
-                let Some(payload) =
-                    encode_upstream_stream_listpacks3_payload(&stream_entries, watermark, &groups)
+                let Some(payload) = encode_upstream_stream_listpacks3_payload(
+                    &stream_entries,
+                    watermark,
+                    &groups,
+                    None,
+                )
                 else {
                     return;
                 };

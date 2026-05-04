@@ -871,6 +871,7 @@ pub enum RdbValue {
         Option<(u64, u64)>,
         Vec<RdbStreamConsumerGroup>,
         Option<RdbStreamMetadata>,
+        Option<u64>,
     ),
 }
 
@@ -882,8 +883,9 @@ pub fn encode_upstream_stream_listpacks3_payload(
     entries: &[StreamEntry],
     watermark: Option<(u64, u64)>,
     groups: &[RdbStreamConsumerGroup],
+    entries_added: Option<u64>,
 ) -> Option<Vec<u8>> {
-    rdb_stream::encode_upstream_stream_listpacks3(entries, watermark, groups)
+    rdb_stream::encode_upstream_stream_listpacks3(entries, watermark, groups, entries_added)
 }
 
 /// Decode an upstream stream DUMP payload starting after the type byte.
@@ -1225,7 +1227,7 @@ fn encode_rdb_internal(
                     }
                 }
             }
-            RdbValue::Stream(stream_entries, watermark, groups, metadata) => {
+            RdbValue::Stream(stream_entries, watermark, groups, metadata, entries_added) => {
                 encode_stream_rdb_value(
                     &mut buf,
                     &entry.key,
@@ -1233,6 +1235,7 @@ fn encode_rdb_internal(
                     *watermark,
                     groups,
                     metadata,
+                    *entries_added,
                 );
             }
         }
@@ -1433,6 +1436,7 @@ fn encode_stream_rdb_value(
     watermark: Option<(u64, u64)>,
     groups: &[RdbStreamConsumerGroup],
     metadata: &Option<RdbStreamMetadata>,
+    entries_added: Option<u64>,
 ) {
     if let Some(metadata) = metadata {
         buf.push(metadata.upstream_type_byte);
@@ -1444,8 +1448,12 @@ fn encode_stream_rdb_value(
     #[cfg(feature = "upstream-stream-rdb")]
     {
         if can_encode_upstream_stream_losslessly(stream_entries, watermark, groups)
-            && let Some(payload) =
-                rdb_stream::encode_upstream_stream_listpacks3(stream_entries, watermark, groups)
+            && let Some(payload) = rdb_stream::encode_upstream_stream_listpacks3(
+                stream_entries,
+                watermark,
+                groups,
+                entries_added,
+            )
         {
             buf.push(UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3);
             rdb_encode_string(buf, key);
@@ -1454,7 +1462,7 @@ fn encode_stream_rdb_value(
         }
     }
 
-    encode_private_stream_rdb_value(buf, key, stream_entries, watermark, groups);
+    encode_private_stream_rdb_value(buf, key, stream_entries, watermark, groups, entries_added);
 }
 
 #[cfg(feature = "upstream-stream-rdb")]
@@ -1513,12 +1521,16 @@ fn encode_private_stream_rdb_value(
     stream_entries: &[StreamEntry],
     watermark: Option<(u64, u64)>,
     groups: &[RdbStreamConsumerGroup],
+    entries_added: Option<u64>,
 ) {
     buf.push(RDB_TYPE_STREAM);
     rdb_encode_string(buf, key);
     let (wm_ms, wm_seq) = watermark.unwrap_or((0, 0));
     buf.extend_from_slice(&wm_ms.to_le_bytes());
     buf.extend_from_slice(&wm_seq.to_le_bytes());
+    let entries_added =
+        entries_added.unwrap_or(u64::try_from(stream_entries.len()).unwrap_or(u64::MAX));
+    buf.extend_from_slice(&entries_added.to_le_bytes());
     rdb_encode_length(buf, stream_entries.len());
     for (ms, seq, fields) in stream_entries {
         buf.extend_from_slice(&ms.to_le_bytes());
@@ -2300,8 +2312,8 @@ pub fn decode_rdb_prefix(data: &[u8]) -> Result<RdbDecodeResult, PersistError> {
                         RdbValue::SortedSet(members)
                     }
                     RDB_TYPE_STREAM => {
-                        // Decode watermark (16 bytes)
-                        if cursor + 16 > data.len() {
+                        // Decode watermark plus private stream entries-added counter.
+                        if cursor + 24 > data.len() {
                             return Err(PersistError::InvalidFrame);
                         }
                         let wm_ms = u64::from_le_bytes(
@@ -2321,6 +2333,12 @@ pub fn decode_rdb_prefix(data: &[u8]) -> Result<RdbDecodeResult, PersistError> {
                         } else {
                             Some((wm_ms, wm_seq))
                         };
+                        let entries_added = u64::from_le_bytes(
+                            data[cursor..cursor + 8]
+                                .try_into()
+                                .map_err(|_| PersistError::InvalidFrame)?,
+                        );
+                        cursor += 8;
                         let (count, consumed) =
                             rdb_decode_length(&data[cursor..]).ok_or(PersistError::InvalidFrame)?;
                         cursor += consumed;
@@ -2457,7 +2475,13 @@ pub fn decode_rdb_prefix(data: &[u8]) -> Result<RdbDecodeResult, PersistError> {
                                 pending,
                             });
                         }
-                        RdbValue::Stream(stream_entries, watermark, groups, None)
+                        RdbValue::Stream(
+                            stream_entries,
+                            watermark,
+                            groups,
+                            None,
+                            Some(entries_added),
+                        )
                     }
                     UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_2 | UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3 => {
                         let (value, consumed) =
@@ -5194,6 +5218,7 @@ mod tests {
                 Some((1001, 0)),
                 Vec::new(),
                 None,
+                Some(2),
             ),
             expire_ms: None,
         }];
@@ -5207,7 +5232,7 @@ mod tests {
         let entries = vec![RdbEntry {
             db: 0,
             key: b"emptystream".to_vec(),
-            value: RdbValue::Stream(vec![], None, Vec::new(), None),
+            value: RdbValue::Stream(vec![], None, Vec::new(), None, Some(0)),
             expire_ms: None,
         }];
         let encoded = encode_rdb(&entries, &[]);
@@ -5225,6 +5250,7 @@ mod tests {
                 Some((5000, 1)),
                 Vec::new(),
                 None,
+                Some(1),
             ),
             expire_ms: Some(9_999_999),
         }];
@@ -5268,6 +5294,7 @@ mod tests {
                     ],
                 }],
                 None,
+                Some(2),
             ),
             expire_ms: None,
         }];
@@ -5300,6 +5327,7 @@ mod tests {
                     }],
                 }],
                 None,
+                Some(1),
             ),
             expire_ms: None,
         }];
@@ -5311,19 +5339,30 @@ mod tests {
 
         let (decoded, _) = decode_rdb(&encoded).expect("decode");
         assert_eq!(decoded.len(), 1);
-        let RdbValue::Stream(decoded_entries, decoded_watermark, decoded_groups, metadata) =
-            &decoded[0].value
+        let RdbValue::Stream(
+            decoded_entries,
+            decoded_watermark,
+            decoded_groups,
+            metadata,
+            decoded_entries_added,
+        ) = &decoded[0].value
         else {
             panic!("expected decoded stream");
         };
-        let RdbValue::Stream(expected_entries, expected_watermark, expected_groups, _) =
-            &entries[0].value
+        let RdbValue::Stream(
+            expected_entries,
+            expected_watermark,
+            expected_groups,
+            _,
+            expected_entries_added,
+        ) = &entries[0].value
         else {
             panic!("expected source stream");
         };
         assert_eq!(decoded_entries, expected_entries);
         assert_eq!(decoded_watermark, expected_watermark);
         assert_eq!(decoded_groups, expected_groups);
+        assert_eq!(decoded_entries_added, expected_entries_added);
         assert!(
             metadata.is_some(),
             "upstream stream decode should retain raw payload metadata"
@@ -5388,6 +5427,7 @@ mod tests {
                         Some((ms, 1)),
                         groups,
                         None,
+                        Some(2),
                     ),
                     expire_ms: None,
                 }
@@ -5541,6 +5581,7 @@ mod tests {
                         upstream_type_byte: UPSTREAM_RDB_TYPE_STREAM_LISTPACKS_3,
                         upstream_payload: payload.clone(),
                     }),
+                    Some(1),
                 ),
                 expire_ms: None,
             }]
@@ -5557,6 +5598,7 @@ mod tests {
                 Some((1000, 0)),
                 Vec::new(),
                 None,
+                Some(1),
             ),
             expire_ms: None,
         }];
@@ -5603,6 +5645,7 @@ mod tests {
                     Some((100, 0)),
                     Vec::new(),
                     None,
+                    Some(1),
                 ),
                 expire_ms: Some(1_000_000),
             },
@@ -5866,7 +5909,7 @@ mod tests {
             let entries = vec![RdbEntry {
                 db: 0,
                 key: b"mystream".to_vec(),
-                value: RdbValue::Stream(vec![], None, Vec::new(), None),
+                value: RdbValue::Stream(vec![], None, Vec::new(), None, Some(0)),
                 expire_ms: None,
             }];
             let encoded = encode_rdb(&entries, &[]);
@@ -6008,7 +6051,8 @@ mod tests {
                     prop::collection::vec(stream_consumer_group_strategy(), 0..=2),
                 )
                     .prop_map(|(entries, watermark, groups)| {
-                        RdbValue::Stream(entries, watermark, groups, None)
+                        let entries_added = u64::try_from(entries.len()).unwrap_or(u64::MAX);
+                        RdbValue::Stream(entries, watermark, groups, None, Some(entries_added))
                     }),
             ]
         }
@@ -6312,7 +6356,8 @@ mod tests {
                     prop::collection::vec(stream_consumer_group_strategy(), 0..=2),
                 )
                     .prop_map(|(entries, watermark, groups)| {
-                        RdbValue::Stream(entries, watermark, groups, None)
+                        let entries_added = u64::try_from(entries.len()).unwrap_or(u64::MAX);
+                        RdbValue::Stream(entries, watermark, groups, None, Some(entries_added))
                     }),
             ]
         }

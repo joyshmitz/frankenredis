@@ -72,6 +72,7 @@ fn generate_rdb_corpus(dir: &Path) {
             Some((1000, 0)),
             Vec::new(),
             None,
+            Some(1),
         ),
         expire_ms: None,
     }];

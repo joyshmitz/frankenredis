@@ -11965,6 +11965,7 @@ fn store_to_rdb_entries(store: &mut Store, now_ms: u64) -> Vec<RdbEntry> {
                     })
                     .collect();
                 let watermark = store.stream_watermark(&key).unwrap_or(None);
+                let entries_added = Some(store.stream_entries_added(&key, entries_map.len()));
                 let groups = store
                     .stream_consumer_groups(&key)
                     .map(|gs| {
@@ -11990,7 +11991,7 @@ fn store_to_rdb_entries(store: &mut Store, now_ms: u64) -> Vec<RdbEntry> {
                             .collect()
                     })
                     .unwrap_or_default();
-                RdbValue::Stream(stream_entries, watermark, groups, None)
+                RdbValue::Stream(stream_entries, watermark, groups, None, entries_added)
             }
         };
         entries.push(RdbEntry {
@@ -12092,14 +12093,22 @@ fn apply_rdb_entries_to_store(
                     );
                 }
             }
-            RdbValue::Stream(stream_entries, watermark, groups, _metadata) => {
+            RdbValue::Stream(stream_entries, watermark, groups, _metadata, entries_added) => {
                 for (ms, seq, fields) in stream_entries {
                     let field_pairs: Vec<(Vec<u8>, Vec<u8>)> =
                         fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     let _ = store.xadd(&key, (*ms, *seq), &field_pairs, now_ms);
                 }
                 if let Some((wm_ms, wm_seq)) = watermark {
-                    let _ = store.xsetid(&key, (*wm_ms, *wm_seq), now_ms);
+                    let _ = store.xsetid_with_metadata(
+                        &key,
+                        (*wm_ms, *wm_seq),
+                        *entries_added,
+                        None,
+                        now_ms,
+                    );
+                } else if let Some(entries_added) = entries_added {
+                    store.restore_stream_entries_added(&key, *entries_added);
                 }
                 // Restore consumer groups from RDB snapshot.
                 for group in groups {
@@ -12120,6 +12129,7 @@ fn apply_rdb_entries_to_store(
                         &key,
                         group.name.clone(),
                         (group.last_delivered_id_ms, group.last_delivered_id_seq),
+                        group.entries_read,
                         consumers,
                         pending,
                     );
