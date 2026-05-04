@@ -3183,7 +3183,16 @@ impl<'a> LuaState<'a> {
                     self.script_started_at.elapsed().as_secs_f64(),
                 )])
             }
-            // ── Coroutine stubs (not supported, matches Redis) ──────────
+            // ── Coroutine library (DIVERGES from upstream — see bw15) ──
+            // Upstream Redis 7.2 keeps the full Lua coroutine library
+            // available inside the script sandbox; coroutine.create /
+            // .resume / .yield / .status / .wrap / .running all work
+            // for normal generator/iterator patterns. fr's Lua
+            // interpreter has no suspended-frame support yet, so each
+            // method short-circuits to nil. Tracked as
+            // frankenredis-bw15. The error wording does not match
+            // upstream either — upstream emits e.g. 'bad argument #1
+            // to resume (coroutine expected)' for typed misuses.
             "coroutine.create" | "coroutine.resume" | "coroutine.yield" | "coroutine.status"
             | "coroutine.wrap" | "coroutine.running" => {
                 Err("attempt to call a nil value".to_string())

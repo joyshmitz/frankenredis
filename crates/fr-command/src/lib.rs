@@ -32238,6 +32238,41 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "frankenredis-bw15: fr's Lua sandbox has no working coroutine.* methods; upstream Redis 7.2 supports the full coroutine library in scripts"]
+    fn eval_lua_coroutine_create_and_resume_yields_value() {
+        // Upstream Redis 7.2 keeps the Lua coroutine library functional
+        // inside the script sandbox. Differential probe vs vendored
+        // redis 7.2.4 (port 16701):
+        //
+        //   EVAL '
+        //     local co = coroutine.create(function(x)
+        //         coroutine.yield(x*2)
+        //     end)
+        //     local _, r = coroutine.resume(co, 21)
+        //     return r
+        //   ' 0
+        //
+        // returns Integer(42) on upstream and
+        // 'ERR attempt to call a nil value ...' on fr.
+        //
+        // This test pins the upstream-correct behavior so the gap
+        // surfaces as a runnable artifact when the bw15 fix lands.
+        let mut store = Store::new();
+        let script = "local co = coroutine.create(function(x) \
+                          coroutine.yield(x*2) \
+                      end) \
+                      local _, r = coroutine.resume(co, 21) \
+                      return r";
+        let out = dispatch_argv(
+            &[b"EVAL".to_vec(), script.as_bytes().to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        assert_eq!(out, RespFrame::Integer(42));
+    }
+
+    #[test]
     fn eval_redis_error_reply_prepends_err_code_when_missing() {
         // Mirror upstream script_lua.c::luaRedisErrorReplyCommand +
         // luaPushErrorBuff: redis.error_reply("err") gets a default
