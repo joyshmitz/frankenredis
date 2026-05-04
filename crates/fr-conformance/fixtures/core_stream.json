@@ -2360,8 +2360,8 @@
                 "value": "entries-read"
               },
               {
-                "kind": "bulk",
-                "value": null
+                "kind": "integer",
+                "value": 3
               },
               {
                 "kind": "bulk",
@@ -2565,8 +2565,8 @@
                 "value": "entries-read"
               },
               {
-                "kind": "bulk",
-                "value": null
+                "kind": "integer",
+                "value": 2
               },
               {
                 "kind": "bulk",
@@ -5652,6 +5652,79 @@
           {"kind":"bulk","value":null},
           {"kind":"bulk","value":"last-entry"},
           {"kind":"bulk","value":null}
+        ]
+      }
+    },
+    {
+      "name": "xreadgroup_entriesread_tombstone_behind_setup_1",
+      "now_ms": 99800,
+      "argv": ["XADD", "xireadlag", "1-0", "f", "v"],
+      "expect": { "kind": "bulk", "value": "1-0" }
+    },
+    {
+      "name": "xreadgroup_entriesread_tombstone_behind_setup_2",
+      "now_ms": 99800,
+      "argv": ["XADD", "xireadlag", "2-0", "f", "v"],
+      "expect": { "kind": "bulk", "value": "2-0" }
+    },
+    {
+      "name": "xreadgroup_entriesread_tombstone_behind_setup_3",
+      "now_ms": 99800,
+      "argv": ["XADD", "xireadlag", "3-0", "f", "v"],
+      "expect": { "kind": "bulk", "value": "3-0" }
+    },
+    {
+      "name": "xreadgroup_entriesread_tombstone_behind_delete_first",
+      "now_ms": 99800,
+      "argv": ["XDEL", "xireadlag", "1-0"],
+      "expect": { "kind": "integer", "value": 1 }
+    },
+    {
+      "name": "xreadgroup_entriesread_tombstone_behind_create_group",
+      "now_ms": 99800,
+      "argv": ["XGROUP", "CREATE", "xireadlag", "grp1", "1-0", "ENTRIESREAD", "1"],
+      "expect": { "kind": "simple", "value": "OK" }
+    },
+    {
+      "name": "xreadgroup_entriesread_tombstone_behind_read_one",
+      "now_ms": 99800,
+      "argv": ["XREADGROUP", "GROUP", "grp1", "c1", "COUNT", "1", "STREAMS", "xireadlag", ">"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind":"array","value":[
+            {"kind":"bulk","value":"xireadlag"},
+            {"kind":"array","value":[
+              {"kind":"array","value":[
+                {"kind":"bulk","value":"2-0"},
+                {"kind":"array","value":[{"kind":"bulk","value":"f"},{"kind":"bulk","value":"v"}]}
+              ]}
+            ]}
+          ]}
+        ]
+      }
+    },
+    {
+      "name": "xinfo_groups_preserves_entriesread_after_tombstone_behind_read",
+      "now_ms": 99800,
+      "argv": ["XINFO", "GROUPS", "xireadlag"],
+      "expect": {
+        "kind": "array",
+        "value": [
+          {"kind":"array","value":[
+            {"kind":"bulk","value":"name"},
+            {"kind":"bulk","value":"grp1"},
+            {"kind":"bulk","value":"consumers"},
+            {"kind":"integer","value":1},
+            {"kind":"bulk","value":"pending"},
+            {"kind":"integer","value":1},
+            {"kind":"bulk","value":"last-delivered-id"},
+            {"kind":"bulk","value":"2-0"},
+            {"kind":"bulk","value":"entries-read"},
+            {"kind":"integer","value":2},
+            {"kind":"bulk","value":"lag"},
+            {"kind":"integer","value":1}
+          ]}
         ]
       }
     },

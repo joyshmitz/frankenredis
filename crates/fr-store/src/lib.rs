@@ -1840,6 +1840,95 @@ impl Store {
             .unwrap_or_else(|| u64::try_from(live_len).unwrap_or(u64::MAX))
     }
 
+    fn stream_read_range_has_tombstones(
+        stream_len: usize,
+        first_id: Option<StreamId>,
+        max_deleted_id: StreamId,
+        start_id: StreamId,
+    ) -> bool {
+        if stream_len == 0 || max_deleted_id == (0, 0) {
+            return false;
+        }
+        let Some(first_id) = first_id else {
+            return false;
+        };
+        first_id <= max_deleted_id && start_id <= max_deleted_id
+    }
+
+    fn estimate_stream_entries_read(
+        entries_added: u64,
+        stream_len: usize,
+        first_id: Option<StreamId>,
+        last_id: Option<StreamId>,
+        max_deleted_id: StreamId,
+        id: StreamId,
+    ) -> Option<u64> {
+        if entries_added == 0 {
+            return Some(0);
+        }
+        if stream_len == 0 && last_id.is_some_and(|last_id| id <= last_id) {
+            return Some(entries_added);
+        }
+        let last_id = last_id?;
+        if id == last_id {
+            return Some(entries_added);
+        }
+        if id > last_id {
+            return None;
+        }
+        let first_id = first_id?;
+        if max_deleted_id == (0, 0) || max_deleted_id < first_id {
+            if id < first_id {
+                return Some(
+                    entries_added.saturating_sub(u64::try_from(stream_len).unwrap_or(u64::MAX)),
+                );
+            }
+            if id == first_id {
+                return Some(
+                    entries_added
+                        .saturating_sub(u64::try_from(stream_len).unwrap_or(u64::MAX))
+                        .saturating_add(1),
+                );
+            }
+        }
+        None
+    }
+
+    fn advance_stream_entries_read_counter(
+        current: Option<u64>,
+        records: &[StreamRecord],
+        entries_added: u64,
+        stream_len: usize,
+        first_id: Option<StreamId>,
+        last_id: Option<StreamId>,
+        max_deleted_id: StreamId,
+    ) -> Option<u64> {
+        let mut entries_read = current;
+        for (id, _) in records {
+            entries_read = match entries_read {
+                Some(read)
+                    if !Self::stream_read_range_has_tombstones(
+                        stream_len,
+                        first_id,
+                        max_deleted_id,
+                        *id,
+                    ) =>
+                {
+                    Some(read.saturating_add(1))
+                }
+                _ => Self::estimate_stream_entries_read(
+                    entries_added,
+                    stream_len,
+                    first_id,
+                    last_id,
+                    max_deleted_id,
+                    *id,
+                ),
+            };
+        }
+        entries_read
+    }
+
     pub fn reset_slowlog(&mut self) {
         self.slowlog.clear();
         self.slowlog_id_counter = 0;
@@ -7477,7 +7566,7 @@ impl Store {
             count,
         } = options;
 
-        let records = match self.entries.get(key) {
+        let (records, stream_len, first_id, last_id) = match self.entries.get(key) {
             Some(entry) => match &entry.value {
                 Value::Stream(entries) => {
                     let Some(groups) = self.stream_groups.get(key) else {
@@ -7517,17 +7606,24 @@ impl Store {
                             }
                         }
                     }
-                    out
+                    (
+                        out,
+                        entries.len(),
+                        entries.keys().next().copied(),
+                        entries.keys().next_back().copied(),
+                    )
                 }
                 _ => return Err(StoreError::WrongType),
             },
             None => return Ok(None),
         };
         let last_seen_id = records.last().map(|(id, _)| *id);
-        let has_deleted_stream_entries = self
+        let entries_added = self.stream_entries_added_value(key, stream_len);
+        let max_deleted_id = self
             .stream_max_deleted_ids
             .get(key)
-            .is_some_and(|id| *id != (0, 0));
+            .copied()
+            .unwrap_or((0, 0));
 
         let Some(groups) = self.stream_groups.get_mut(key) else {
             return Ok(None);
@@ -7540,14 +7636,15 @@ impl Store {
         if let StreamGroupReadCursor::NewEntries = cursor
             && let Some(last_seen_id) = last_seen_id
         {
-            if let Some(entries_read) = group_state.entries_read.as_mut() {
-                if has_deleted_stream_entries {
-                    group_state.entries_read = None;
-                } else {
-                    let read_count = u64::try_from(records.len()).unwrap_or(u64::MAX);
-                    *entries_read = entries_read.saturating_add(read_count);
-                }
-            }
+            group_state.entries_read = Self::advance_stream_entries_read_counter(
+                group_state.entries_read,
+                &records,
+                entries_added,
+                stream_len,
+                first_id,
+                last_id,
+                max_deleted_id,
+            );
             group_state.last_delivered_id = last_seen_id;
             if !noack {
                 for (id, _) in &records {
