@@ -8726,30 +8726,65 @@ fn function_cmd(
             return Err(script_noscript_command_error());
         }
         let (lib_count, func_count) = store.function_stats();
-        Ok(RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(b"running_script".to_vec())),
-            // PINNED 2026-04-22 — running_script is RESP2 nil (BulkString(None))
-            // when no script is executing, NOT Integer(0). Verified against
-            // stock `redis:7.4` (version 7.4.8): `FUNCTION STATS` returns
-            // `(nil)` in the running_script slot on an idle server. A prior
-            // session briefly changed this to `RespFrame::Integer(0)`; that
-            // was incorrect and has since been reverted. Leave it as nil.
-            RespFrame::BulkString(None),
-            RespFrame::BulkString(Some(b"engines".to_vec())),
-            RespFrame::Array(Some(vec![
-                // PINNED 2026-04-22 — engine name is emitted in its stored case
-                // (uppercase "LUA") in both FUNCTION STATS and FUNCTION LIST;
-                // see the matching pin at the `lib.engine.as_bytes()` line in
-                // the FUNCTION LIST handler above.
-                RespFrame::BulkString(Some(b"LUA".to_vec())),
-                RespFrame::Array(Some(vec![
+        // Mirror upstream functions.c::functionStatsCommand which uses
+        // doubly-nested addReplyMapLen — RESP3 wire shape is a Map of
+        // 2 pairs at the outer level (running_script, engines), with
+        // 'engines' being a Map of (engine_name, per-engine Map). The
+        // per-engine inner Map carries (libraries_count, N) and
+        // (functions_count, M). RESP2 stays the existing flat Array of
+        // alternating k/v entries with the engine details nested as
+        // sub-Arrays. (frankenredis-asvh1)
+        if store.dispatch_client_ctx.resp_protocol_version == 3 {
+            let lua_inner = RespFrame::Map(Some(vec![
+                (
                     RespFrame::BulkString(Some(b"libraries_count".to_vec())),
                     RespFrame::Integer(lib_count as i64),
+                ),
+                (
                     RespFrame::BulkString(Some(b"functions_count".to_vec())),
                     RespFrame::Integer(func_count as i64),
+                ),
+            ]));
+            let engines = RespFrame::Map(Some(vec![(
+                RespFrame::BulkString(Some(b"LUA".to_vec())),
+                lua_inner,
+            )]));
+            Ok(RespFrame::Map(Some(vec![
+                (
+                    RespFrame::BulkString(Some(b"running_script".to_vec())),
+                    RespFrame::BulkString(None),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"engines".to_vec())),
+                    engines,
+                ),
+            ])))
+        } else {
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"running_script".to_vec())),
+                // PINNED 2026-04-22 — running_script is RESP2 nil (BulkString(None))
+                // when no script is executing, NOT Integer(0). Verified against
+                // stock `redis:7.4` (version 7.4.8): `FUNCTION STATS` returns
+                // `(nil)` in the running_script slot on an idle server. A prior
+                // session briefly changed this to `RespFrame::Integer(0)`; that
+                // was incorrect and has since been reverted. Leave it as nil.
+                RespFrame::BulkString(None),
+                RespFrame::BulkString(Some(b"engines".to_vec())),
+                RespFrame::Array(Some(vec![
+                    // PINNED 2026-04-22 — engine name is emitted in its stored case
+                    // (uppercase "LUA") in both FUNCTION STATS and FUNCTION LIST;
+                    // see the matching pin at the `lib.engine.as_bytes()` line in
+                    // the FUNCTION LIST handler above.
+                    RespFrame::BulkString(Some(b"LUA".to_vec())),
+                    RespFrame::Array(Some(vec![
+                        RespFrame::BulkString(Some(b"libraries_count".to_vec())),
+                        RespFrame::Integer(lib_count as i64),
+                        RespFrame::BulkString(Some(b"functions_count".to_vec())),
+                        RespFrame::Integer(func_count as i64),
+                    ])),
                 ])),
-            ])),
-        ])))
+            ])))
+        }
     } else if sub.eq_ignore_ascii_case("DUMP") {
         // Upstream commands.def declares FUNCTION DUMP with arity = 2,
         // so any extra arg trips the table-level WrongArity check
@@ -38566,6 +38601,75 @@ mod tests {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"FUNCTION".to_vec(), b"FLUSH".to_vec()], &mut store, 0).unwrap();
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn function_stats_under_resp3_returns_nested_map_shape() {
+        // (frankenredis-asvh1) Upstream functions.c::functionStatsCommand
+        // emits doubly-nested addReplyMapLen — outer (running_script,
+        // engines), 'engines' is a Map of (engine_name, per-engine
+        // Map), and the per-engine Map carries (libraries_count, N)
+        // and (functions_count, M). fr was emitting flat Array
+        // regardless of session protocol version.
+        let mut store = Store::new();
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        let out = dispatch_argv(&[b"FUNCTION".to_vec(), b"STATS".to_vec()], &mut store, 0)
+            .expect("function stats");
+        let RespFrame::Map(Some(outer)) = out else {
+            panic!("RESP3 FUNCTION STATS must be a Map, got {out:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(outer.len(), 2);
+        assert_eq!(
+            outer[0].0,
+            RespFrame::BulkString(Some(b"running_script".to_vec()))
+        );
+        assert_eq!(outer[0].1, RespFrame::BulkString(None));
+        assert_eq!(
+            outer[1].0,
+            RespFrame::BulkString(Some(b"engines".to_vec()))
+        );
+        let RespFrame::Map(Some(engines)) = &outer[1].1 else {
+            panic!("'engines' must be a Map under RESP3"); // ubs:ignore — AI triage
+        };
+        assert_eq!(engines.len(), 1);
+        assert_eq!(
+            engines[0].0,
+            RespFrame::BulkString(Some(b"LUA".to_vec()))
+        );
+        let RespFrame::Map(Some(lua)) = &engines[0].1 else {
+            panic!("LUA engine value must be a Map"); // ubs:ignore — AI triage
+        };
+        assert_eq!(lua.len(), 2);
+        assert_eq!(
+            lua[0].0,
+            RespFrame::BulkString(Some(b"libraries_count".to_vec()))
+        );
+        assert_eq!(
+            lua[1].0,
+            RespFrame::BulkString(Some(b"functions_count".to_vec()))
+        );
+    }
+
+    #[test]
+    fn function_stats_under_resp2_stays_flat_array() {
+        // (frankenredis-asvh1) Companion to the RESP3 pin.
+        let mut store = Store::new();
+        // Default protocol_version = 2.
+        let out = dispatch_argv(&[b"FUNCTION".to_vec(), b"STATS".to_vec()], &mut store, 0)
+            .expect("function stats");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("RESP2 FUNCTION STATS must be a flat Array, got {out:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 4);
+        assert_eq!(
+            items[0],
+            RespFrame::BulkString(Some(b"running_script".to_vec()))
+        );
+        assert_eq!(items[1], RespFrame::BulkString(None));
+        assert_eq!(
+            items[2],
+            RespFrame::BulkString(Some(b"engines".to_vec()))
+        );
     }
 
     #[test]
