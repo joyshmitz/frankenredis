@@ -3191,18 +3191,46 @@ impl<'a> LuaState<'a> {
             }
             // ── Coroutine library (DIVERGES from upstream — see bw15) ──
             // Upstream Redis 7.2 keeps the full Lua coroutine library
-            // available inside the script sandbox; coroutine.create /
-            // .resume / .yield / .status / .wrap / .running all work
-            // for normal generator/iterator patterns. fr's Lua
-            // interpreter has no suspended-frame support yet, so each
-            // method short-circuits to nil. Tracked as
-            // frankenredis-bw15. The error wording does not match
-            // upstream either — upstream emits e.g. 'bad argument #1
-            // to resume (coroutine expected)' for typed misuses.
-            "coroutine.create" | "coroutine.resume" | "coroutine.yield" | "coroutine.status"
-            | "coroutine.wrap" | "coroutine.running" => {
-                Err("attempt to call a nil value".to_string())
+            // available inside the script sandbox. fr still lacks
+            // suspended-frame support, but typed misuse should preserve
+            // Lua's upstream error contract instead of returning the old
+            // generic nil-call stub. (frankenredis-m71oe)
+            "coroutine.create" => {
+                if args
+                    .first()
+                    .is_some_and(|arg| matches!(arg, LuaValue::Function(_)))
+                {
+                    Err("attempt to call a nil value".to_string())
+                } else {
+                    Err(
+                        "user_script:1: bad argument #1 to 'create' (Lua function expected)"
+                            .to_string(),
+                    )
+                }
             }
+            "coroutine.wrap" => {
+                if args
+                    .first()
+                    .is_some_and(|arg| matches!(arg, LuaValue::Function(_)))
+                {
+                    Err("attempt to call a nil value".to_string())
+                } else {
+                    Err(
+                        "user_script:1: bad argument #1 to 'wrap' (Lua function expected)"
+                            .to_string(),
+                    )
+                }
+            }
+            "coroutine.resume" => {
+                Err("user_script:1: bad argument #1 to 'resume' (coroutine expected)".to_string())
+            }
+            "coroutine.status" => {
+                Err("user_script:1: bad argument #1 to 'status' (coroutine expected)".to_string())
+            }
+            "coroutine.yield" => {
+                Err("attempt to yield across metamethod/C-call boundary".to_string())
+            }
+            "coroutine.running" => Ok(vec![LuaValue::Nil]),
             // ── String library ──────────────────────────────────────────
             "string.len" => {
                 let s = args
@@ -5898,23 +5926,35 @@ mod tests {
     }
 
     #[test]
-    fn coroutine_stubs_return_error_pending_bw15() {
-        // (frankenredis-bw15 / n8vo2) Regression marker for a CURRENT
-        // divergence from upstream Redis 7.2: every coroutine.* method
-        // returns 'attempt to call a nil value' because fr's Lua
-        // interpreter has no suspended-frame support. Upstream keeps
-        // the full coroutine library functional inside the script
-        // sandbox, so this test will need to flip (and the linked
-        // ignore'd parity test eval_lua_coroutine_create_and_resume_
-        // yields_value will start passing) once bw15 lands.
+    fn coroutine_misuse_errors_match_upstream_pending_bw15() {
+        // frankenredis-m71oe: full coroutine suspension still belongs
+        // to bw15, but the observable errors for typed misuse are cheap
+        // parity and must not fall back to the old nil-call stub.
         let mut store = Store::new();
-        for func in &["create", "resume", "yield", "status", "wrap", "running"] {
-            let script = format!("return coroutine.{func}()").into_bytes();
-            let result = eval_script(&script, &[], &[], &mut store, 0);
-            assert!(
-                result.is_err(),
-                "coroutine.{func}() currently errors pending bw15, got: {result:?}"
-            );
+        for (script, expected) in [
+            (
+                b"return coroutine.create(nil)".as_slice(),
+                "user_script:1: bad argument #1 to 'create' (Lua function expected)",
+            ),
+            (
+                b"return coroutine.wrap(nil)".as_slice(),
+                "user_script:1: bad argument #1 to 'wrap' (Lua function expected)",
+            ),
+            (
+                b"return coroutine.resume(nil)".as_slice(),
+                "user_script:1: bad argument #1 to 'resume' (coroutine expected)",
+            ),
+            (
+                b"return coroutine.status(nil)".as_slice(),
+                "user_script:1: bad argument #1 to 'status' (coroutine expected)",
+            ),
+            (
+                b"return coroutine.yield()".as_slice(),
+                "attempt to yield across metamethod/C-call boundary",
+            ),
+        ] {
+            let result = eval_script(script, &[], &[], &mut store, 0);
+            assert_eq!(result, Err(expected.to_string()), "script {script:?}");
         }
     }
 
@@ -5923,6 +5963,13 @@ mod tests {
         let mut store = Store::new();
         let result = eval_script(b"return type(coroutine)", &[], &[], &mut store, 0);
         assert_eq!(result, Ok(RespFrame::BulkString(Some(b"table".to_vec()))));
+    }
+
+    #[test]
+    fn coroutine_running_returns_nil_in_main_thread() {
+        let mut store = Store::new();
+        let result = eval_script(b"return coroutine.running()", &[], &[], &mut store, 0);
+        assert_eq!(result, Ok(RespFrame::BulkString(None)));
     }
 
     #[test]
