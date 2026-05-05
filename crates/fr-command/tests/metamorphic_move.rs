@@ -160,8 +160,8 @@ fn mr_move_same_db_does_not_mutate_state() {
     store.set(encode_db_key(0, b"foo"), b"bar".to_vec(), None, now);
 
     select_db(&mut store, 0);
-    let err = dispatch_argv(&move_argv(b"foo", 0), &mut store, now)
-        .expect_err("same-db should error");
+    let err =
+        dispatch_argv(&move_argv(b"foo", 0), &mut store, now).expect_err("same-db should error");
     assert!(matches!(
         err,
         CommandError::Custom(ref s) if s == "ERR source and destination objects are the same"
@@ -198,9 +198,43 @@ fn mr_move_out_of_range_does_not_mutate_state() {
     assert!(store.exists(&encode_db_key(0, b"foo"), now));
 }
 
-// MR8 (SELECT-then-MOVE) intentionally not included here: SELECT
-// through dispatch_argv is itself stubbed in fr-command (filed as
-// frankenredis-j22p8) — it doesn't mutate dispatch_client_ctx.db_index
-// and rejects every db != 0 with "ERR DB index is out of range". Once
-// that stub is fixed, an MR8 invariant should pin SELECT+MOVE as a
-// composed pair so MULTI/EXEC and Lua transactions are covered.
+#[test]
+fn mr_select_then_move_uses_selected_source_db() {
+    // MR8: SELECT through dispatch_argv must update the same selected-db
+    // context MOVE reads, because Lua redis.call, AOF replay, and queued
+    // command dispatch all compose these commands through this path.
+    let mut store = Store::new();
+    let now = 1_000_000_u64;
+    store.set(encode_db_key(1, b"foo"), b"bar".to_vec(), None, now);
+
+    let selected =
+        dispatch_argv(&[b"SELECT".to_vec(), b"1".to_vec()], &mut store, now).expect("select db 1");
+    assert_eq!(selected, RespFrame::SimpleString("OK".to_string()));
+    assert_eq!(store.dispatch_client_ctx.db_index, 1);
+
+    let out = dispatch_argv(&move_argv(b"foo", 2), &mut store, now).expect("move 1->2");
+    assert_eq!(out, RespFrame::Integer(1));
+    assert!(!store.exists(&encode_db_key(1, b"foo"), now));
+    assert_eq!(
+        store
+            .get(&encode_db_key(2, b"foo"), now)
+            .expect("get moved")
+            .as_deref(),
+        Some(&b"bar"[..])
+    );
+}
+
+#[test]
+fn select_out_of_range_does_not_mutate_selected_db() {
+    let mut store = Store::new();
+    let now = 1_000_000_u64;
+    select_db(&mut store, 3);
+
+    let out = dispatch_argv(&[b"SELECT".to_vec(), b"999".to_vec()], &mut store, now)
+        .expect("range error frame");
+    assert_eq!(
+        out,
+        RespFrame::Error("ERR DB index is out of range".to_string())
+    );
+    assert_eq!(store.dispatch_client_ctx.db_index, 3);
+}

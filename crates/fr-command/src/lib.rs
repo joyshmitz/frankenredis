@@ -1368,7 +1368,7 @@ pub fn dispatch_argv(
         Some(CommandId::Substr) => return substr(argv, store, now_ms),
         Some(CommandId::Bitop) => return bitop(argv, store, now_ms),
         Some(CommandId::Quit) => return quit(argv, store),
-        Some(CommandId::Select) => return select(argv),
+        Some(CommandId::Select) => return select(argv, store),
         Some(CommandId::Info) => return info(argv, store, now_ms),
         Some(CommandId::Command) => return command_cmd(argv),
         Some(CommandId::Config) => return config_cmd(argv, store, now_ms),
@@ -11553,12 +11553,16 @@ fn quit(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
     Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
-fn select(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn select(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
     if argv.len() != 2 {
         return Err(CommandError::WrongArity("SELECT"));
     }
     let db = parse_i64_arg(&argv[1])?;
-    if db == 0 {
+    let Ok(db_index) = usize::try_from(db) else {
+        return Ok(RespFrame::Error("ERR DB index is out of range".to_string()));
+    };
+    if db_index < store.database_count {
+        store.dispatch_client_ctx.db_index = db_index;
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else {
         Ok(RespFrame::Error("ERR DB index is out of range".to_string()))
@@ -17441,6 +17445,14 @@ fn parse_blocking_deadline_milliseconds(arg: &[u8], now_ms: u64) -> Result<u64, 
 }
 
 /// Parse and validate a blocking command timeout. Returns an error for negative values.
+///
+/// Wording / ordering must match upstream Redis 7.2 util.c::string2ld plus the
+/// call sites in t_list.c / t_zset.c / blocked.c. Parse failure or NaN yields
+/// `ERR timeout is not a float or out of range`; any finite negative or `-inf`
+/// yields `ERR timeout is negative`; `+inf` or a finite positive that overflows
+/// the deadline yields `ERR timeout is out of range`. Collapsing any two of
+/// these produces user-visible wording divergence on BLPOP/BRPOP/BZPOPMIN/etc.
+/// (frankenredis-82gyd)
 fn parse_blocking_timeout(arg: &[u8]) -> Result<f64, CommandError> {
     let text = std::str::from_utf8(arg).map_err(|_| {
         CommandError::Custom("ERR timeout is not a float or out of range".to_string())
@@ -17448,13 +17460,16 @@ fn parse_blocking_timeout(arg: &[u8]) -> Result<f64, CommandError> {
     let timeout: f64 = text.parse().map_err(|_| {
         CommandError::Custom("ERR timeout is not a float or out of range".to_string())
     })?;
-    if !timeout.is_finite() {
+    if timeout.is_nan() {
         return Err(CommandError::Custom(
             "ERR timeout is not a float or out of range".to_string(),
         ));
     }
     if timeout < 0.0 {
         return Err(CommandError::Custom("ERR timeout is negative".to_string()));
+    }
+    if !timeout.is_finite() {
+        return Err(blocking_timeout_out_of_range_error());
     }
     Ok(timeout)
 }
@@ -30623,6 +30638,38 @@ mod tests {
     }
 
     #[test]
+    fn blpop_nonfinite_timeout_wording_matches_upstream() {
+        // Differential probe vs vendored Redis 7.2.4 (port 16701) showed
+        // upstream distinguishes the three non-finite cases with three
+        // different wordings — fr was collapsing all three into "not a
+        // float or out of range". Pin each so a future refactor of
+        // parse_blocking_timeout can't silently regress.
+        // (frankenredis-82gyd)
+        let mut store = Store::new();
+        for (timeout, expected) in [
+            (
+                b"NaN".as_slice(),
+                "ERR timeout is not a float or out of range",
+            ),
+            (b"inf".as_slice(), "ERR timeout is out of range"),
+            (b"+inf".as_slice(), "ERR timeout is out of range"),
+            (b"-inf".as_slice(), "ERR timeout is negative"),
+        ] {
+            let err = dispatch_argv(
+                &[b"BLPOP".to_vec(), b"key".to_vec(), timeout.to_vec()],
+                &mut store,
+                0,
+            )
+            .expect_err("timeout must be rejected");
+            assert_eq!(
+                err,
+                CommandError::Custom(expected.to_string()),
+                "timeout {timeout:?} should yield {expected}"
+            );
+        }
+    }
+
+    #[test]
     fn blocking_seconds_deadline_rounds_submillisecond_waits_up() {
         assert_eq!(
             crate::parse_blocking_deadline_seconds(b"0.0001", 123),
@@ -33352,12 +33399,7 @@ mod tests {
         // actually move keys between databases (not silently no-op
         // as the prior stub did). (frankenredis-w9yzb)
         let mut store = Store::new();
-        store.set(
-            fr_store::encode_db_key(0, b"foo"),
-            b"bar".to_vec(),
-            None,
-            0,
-        );
+        store.set(fr_store::encode_db_key(0, b"foo"), b"bar".to_vec(), None, 0);
         assert!(store.exists(&fr_store::encode_db_key(0, b"foo"), 0));
 
         let out = dispatch_argv(
