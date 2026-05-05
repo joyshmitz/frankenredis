@@ -14539,10 +14539,20 @@ fn randomkey(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("RANDOMKEY"));
     }
-    match store.randomkey(now_ms) {
-        Some(key) => Ok(RespFrame::BulkString(Some(key))),
-        None => Ok(RespFrame::BulkString(None)),
-    }
+    // Scope to the dispatch context's selected db. The all-DBs
+    // Store::randomkey primitive picks from entries.keys() globally
+    // and was leaking key names from foreign databases through
+    // Lua / AOF replay / MULTI/EXEC. Mirrors fr-runtime::
+    // handle_randomkey_command at fr-runtime/src/lib.rs:10213.
+    // (frankenredis-bwkfm)
+    let db = store.dispatch_client_ctx.db_index;
+    let Some(physical) = store.randomkey_in_db(db, now_ms) else {
+        return Ok(RespFrame::BulkString(None));
+    };
+    let logical = fr_store::decode_db_key(&physical)
+        .map(|(_, logical)| logical.to_vec())
+        .unwrap_or(physical);
+    Ok(RespFrame::BulkString(Some(logical)))
 }
 
 // ── SCAN family ──────────────────────────────────────────────────────
@@ -19612,6 +19622,67 @@ mod tests {
         let argv = vec![b"DBSIZE".to_vec()];
         let out = dispatch_argv(&argv, &mut store, 0).expect("dbsize");
         assert_eq!(out, RespFrame::Integer(2));
+    }
+
+    #[test]
+    fn randomkey_via_dispatch_only_returns_selected_db_keys() {
+        // (frankenredis-bwkfm) Lua redis.call('RANDOMKEY') and AOF
+        // replay route RANDOMKEY through dispatch_argv. Per-DB scope
+        // must come from dispatch_client_ctx.db_index — the earlier
+        // implementation called Store::randomkey() (the all-DBs
+        // primitive) and Lua scripts saw key names from any other db.
+        // 100 trials catches the bug deterministically; previously
+        // every trial returned a foreign-db name.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(1, b"k1_alpha"),
+            b"v1".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(1, b"k1_beta"),
+            b"v1b".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(2, b"k2_alpha"),
+            b"v2".to_vec(),
+            None,
+            0,
+        );
+
+        // db 0 is empty: every RANDOMKEY call must return Nil.
+        for _ in 0..100 {
+            let out = dispatch_argv(&[b"RANDOMKEY".to_vec()], &mut store, 0).expect("randomkey");
+            assert_eq!(
+                out,
+                RespFrame::BulkString(None),
+                "db 0 is empty; RANDOMKEY must return nil"
+            );
+        }
+
+        // db 1 has 2 keys: every RANDOMKEY call must return one of
+        // them as a logical name (no encode_db_key prefix bytes,
+        // no k2_alpha leaking through).
+        store.dispatch_client_ctx.db_index = 1;
+        let allowed: std::collections::HashSet<Vec<u8>> = [
+            b"k1_alpha".to_vec(),
+            b"k1_beta".to_vec(),
+        ]
+        .into_iter()
+        .collect();
+        for _ in 0..100 {
+            let out = dispatch_argv(&[b"RANDOMKEY".to_vec()], &mut store, 0).expect("randomkey");
+            let RespFrame::BulkString(Some(name)) = out else {
+                panic!("expected bulk string for db 1, got {out:?}"); // ubs:ignore — AI triage
+            };
+            assert!(
+                allowed.contains(&name),
+                "db 1 RANDOMKEY returned unexpected name {name:?} — must be one of k1_alpha / k1_beta"
+            );
+        }
     }
 
     #[test]
