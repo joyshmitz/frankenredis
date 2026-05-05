@@ -2913,7 +2913,16 @@ fn flushdb(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandErro
     if argv.len() > 2 || (argv.len() == 2 && !is_flush_mode_arg(&argv[1])) {
         return Err(CommandError::SyntaxError);
     }
-    store.flushdb();
+    // FLUSHDB is per-DB: clear only the currently-selected db read from the
+    // dispatch context. Calling Store::flushdb() here was wrong — that
+    // primitive does self.entries.clear() across all DBs (i.e. FLUSHALL
+    // semantics despite the name), so Lua redis.call('FLUSHDB'),
+    // AOF replay of FLUSHDB records, and MULTI/EXEC FLUSHDB silently
+    // wiped unrelated databases. fr-runtime::handle_flushdb_command at
+    // fr-runtime/src/lib.rs:10203 already uses flush_database; this
+    // mirrors that behavior on the dispatch_argv path.
+    // (frankenredis-rdz52)
+    store.flush_database(store.dispatch_client_ctx.db_index);
     Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
@@ -2921,6 +2930,9 @@ fn flushall(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandErr
     if argv.len() > 2 || (argv.len() == 2 && !is_flush_mode_arg(&argv[1])) {
         return Err(CommandError::SyntaxError);
     }
+    // FLUSHALL clears every database. Store::flushdb() is the all-DBs
+    // primitive (entries.clear()); the misleading name is a pre-existing
+    // wart, not a bug at this call site. (frankenredis-rdz52)
     store.flushdb();
     Ok(RespFrame::SimpleString("OK".to_string()))
 }
@@ -19588,6 +19600,71 @@ mod tests {
         let out = dispatch_argv(&argv, &mut store, 0).expect("flushdb");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn flushdb_via_dispatch_only_clears_selected_db() {
+        // (frankenredis-rdz52) Lua redis.call('FLUSHDB'), AOF replay, and
+        // MULTI/EXEC all route FLUSHDB through dispatch_argv. The
+        // dispatch context's db_index must scope the wipe so unrelated
+        // databases are untouched. Previously fr-command::flushdb called
+        // Store::flushdb() (which has FLUSHALL semantics despite the
+        // name) and silently destroyed every other database.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"k0"),
+            b"v0".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(1, b"k1"),
+            b"v1".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(2, b"k2"),
+            b"v2".to_vec(),
+            None,
+            0,
+        );
+
+        store.dispatch_client_ctx.db_index = 1;
+        let out = dispatch_argv(&[b"FLUSHDB".to_vec()], &mut store, 0).expect("flushdb db 1");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+
+        // db 1 wiped, db 0 + db 2 untouched.
+        assert!(!store.exists(&fr_store::encode_db_key(1, b"k1"), 0));
+        assert!(store.exists(&fr_store::encode_db_key(0, b"k0"), 0));
+        assert!(store.exists(&fr_store::encode_db_key(2, b"k2"), 0));
+    }
+
+    #[test]
+    fn flushall_via_dispatch_clears_every_db() {
+        // (frankenredis-rdz52) FLUSHALL must wipe every database
+        // regardless of the dispatch context's selected db. Companion
+        // pin to flushdb_via_dispatch_only_clears_selected_db.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"k0"),
+            b"v0".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(1, b"k1"),
+            b"v1".to_vec(),
+            None,
+            0,
+        );
+
+        store.dispatch_client_ctx.db_index = 1;
+        let out = dispatch_argv(&[b"FLUSHALL".to_vec()], &mut store, 0).expect("flushall");
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+
+        assert!(!store.exists(&fr_store::encode_db_key(0, b"k0"), 0));
+        assert!(!store.exists(&fr_store::encode_db_key(1, b"k1"), 0));
     }
 
     #[test]
