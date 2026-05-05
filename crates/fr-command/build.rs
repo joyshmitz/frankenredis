@@ -72,6 +72,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // — preserves the JSON acl_categories declaration order then the
     // flag-derived suffix order so COMMAND INFO matches upstream.
     let mut entries = BTreeMap::<String, Vec<String>>::new();
+    // Parallel BTreeMap of (summary, complexity, since) tuples for COMMAND
+    // DOCS. Optional strings (None for missing fields) so command_docs_entry
+    // can omit fields the upstream JSON didn't declare. (frankenredis-f39s3)
+    let mut docs_meta = BTreeMap::<String, (Option<String>, Option<String>, Option<String>)>::new();
     for path in command_json_paths(&commands_dir)? {
         println!("cargo:rerun-if-changed={}", path.display());
         let raw = fs::read_to_string(&path).map_err(|err| {
@@ -115,7 +119,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or_else(|| name.clone())
                 .to_ascii_lowercase();
 
-            let categories = entries.entry(command_name).or_default();
+            let categories = entries.entry(command_name.clone()).or_default();
             for category in string_array(metadata.get("acl_categories")) {
                 push_unique(categories, category.to_ascii_lowercase());
             }
@@ -142,6 +146,23 @@ fn main() -> Result<(), Box<dyn Error>> {
             if !categories.iter().any(|c| c == "fast") {
                 push_unique(categories, "slow".to_string());
             }
+
+            // Harvest COMMAND DOCS metadata from the same JSON. Each
+            // field is optional — upstream omits them for some
+            // commands, and we mirror that. (frankenredis-f39s3)
+            let summary = metadata
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let complexity = metadata
+                .get("complexity")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let since = metadata
+                .get("since")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            docs_meta.insert(command_name.clone(), (summary, complexity, since));
         }
     }
 
@@ -159,6 +180,32 @@ fn main() -> Result<(), Box<dyn Error>> {
             out.push_str("\", ");
         }
         out.push_str("]),\n");
+    }
+    out.push_str("];\n");
+
+    // Emit the parallel COMMAND DOCS metadata table. Each tuple is
+    // (name, summary, complexity, since); empty strings stand in for
+    // None and are filtered out at lookup time so command_docs_entry
+    // only emits fields the upstream JSON declared. (frankenredis-f39s3)
+    out.push_str(
+        "const UPSTREAM_COMMAND_DOCS_META: &[(&str, &str, &str, &str)] = &[\n",
+    );
+    for (command, (summary, complexity, since)) in &docs_meta {
+        out.push_str("    (\"");
+        out.push_str(&escape_rust_string(command));
+        out.push_str("\", \"");
+        if let Some(s) = summary.as_deref() {
+            out.push_str(&escape_rust_string(s));
+        }
+        out.push_str("\", \"");
+        if let Some(s) = complexity.as_deref() {
+            out.push_str(&escape_rust_string(s));
+        }
+        out.push_str("\", \"");
+        if let Some(s) = since.as_deref() {
+            out.push_str(&escape_rust_string(s));
+        }
+        out.push_str("\"),\n");
     }
     out.push_str("];\n");
 

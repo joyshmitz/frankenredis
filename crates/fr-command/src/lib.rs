@@ -13036,17 +13036,50 @@ fn command_docs_entry(
     step: i64,
 ) -> RespFrame {
     let group = command_group_for_docs(name, flags);
-    let summary = format!("{} command `{name}`.", command_group_summary_prefix(group));
-    RespFrame::Array(Some(vec![
-        hello_bulk("summary"),
-        hello_bulk(&summary),
-        hello_bulk("group"),
-        hello_bulk(group),
-        hello_bulk("arguments"),
-        RespFrame::Array(Some(command_docs_arguments(
-            arity, first_key, last_key, step,
-        ))),
-    ]))
+    // Look up upstream metadata harvested at build time from
+    // legacy_redis_code/redis/src/commands/*.json. The table is
+    // sorted-by-name so binary_search_by is O(log n). Empty strings
+    // mean the upstream JSON omitted that field — we mirror the
+    // omission rather than fabricating a value. (frankenredis-f39s3)
+    let upstream = UPSTREAM_COMMAND_DOCS_META
+        .binary_search_by(|(entry_name, _, _, _)| entry_name.cmp(&name))
+        .ok()
+        .map(|idx| UPSTREAM_COMMAND_DOCS_META[idx]);
+
+    let summary_owned;
+    let summary: &str = match upstream {
+        Some((_, s, _, _)) if !s.is_empty() => s,
+        _ => {
+            summary_owned = format!("{} command `{name}`.", command_group_summary_prefix(group));
+            &summary_owned
+        }
+    };
+
+    // Build entries in upstream's field order: summary, since, group,
+    // complexity, arguments. Optional fields (since, complexity) are
+    // emitted only when the upstream JSON had a value.
+    let mut entry: Vec<RespFrame> = Vec::with_capacity(12);
+    entry.push(hello_bulk("summary"));
+    entry.push(hello_bulk(summary));
+    if let Some((_, _, _, since)) = upstream
+        && !since.is_empty()
+    {
+        entry.push(hello_bulk("since"));
+        entry.push(hello_bulk(since));
+    }
+    entry.push(hello_bulk("group"));
+    entry.push(hello_bulk(group));
+    if let Some((_, _, complexity, _)) = upstream
+        && !complexity.is_empty()
+    {
+        entry.push(hello_bulk("complexity"));
+        entry.push(hello_bulk(complexity));
+    }
+    entry.push(hello_bulk("arguments"));
+    entry.push(RespFrame::Array(Some(command_docs_arguments(
+        arity, first_key, last_key, step,
+    ))));
+    RespFrame::Array(Some(entry))
 }
 
 fn command_docs_arguments(arity: i64, first_key: i64, last_key: i64, step: i64) -> Vec<RespFrame> {
@@ -37544,6 +37577,49 @@ mod tests {
         };
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"group".to_vec()))));
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"string".to_vec()))));
+    }
+
+    #[test]
+    fn command_docs_emits_upstream_summary_since_complexity_for_get() {
+        // (frankenredis-f39s3) Pin the per-command upstream metadata
+        // pulled from legacy_redis_code/redis/src/commands/get.json:
+        //   summary    = "Returns the string value of a key."
+        //   since      = "1.0.0"
+        //   complexity = "O(1)"
+        // A future build.rs refactor that drops the JSON-driven
+        // harvester would silently regress every COMMAND DOCS reply.
+        let mut store = Store::new();
+        let out =
+            dispatch_argv(&[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"GET".to_vec()], &mut store, 0)
+                .unwrap();
+        let RespFrame::Array(Some(entries)) = out else {
+            panic!("expected docs array"); // ubs:ignore — AI triage
+        };
+        let RespFrame::Array(Some(doc_fields)) = &entries[1] else {
+            panic!("expected doc fields array"); // ubs:ignore — AI triage
+        };
+        // Walk the [k1, v1, k2, v2, ...] field list and assert each
+        // expected pair is present.
+        let pairs: Vec<(Vec<u8>, Vec<u8>)> = doc_fields
+            .chunks(2)
+            .filter_map(|chunk| match chunk {
+                [
+                    RespFrame::BulkString(Some(k)),
+                    RespFrame::BulkString(Some(v)),
+                ] => Some((k.clone(), v.clone())),
+                _ => None,
+            })
+            .collect();
+        let kv = |key: &[u8]| -> Option<&[u8]> {
+            pairs
+                .iter()
+                .find(|(k, _)| k.as_slice() == key)
+                .map(|(_, v)| v.as_slice())
+        };
+        assert_eq!(kv(b"summary"), Some(&b"Returns the string value of a key."[..]));
+        assert_eq!(kv(b"since"), Some(&b"1.0.0"[..]));
+        assert_eq!(kv(b"complexity"), Some(&b"O(1)"[..]));
+        assert_eq!(kv(b"group"), Some(&b"string"[..]));
     }
 
     #[test]
