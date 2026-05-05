@@ -20889,6 +20889,231 @@ mod tests {
     }
 
     #[test]
+    fn hash_field_ttl_chained_hexpire_httl_hpersist_round_trip_golden() {
+        // (frankenredis-pxsy) Vendored Redis 7.2.4 returns
+        // 'ERR unknown command HEXPIRE ...' so the live-oracle conformance
+        // path can't validate this family. Pin the response codes
+        // anchored to Redis 7.4 spec as a golden:
+        //
+        //   HEXPIRE h 60 FIELDS 3 f1 f2 nope    → [1, 1, -2]
+        //                                          (1 = applied,
+        //                                           -2 = no such field)
+        //   HTTL    h FIELDS 3 f1 f2 nope       → [60, 60, -2]
+        //   HEXPIRE h 5  FIELDS 1 f1 NX         → [0]   (NX skip — TTL set)
+        //   HEXPIRE h 5  FIELDS 1 f1 XX         → [1]   (XX apply — has TTL)
+        //   HEXPIRE h 99 FIELDS 1 f1 LT         → [1]   (LT apply — 99 > 5)
+        //                                          Wait: LT applies when NEW
+        //                                          ttl is LESS than current.
+        //                                          5 < 99 → skip → [0]
+        //   HEXPIRE h 1  FIELDS 1 f1 LT         → [1]   (1 < 5 → apply)
+        //   HEXPIRE h 99 FIELDS 1 f1 GT         → [1]   (99 > 1 → apply)
+        //   HPERSIST h FIELDS 3 f1 f2 nope      → [1, 1, -2]
+        //   HTTL    h FIELDS 3 f1 f2 nope       → [-1, -1, -2]
+        //                                          (-1 = no TTL, -2 = no field)
+        //
+        // One chained scenario keeps the response shape and code
+        // semantics locked in across refactors of the per-field TTL
+        // tables without depending on a 7.4 oracle.
+        let mut store = seed_hash_field_ttl_store();
+
+        let apply = dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"60".to_vec(),
+                b"FIELDS".to_vec(),
+                b"3".to_vec(),
+                b"f1".to_vec(),
+                b"f2".to_vec(),
+                b"nope".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire");
+        assert_eq!(
+            apply,
+            RespFrame::Array(Some(vec![
+                RespFrame::Integer(1),
+                RespFrame::Integer(1),
+                RespFrame::Integer(-2),
+            ]))
+        );
+
+        let httl = dispatch_argv(
+            &[
+                b"HTTL".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"3".to_vec(),
+                b"f1".to_vec(),
+                b"f2".to_vec(),
+                b"nope".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("httl after apply");
+        assert_eq!(
+            httl,
+            RespFrame::Array(Some(vec![
+                RespFrame::Integer(60),
+                RespFrame::Integer(60),
+                RespFrame::Integer(-2),
+            ]))
+        );
+
+        // NX should skip when a TTL is already set.
+        let nx_skip = dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"5".to_vec(),
+                b"NX".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire nx");
+        assert_eq!(
+            nx_skip,
+            RespFrame::Array(Some(vec![RespFrame::Integer(0)]))
+        );
+
+        // XX applies when a TTL exists; lowers it to 5.
+        let xx_apply = dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"5".to_vec(),
+                b"XX".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire xx");
+        assert_eq!(
+            xx_apply,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1)]))
+        );
+
+        // LT skips when proposed > current (99 > 5 → skip).
+        let lt_skip = dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"99".to_vec(),
+                b"LT".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire lt skip");
+        assert_eq!(
+            lt_skip,
+            RespFrame::Array(Some(vec![RespFrame::Integer(0)]))
+        );
+
+        // LT applies when proposed < current (1 < 5 → apply).
+        let lt_apply = dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"1".to_vec(),
+                b"LT".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire lt apply");
+        assert_eq!(
+            lt_apply,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1)]))
+        );
+
+        // GT applies when proposed > current (99 > 1 → apply).
+        let gt_apply = dispatch_argv(
+            &[
+                b"HEXPIRE".to_vec(),
+                b"h".to_vec(),
+                b"99".to_vec(),
+                b"GT".to_vec(),
+                b"FIELDS".to_vec(),
+                b"1".to_vec(),
+                b"f1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hexpire gt apply");
+        assert_eq!(
+            gt_apply,
+            RespFrame::Array(Some(vec![RespFrame::Integer(1)]))
+        );
+
+        // HPERSIST clears the TTL: 1 = persisted, -2 = no such field.
+        let persisted = dispatch_argv(
+            &[
+                b"HPERSIST".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"3".to_vec(),
+                b"f1".to_vec(),
+                b"f2".to_vec(),
+                b"nope".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hpersist");
+        assert_eq!(
+            persisted,
+            RespFrame::Array(Some(vec![
+                RespFrame::Integer(1),
+                RespFrame::Integer(1),
+                RespFrame::Integer(-2),
+            ]))
+        );
+
+        // Final HTTL: now -1 (field exists, no TTL) for f1/f2 and
+        // -2 for the missing field.
+        let httl_after = dispatch_argv(
+            &[
+                b"HTTL".to_vec(),
+                b"h".to_vec(),
+                b"FIELDS".to_vec(),
+                b"3".to_vec(),
+                b"f1".to_vec(),
+                b"f2".to_vec(),
+                b"nope".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("httl after persist");
+        assert_eq!(
+            httl_after,
+            RespFrame::Array(Some(vec![
+                RespFrame::Integer(-1),
+                RespFrame::Integer(-1),
+                RespFrame::Integer(-2),
+            ]))
+        );
+    }
+
+    #[test]
     fn hpersist_reports_persisted_notttl_or_missing_codes() {
         let mut store = seed_hash_field_ttl_store();
         dispatch_argv(
