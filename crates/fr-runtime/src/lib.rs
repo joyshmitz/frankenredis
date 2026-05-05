@@ -6445,9 +6445,23 @@ impl Runtime {
                 *byte = (state >> 33) as u8;
             }
         }
-        let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
-        let truncated = &hex[..hex_chars];
-        RespFrame::BulkString(Some(truncated.as_bytes().to_vec()))
+        // Direct hex encoding into the output Vec — mirrors upstream
+        // acl.c::ACLGenerateRandomBytesAsHex. Avoids the O(N) per-byte
+        // `format!` allocations + intermediate String + as_bytes().to_vec()
+        // round-trip the previous implementation paid on every call.
+        // (frankenredis-tzu1)
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = Vec::with_capacity(hex_chars);
+        for &byte in &buf {
+            if out.len() < hex_chars {
+                out.push(HEX[(byte >> 4) as usize]);
+            }
+            if out.len() < hex_chars {
+                out.push(HEX[(byte & 0x0f) as usize]);
+            }
+        }
+        debug_assert_eq!(out.len(), hex_chars);
+        RespFrame::BulkString(Some(out))
     }
 
     fn acl_log_entry_frame(&self, entry: &AclLogEntry, now_ms: u64) -> RespFrame {
