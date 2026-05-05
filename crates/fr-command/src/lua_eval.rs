@@ -26,6 +26,8 @@ pub enum LuaValue {
     Table(LuaTable),
     Function(LuaFunc),
     RustFunction(String), // name of built-in
+    Coroutine(LuaCoroutine),
+    WrappedCoroutine(LuaCoroutine),
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +59,9 @@ impl std::hash::Hash for LuaHashKey {
             LuaValue::Table(_) => "table".hash(state),
             LuaValue::Function(_) => "func".hash(state),
             LuaValue::RustFunction(n) => n.hash(state),
+            LuaValue::Coroutine(co) | LuaValue::WrappedCoroutine(co) => {
+                (Rc::as_ptr(&co.inner) as usize).hash(state);
+            }
         }
     }
 }
@@ -79,6 +84,49 @@ pub struct LuaFunc {
     /// For `local function f(x) ... end`, stores the name so the function
     /// can be injected into its own call scope for self-recursion.
     pub self_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LuaCoroutine {
+    inner: Rc<RefCell<LuaCoroutineInner>>,
+}
+
+#[derive(Clone, Debug)]
+struct LuaCoroutineInner {
+    func: LuaFunc,
+    status: LuaCoroutineStatus,
+    env: Option<Env>,
+    varargs: Vec<LuaValue>,
+    pc: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LuaCoroutineStatus {
+    Suspended,
+    Running,
+    Dead,
+}
+
+impl LuaCoroutine {
+    fn new(func: LuaFunc) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(LuaCoroutineInner {
+                func,
+                status: LuaCoroutineStatus::Suspended,
+                env: None,
+                varargs: Vec::new(),
+                pc: 0,
+            })),
+        }
+    }
+
+    fn status_name(&self) -> &'static [u8] {
+        match self.inner.borrow().status {
+            LuaCoroutineStatus::Suspended => b"suspended",
+            LuaCoroutineStatus::Running => b"running",
+            LuaCoroutineStatus::Dead => b"dead",
+        }
+    }
 }
 
 impl LuaTable {
@@ -259,6 +307,10 @@ fn lua_raw_equal(a: &LuaValue, b: &LuaValue) -> bool {
         (LuaValue::Bool(x), LuaValue::Bool(y)) => x == y,
         (LuaValue::Number(x), LuaValue::Number(y)) => x == y,
         (LuaValue::Str(x), LuaValue::Str(y)) => x == y,
+        (LuaValue::Coroutine(x), LuaValue::Coroutine(y))
+        | (LuaValue::WrappedCoroutine(x), LuaValue::WrappedCoroutine(y)) => {
+            Rc::ptr_eq(&x.inner, &y.inner)
+        }
         _ => false,
     }
 }
@@ -320,6 +372,8 @@ impl LuaValue {
             LuaValue::Str(_) => "string",
             LuaValue::Table(_) => "table",
             LuaValue::Function(_) | LuaValue::RustFunction(_) => "function",
+            LuaValue::Coroutine(_) => "thread",
+            LuaValue::WrappedCoroutine(_) => "function",
         }
     }
 
@@ -356,6 +410,12 @@ impl LuaValue {
             LuaValue::Function(_) | LuaValue::RustFunction(_) => {
                 Err("Lua function can't be used as a Redis argument".to_string())
             }
+            LuaValue::Coroutine(_) => {
+                Err("Lua thread can't be used as a Redis argument".to_string())
+            }
+            LuaValue::WrappedCoroutine(_) => {
+                Err("Lua function can't be used as a Redis argument".to_string())
+            }
         }
     }
 
@@ -379,6 +439,8 @@ impl LuaValue {
             LuaValue::Str(s) => s.clone(),
             LuaValue::Table(_) => b"table".to_vec(),
             LuaValue::Function(_) | LuaValue::RustFunction(_) => b"function".to_vec(),
+            LuaValue::Coroutine(_) => b"thread".to_vec(),
+            LuaValue::WrappedCoroutine(_) => b"function".to_vec(),
         }
     }
 }
@@ -1462,11 +1524,20 @@ impl Parser {
 
 const MAX_CALL_DEPTH: usize = 128;
 const MAX_ITERATIONS: u64 = 1_000_000;
+const LUA_YIELD_SENTINEL: &str = "__frankenredis_lua_coroutine_yield__";
 
 enum ControlFlow {
     None,
     Return(Vec<LuaValue>),
     Break,
+}
+
+enum CoroutineRun {
+    Complete(Vec<LuaValue>),
+    Yield {
+        values: Vec<LuaValue>,
+        next_pc: usize,
+    },
 }
 
 pub struct LuaState<'a> {
@@ -1477,8 +1548,11 @@ pub struct LuaState<'a> {
     iterations: u64,
     rng_seed: u64,
     script_started_at: Instant,
+    current_coroutine: Option<LuaCoroutine>,
+    pending_yield: Option<Vec<LuaValue>>,
 }
 
+#[derive(Clone, Debug)]
 struct Scope {
     locals: HashMap<String, Rc<RefCell<LuaValue>>>,
 }
@@ -1491,8 +1565,13 @@ impl Scope {
     }
 }
 
+#[derive(Clone, Debug)]
 struct Env {
     scopes: Vec<Scope>,
+}
+
+fn is_lua_yield_signal(err: &str) -> bool {
+    err == LUA_YIELD_SENTINEL
 }
 
 impl Env {
@@ -1668,6 +1747,8 @@ impl<'a> LuaState<'a> {
             iterations: 0,
             rng_seed,
             script_started_at: Instant::now(),
+            current_coroutine: None,
+            pending_yield: None,
         }
     }
 
@@ -1778,13 +1859,8 @@ impl<'a> LuaState<'a> {
         self.globals
             .insert("os".to_string(), LuaValue::Table(os_table));
 
-        // Coroutine table registration — DIVERGES from upstream
-        // Redis 7.2, which keeps the full Lua coroutine library
-        // (create / resume / yield / status / wrap / running)
-        // functional inside the script sandbox. fr's interpreter has
-        // no suspended-frame support yet, so the registered methods
-        // dispatch to RustFunctions that return 'attempt to call a nil
-        // value'. Tracked as frankenredis-bw15 / frankenredis-n8vo2.
+        // Coroutine table registration. Redis 7.2 keeps the Lua
+        // coroutine library available inside the script sandbox.
         let coroutine_table = LuaTable::new();
         for name in &["create", "resume", "yield", "status", "wrap", "running"] {
             coroutine_table.set(
@@ -2373,6 +2449,128 @@ impl<'a> LuaState<'a> {
         self.eval_call_args(exprs, env, varargs)
     }
 
+    fn prepare_lua_function_env(
+        func_value: LuaValue,
+        lua_func: &LuaFunc,
+        args: &[LuaValue],
+    ) -> (Env, Vec<LuaValue>) {
+        let mut new_env = match &lua_func.captured_env {
+            Some(captured) => Env::from_captured(captured),
+            None => Env::new(),
+        };
+        new_env.push_scope();
+        if let Some(name) = &lua_func.self_name {
+            new_env.set_local(name, func_value);
+        }
+        for (i, param) in lua_func.params.iter().enumerate() {
+            let val = args.get(i).cloned().unwrap_or(LuaValue::Nil);
+            new_env.set_local(param, val);
+        }
+        let func_varargs = if lua_func.is_variadic {
+            args.get(lua_func.params.len()..).unwrap_or(&[]).to_vec()
+        } else {
+            Vec::new()
+        };
+        (new_env, func_varargs)
+    }
+
+    fn exec_coroutine_stmts(
+        &mut self,
+        stmts: &[Stmt],
+        start_pc: usize,
+        env: &mut Env,
+        varargs: &mut Vec<LuaValue>,
+    ) -> Result<CoroutineRun, String> {
+        for (offset, stmt) in stmts.iter().enumerate().skip(start_pc) {
+            self.iterations += 1;
+            if self.iterations > MAX_ITERATIONS {
+                return Err("script exceeded maximum iteration count".to_string());
+            }
+            match self.exec_stmt(stmt, env, varargs) {
+                Ok(ControlFlow::None) => {}
+                Ok(ControlFlow::Return(vals)) => return Ok(CoroutineRun::Complete(vals)),
+                Ok(ControlFlow::Break) => return Ok(CoroutineRun::Complete(vec![LuaValue::Nil])),
+                Err(err) if is_lua_yield_signal(&err) => {
+                    let values = self.pending_yield.take().unwrap_or_default();
+                    return Ok(CoroutineRun::Yield {
+                        values,
+                        next_pc: offset + 1,
+                    });
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(CoroutineRun::Complete(Vec::new()))
+    }
+
+    fn resume_coroutine(
+        &mut self,
+        coroutine: &LuaCoroutine,
+        args: &[LuaValue],
+    ) -> Result<Vec<LuaValue>, String> {
+        let (func, mut env, mut func_varargs, pc) = {
+            let mut inner = coroutine.inner.borrow_mut();
+            match inner.status {
+                LuaCoroutineStatus::Running => {
+                    return Ok(vec![
+                        LuaValue::Bool(false),
+                        LuaValue::Str(b"cannot resume non-suspended coroutine".to_vec()),
+                    ]);
+                }
+                LuaCoroutineStatus::Dead => {
+                    return Ok(vec![
+                        LuaValue::Bool(false),
+                        LuaValue::Str(b"cannot resume dead coroutine".to_vec()),
+                    ]);
+                }
+                LuaCoroutineStatus::Suspended => {}
+            }
+            inner.status = LuaCoroutineStatus::Running;
+            let func = inner.func.clone();
+            let pc = inner.pc;
+            if let Some(env) = inner.env.take() {
+                (func, env, std::mem::take(&mut inner.varargs), pc)
+            } else {
+                let func_value = LuaValue::Function(func.clone());
+                let (env, func_varargs) = Self::prepare_lua_function_env(func_value, &func, args);
+                (func, env, func_varargs, pc)
+            }
+        };
+
+        let previous_coroutine = self.current_coroutine.replace(coroutine.clone());
+        let previous_yield = self.pending_yield.take();
+        let run_result = self.exec_coroutine_stmts(&func.body, pc, &mut env, &mut func_varargs);
+        self.current_coroutine = previous_coroutine;
+        self.pending_yield = previous_yield;
+
+        match run_result {
+            Ok(CoroutineRun::Complete(vals)) => {
+                coroutine.inner.borrow_mut().status = LuaCoroutineStatus::Dead;
+                let mut out = Vec::with_capacity(vals.len() + 1);
+                out.push(LuaValue::Bool(true));
+                out.extend(vals);
+                Ok(out)
+            }
+            Ok(CoroutineRun::Yield { values, next_pc }) => {
+                let mut inner = coroutine.inner.borrow_mut();
+                inner.status = LuaCoroutineStatus::Suspended;
+                inner.env = Some(env);
+                inner.varargs = func_varargs;
+                inner.pc = next_pc;
+                drop(inner);
+
+                let mut out = Vec::with_capacity(values.len() + 1);
+                out.push(LuaValue::Bool(true));
+                out.extend(values);
+                Ok(out)
+            }
+            Err(err) => {
+                coroutine.inner.borrow_mut().status = LuaCoroutineStatus::Dead;
+                Ok(vec![LuaValue::Bool(false), LuaValue::Str(err.into_bytes())])
+            }
+        }
+    }
+
     fn eval_binop(&self, lv: &LuaValue, op: &BinOp, rv: &LuaValue) -> Result<LuaValue, String> {
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
@@ -2442,28 +2640,20 @@ impl<'a> LuaState<'a> {
         }
         let result = match func {
             LuaValue::RustFunction(name) => self.call_builtin(name, args, env),
+            LuaValue::WrappedCoroutine(coroutine) => {
+                let resumed = self.resume_coroutine(coroutine, args)?;
+                match resumed.as_slice() {
+                    [LuaValue::Bool(true), values @ ..] => Ok(values.to_vec()),
+                    [LuaValue::Bool(false), LuaValue::Str(err), ..] => {
+                        Err(String::from_utf8_lossy(err).to_string())
+                    }
+                    [LuaValue::Bool(false), ..] => Err("cannot resume coroutine".to_string()),
+                    _ => Ok(Vec::new()),
+                }
+            }
             LuaValue::Function(lua_func) => {
-                // Start with captured upvalues (if any) for lexical scoping
-                let mut new_env = match &lua_func.captured_env {
-                    Some(captured) => Env::from_captured(captured),
-                    None => Env::new(),
-                };
-                // Push a new scope for function parameters/locals
-                new_env.push_scope();
-                // For `local function f(x) ... end`, inject the function
-                // into its own scope so self-recursion works.
-                if let Some(name) = &lua_func.self_name {
-                    new_env.set_local(name, func.clone());
-                }
-                for (i, param) in lua_func.params.iter().enumerate() {
-                    let val = args.get(i).cloned().unwrap_or(LuaValue::Nil);
-                    new_env.set_local(param, val);
-                }
-                let mut func_varargs = if lua_func.is_variadic {
-                    args.get(lua_func.params.len()..).unwrap_or(&[]).to_vec()
-                } else {
-                    Vec::new()
-                };
+                let (mut new_env, mut func_varargs) =
+                    Self::prepare_lua_function_env(func.clone(), lua_func, args);
                 match self.exec_stmts(&lua_func.body, &mut new_env, &mut func_varargs) {
                     Ok(ControlFlow::Return(vals)) => Ok(vals),
                     Ok(_) => Ok(vec![LuaValue::Nil]),
@@ -2471,6 +2661,7 @@ impl<'a> LuaState<'a> {
                 }
             }
             LuaValue::Nil => Err("attempt to call a nil value".to_string()),
+            LuaValue::Coroutine(_) => Err("attempt to call a thread value".to_string()),
             other => Err(format!("attempt to call a {} value", other.type_name())),
         };
         self.call_depth -= 1;
@@ -2716,6 +2907,7 @@ impl<'a> LuaState<'a> {
                         new_vals.extend(vals);
                         Ok(new_vals)
                     }
+                    Err(msg) if is_lua_yield_signal(&msg) => Err(msg),
                     Err(msg) => Ok(vec![LuaValue::Bool(false), LuaValue::Str(msg.into_bytes())]),
                 }
             }
@@ -2731,6 +2923,7 @@ impl<'a> LuaState<'a> {
                         new_vals.extend(vals);
                         Ok(new_vals)
                     }
+                    Err(msg) if is_lua_yield_signal(&msg) => Err(msg),
                     Err(msg) => {
                         // Call error handler with the error message
                         let err_val = LuaValue::Str(msg.into_bytes());
@@ -3189,18 +3382,16 @@ impl<'a> LuaState<'a> {
                     self.script_started_at.elapsed().as_secs_f64(),
                 )])
             }
-            // ── Coroutine library (DIVERGES from upstream — see bw15) ──
-            // Upstream Redis 7.2 keeps the full Lua coroutine library
-            // available inside the script sandbox. fr still lacks
-            // suspended-frame support, but typed misuse should preserve
-            // Lua's upstream error contract instead of returning the old
-            // generic nil-call stub. (frankenredis-m71oe)
+            // ── Coroutine library ──────────────────────────────────────
+            // Redis exposes Lua 5.1 coroutines inside scripts. This
+            // interpreter supports the common script patterns directly:
+            // create/resume/status/wrap/running plus top-level yields in
+            // Lua function bodies. More exotic "yield as expression"
+            // continuations intentionally still fall back to ordinary Lua
+            // errors instead of panicking.
             "coroutine.create" => {
-                if args
-                    .first()
-                    .is_some_and(|arg| matches!(arg, LuaValue::Function(_)))
-                {
-                    Err("attempt to call a nil value".to_string())
+                if let Some(LuaValue::Function(func)) = args.first() {
+                    Ok(vec![LuaValue::Coroutine(LuaCoroutine::new(func.clone()))])
                 } else {
                     Err(
                         "user_script:1: bad argument #1 to 'create' (Lua function expected)"
@@ -3209,11 +3400,10 @@ impl<'a> LuaState<'a> {
                 }
             }
             "coroutine.wrap" => {
-                if args
-                    .first()
-                    .is_some_and(|arg| matches!(arg, LuaValue::Function(_)))
-                {
-                    Err("attempt to call a nil value".to_string())
+                if let Some(LuaValue::Function(func)) = args.first() {
+                    Ok(vec![LuaValue::WrappedCoroutine(LuaCoroutine::new(
+                        func.clone(),
+                    ))])
                 } else {
                     Err(
                         "user_script:1: bad argument #1 to 'wrap' (Lua function expected)"
@@ -3221,16 +3411,37 @@ impl<'a> LuaState<'a> {
                     )
                 }
             }
-            "coroutine.resume" => {
-                Err("user_script:1: bad argument #1 to 'resume' (coroutine expected)".to_string())
-            }
-            "coroutine.status" => {
-                Err("user_script:1: bad argument #1 to 'status' (coroutine expected)".to_string())
-            }
+            "coroutine.resume" => match args.first() {
+                Some(LuaValue::Coroutine(coroutine)) => {
+                    self.resume_coroutine(coroutine, args.get(1..).unwrap_or(&[]))
+                }
+                _ => Err(
+                    "user_script:1: bad argument #1 to 'resume' (coroutine expected)".to_string(),
+                ),
+            },
+            "coroutine.status" => match args.first() {
+                Some(LuaValue::Coroutine(coroutine)) => {
+                    Ok(vec![LuaValue::Str(coroutine.status_name().to_vec())])
+                }
+                _ => Err(
+                    "user_script:1: bad argument #1 to 'status' (coroutine expected)".to_string(),
+                ),
+            },
             "coroutine.yield" => {
-                Err("attempt to yield across metamethod/C-call boundary".to_string())
+                if self.current_coroutine.is_some() {
+                    self.pending_yield = Some(args.to_vec());
+                    Err(LUA_YIELD_SENTINEL.to_string())
+                } else {
+                    Err("attempt to yield across metamethod/C-call boundary".to_string())
+                }
             }
-            "coroutine.running" => Ok(vec![LuaValue::Nil]),
+            "coroutine.running" => {
+                if let Some(coroutine) = &self.current_coroutine {
+                    Ok(vec![LuaValue::Coroutine(coroutine.clone())])
+                } else {
+                    Ok(vec![LuaValue::Nil])
+                }
+            }
             // ── String library ──────────────────────────────────────────
             "string.len" => {
                 let s = args
@@ -4608,7 +4819,10 @@ pub fn lua_to_resp(val: &LuaValue) -> RespFrame {
             }
             RespFrame::Array(Some(items))
         }
-        LuaValue::Function(_) | LuaValue::RustFunction(_) => RespFrame::BulkString(None),
+        LuaValue::Function(_)
+        | LuaValue::RustFunction(_)
+        | LuaValue::Coroutine(_)
+        | LuaValue::WrappedCoroutine(_) => RespFrame::BulkString(None),
     }
 }
 
@@ -4932,7 +5146,10 @@ fn lua_value_to_json(val: &LuaValue) -> String {
                 format!("{{{}}}", pairs.join(","))
             }
         }
-        LuaValue::Function(_) | LuaValue::RustFunction(_) => "null".to_string(),
+        LuaValue::Function(_)
+        | LuaValue::RustFunction(_)
+        | LuaValue::Coroutine(_)
+        | LuaValue::WrappedCoroutine(_) => "null".to_string(),
     }
 }
 
@@ -5927,9 +6144,6 @@ mod tests {
 
     #[test]
     fn coroutine_misuse_errors_match_upstream_pending_bw15() {
-        // frankenredis-m71oe: full coroutine suspension still belongs
-        // to bw15, but the observable errors for typed misuse are cheap
-        // parity and must not fall back to the old nil-call stub.
         let mut store = Store::new();
         for (script, expected) in [
             (
@@ -5970,6 +6184,56 @@ mod tests {
         let mut store = Store::new();
         let result = eval_script(b"return coroutine.running()", &[], &[], &mut store, 0);
         assert_eq!(result, Ok(RespFrame::BulkString(None)));
+    }
+
+    #[test]
+    fn coroutine_resume_yields_then_completes_with_status_transitions() {
+        let mut store = Store::new();
+        let script = b"
+            local co = coroutine.create(function(x)
+                coroutine.yield(x * 2)
+                return x * 3
+            end)
+            local s1 = coroutine.status(co)
+            local ok1, first = coroutine.resume(co, 7)
+            local s2 = coroutine.status(co)
+            local ok2, second = coroutine.resume(co)
+            local s3 = coroutine.status(co)
+            return {s1, ok1, first, s2, ok2, second, s3}
+        ";
+        let result = eval_script(script, &[], &[], &mut store, 0);
+        assert_eq!(
+            result,
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"suspended".to_vec())),
+                RespFrame::Integer(1),
+                RespFrame::Integer(14),
+                RespFrame::BulkString(Some(b"suspended".to_vec())),
+                RespFrame::Integer(1),
+                RespFrame::Integer(21),
+                RespFrame::BulkString(Some(b"dead".to_vec())),
+            ])))
+        );
+    }
+
+    #[test]
+    fn coroutine_wrap_resumes_same_thread_after_yield() {
+        let mut store = Store::new();
+        let script = b"
+            local f = coroutine.wrap(function(x)
+                coroutine.yield(x * 2)
+                return x * 3
+            end)
+            return {f(4), f(4)}
+        ";
+        let result = eval_script(script, &[], &[], &mut store, 0);
+        assert_eq!(
+            result,
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::Integer(8),
+                RespFrame::Integer(12),
+            ])))
+        );
     }
 
     #[test]
