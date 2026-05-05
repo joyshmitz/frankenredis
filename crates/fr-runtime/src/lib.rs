@@ -5277,7 +5277,13 @@ impl Runtime {
                     line.push('\\');
                     line.push(b as char);
                 } else if !(32..=126).contains(&b) {
-                    line.push_str(&format!("\\x{b:02x}"));
+                    // (frankenredis-v1twi) write! into the existing
+                    // String avoids the per-byte intermediate alloc
+                    // that push_str(&format!()) was paying — matters
+                    // for MONITOR streams over binary payloads (RDB
+                    // chunks, MIGRATE dumps) where most bytes hit
+                    // this branch.
+                    let _ = write!(line, "\\x{b:02x}");
                 } else {
                     line.push(b as char);
                 }
