@@ -14741,23 +14741,49 @@ fn scan(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     // Upstream SCAN doesn't recognise NOVALUES — only HSCAN does.
     // (br-frankenredis-scannv)
     let args = parse_scan_args_with_novalues(argv, 2, false)?;
-    let (next_cursor, keys) = store.scan(cursor, args.pattern.as_deref(), args.count, now_ms);
 
-    // Apply TYPE filter if specified
-    let keys: Vec<Vec<u8>> = if let Some(ref tf) = args.type_filter {
+    // Scope to the dispatch context's selected db. The all-DBs
+    // Store::scan primitive iterates ordered_keys across the entire
+    // keyspace and was leaking foreign-db key names through Lua /
+    // AOF replay / MULTI/EXEC. Mirrors fr-runtime::handle_scan_command
+    // at fr-runtime/src/lib.rs:10319 which already does this correctly.
+    // (frankenredis-m05ll)
+    let db = store.dispatch_client_ctx.db_index;
+    let mut logical_keys = store.keys_in_db(db, now_ms);
+
+    if let Some(ref pat) = args.pattern {
+        logical_keys.retain(|k| fr_store::glob_match(pat, k));
+    }
+    if let Some(ref tf) = args.type_filter {
         let tf_str = std::str::from_utf8(tf).map_err(|_| CommandError::InvalidUtf8Argument)?;
-        keys.into_iter()
-            .filter(|k| {
-                store
-                    .key_type(k, now_ms)
-                    .is_some_and(|t| t.eq_ignore_ascii_case(tf_str))
-            })
-            .collect()
+        logical_keys.retain(|logical| {
+            let physical = fr_store::encode_db_key(db, logical);
+            store
+                .key_type(&physical, now_ms)
+                .is_some_and(|t| t.eq_ignore_ascii_case(tf_str))
+        });
+    }
+    logical_keys.sort();
+
+    // Cursor-based slicing: same single-pass semantics fr already
+    // uses elsewhere (a 'large cursor returns []' shape, signalling
+    // end-of-iteration).
+    let cursor_idx = cursor as usize;
+    let count = args.count.max(1);
+    let (next_cursor, batch): (u64, Vec<Vec<u8>>) = if cursor_idx >= logical_keys.len() {
+        (0, Vec::new())
     } else {
-        keys
+        let end = cursor_idx.saturating_add(count).min(logical_keys.len());
+        let slice = logical_keys[cursor_idx..end].to_vec();
+        let next = if end >= logical_keys.len() {
+            0_u64
+        } else {
+            end as u64
+        };
+        (next, slice)
     };
 
-    let key_frames: Vec<RespFrame> = keys
+    let key_frames: Vec<RespFrame> = batch
         .into_iter()
         .map(|k| RespFrame::BulkString(Some(k)))
         .collect();
@@ -41259,6 +41285,91 @@ mod tests {
                 RespFrame::Error("ERR value is out of range, must be positive".to_string())
             );
         }
+    }
+
+    #[test]
+    fn scan_via_dispatch_only_returns_selected_db_keys() {
+        // (frankenredis-m05ll) Lua redis.call('SCAN', '0'), AOF replay,
+        // and MULTI/EXEC route SCAN through dispatch_argv. Per-DB
+        // scope must come from dispatch_client_ctx.db_index — the
+        // earlier implementation called Store::scan() (the all-DBs
+        // primitive iterating ordered_keys) and Lua scripts saw key
+        // names from any other db.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"k0_a"),
+            b"v".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(1, b"k1_a"),
+            b"v".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(1, b"k1_b"),
+            b"v".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(2, b"k2_a"),
+            b"v".to_vec(),
+            None,
+            0,
+        );
+
+        // Default db_index = 0 → just k0_a.
+        let out = dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0)
+            .expect("scan db 0");
+        let RespFrame::Array(Some(reply)) = out else {
+            panic!("expected SCAN array reply"); // ubs:ignore — AI triage
+        };
+        assert_eq!(reply.len(), 2, "SCAN reply is [cursor, keys-array]");
+        let RespFrame::Array(Some(keys)) = &reply[1] else {
+            panic!("inner SCAN payload must be array"); // ubs:ignore — AI triage
+        };
+        let names: Vec<Vec<u8>> = keys
+            .iter()
+            .map(|f| match f {
+                RespFrame::BulkString(Some(b)) => b.clone(),
+                _ => panic!("SCAN key must be bulk string"), // ubs:ignore — AI triage
+            })
+            .collect();
+        assert_eq!(names, vec![b"k0_a".to_vec()]);
+
+        // db 1 → 2 keys, sorted.
+        store.dispatch_client_ctx.db_index = 1;
+        let out = dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0)
+            .expect("scan db 1");
+        let RespFrame::Array(Some(reply)) = out else {
+            panic!("expected array"); // ubs:ignore — AI triage
+        };
+        let RespFrame::Array(Some(keys)) = &reply[1] else {
+            panic!("expected inner array"); // ubs:ignore — AI triage
+        };
+        let names: Vec<Vec<u8>> = keys
+            .iter()
+            .map(|f| match f {
+                RespFrame::BulkString(Some(b)) => b.clone(),
+                _ => panic!("SCAN key must be bulk string"), // ubs:ignore — AI triage
+            })
+            .collect();
+        assert_eq!(names, vec![b"k1_a".to_vec(), b"k1_b".to_vec()]);
+
+        // db 5 (empty) → nothing.
+        store.dispatch_client_ctx.db_index = 5;
+        let out = dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0)
+            .expect("scan db 5");
+        let RespFrame::Array(Some(reply)) = out else {
+            panic!("expected array"); // ubs:ignore — AI triage
+        };
+        let RespFrame::Array(Some(keys)) = &reply[1] else {
+            panic!("expected inner array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(keys.len(), 0);
     }
 
     #[test]
