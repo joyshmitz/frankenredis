@@ -6343,20 +6343,54 @@ impl Runtime {
         let keys_str = user.keys_string();
         let channels_str = user.channels_string();
 
-        RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(b"flags".to_vec())),
-            RespFrame::Array(Some(flags)),
-            RespFrame::BulkString(Some(b"passwords".to_vec())),
-            RespFrame::Array(Some(passwords)),
-            RespFrame::BulkString(Some(b"commands".to_vec())),
-            RespFrame::BulkString(Some(commands_str.into_bytes())),
-            RespFrame::BulkString(Some(b"keys".to_vec())),
-            RespFrame::BulkString(Some(keys_str.into_bytes())),
-            RespFrame::BulkString(Some(b"channels".to_vec())),
-            RespFrame::BulkString(Some(channels_str.as_bytes().to_vec())),
-            RespFrame::BulkString(Some(b"selectors".to_vec())),
-            RespFrame::Array(Some(Vec::new())),
-        ]))
+        // Mirror upstream acl.c::aclCommand GETUSER which calls
+        // addReplyMapLen(c, 6) — RESP3 wire shape is a Map of 6
+        // (key, value) pairs; RESP2 stays the flat Array of
+        // alternating k/v entries. Same shape pattern as
+        // CLIENT TRACKINGINFO (i40x2). (frankenredis-e4njz)
+        if self.session.resp_protocol_version == 3 {
+            RespFrame::Map(Some(vec![
+                (
+                    RespFrame::BulkString(Some(b"flags".to_vec())),
+                    RespFrame::Array(Some(flags)),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"passwords".to_vec())),
+                    RespFrame::Array(Some(passwords)),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"commands".to_vec())),
+                    RespFrame::BulkString(Some(commands_str.into_bytes())),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"keys".to_vec())),
+                    RespFrame::BulkString(Some(keys_str.into_bytes())),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"channels".to_vec())),
+                    RespFrame::BulkString(Some(channels_str.as_bytes().to_vec())),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"selectors".to_vec())),
+                    RespFrame::Array(Some(Vec::new())),
+                ),
+            ]))
+        } else {
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(flags)),
+                RespFrame::BulkString(Some(b"passwords".to_vec())),
+                RespFrame::Array(Some(passwords)),
+                RespFrame::BulkString(Some(b"commands".to_vec())),
+                RespFrame::BulkString(Some(commands_str.into_bytes())),
+                RespFrame::BulkString(Some(b"keys".to_vec())),
+                RespFrame::BulkString(Some(keys_str.into_bytes())),
+                RespFrame::BulkString(Some(b"channels".to_vec())),
+                RespFrame::BulkString(Some(channels_str.as_bytes().to_vec())),
+                RespFrame::BulkString(Some(b"selectors".to_vec())),
+                RespFrame::Array(Some(Vec::new())),
+            ]))
+        }
     }
 
     fn handle_acl_cat(&self, argv: &[Vec<u8>]) -> RespFrame {
@@ -20702,6 +20736,50 @@ mod tests {
             ),
             RespFrame::SimpleString("OK".to_string())
         );
+    }
+
+    #[test]
+    fn acl_getuser_under_resp3_returns_map_shape() {
+        // (frankenredis-e4njz) Upstream acl.c::aclCommand GETUSER calls
+        // addReplyMapLen(c, 6), so the RESP3 wire shape is a Map of
+        // 6 (key, value) pairs. fr was emitting Array regardless of
+        // session.resp_protocol_version. Same shape pattern as
+        // CLIENT TRACKINGINFO (i40x2).
+        let mut rt = Runtime::default_strict();
+        let hello = rt.execute_frame(command(&[b"HELLO", b"3"]), 1);
+        assert!(
+            matches!(hello, RespFrame::Map(_)),
+            "HELLO 3 should reply with a Map, got {hello:?}"
+        );
+
+        let info = rt.execute_frame(command(&[b"ACL", b"GETUSER", b"default"]), 2);
+        let RespFrame::Map(Some(entries)) = info else {
+            panic!("RESP3 ACL GETUSER must be a Map, got {info:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(entries.len(), 6, "Map should have exactly 6 entries");
+        let keys: Vec<&RespFrame> = entries.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys[0], &RespFrame::BulkString(Some(b"flags".to_vec())));
+        assert_eq!(keys[1], &RespFrame::BulkString(Some(b"passwords".to_vec())));
+        assert_eq!(keys[2], &RespFrame::BulkString(Some(b"commands".to_vec())));
+        assert_eq!(keys[3], &RespFrame::BulkString(Some(b"keys".to_vec())));
+        assert_eq!(keys[4], &RespFrame::BulkString(Some(b"channels".to_vec())));
+        assert_eq!(keys[5], &RespFrame::BulkString(Some(b"selectors".to_vec())));
+    }
+
+    #[test]
+    fn acl_getuser_under_resp2_stays_flat_array() {
+        // (frankenredis-e4njz) RESP2 wire shape is a flat Array of 12
+        // alternating k/v entries — companion pin to the RESP3 test.
+        let mut rt = Runtime::default_strict();
+        let info = rt.execute_frame(command(&[b"ACL", b"GETUSER", b"default"]), 1);
+        let RespFrame::Array(Some(items)) = info else {
+            panic!("RESP2 ACL GETUSER must be a flat Array, got {info:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 12, "flat shape: 6 keys + 6 values");
+        assert_eq!(items[0], RespFrame::BulkString(Some(b"flags".to_vec())));
+        assert_eq!(items[2], RespFrame::BulkString(Some(b"passwords".to_vec())));
+        assert_eq!(items[4], RespFrame::BulkString(Some(b"commands".to_vec())));
+        assert_eq!(items[10], RespFrame::BulkString(Some(b"selectors".to_vec())));
     }
 
     #[test]
