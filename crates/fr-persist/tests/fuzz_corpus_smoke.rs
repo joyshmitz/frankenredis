@@ -7,7 +7,7 @@
 //!
 //! (frankenredis-ohm5 + frankenredis-fek0y)
 
-use fr_persist::{decode_aof_stream, parse_aof_manifest};
+use fr_persist::{decode_aof_stream, decode_rdb, parse_aof_manifest};
 use std::fs;
 use std::path::PathBuf;
 
@@ -19,6 +19,11 @@ fn corpus_dir() -> PathBuf {
 fn manifest_corpus_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir.join("../../fuzz/corpus/fuzz_aof_manifest_parser")
+}
+
+fn rdb_corpus_dir() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.join("../../fuzz/corpus/fuzz_rdb_decoder")
 }
 
 #[test]
@@ -161,4 +166,42 @@ fn fuzz_aof_manifest_parser_classifies_valid_vs_hostile_seeds() {
             "hostile seed {name} should reject, got Ok: {result:?}"
         );
     }
+}
+
+#[test]
+fn fuzz_rdb_decoder_corpus_never_panics() {
+    // (frankenredis-xpgvh) Replay every fuzz_rdb_decoder corpus file
+    // through decode_rdb. Coverage spans every Redis type-byte plus
+    // compact-listpack variants and hostile/truncated inputs
+    // (compact_intset_truncated, compact_listpack_truncated,
+    // compact_intset_invalid_encoding, compact_quicklist2_unknown_
+    // container). Bridges fuzz coverage between cargo-fuzz runs.
+    let dir = rdb_corpus_dir();
+    assert!(
+        dir.is_dir(),
+        "corpus dir missing: {} — did the workspace move?",
+        dir.display()
+    );
+
+    let mut count = 0_usize;
+    for entry in fs::read_dir(&dir).expect("read rdb corpus dir") {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let bytes = fs::read(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+        // Decoder must surface every malformed input as Err — never
+        // unwind. Discarding the result is the point.
+        let _ = decode_rdb(&bytes);
+
+        count += 1;
+    }
+
+    assert!(
+        count >= 28,
+        "fuzz_rdb_decoder corpus shrank to {count} files — regressed seed coverage?"
+    );
 }
