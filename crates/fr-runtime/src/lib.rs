@@ -5077,14 +5077,28 @@ impl Runtime {
         } else if cmd.eq_ignore_ascii_case(b"BZPOPMAX") {
             "zpopmax"
         } else if cmd.eq_ignore_ascii_case(b"XGROUP") {
-            // Upstream fires "xgroup-<sub>" (xgroup-create, xgroup-setid,
-            // xgroup-destroy, xgroup-createconsumer, xgroup-delconsumer)
-            // depending on argv[1]. Approximate with the generic
-            // "xgroup-create" for now — the comparator only needs the
-            // event-name prefix in most use-cases. (br-frankenredis-r74v)
-            "xgroup-create"
+            Self::xgroup_keyspace_event(argv)
         } else if cmd.eq_ignore_ascii_case(b"XSETID") {
             "xsetid"
+        } else {
+            "generic"
+        }
+    }
+
+    fn xgroup_keyspace_event(argv: &[Vec<u8>]) -> &'static str {
+        let Some(subcommand) = argv.get(1) else {
+            return "generic";
+        };
+        if subcommand.eq_ignore_ascii_case(b"CREATE") {
+            "xgroup-create"
+        } else if subcommand.eq_ignore_ascii_case(b"SETID") {
+            "xgroup-setid"
+        } else if subcommand.eq_ignore_ascii_case(b"DESTROY") {
+            "xgroup-destroy"
+        } else if subcommand.eq_ignore_ascii_case(b"CREATECONSUMER") {
+            "xgroup-createconsumer"
+        } else if subcommand.eq_ignore_ascii_case(b"DELCONSUMER") {
+            "xgroup-delconsumer"
         } else {
             "generic"
         }
@@ -5170,6 +5184,7 @@ impl Runtime {
         } else if cmd.eq_ignore_ascii_case(b"XADD")
             || cmd.eq_ignore_ascii_case(b"XDEL")
             || cmd.eq_ignore_ascii_case(b"XTRIM")
+            || cmd.eq_ignore_ascii_case(b"XGROUP")
         {
             fr_store::NOTIFY_STREAM
         } else {
@@ -10522,10 +10537,7 @@ impl Runtime {
             let keys = self.server.store.dbsize_in_db(db);
             if keys > 0 {
                 let expires = self.server.store.expires_in_db(db);
-                let _ = write!(
-                    info,
-                    "db{db}:keys={keys},expires={expires},avg_ttl=0\r\n"
-                );
+                let _ = write!(info, "db{db}:keys={keys},expires={expires},avg_ttl=0\r\n");
             }
         }
         info.push_str("\r\n");
@@ -10589,11 +10601,7 @@ impl Runtime {
                 .map_or(-1, |ts| ts as i64)
         );
         info.push_str("rdb_current_bgsave_time_sec:-1\r\n");
-        let _ = write!(
-            info,
-            "rdb_saves:{}\r\n",
-            self.server.store.stat_rdb_saves
-        );
+        let _ = write!(info, "rdb_saves:{}\r\n", self.server.store.stat_rdb_saves);
         info.push_str("rdb_last_cow_size:0\r\n");
         // Upstream populates these from server.rdb_last_load_keys_*
         // (server.c::genRedisInfoString); fr does not yet track keys
@@ -13654,9 +13662,7 @@ mod tests {
         // wording, matching NUMPAT below. (frankenredis-godyg)
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"HELP", b"extra"]), 1),
-            RespFrame::Error(
-                "ERR wrong number of arguments for 'pubsub|help' command".to_string()
-            )
+            RespFrame::Error("ERR wrong number of arguments for 'pubsub|help' command".to_string())
         );
         // (br-frankenredis-pubsubary) — upstream emits the
         // subcommand-specific arity error rather than syntax error.
@@ -13802,6 +13808,45 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"DBSIZE"]), 9),
             RespFrame::Integer(1)
+        );
+    }
+
+    #[test]
+    fn xgroup_keyspace_notifications_use_subcommand_event_names() {
+        fn assert_xgroup_event(parts: &[&[u8]], expected: &'static str) {
+            let command = argv(parts);
+            assert_eq!(Runtime::command_to_keyspace_event(&command), expected);
+            assert_eq!(
+                Runtime::command_to_notify_type(&command),
+                fr_store::NOTIFY_STREAM
+            );
+        }
+
+        assert_xgroup_event(
+            &[b"XGROUP", b"CREATE", b"stream", b"group", b"0"],
+            "xgroup-create",
+        );
+        assert_xgroup_event(
+            &[b"XGROUP", b"SETID", b"stream", b"group", b"$"],
+            "xgroup-setid",
+        );
+        assert_xgroup_event(
+            &[b"XGROUP", b"DESTROY", b"stream", b"group"],
+            "xgroup-destroy",
+        );
+        assert_xgroup_event(
+            &[
+                b"XGROUP",
+                b"CREATECONSUMER",
+                b"stream",
+                b"group",
+                b"consumer",
+            ],
+            "xgroup-createconsumer",
+        );
+        assert_xgroup_event(
+            &[b"XGROUP", b"DELCONSUMER", b"stream", b"group", b"consumer"],
+            "xgroup-delconsumer",
         );
     }
 
