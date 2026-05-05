@@ -13868,20 +13868,44 @@ fn client_tracking_flags(state: &ClientTrackingState) -> Vec<RespFrame> {
     flags
 }
 
-pub fn client_trackinginfo_frame(state: &ClientTrackingState) -> RespFrame {
-    let prefixes = state
+pub fn client_trackinginfo_frame(
+    state: &ClientTrackingState,
+    resp_protocol_version: i64,
+) -> RespFrame {
+    let prefixes: Vec<RespFrame> = state
         .prefixes
         .iter()
         .map(|prefix| RespFrame::BulkString(Some(prefix.clone())))
         .collect();
-    RespFrame::Array(Some(vec![
-        RespFrame::BulkString(Some(b"flags".to_vec())),
-        RespFrame::Array(Some(client_tracking_flags(state))),
-        RespFrame::BulkString(Some(b"redirect".to_vec())),
-        RespFrame::Integer(client_tracking_getredir_value(state)),
-        RespFrame::BulkString(Some(b"prefixes".to_vec())),
-        RespFrame::Array(Some(prefixes)),
-    ]))
+    // Mirror upstream networking.c::trackingInfoCommand which uses
+    // addReplyMapLen(c, 3) — RESP3 wire shape is a Map, RESP2 a flat
+    // Array of alternating k/v pairs. Same pattern as hgetall.
+    // (frankenredis-i40x2)
+    if resp_protocol_version == 3 {
+        RespFrame::Map(Some(vec![
+            (
+                RespFrame::BulkString(Some(b"flags".to_vec())),
+                RespFrame::Array(Some(client_tracking_flags(state))),
+            ),
+            (
+                RespFrame::BulkString(Some(b"redirect".to_vec())),
+                RespFrame::Integer(client_tracking_getredir_value(state)),
+            ),
+            (
+                RespFrame::BulkString(Some(b"prefixes".to_vec())),
+                RespFrame::Array(Some(prefixes)),
+            ),
+        ]))
+    } else {
+        RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"flags".to_vec())),
+            RespFrame::Array(Some(client_tracking_flags(state))),
+            RespFrame::BulkString(Some(b"redirect".to_vec())),
+            RespFrame::Integer(client_tracking_getredir_value(state)),
+            RespFrame::BulkString(Some(b"prefixes".to_vec())),
+            RespFrame::Array(Some(prefixes)),
+        ]))
+    }
 }
 
 pub fn parse_client_tracking_state(argv: &[Vec<u8>]) -> Result<ClientTrackingState, CommandError> {
@@ -14459,6 +14483,7 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         }
         Ok(client_trackinginfo_frame(
             &store.dispatch_client_ctx.client_tracking,
+            store.dispatch_client_ctx.resp_protocol_version,
         ))
     } else if sub.eq_ignore_ascii_case("UNBLOCK") {
         if argv.len() != 3 && argv.len() != 4 {
@@ -44162,8 +44187,8 @@ mod tests {
                 prop_assert_eq!(&canonical, &expected, "canonical tracking state mismatch");
                 prop_assert_eq!(&reordered, &expected, "reordered tracking state mismatch");
                 prop_assert_eq!(
-                    client_trackinginfo_frame(&canonical),
-                    client_trackinginfo_frame(&reordered),
+                    client_trackinginfo_frame(&canonical, 2),
+                    client_trackinginfo_frame(&reordered, 2),
                     "TRACKINGINFO should be invariant under valid option reordering",
                 );
             }
@@ -44184,8 +44209,8 @@ mod tests {
                     "duplicate PREFIX options should collapse to the same tracking state",
                 );
                 prop_assert_eq!(
-                    client_trackinginfo_frame(&deduped),
-                    client_trackinginfo_frame(&duplicated),
+                    client_trackinginfo_frame(&deduped, 2),
+                    client_trackinginfo_frame(&duplicated, 2),
                     "TRACKINGINFO should ignore duplicate PREFIX tokens",
                 );
             }
@@ -44206,8 +44231,8 @@ mod tests {
                     "earlier REDIRECT values should be shadowed by the final REDIRECT",
                 );
                 prop_assert_eq!(
-                    client_trackinginfo_frame(&canonical),
-                    client_trackinginfo_frame(&shadowed),
+                    client_trackinginfo_frame(&canonical, 2),
+                    client_trackinginfo_frame(&shadowed, 2),
                     "TRACKINGINFO should reflect only the effective redirect target",
                 );
             }

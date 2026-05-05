@@ -9394,7 +9394,10 @@ impl Runtime {
             if argv.len() != 2 {
                 return client_wrong_subcommand_arity(sub);
             }
-            client_trackinginfo_frame(&self.session.client_tracking)
+            client_trackinginfo_frame(
+                &self.session.client_tracking,
+                self.session.resp_protocol_version,
+            )
         } else if sub.eq_ignore_ascii_case("UNBLOCK") {
             // CLIENT UNBLOCK client-id [TIMEOUT|ERROR]
             if argv.len() != 3 && argv.len() != 4 {
@@ -15223,6 +15226,49 @@ mod tests {
                 RespFrame::Array(Some(Vec::new())),
             ]))
         );
+    }
+
+    #[test]
+    fn client_trackinginfo_under_resp3_returns_map_shape() {
+        // (frankenredis-i40x2) Upstream networking.c::trackingInfoCommand
+        // calls addReplyMapLen(c, 3), so the RESP3 wire shape is a Map
+        // not a flat Array. fr was emitting Array regardless of the
+        // dispatch context's protocol version.
+        let mut rt = Runtime::default_strict();
+        // HELLO 3 promotes the session to RESP3.
+        let hello = rt.execute_frame(command(&[b"HELLO", b"3"]), 1);
+        assert!(
+            matches!(hello, RespFrame::Map(_)),
+            "HELLO 3 should reply with a Map, got {hello:?}"
+        );
+
+        let info = rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 2);
+        let RespFrame::Map(Some(entries)) = info else {
+            panic!("RESP3 CLIENT TRACKINGINFO must be a Map, got {info:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(entries.len(), 3, "Map should have exactly 3 entries");
+        // Pin the keys + redirect value (default is -1 for an
+        // un-tracking session).
+        let keys: Vec<&RespFrame> = entries.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys[0], &RespFrame::BulkString(Some(b"flags".to_vec())));
+        assert_eq!(keys[1], &RespFrame::BulkString(Some(b"redirect".to_vec())));
+        assert_eq!(keys[2], &RespFrame::BulkString(Some(b"prefixes".to_vec())));
+        assert_eq!(entries[1].1, RespFrame::Integer(-1));
+    }
+
+    #[test]
+    fn client_trackinginfo_under_resp2_stays_flat_array() {
+        // (frankenredis-i40x2) Companion to the RESP3 pin: under RESP2
+        // the wire shape is still a flat Array of alternating k/v.
+        let mut rt = Runtime::default_strict();
+        let info = rt.execute_frame(command(&[b"CLIENT", b"TRACKINGINFO"]), 1);
+        let RespFrame::Array(Some(items)) = info else {
+            panic!("RESP2 CLIENT TRACKINGINFO must be a flat Array, got {info:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 6, "flat shape: 3 keys + 3 values");
+        assert_eq!(items[0], RespFrame::BulkString(Some(b"flags".to_vec())));
+        assert_eq!(items[2], RespFrame::BulkString(Some(b"redirect".to_vec())));
+        assert_eq!(items[4], RespFrame::BulkString(Some(b"prefixes".to_vec())));
     }
 
     #[test]
