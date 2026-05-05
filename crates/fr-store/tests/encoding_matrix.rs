@@ -327,7 +327,6 @@ fn mr_enc_mono_set_traverses_intset_listpack_hashtable_in_order() {
 }
 
 #[test]
-#[ignore = "frankenredis-1jwi: fr currently downgrades to intset after SREM removes the last non-int; upstream keeps listpack"]
 fn mr_enc_no_downgrade_on_set_srem_after_listpack_promotion() {
     // ENC-NO-DOWNGRADE-ON-REMOVE: Once a set has been promoted from
     // intset to listpack (because a non-integer was added), removing
@@ -335,6 +334,10 @@ fn mr_enc_no_downgrade_on_set_srem_after_listpack_promotion() {
     // Upstream Redis tracks the "this set was once non-int" state via
     // the encoding itself; downgrades are not part of the type
     // contract. (mirror of upstream t_set.c::setTypeMaybeConvert)
+    //
+    // (frankenredis-1jwi closed by peer cb5cd39 — sticky promotion flag
+    // landed; un-ignored in 0ccdm so the regression marker stays in the
+    // regular cargo test surface.)
     let mut store = Store::new();
     for i in 0..10_u32 {
         store
