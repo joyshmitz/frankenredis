@@ -18076,15 +18076,18 @@ fn sort_resolve_key_or_hash(store: &mut Store, key: &[u8], now_ms: u64) -> Optio
 }
 
 fn copy_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
+    // Mirrors fr-runtime::handle_copy_command. The earlier implementation
+    // hard-coded 'db != 0' as out-of-range and used raw (un-namespaced)
+    // source/dest keys, so Lua redis.call('COPY', ..., 'DB', N), AOF
+    // replay, and MULTI/EXEC could never copy across databases — same
+    // dispatch_argv-vs-runtime drift that surfaced w9yzb (MOVE),
+    // j22p8 (SELECT), and rdz52 (FLUSHDB). (frankenredis-op84s)
     if argv.len() < 3 {
         return Err(CommandError::WrongArity("COPY"));
     }
-    let source = &argv[1];
-    let destination = &argv[2];
-
-    // Parse optional REPLACE flag
+    let source_db = store.dispatch_client_ctx.db_index;
+    let mut destination_db = source_db;
     let mut replace = false;
-    let mut target_db: i64 = 0;
     let mut i = 3;
     while i < argv.len() {
         let arg = std::str::from_utf8(&argv[i]).map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -18097,13 +18100,14 @@ fn copy_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
             if i + 1 >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            let db = parse_i64_arg(&argv[i + 1])?;
-            if db != 0 {
+            let parsed = parse_i64_arg(&argv[i + 1])?;
+            let dbc = store.database_count;
+            if !(0..dbc as i64).contains(&parsed) {
                 return Err(CommandError::Custom(
                     "ERR DB index is out of range".to_string(),
                 ));
             }
-            target_db = db;
+            destination_db = parsed as usize;
             i += 2;
             continue;
         }
@@ -18114,14 +18118,16 @@ fn copy_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     // dedicated error before even touching the store, regardless of
     // REPLACE. See legacy_redis_code/redis/src/cluster.c::copyCommand.
     // (br-frankenredis-ao1i)
-    if source == destination && target_db == 0 {
+    if destination_db == source_db && argv[1] == argv[2] {
         return Ok(RespFrame::Error(
             "ERR source and destination objects are the same".to_string(),
         ));
     }
 
+    let source = fr_store::encode_db_key(source_db, &argv[1]);
+    let destination = fr_store::encode_db_key(destination_db, &argv[2]);
     let copied = store
-        .copy(source, destination, replace, now_ms)
+        .copy(&source, &destination, replace, now_ms)
         .map_err(CommandError::Store)?;
     Ok(RespFrame::Integer(i64::from(copied)))
 }
@@ -19633,6 +19639,148 @@ mod tests {
         let out = dispatch_argv(&argv, &mut store, 0).expect("flushdb");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn copy_via_dispatch_supports_cross_db_target() {
+        // (frankenredis-op84s) Lua redis.call('COPY', src, dst, 'DB', N)
+        // and AOF replay route through dispatch_argv. The earlier
+        // copy_cmd hard-coded 'db != 0' as out-of-range so cross-db
+        // COPY was impossible on these paths even though the Store
+        // engine namespaces keys per-DB via encode_db_key.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"src"),
+            b"payload".to_vec(),
+            None,
+            0,
+        );
+
+        let out = dispatch_argv(
+            &[
+                b"COPY".to_vec(),
+                b"src".to_vec(),
+                b"dst".to_vec(),
+                b"DB".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("copy with DB option");
+        assert_eq!(out, RespFrame::Integer(1));
+        // Source still in db 0; destination materialised in db 1.
+        assert_eq!(
+            store
+                .get(&fr_store::encode_db_key(0, b"src"), 0)
+                .expect("get src")
+                .as_deref(),
+            Some(&b"payload"[..])
+        );
+        assert_eq!(
+            store
+                .get(&fr_store::encode_db_key(1, b"dst"), 0)
+                .expect("get dst")
+                .as_deref(),
+            Some(&b"payload"[..])
+        );
+    }
+
+    #[test]
+    fn copy_via_dispatch_rejects_out_of_range_db() {
+        // (frankenredis-op84s) Range check is now against
+        // store.database_count rather than a hard-coded 'db != 0'
+        // sentinel. Pin that any db beyond database_count is rejected
+        // with the upstream wording and that source data is untouched.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"src"),
+            b"payload".to_vec(),
+            None,
+            0,
+        );
+
+        let err = dispatch_argv(
+            &[
+                b"COPY".to_vec(),
+                b"src".to_vec(),
+                b"dst".to_vec(),
+                b"DB".to_vec(),
+                b"999".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("out-of-range db must error");
+        assert!(matches!(
+            err,
+            CommandError::Custom(ref s) if s == "ERR DB index is out of range"
+        ));
+        assert!(store.exists(&fr_store::encode_db_key(0, b"src"), 0));
+    }
+
+    #[test]
+    fn copy_via_dispatch_same_key_cross_db_succeeds() {
+        // (frankenredis-op84s) source == destination is only an error
+        // when the source AND destination DBs match. Cross-db same-name
+        // COPY must succeed (matches upstream cluster.c::copyCommand).
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"foo"),
+            b"v".to_vec(),
+            None,
+            0,
+        );
+
+        let out = dispatch_argv(
+            &[
+                b"COPY".to_vec(),
+                b"foo".to_vec(),
+                b"foo".to_vec(),
+                b"DB".to_vec(),
+                b"2".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("cross-db same-name copy");
+        assert_eq!(out, RespFrame::Integer(1));
+        assert!(store.exists(&fr_store::encode_db_key(0, b"foo"), 0));
+        assert!(store.exists(&fr_store::encode_db_key(2, b"foo"), 0));
+    }
+
+    #[test]
+    fn copy_via_dispatch_same_key_same_db_emits_upstream_error() {
+        // (frankenredis-op84s) The source-equals-destination guard must
+        // still fire when both DBs match, even with a non-zero DB
+        // option. Pins the upstream error wording.
+        let mut store = Store::new();
+        store.dispatch_client_ctx.db_index = 1;
+        store.set(
+            fr_store::encode_db_key(1, b"foo"),
+            b"v".to_vec(),
+            None,
+            0,
+        );
+
+        let out = dispatch_argv(
+            &[
+                b"COPY".to_vec(),
+                b"foo".to_vec(),
+                b"foo".to_vec(),
+                b"DB".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("dispatch returns Ok-with-error");
+        assert_eq!(
+            out,
+            RespFrame::Error(
+                "ERR source and destination objects are the same".to_string()
+            )
+        );
     }
 
     #[test]
