@@ -6852,11 +6852,14 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         }
         // Upstream xgroupCommand DESTROY rejects missing keys with
         // the verbose "requires the key to exist" error rather than
-        // silently returning 0. (br-frankenredis-qcmh)
-        match store.xlen(&argv[2], now_ms) {
-            Ok(_) => {}
-            Err(StoreError::KeyNotFound) => return Ok(xgroup_key_required_error()),
-            Err(err) => return Err(CommandError::Store(err)),
+        // silently returning 0. Store::xlen returns Ok(0) on a missing
+        // key (same as the user-facing XLEN contract), so it can't be
+        // used to distinguish absent-vs-empty here — Store::key_type
+        // is the right probe. (frankenredis-n4qd, supersedes qcmh)
+        match store.key_type(&argv[2], now_ms) {
+            None => return Ok(xgroup_key_required_error()),
+            Some("stream") => {}
+            Some(_) => return Err(CommandError::Store(StoreError::WrongType)),
         }
         return match store.xgroup_destroy(&argv[2], &argv[3], now_ms) {
             Ok(removed) => Ok(RespFrame::Integer(if removed { 1 } else { 0 })),
@@ -26730,7 +26733,16 @@ mod tests {
             0,
         )
         .expect("xgroup destroy missing key");
-        assert_eq!(missing_key, RespFrame::Integer(0));
+        // Upstream xgroupCommand DESTROY rejects missing keys with the
+        // verbose key-required error; matches the rest of the XGROUP
+        // family (CREATE/SETID/DELCONSUMER). (frankenredis-n4qd)
+        assert_eq!(
+            missing_key,
+            RespFrame::Error(
+                "ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically."
+                    .to_string()
+            )
+        );
     }
 
     #[test]

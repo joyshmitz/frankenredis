@@ -8947,7 +8947,9 @@ mod tests {
             "xdel_removes_existing_and_missing_ids",
             "xgroup_create_missing_key_error",
             "xgroup_delconsumer_missing_key_error",
-            "xgroup_destroy_missing_key_zero",
+            // xgroup_destroy_missing_key_zero removed from XFAIL: fr now
+            // emits the upstream key-required error instead of returning
+            // 0 (frankenredis-n4qd).
             "xgroup_setid_invalid_id_error",
             "xgroup_setid_missing_key_error",
             "xinfo_consumers_read1_after_createconsumer",
