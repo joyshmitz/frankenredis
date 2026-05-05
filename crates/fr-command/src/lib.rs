@@ -15250,7 +15250,27 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         ] {
             items.extend(kv);
         }
-        Ok(RespFrame::Array(Some(items)))
+        // Mirror upstream object.c::memoryCommand which uses
+        // addReplyMapLen — RESP3 is a Map of (key, value) pairs;
+        // RESP2 is the existing flat Array of alternating k/v
+        // entries. Same shape pattern as HGETALL, CLIENT
+        // TRACKINGINFO (i40x2), ACL GETUSER (e4njz).
+        // (frankenredis-udl3y)
+        if store.dispatch_client_ctx.resp_protocol_version == 3 {
+            assert!(
+                items.len().is_multiple_of(2),
+                "MEMORY STATS items must be balanced k/v pairs; got odd len {}",
+                items.len()
+            );
+            let mut map_entries = Vec::with_capacity(items.len() / 2);
+            let mut iter = items.into_iter();
+            while let (Some(k), Some(v)) = (iter.next(), iter.next()) {
+                map_entries.push((k, v));
+            }
+            Ok(RespFrame::Map(Some(map_entries)))
+        } else {
+            Ok(RespFrame::Array(Some(items)))
+        }
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
             // (br-frankenredis-marg)
@@ -30420,6 +30440,61 @@ mod tests {
         let bogus = dispatch_argv(&[b"MEMORY".to_vec(), b"BOGUS".to_vec()], &mut store, 0)
             .expect("memory bogus");
         assert!(matches!(bogus, RespFrame::Error(_)));
+    }
+
+    #[test]
+    fn memory_stats_under_resp3_returns_map_shape() {
+        // (frankenredis-udl3y) Upstream object.c::memoryCommand uses
+        // addReplyMapLen, so the RESP3 wire shape is a Map of (key,
+        // value) pairs. fr was emitting Array regardless of the
+        // dispatch context's protocol version. Same shape pattern
+        // as ACL GETUSER (e4njz) and CLIENT TRACKINGINFO (i40x2).
+        let mut store = Store::new();
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        let out = dispatch_argv(&[b"MEMORY".to_vec(), b"STATS".to_vec()], &mut store, 0)
+            .expect("memory stats");
+        let RespFrame::Map(Some(entries)) = out else {
+            panic!("RESP3 MEMORY STATS must be a Map, got {out:?}"); // ubs:ignore — AI triage
+        };
+        // Pairs are balanced; first three keys are the standard
+        // upstream openers.
+        assert!(entries.len() >= 20, "expected >= 20 stats entries");
+        let keys_first_3: Vec<&RespFrame> = entries.iter().take(3).map(|(k, _)| k).collect();
+        assert_eq!(
+            keys_first_3[0],
+            &RespFrame::BulkString(Some(b"peak.allocated".to_vec()))
+        );
+        assert_eq!(
+            keys_first_3[1],
+            &RespFrame::BulkString(Some(b"total.allocated".to_vec()))
+        );
+        assert_eq!(
+            keys_first_3[2],
+            &RespFrame::BulkString(Some(b"startup.allocated".to_vec()))
+        );
+    }
+
+    #[test]
+    fn memory_stats_under_resp2_stays_flat_array() {
+        // (frankenredis-udl3y) RESP2 stays a flat Array of alternating
+        // k/v entries — companion pin to the RESP3 test.
+        let mut store = Store::new();
+        // Default protocol_version = 2 (Store::new()).
+        let out = dispatch_argv(&[b"MEMORY".to_vec(), b"STATS".to_vec()], &mut store, 0)
+            .expect("memory stats");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("RESP2 MEMORY STATS must be a flat Array, got {out:?}"); // ubs:ignore — AI triage
+        };
+        // Flat shape: every other element is a key.
+        assert!(items.len() >= 40);
+        assert_eq!(
+            items[0],
+            RespFrame::BulkString(Some(b"peak.allocated".to_vec()))
+        );
+        assert_eq!(
+            items[2],
+            RespFrame::BulkString(Some(b"total.allocated".to_vec()))
+        );
     }
 
     #[test]
