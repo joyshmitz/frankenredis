@@ -9905,7 +9905,15 @@ impl Runtime {
         }
         if sub.eq_ignore_ascii_case("HELP") {
             if argv.len() != 2 {
-                return CommandError::SyntaxError.to_resp();
+                // Upstream commands.def declares pubsub|help with arity = 2
+                // (exact), so extra args trigger the WrongSubcommandArity
+                // wording rather than the generic SyntaxError fallthrough,
+                // mirroring NUMPAT below. (frankenredis-godyg)
+                return CommandError::WrongSubcommandArity {
+                    command: "PUBSUB",
+                    subcommand: "HELP".to_string(),
+                }
+                .to_resp();
             }
             return RespFrame::Array(Some(vec![
                 RespFrame::SimpleString(
@@ -13641,9 +13649,14 @@ mod tests {
         };
         assert!(lines.len() >= 6);
 
+        // Upstream commands.def declares pubsub|help with arity = 2
+        // (exact), so extra args trigger the WrongSubcommandArity
+        // wording, matching NUMPAT below. (frankenredis-godyg)
         assert_eq!(
             rt.execute_frame(command(&[b"PUBSUB", b"HELP", b"extra"]), 1),
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'pubsub|help' command".to_string()
+            )
         );
         // (br-frankenredis-pubsubary) — upstream emits the
         // subcommand-specific arity error rather than syntax error.
