@@ -5415,6 +5415,53 @@
         "kind": "error",
         "value": "ERR wrong number of arguments for 'debug' command"
       }
+    },
+    {
+      "name": "flushall_then_set_ghostkey_setup",
+      "now_ms": 74000,
+      "argv": [
+        "SET",
+        "ghostkey",
+        "ghostvalue"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "flushall_then_flushall",
+      "now_ms": 74001,
+      "argv": [
+        "FLUSHALL"
+      ],
+      "expect": {
+        "kind": "simple",
+        "value": "OK"
+      }
+    },
+    {
+      "name": "flushall_then_keys_empty",
+      "now_ms": 74002,
+      "argv": [
+        "KEYS",
+        "*"
+      ],
+      "expect": {
+        "kind": "array",
+        "value": []
+      }
+    },
+    {
+      "name": "flushall_then_dbsize_zero",
+      "now_ms": 74003,
+      "argv": [
+        "DBSIZE"
+      ],
+      "expect": {
+        "kind": "integer",
+        "value": 0
+      }
     }
   ]
 }
