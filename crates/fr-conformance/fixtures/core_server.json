@@ -84,8 +84,8 @@
         "fr_core_server.rdb"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'dir') - can't set protected config"
       }
     },
     {
@@ -2847,8 +2847,8 @@
         "fr_core_server_dup.rdb"
       ],
       "expect": {
-        "kind": "simple",
-        "value": "OK"
+        "kind": "error",
+        "value": "ERR CONFIG SET failed (possibly related to argument 'dir') - can't set protected config"
       }
     },
     {
