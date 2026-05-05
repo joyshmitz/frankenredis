@@ -16562,18 +16562,40 @@ fn shutdown_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErr
 }
 
 fn move_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
-    // MOVE key db
+    // MOVE key db. Mirrors fr-runtime::handle_move_command. The earlier
+    // implementation hard-coded a 0..16 range and always returned 0 with
+    // a "single-namespace" comment that was wrong: keys are already
+    // namespaced per-DB via fr_store::encode_db_key, so cross-DB
+    // transfers ARE possible at this layer. The dispatch_argv path is
+    // what AOF replay (fr-runtime:2262) and Lua redis.call() use, so
+    // the stub silently dropped MOVE side effects from those routes.
+    // (frankenredis-w9yzb)
     if argv.len() != 3 {
         return Err(CommandError::WrongArity("MOVE"));
     }
-    let db = parse_i64_arg(&argv[2])?;
-    if !(0..16).contains(&db) {
-        return Ok(RespFrame::Error("ERR out of range".to_string()));
+    let target_db = parse_i64_arg(&argv[2])?;
+    let dbc = store.database_count;
+    if !(0..dbc as i64).contains(&target_db) {
+        return Err(CommandError::Custom(
+            "ERR DB index is out of range".to_string(),
+        ));
     }
-    let _ = store.exists(&argv[1], now_ms);
-    // In single-namespace mode, all DBs share the same store, so MOVE cannot
-    // succeed as a cross-db transfer at this layer.
-    Ok(RespFrame::Integer(0))
+    let source_db = store.dispatch_client_ctx.db_index;
+    if target_db as usize == source_db {
+        return Err(CommandError::Custom(
+            "ERR source and destination objects are the same".to_string(),
+        ));
+    }
+    let source = fr_store::encode_db_key(source_db, &argv[1]);
+    let destination = fr_store::encode_db_key(target_db as usize, &argv[1]);
+    if !store.exists(&source, now_ms) || store.exists(&destination, now_ms) {
+        return Ok(RespFrame::Integer(0));
+    }
+    store
+        .copy(&source, &destination, false, now_ms)
+        .map_err(CommandError::Store)?;
+    store.del(&[source], now_ms);
+    Ok(RespFrame::Integer(1))
 }
 
 fn latency_graph(event: &str, samples: &[fr_store::LatencySample]) -> String {
@@ -33303,15 +33325,68 @@ mod tests {
     }
 
     #[test]
-    fn move_same_db() {
+    fn move_same_db_returns_redis_error() {
+        // Upstream Redis 7.2 db.c::moveCommand checks for same-db
+        // BEFORE consulting key existence, so 'MOVE missing 0' from
+        // db 0 emits "ERR source and destination objects are the
+        // same" rather than 0. The previous fr-command::move_cmd was
+        // a stub that returned Integer(0) regardless. Verified via
+        // redis-cli -p 16701. (frankenredis-w9yzb)
         let mut store = Store::new();
-        let out = dispatch_argv(
+        let err = dispatch_argv(
             &[b"MOVE".to_vec(), b"key".to_vec(), b"0".to_vec()],
             &mut store,
             0,
         )
+        .expect_err("same-db should error");
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error("ERR source and destination objects are the same".to_string())
+        );
+    }
+
+    #[test]
+    fn move_cross_db_actually_transfers_key() {
+        // Lua redis.call('MOVE', ...) and AOF replay both route
+        // through dispatch_argv → move_cmd, so this path must
+        // actually move keys between databases (not silently no-op
+        // as the prior stub did). (frankenredis-w9yzb)
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"foo"),
+            b"bar".to_vec(),
+            None,
+            0,
+        );
+        assert!(store.exists(&fr_store::encode_db_key(0, b"foo"), 0));
+
+        let out = dispatch_argv(
+            &[b"MOVE".to_vec(), b"foo".to_vec(), b"1".to_vec()],
+            &mut store,
+            0,
+        )
         .expect("move");
-        assert_eq!(out, RespFrame::Integer(0));
+        assert_eq!(out, RespFrame::Integer(1));
+        assert!(!store.exists(&fr_store::encode_db_key(0, b"foo"), 0));
+        assert!(store.exists(&fr_store::encode_db_key(1, b"foo"), 0));
+    }
+
+    #[test]
+    fn move_out_of_range_uses_upstream_wording() {
+        // Upstream emits "ERR DB index is out of range" — not the
+        // generic "ERR out of range" the prior stub used.
+        // (frankenredis-w9yzb)
+        let mut store = Store::new();
+        let err = dispatch_argv(
+            &[b"MOVE".to_vec(), b"foo".to_vec(), b"999".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("out-of-range db should error");
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error("ERR DB index is out of range".to_string())
+        );
     }
 
     #[test]
