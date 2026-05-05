@@ -4306,6 +4306,50 @@ mod tests {
     }
 
     #[test]
+    fn parse_blocking_deadline_handles_signed_zero_and_subnormals() {
+        // (frankenredis-p0rr) Edge cases that are easy to silently
+        // regress — pin them as a single test so a future refactor
+        // that uses sign-bit checks or restructures the zero/finite
+        // gates can't accidentally turn a 'block forever' request into
+        // a 'time out immediately' one.
+
+        // -0.0 == 0.0 in IEEE-754, so negative-zero literals must
+        // hit the zero-timeout (block forever) path, NOT the
+        // negative-rejection path.
+        assert_eq!(parse_blocking_deadline(b"-0", 123), Some(u64::MAX));
+        assert_eq!(parse_blocking_deadline(b"-0.0", 123), Some(u64::MAX));
+        assert_eq!(parse_blocking_deadline(b"-0e0", 123), Some(u64::MAX));
+
+        // Scientific-notation zeros must also map to block-forever,
+        // not to a far-future deadline.
+        assert_eq!(parse_blocking_deadline(b"0e100", 123), Some(u64::MAX));
+        assert_eq!(parse_blocking_deadline(b"0.0e0", 123), Some(u64::MAX));
+        assert_eq!(parse_blocking_deadline(b"0.0e-100", 123), Some(u64::MAX));
+
+        // Subnormal/underflow positives must still produce a valid
+        // bounded deadline (rounded up to >=1ms by the ceil step) —
+        // never None and never the block-forever sentinel.
+        for tiny in ["1e-300", "1e-323", "1e-200", "0.000000000001"] {
+            let deadline = parse_blocking_deadline(tiny.as_bytes(), 1_000)
+                .unwrap_or_else(|| panic!("subnormal {tiny} should yield a deadline"));
+            assert_ne!(
+                deadline,
+                u64::MAX,
+                "subnormal {tiny} must NOT map to block-forever"
+            );
+            assert!(
+                deadline > 1_000,
+                "subnormal {tiny} should round up to a future deadline > now_ms, got {deadline}"
+            );
+        }
+
+        // Plain positive zero stays at block-forever (regression
+        // guard alongside the variants above).
+        assert_eq!(parse_blocking_deadline(b"0", 123), Some(u64::MAX));
+        assert_eq!(parse_blocking_deadline(b"0.0", 123), Some(u64::MAX));
+    }
+
+    #[test]
     fn blocking_state_builder_rejects_nonfinite_blpop_timeout() {
         let frame = RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"BLPOP".to_vec())),
