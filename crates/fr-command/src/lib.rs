@@ -2887,7 +2887,14 @@ fn keys(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     if argv.len() != 2 {
         return Err(CommandError::WrongArity("KEYS"));
     }
-    let matched = store.keys_matching(&argv[1], now_ms);
+    // Scope to the dispatch context's selected db. The all-DBs
+    // Store::keys_matching primitive is reserved for tooling /
+    // tests; calling it here leaked multi-db key names (with raw
+    // encode_db_key prefix bytes) into Lua, AOF replay, and MULTI/
+    // EXEC paths. Same architectural drift as MOVE/COPY/FLUSHDB.
+    // (frankenredis-shbbv)
+    let db = store.dispatch_client_ctx.db_index;
+    let matched = store.keys_matching_in_db(db, &argv[1], now_ms);
     let frames = matched
         .into_iter()
         .map(|k| RespFrame::BulkString(Some(k)))
@@ -2899,7 +2906,13 @@ fn dbsize(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     if argv.len() != 1 {
         return Err(CommandError::WrongArity("DBSIZE"));
     }
-    let size = store.dbsize(now_ms);
+    // Per-DB count. Store::dbsize is the all-DBs primitive (returns
+    // entries.len()); the dispatch_argv path must use dbsize_in_db
+    // so Lua redis.call('DBSIZE') / AOF replay / MULTI report only
+    // the selected db's count. (frankenredis-shbbv)
+    let _ = now_ms;
+    let db = store.dispatch_client_ctx.db_index;
+    let size = store.dbsize_in_db(db);
     let size = i64::try_from(size).unwrap_or(i64::MAX);
     Ok(RespFrame::Integer(size))
 }
@@ -19599,6 +19612,120 @@ mod tests {
         let argv = vec![b"DBSIZE".to_vec()];
         let out = dispatch_argv(&argv, &mut store, 0).expect("dbsize");
         assert_eq!(out, RespFrame::Integer(2));
+    }
+
+    #[test]
+    fn dbsize_via_dispatch_only_counts_selected_db() {
+        // (frankenredis-shbbv) Lua redis.call('DBSIZE'), AOF replay,
+        // and MULTI/EXEC route DBSIZE through dispatch_argv. Per-DB
+        // scope must come from dispatch_client_ctx.db_index — the
+        // earlier implementation called Store::dbsize() (the all-DBs
+        // primitive) and Lua scripts saw the global keyspace count.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"k0"),
+            b"v0".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(0, b"k0b"),
+            b"v0b".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(1, b"k1"),
+            b"v1".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(2, b"k2"),
+            b"v2".to_vec(),
+            None,
+            0,
+        );
+
+        // Default db_index = 0 → 2 entries.
+        let out = dispatch_argv(&[b"DBSIZE".to_vec()], &mut store, 0).expect("dbsize db 0");
+        assert_eq!(out, RespFrame::Integer(2));
+
+        // db 1 → 1 entry; db 2 → 1 entry; db 5 → 0.
+        store.dispatch_client_ctx.db_index = 1;
+        let out = dispatch_argv(&[b"DBSIZE".to_vec()], &mut store, 0).expect("dbsize db 1");
+        assert_eq!(out, RespFrame::Integer(1));
+
+        store.dispatch_client_ctx.db_index = 2;
+        let out = dispatch_argv(&[b"DBSIZE".to_vec()], &mut store, 0).expect("dbsize db 2");
+        assert_eq!(out, RespFrame::Integer(1));
+
+        store.dispatch_client_ctx.db_index = 5;
+        let out = dispatch_argv(&[b"DBSIZE".to_vec()], &mut store, 0).expect("dbsize db 5");
+        assert_eq!(out, RespFrame::Integer(0));
+    }
+
+    #[test]
+    fn keys_via_dispatch_only_returns_selected_db_keys() {
+        // (frankenredis-shbbv) Companion to the DBSIZE pin. KEYS must
+        // return only the logical names from the selected db, with
+        // the encode_db_key prefix bytes stripped — Lua / AOF /
+        // MULTI must not see foreign-db key existence.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(0, b"k0"),
+            b"v0".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(1, b"k1_alpha"),
+            b"v1".to_vec(),
+            None,
+            0,
+        );
+        store.set(
+            fr_store::encode_db_key(1, b"k1_beta"),
+            b"v1b".to_vec(),
+            None,
+            0,
+        );
+
+        store.dispatch_client_ctx.db_index = 1;
+        let out =
+            dispatch_argv(&[b"KEYS".to_vec(), b"*".to_vec()], &mut store, 0).expect("keys db 1");
+        let RespFrame::Array(Some(frames)) = out else {
+            panic!("expected keys array"); // ubs:ignore — AI triage
+        };
+        let mut keys: Vec<Vec<u8>> = frames
+            .into_iter()
+            .map(|f| match f {
+                RespFrame::BulkString(Some(b)) => b,
+                other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
+            })
+            .collect();
+        keys.sort();
+        // db 1 has two keys, both surfaced as logical names — no db
+        // 0's "k0" leaking through, no encode_db_key prefix bytes.
+        assert_eq!(
+            keys,
+            vec![b"k1_alpha".to_vec(), b"k1_beta".to_vec()]
+        );
+
+        store.dispatch_client_ctx.db_index = 0;
+        let out =
+            dispatch_argv(&[b"KEYS".to_vec(), b"*".to_vec()], &mut store, 0).expect("keys db 0");
+        let RespFrame::Array(Some(frames)) = out else {
+            panic!("expected keys array"); // ubs:ignore — AI triage
+        };
+        let keys: Vec<Vec<u8>> = frames
+            .into_iter()
+            .map(|f| match f {
+                RespFrame::BulkString(Some(b)) => b,
+                other => panic!("expected bulk string, got {other:?}"), // ubs:ignore — AI triage
+            })
+            .collect();
+        assert_eq!(keys, vec![b"k0".to_vec()]);
     }
 
     #[test]
