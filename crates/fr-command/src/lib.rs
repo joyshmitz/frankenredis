@@ -13075,6 +13075,29 @@ fn command_docs_entry(
         entry.push(hello_bulk("complexity"));
         entry.push(hello_bulk(complexity));
     }
+    // History is emitted between complexity and arguments to match
+    // upstream t_string.c::commandDocsCommand emission order. Only
+    // commands with at least one entry in UPSTREAM_COMMAND_DOCS_HISTORY
+    // get the field; the rest skip it. Each entry is a 2-element array
+    // [version, message] mirroring the JSON shape. (frankenredis-az2a4)
+    if let Ok(idx) = UPSTREAM_COMMAND_DOCS_HISTORY
+        .binary_search_by(|(entry_name, _)| entry_name.cmp(&name))
+    {
+        let history = UPSTREAM_COMMAND_DOCS_HISTORY[idx].1;
+        if !history.is_empty() {
+            entry.push(hello_bulk("history"));
+            let history_frames: Vec<RespFrame> = history
+                .iter()
+                .map(|(version, message)| {
+                    RespFrame::Array(Some(vec![
+                        hello_bulk(version),
+                        hello_bulk(message),
+                    ]))
+                })
+                .collect();
+            entry.push(RespFrame::Array(Some(history_frames)));
+        }
+    }
     entry.push(hello_bulk("arguments"));
     entry.push(RespFrame::Array(Some(command_docs_arguments(
         arity, first_key, last_key, step,
@@ -37768,6 +37791,96 @@ mod tests {
         assert_eq!(kv(b"since"), Some(&b"1.0.0"[..]));
         assert_eq!(kv(b"complexity"), Some(&b"O(1)"[..]));
         assert_eq!(kv(b"group"), Some(&b"string"[..]));
+    }
+
+    #[test]
+    fn command_docs_emits_upstream_history_for_set() {
+        // (frankenredis-az2a4) SET has 4 history entries in
+        // legacy_redis_code/redis/src/commands/set.json:
+        //   2.6.12 → "Added the `EX`, `PX`, `NX` and `XX` options."
+        //   6.0.0  → "Added the `KEEPTTL` option."
+        //   6.2.0  → "Added the `GET`, `EXAT` and `PXAT` option."
+        //   7.0.0  → "Allowed the `NX` and `GET` options to be used together."
+        // Pin the count + first/last entry so a future build.rs
+        // refactor can't silently drop the harvester.
+        let mut store = Store::new();
+        let out =
+            dispatch_argv(&[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"SET".to_vec()], &mut store, 0)
+                .unwrap();
+        let RespFrame::Array(Some(entries)) = out else {
+            panic!("expected docs array"); // ubs:ignore — AI triage
+        };
+        let RespFrame::Array(Some(doc_fields)) = &entries[1] else {
+            panic!("expected doc fields array"); // ubs:ignore — AI triage
+        };
+
+        // Walk pairs; find the value following "history" key.
+        let history_value: Option<&Vec<RespFrame>> = doc_fields
+            .chunks(2)
+            .find_map(|chunk| match chunk {
+                [
+                    RespFrame::BulkString(Some(k)),
+                    RespFrame::Array(Some(items)),
+                ] if k.as_slice() == b"history" => Some(items),
+                _ => None,
+            });
+        let history = history_value.expect("history field missing for SET");
+        assert_eq!(history.len(), 4, "expected 4 history entries");
+
+        // First entry: 2.6.12 with the EX/PX/NX/XX message.
+        let RespFrame::Array(Some(first)) = &history[0] else {
+            panic!("first history entry shape"); // ubs:ignore — AI triage
+        };
+        assert_eq!(
+            first[0],
+            RespFrame::BulkString(Some(b"2.6.12".to_vec()))
+        );
+        assert_eq!(
+            first[1],
+            RespFrame::BulkString(Some(
+                b"Added the `EX`, `PX`, `NX` and `XX` options.".to_vec()
+            ))
+        );
+
+        // Last entry: 7.0.0 with the NX+GET combination message.
+        let RespFrame::Array(Some(last)) = &history[3] else {
+            panic!("last history entry shape"); // ubs:ignore — AI triage
+        };
+        assert_eq!(
+            last[0],
+            RespFrame::BulkString(Some(b"7.0.0".to_vec()))
+        );
+        assert_eq!(
+            last[1],
+            RespFrame::BulkString(Some(
+                b"Allowed the `NX` and `GET` options to be used together.".to_vec()
+            ))
+        );
+    }
+
+    #[test]
+    fn command_docs_omits_history_for_commands_without_upstream_entries() {
+        // (frankenredis-az2a4) GET has no history entries in upstream
+        // — its set.json sibling never declared the field. Pin that
+        // we omit the field rather than emitting an empty array.
+        let mut store = Store::new();
+        let out =
+            dispatch_argv(&[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"GET".to_vec()], &mut store, 0)
+                .unwrap();
+        let RespFrame::Array(Some(entries)) = out else {
+            panic!("expected docs array"); // ubs:ignore — AI triage
+        };
+        let RespFrame::Array(Some(doc_fields)) = &entries[1] else {
+            panic!("expected doc fields array"); // ubs:ignore — AI triage
+        };
+        // 'history' must not appear at all.
+        assert!(
+            !doc_fields.iter().any(|frame| matches!(
+                frame,
+                RespFrame::BulkString(Some(b)) if b.as_slice() == b"history"
+            )),
+            "GET should not emit a history field"
+        );
     }
 
     #[test]

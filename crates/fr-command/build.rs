@@ -76,6 +76,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // DOCS. Optional strings (None for missing fields) so command_docs_entry
     // can omit fields the upstream JSON didn't declare. (frankenredis-f39s3)
     let mut docs_meta = BTreeMap::<String, (Option<String>, Option<String>, Option<String>)>::new();
+    // Parallel BTreeMap of history entries: each is a Vec<(version,
+    // message)>. Empty vec means upstream didn't declare any history
+    // entries for the command, in which case command_docs_entry omits
+    // the field entirely (matching upstream t_string.c::
+    // commandDocsCommand). (frankenredis-az2a4)
+    let mut docs_history = BTreeMap::<String, Vec<(String, String)>>::new();
     for path in command_json_paths(&commands_dir)? {
         println!("cargo:rerun-if-changed={}", path.display());
         let raw = fs::read_to_string(&path).map_err(|err| {
@@ -163,6 +169,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .and_then(Value::as_str)
                 .map(str::to_string);
             docs_meta.insert(command_name.clone(), (summary, complexity, since));
+
+            // History is a JSON array of [version, message] 2-tuples
+            // — pairs of strings. Skip the entry entirely when absent
+            // or empty so the generated table doesn't carry useless
+            // rows. (frankenredis-az2a4)
+            let history_entries: Vec<(String, String)> = metadata
+                .get("history")
+                .and_then(Value::as_array)
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|item| {
+                            let pair = item.as_array()?;
+                            if pair.len() != 2 {
+                                return None;
+                            }
+                            let version = pair[0].as_str()?.to_string();
+                            let message = pair[1].as_str()?.to_string();
+                            Some((version, message))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !history_entries.is_empty() {
+                docs_history.insert(command_name, history_entries);
+            }
         }
     }
 
@@ -206,6 +238,28 @@ fn main() -> Result<(), Box<dyn Error>> {
             out.push_str(&escape_rust_string(s));
         }
         out.push_str("\"),\n");
+    }
+    out.push_str("];\n");
+
+    // Emit the COMMAND DOCS history table. Each row is (name, &[(
+    // version, message)]). Only commands with at least one history
+    // entry appear; the consumer falls through to omitting the field
+    // when binary_search misses. (frankenredis-az2a4)
+    out.push_str(
+        "const UPSTREAM_COMMAND_DOCS_HISTORY: &[(&str, &[(&str, &str)])] = &[\n",
+    );
+    for (command, history) in &docs_history {
+        out.push_str("    (\"");
+        out.push_str(&escape_rust_string(command));
+        out.push_str("\", &[");
+        for (version, message) in history {
+            out.push_str("(\"");
+            out.push_str(&escape_rust_string(version));
+            out.push_str("\", \"");
+            out.push_str(&escape_rust_string(message));
+            out.push_str("\"), ");
+        }
+        out.push_str("]),\n");
     }
     out.push_str("];\n");
 
