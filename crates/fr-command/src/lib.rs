@@ -4947,7 +4947,7 @@ fn georadius(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         Some(m) => m,
         None => {
             return Ok(RespFrame::Error(
-                "ERR unsupported unit provided. please use m, km, ft, mi".to_string(),
+                "ERR unsupported unit provided. please use M, KM, FT, MI".to_string(),
             ));
         }
     };
@@ -5005,7 +5005,7 @@ fn georadiusbymember(
         Some(m) => m,
         None => {
             return Ok(RespFrame::Error(
-                "ERR unsupported unit provided. please use m, km, ft, mi".to_string(),
+                "ERR unsupported unit provided. please use M, KM, FT, MI".to_string(),
             ));
         }
     };
@@ -5119,7 +5119,7 @@ fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
                 Some(m) => m,
                 None => {
                     return Ok(RespFrame::Error(
-                        "ERR unsupported unit provided. please use m, km, ft, mi".to_string(),
+                        "ERR unsupported unit provided. please use M, KM, FT, MI".to_string(),
                     ));
                 }
             };
@@ -5155,7 +5155,7 @@ fn geosearch(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
                 Some(m) => m,
                 None => {
                     return Ok(RespFrame::Error(
-                        "ERR unsupported unit provided. please use m, km, ft, mi".to_string(),
+                        "ERR unsupported unit provided. please use M, KM, FT, MI".to_string(),
                     ));
                 }
             };
@@ -5329,7 +5329,7 @@ fn geosearchstore(
                 Some(m) => m,
                 None => {
                     return Ok(RespFrame::Error(
-                        "ERR unsupported unit provided. please use m, km, ft, mi".to_string(),
+                        "ERR unsupported unit provided. please use M, KM, FT, MI".to_string(),
                     ));
                 }
             };
@@ -5364,7 +5364,7 @@ fn geosearchstore(
                 Some(m) => m,
                 None => {
                     return Ok(RespFrame::Error(
-                        "ERR unsupported unit provided. please use m, km, ft, mi".to_string(),
+                        "ERR unsupported unit provided. please use M, KM, FT, MI".to_string(),
                     ));
                 }
             };
@@ -8754,10 +8754,7 @@ fn function_cmd(
                     RespFrame::BulkString(Some(b"running_script".to_vec())),
                     RespFrame::BulkString(None),
                 ),
-                (
-                    RespFrame::BulkString(Some(b"engines".to_vec())),
-                    engines,
-                ),
+                (RespFrame::BulkString(Some(b"engines".to_vec())), engines),
             ])))
         } else {
             Ok(RespFrame::Array(Some(vec![
@@ -23605,6 +23602,64 @@ mod tests {
     }
 
     #[test]
+    fn geo_unit_errors_use_uppercase_unit_names_across_family() {
+        // (frankenredis-lcs68) Upstream geo.c::extractUnitOrReply emits
+        // 'M, KM, FT, MI' (uppercase). 7 fr-command sites — GEORADIUS,
+        // GEORADIUSBYMEMBER, GEORADIUS_RO, GEORADIUSBYMEMBER_RO,
+        // GEOSEARCH, GEOSEARCHSTORE — were emitting lowercase. Pin the
+        // canonical uppercase wording across the family.
+        let expected = "ERR unsupported unit provided. please use M, KM, FT, MI";
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"GEOADD".to_vec(),
+                b"geo".to_vec(),
+                b"13.361389".to_vec(),
+                b"38.115556".to_vec(),
+                b"Palermo".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("geoadd seed");
+
+        let cases = [
+            // GEOSEARCH FROMMEMBER ... BYRADIUS ... <bad-unit>
+            vec![
+                b"GEOSEARCH".to_vec(),
+                b"geo".to_vec(),
+                b"FROMMEMBER".to_vec(),
+                b"Palermo".to_vec(),
+                b"BYRADIUS".to_vec(),
+                b"100".to_vec(),
+                b"yards".to_vec(),
+                b"ASC".to_vec(),
+            ],
+            // GEORADIUSBYMEMBER ... <bad-unit>
+            vec![
+                b"GEORADIUSBYMEMBER".to_vec(),
+                b"geo".to_vec(),
+                b"Palermo".to_vec(),
+                b"100".to_vec(),
+                b"yards".to_vec(),
+            ],
+            // GEORADIUS lon lat radius <bad-unit>
+            vec![
+                b"GEORADIUS".to_vec(),
+                b"geo".to_vec(),
+                b"13".to_vec(),
+                b"38".to_vec(),
+                b"100".to_vec(),
+                b"yards".to_vec(),
+            ],
+        ];
+        for argv in cases {
+            let out = dispatch_argv(&argv, &mut store, 0).expect("geo unit-error case");
+            assert_eq!(out, RespFrame::Error(expected.to_string()), "argv={argv:?}");
+        }
+    }
+
+    #[test]
     fn xadd_xlen_and_type_roundtrip() {
         let mut store = Store::new();
 
@@ -33121,7 +33176,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "frankenredis-bw15: fr's Lua sandbox has no working coroutine.* methods; upstream Redis 7.2 supports the full coroutine library in scripts"]
     fn eval_lua_coroutine_create_and_resume_yields_value() {
         // Upstream Redis 7.2 keeps the Lua coroutine library functional
         // inside the script sandbox. Differential probe vs vendored
@@ -38650,18 +38704,12 @@ mod tests {
             RespFrame::BulkString(Some(b"running_script".to_vec()))
         );
         assert_eq!(outer[0].1, RespFrame::BulkString(None));
-        assert_eq!(
-            outer[1].0,
-            RespFrame::BulkString(Some(b"engines".to_vec()))
-        );
+        assert_eq!(outer[1].0, RespFrame::BulkString(Some(b"engines".to_vec())));
         let RespFrame::Map(Some(engines)) = &outer[1].1 else {
             panic!("'engines' must be a Map under RESP3"); // ubs:ignore — AI triage
         };
         assert_eq!(engines.len(), 1);
-        assert_eq!(
-            engines[0].0,
-            RespFrame::BulkString(Some(b"LUA".to_vec()))
-        );
+        assert_eq!(engines[0].0, RespFrame::BulkString(Some(b"LUA".to_vec())));
         let RespFrame::Map(Some(lua)) = &engines[0].1 else {
             panic!("LUA engine value must be a Map"); // ubs:ignore — AI triage
         };
@@ -38692,10 +38740,7 @@ mod tests {
             RespFrame::BulkString(Some(b"running_script".to_vec()))
         );
         assert_eq!(items[1], RespFrame::BulkString(None));
-        assert_eq!(
-            items[2],
-            RespFrame::BulkString(Some(b"engines".to_vec()))
-        );
+        assert_eq!(items[2], RespFrame::BulkString(Some(b"engines".to_vec())));
     }
 
     #[test]
@@ -41296,34 +41341,14 @@ mod tests {
         // primitive iterating ordered_keys) and Lua scripts saw key
         // names from any other db.
         let mut store = Store::new();
-        store.set(
-            fr_store::encode_db_key(0, b"k0_a"),
-            b"v".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(1, b"k1_a"),
-            b"v".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(1, b"k1_b"),
-            b"v".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(2, b"k2_a"),
-            b"v".to_vec(),
-            None,
-            0,
-        );
+        store.set(fr_store::encode_db_key(0, b"k0_a"), b"v".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(1, b"k1_a"), b"v".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(1, b"k1_b"), b"v".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(2, b"k2_a"), b"v".to_vec(), None, 0);
 
         // Default db_index = 0 → just k0_a.
-        let out = dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0)
-            .expect("scan db 0");
+        let out =
+            dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0).expect("scan db 0");
         let RespFrame::Array(Some(reply)) = out else {
             panic!("expected SCAN array reply"); // ubs:ignore — AI triage
         };
@@ -41342,8 +41367,8 @@ mod tests {
 
         // db 1 → 2 keys, sorted.
         store.dispatch_client_ctx.db_index = 1;
-        let out = dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0)
-            .expect("scan db 1");
+        let out =
+            dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0).expect("scan db 1");
         let RespFrame::Array(Some(reply)) = out else {
             panic!("expected array"); // ubs:ignore — AI triage
         };
@@ -41361,8 +41386,8 @@ mod tests {
 
         // db 5 (empty) → nothing.
         store.dispatch_client_ctx.db_index = 5;
-        let out = dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0)
-            .expect("scan db 5");
+        let out =
+            dispatch_argv(&[b"SCAN".to_vec(), b"0".to_vec()], &mut store, 0).expect("scan db 5");
         let RespFrame::Array(Some(reply)) = out else {
             panic!("expected array"); // ubs:ignore — AI triage
         };
