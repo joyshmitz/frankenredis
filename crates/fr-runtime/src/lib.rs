@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    fmt::Write as _,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
@@ -10513,9 +10514,10 @@ impl Runtime {
             let keys = self.server.store.dbsize_in_db(db);
             if keys > 0 {
                 let expires = self.server.store.expires_in_db(db);
-                info.push_str(&format!(
+                let _ = write!(
+                    info,
                     "db{db}:keys={keys},expires={expires},avg_ttl=0\r\n"
-                ));
+                );
             }
         }
         info.push_str("\r\n");
@@ -10526,13 +10528,13 @@ impl Runtime {
         let mut info = String::from("# Latencystats\r\n");
         let histograms = self.server.store.all_command_histograms();
         for (cmd, hist) in histograms {
-            info.push_str(&format!("latency_percentiles_usec_{cmd}:"));
+            let _ = write!(info, "latency_percentiles_usec_{cmd}:");
             for (i, &p) in self.server.latency_percentiles.iter().enumerate() {
                 if i > 0 {
                     info.push(',');
                 }
                 let val = histogram_percentile_us(hist, p);
-                info.push_str(&format!("p{p}={val:.2}"));
+                let _ = write!(info, "p{p}={val:.2}");
             }
             info.push_str("\r\n");
         }
@@ -10550,83 +10552,94 @@ impl Runtime {
         info.push_str("current_fork_perc:0.00\r\n");
         info.push_str("current_save_keys_processed:0\r\n");
         info.push_str("current_save_keys_total:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "rdb_changes_since_last_save:{}\r\n",
             self.server.store.dirty
-        ));
+        );
         info.push_str("rdb_bgsave_in_progress:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "rdb_last_save_time:{}\r\n",
             self.server.store.last_save_time_sec
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "rdb_last_bgsave_status:{}\r\n",
             if self.server.store.stat_rdb_last_bgsave_ok {
                 "ok"
             } else {
                 "err"
             }
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "rdb_last_bgsave_time_sec:{}\r\n",
             self.server
                 .store
                 .stat_rdb_last_bgsave_time_sec
                 .map_or(-1, |ts| ts as i64)
-        ));
+        );
         info.push_str("rdb_current_bgsave_time_sec:-1\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "rdb_saves:{}\r\n",
             self.server.store.stat_rdb_saves
-        ));
+        );
         info.push_str("rdb_last_cow_size:0\r\n");
         // Upstream populates these from server.rdb_last_load_keys_*
         // (server.c::genRedisInfoString); fr does not yet track keys
         // expired/loaded during the most recent RDB load, so report 0.
         info.push_str("rdb_last_load_keys_expired:0\r\n");
         info.push_str("rdb_last_load_keys_loaded:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "aof_enabled:{}\r\n",
             usize::from(self.server.aof_path.is_some())
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "aof_rewrite_in_progress:{}\r\n",
             usize::from(self.server.aof_rewrite_pid.is_some())
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "aof_rewrite_scheduled:{}\r\n",
             usize::from(self.server.aof_rewrite_scheduled)
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "aof_last_rewrite_time_sec:{}\r\n",
             self.server
                 .store
                 .stat_aof_last_rewrite_time_sec
                 .map_or(-1, |ts| ts as i64)
-        ));
+        );
         info.push_str("aof_current_rewrite_time_sec:-1\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "aof_last_bgrewrite_status:{}\r\n",
             if self.server.store.stat_aof_last_bgrewrite_ok {
                 "ok"
             } else {
                 "err"
             }
-        ));
+        );
         // aof_rewrites / aof_rewrites_consecutive_failures sit between
         // aof_last_bgrewrite_status and aof_last_write_status in upstream
         // server.c::genRedisInfoString. fr does not yet track AOF rewrite
         // counts, so report zero.
         info.push_str("aof_rewrites:0\r\n");
         info.push_str("aof_rewrites_consecutive_failures:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "aof_last_write_status:{}\r\n",
             if self.server.store.stat_aof_last_write_ok {
                 "ok"
             } else {
                 "err"
             }
-        ));
+        );
         info.push_str("aof_last_cow_size:0\r\n");
         // Module fork tracking is module-only in upstream; fr has no module
         // subsystem so always report no module fork in flight.
@@ -10650,7 +10663,7 @@ impl Runtime {
             i64::try_from(self.server.replication_ack_state.primary_offset.0).unwrap_or(i64::MAX);
 
         let mut info = String::from("# Replication\r\n");
-        info.push_str(&format!("role:{role}\r\n"));
+        let _ = write!(info, "role:{role}\r\n");
 
         match &self.server.replication_runtime_state.role {
             ReplicationRoleState::Master => {}
@@ -10658,7 +10671,8 @@ impl Runtime {
                 let master_link_status = if *state == "connected" { "up" } else { "down" };
                 let master_last_io_seconds_ago = if *state == "connected" { 0 } else { -1 };
                 let master_sync_in_progress = i64::from(*state == "sync");
-                info.push_str(&format!(
+                let _ = write!(
+                    info,
                     "master_host:{host}\r\n\
 master_port:{port}\r\n\
 master_link_status:{master_link_status}\r\n\
@@ -10668,7 +10682,7 @@ slave_read_repl_offset:{primary_offset}\r\n\
 slave_repl_offset:{primary_offset}\r\n\
 slave_priority:{}\r\n",
                     self.server.replica_priority
-                ));
+                );
             }
         }
         for (i, replica) in self
@@ -10688,27 +10702,30 @@ slave_priority:{}\r\n",
                 .primary_offset
                 .0
                 .saturating_sub(offset);
-            info.push_str(&format!(
+            let _ = write!(
+                info,
                 "slave{i}:ip={ip},port={port},state={state},offset={offset},lag={lag}\r\n"
-            ));
+            );
         }
 
-        info.push_str(&format!("connected_slaves:{connected_replicas}\r\n"));
+        let _ = write!(info, "connected_slaves:{connected_replicas}\r\n");
         info.push_str("master_failover_state:no-failover\r\n");
-        info.push_str(&format!("master_replid:{}\r\n", backlog.replid));
+        let _ = write!(info, "master_replid:{}\r\n", backlog.replid);
         info.push_str("master_replid2:0000000000000000000000000000000000000000\r\n");
-        info.push_str(&format!("master_repl_offset:{primary_offset}\r\n"));
+        let _ = write!(info, "master_repl_offset:{primary_offset}\r\n");
         info.push_str("second_repl_offset:-1\r\n");
-        info.push_str(&format!("repl_backlog_active:{backlog_active}\r\n"));
-        info.push_str(&format!(
+        let _ = write!(info, "repl_backlog_active:{backlog_active}\r\n");
+        let _ = write!(
+            info,
             "repl_backlog_size:{}\r\n",
             self.server.repl_backlog_size
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "repl_backlog_first_byte_offset:{}\r\n",
             backlog.start_offset.0
-        ));
-        info.push_str(&format!("repl_backlog_histlen:{backlog_histlen}\r\n"));
+        );
+        let _ = write!(info, "repl_backlog_histlen:{backlog_histlen}\r\n");
         info.push_str("\r\n");
         RespFrame::BulkString(Some(info.into_bytes()))
     }
