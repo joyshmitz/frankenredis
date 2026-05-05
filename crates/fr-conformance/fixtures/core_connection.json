@@ -965,6 +965,7 @@
     {
       "name": "swapdb_non_integer",
       "now_ms": 303,
+      "comment": "Upstream db.c::swapdbCommand emits a bespoke 'invalid first DB index' wording for unparseable argv[1], not the generic integer-range error used by GETSET/INCRBY/etc. Verified vs vendored Redis 7.2.4. (frankenredis-uoe58)",
       "argv": [
         "SWAPDB",
         "abc",
@@ -972,7 +973,7 @@
       ],
       "expect": {
         "kind": "error",
-        "value": "ERR value is not an integer or out of range"
+        "value": "ERR invalid first DB index"
       }
     },
     {
