@@ -13093,8 +13093,8 @@ fn command_docs_entry(
     // commands with at least one entry in UPSTREAM_COMMAND_DOCS_HISTORY
     // get the field; the rest skip it. Each entry is a 2-element array
     // [version, message] mirroring the JSON shape. (frankenredis-az2a4)
-    if let Ok(idx) = UPSTREAM_COMMAND_DOCS_HISTORY
-        .binary_search_by(|(entry_name, _)| entry_name.cmp(&name))
+    if let Ok(idx) =
+        UPSTREAM_COMMAND_DOCS_HISTORY.binary_search_by(|(entry_name, _)| entry_name.cmp(&name))
     {
         let history = UPSTREAM_COMMAND_DOCS_HISTORY[idx].1;
         if !history.is_empty() {
@@ -13102,10 +13102,7 @@ fn command_docs_entry(
             let history_frames: Vec<RespFrame> = history
                 .iter()
                 .map(|(version, message)| {
-                    RespFrame::Array(Some(vec![
-                        hello_bulk(version),
-                        hello_bulk(message),
-                    ]))
+                    RespFrame::Array(Some(vec![hello_bulk(version), hello_bulk(message)]))
                 })
                 .collect();
             entry.push(RespFrame::Array(Some(history_frames)));
@@ -19667,12 +19664,10 @@ mod tests {
         // them as a logical name (no encode_db_key prefix bytes,
         // no k2_alpha leaking through).
         store.dispatch_client_ctx.db_index = 1;
-        let allowed: std::collections::HashSet<Vec<u8>> = [
-            b"k1_alpha".to_vec(),
-            b"k1_beta".to_vec(),
-        ]
-        .into_iter()
-        .collect();
+        let allowed: std::collections::HashSet<Vec<u8>> =
+            [b"k1_alpha".to_vec(), b"k1_beta".to_vec()]
+                .into_iter()
+                .collect();
         for _ in 0..100 {
             let out = dispatch_argv(&[b"RANDOMKEY".to_vec()], &mut store, 0).expect("randomkey");
             let RespFrame::BulkString(Some(name)) = out else {
@@ -19693,30 +19688,10 @@ mod tests {
         // earlier implementation called Store::dbsize() (the all-DBs
         // primitive) and Lua scripts saw the global keyspace count.
         let mut store = Store::new();
-        store.set(
-            fr_store::encode_db_key(0, b"k0"),
-            b"v0".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(0, b"k0b"),
-            b"v0b".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(1, b"k1"),
-            b"v1".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(2, b"k2"),
-            b"v2".to_vec(),
-            None,
-            0,
-        );
+        store.set(fr_store::encode_db_key(0, b"k0"), b"v0".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(0, b"k0b"), b"v0b".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(1, b"k1"), b"v1".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(2, b"k2"), b"v2".to_vec(), None, 0);
 
         // Default db_index = 0 → 2 entries.
         let out = dispatch_argv(&[b"DBSIZE".to_vec()], &mut store, 0).expect("dbsize db 0");
@@ -19743,12 +19718,7 @@ mod tests {
         // the encode_db_key prefix bytes stripped — Lua / AOF /
         // MULTI must not see foreign-db key existence.
         let mut store = Store::new();
-        store.set(
-            fr_store::encode_db_key(0, b"k0"),
-            b"v0".to_vec(),
-            None,
-            0,
-        );
+        store.set(fr_store::encode_db_key(0, b"k0"), b"v0".to_vec(), None, 0);
         store.set(
             fr_store::encode_db_key(1, b"k1_alpha"),
             b"v1".to_vec(),
@@ -19778,10 +19748,7 @@ mod tests {
         keys.sort();
         // db 1 has two keys, both surfaced as logical names — no db
         // 0's "k0" leaking through, no encode_db_key prefix bytes.
-        assert_eq!(
-            keys,
-            vec![b"k1_alpha".to_vec(), b"k1_beta".to_vec()]
-        );
+        assert_eq!(keys, vec![b"k1_alpha".to_vec(), b"k1_beta".to_vec()]);
 
         store.dispatch_client_ctx.db_index = 0;
         let out =
@@ -19946,12 +19913,7 @@ mod tests {
         // when the source AND destination DBs match. Cross-db same-name
         // COPY must succeed (matches upstream cluster.c::copyCommand).
         let mut store = Store::new();
-        store.set(
-            fr_store::encode_db_key(0, b"foo"),
-            b"v".to_vec(),
-            None,
-            0,
-        );
+        store.set(fr_store::encode_db_key(0, b"foo"), b"v".to_vec(), None, 0);
 
         let out = dispatch_argv(
             &[
@@ -19977,12 +19939,7 @@ mod tests {
         // option. Pins the upstream error wording.
         let mut store = Store::new();
         store.dispatch_client_ctx.db_index = 1;
-        store.set(
-            fr_store::encode_db_key(1, b"foo"),
-            b"v".to_vec(),
-            None,
-            0,
-        );
+        store.set(fr_store::encode_db_key(1, b"foo"), b"v".to_vec(), None, 0);
 
         let out = dispatch_argv(
             &[
@@ -19998,9 +19955,7 @@ mod tests {
         .expect("dispatch returns Ok-with-error");
         assert_eq!(
             out,
-            RespFrame::Error(
-                "ERR source and destination objects are the same".to_string()
-            )
+            RespFrame::Error("ERR source and destination objects are the same".to_string())
         );
     }
 
@@ -20013,24 +19968,9 @@ mod tests {
         // Store::flushdb() (which has FLUSHALL semantics despite the
         // name) and silently destroyed every other database.
         let mut store = Store::new();
-        store.set(
-            fr_store::encode_db_key(0, b"k0"),
-            b"v0".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(1, b"k1"),
-            b"v1".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(2, b"k2"),
-            b"v2".to_vec(),
-            None,
-            0,
-        );
+        store.set(fr_store::encode_db_key(0, b"k0"), b"v0".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(1, b"k1"), b"v1".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(2, b"k2"), b"v2".to_vec(), None, 0);
 
         store.dispatch_client_ctx.db_index = 1;
         let out = dispatch_argv(&[b"FLUSHDB".to_vec()], &mut store, 0).expect("flushdb db 1");
@@ -20048,18 +19988,8 @@ mod tests {
         // regardless of the dispatch context's selected db. Companion
         // pin to flushdb_via_dispatch_only_clears_selected_db.
         let mut store = Store::new();
-        store.set(
-            fr_store::encode_db_key(0, b"k0"),
-            b"v0".to_vec(),
-            None,
-            0,
-        );
-        store.set(
-            fr_store::encode_db_key(1, b"k1"),
-            b"v1".to_vec(),
-            None,
-            0,
-        );
+        store.set(fr_store::encode_db_key(0, b"k0"), b"v0".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(1, b"k1"), b"v1".to_vec(), None, 0);
 
         store.dispatch_client_ctx.db_index = 1;
         let out = dispatch_argv(&[b"FLUSHALL".to_vec()], &mut store, 0).expect("flushall");
@@ -37958,9 +37888,12 @@ mod tests {
         // A future build.rs refactor that drops the JSON-driven
         // harvester would silently regress every COMMAND DOCS reply.
         let mut store = Store::new();
-        let out =
-            dispatch_argv(&[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"GET".to_vec()], &mut store, 0)
-                .unwrap();
+        let out = dispatch_argv(
+            &[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"GET".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
         let RespFrame::Array(Some(entries)) = out else {
             panic!("expected docs array"); // ubs:ignore — AI triage
         };
@@ -37985,7 +37918,10 @@ mod tests {
                 .find(|(k, _)| k.as_slice() == key)
                 .map(|(_, v)| v.as_slice())
         };
-        assert_eq!(kv(b"summary"), Some(&b"Returns the string value of a key."[..]));
+        assert_eq!(
+            kv(b"summary"),
+            Some(&b"Returns the string value of a key."[..])
+        );
         assert_eq!(kv(b"since"), Some(&b"1.0.0"[..]));
         assert_eq!(kv(b"complexity"), Some(&b"O(1)"[..]));
         assert_eq!(kv(b"group"), Some(&b"string"[..]));
@@ -38002,9 +37938,12 @@ mod tests {
         // Pin the count + first/last entry so a future build.rs
         // refactor can't silently drop the harvester.
         let mut store = Store::new();
-        let out =
-            dispatch_argv(&[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"SET".to_vec()], &mut store, 0)
-                .unwrap();
+        let out = dispatch_argv(
+            &[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"SET".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
         let RespFrame::Array(Some(entries)) = out else {
             panic!("expected docs array"); // ubs:ignore — AI triage
         };
@@ -38013,9 +37952,8 @@ mod tests {
         };
 
         // Walk pairs; find the value following "history" key.
-        let history_value: Option<&Vec<RespFrame>> = doc_fields
-            .chunks(2)
-            .find_map(|chunk| match chunk {
+        let history_value: Option<&Vec<RespFrame>> =
+            doc_fields.chunks(2).find_map(|chunk| match chunk {
                 [
                     RespFrame::BulkString(Some(k)),
                     RespFrame::Array(Some(items)),
@@ -38029,10 +37967,7 @@ mod tests {
         let RespFrame::Array(Some(first)) = &history[0] else {
             panic!("first history entry shape"); // ubs:ignore — AI triage
         };
-        assert_eq!(
-            first[0],
-            RespFrame::BulkString(Some(b"2.6.12".to_vec()))
-        );
+        assert_eq!(first[0], RespFrame::BulkString(Some(b"2.6.12".to_vec())));
         assert_eq!(
             first[1],
             RespFrame::BulkString(Some(
@@ -38044,10 +37979,7 @@ mod tests {
         let RespFrame::Array(Some(last)) = &history[3] else {
             panic!("last history entry shape"); // ubs:ignore — AI triage
         };
-        assert_eq!(
-            last[0],
-            RespFrame::BulkString(Some(b"7.0.0".to_vec()))
-        );
+        assert_eq!(last[0], RespFrame::BulkString(Some(b"7.0.0".to_vec())));
         assert_eq!(
             last[1],
             RespFrame::BulkString(Some(
@@ -38062,9 +37994,12 @@ mod tests {
         // — its set.json sibling never declared the field. Pin that
         // we omit the field rather than emitting an empty array.
         let mut store = Store::new();
-        let out =
-            dispatch_argv(&[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"GET".to_vec()], &mut store, 0)
-                .unwrap();
+        let out = dispatch_argv(
+            &[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"GET".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
         let RespFrame::Array(Some(entries)) = out else {
             panic!("expected docs array"); // ubs:ignore — AI triage
         };

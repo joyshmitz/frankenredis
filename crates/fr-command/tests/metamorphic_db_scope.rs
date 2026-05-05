@@ -99,9 +99,7 @@ fn mr_select_then_randomkey_only_samples_selected_db() {
     store.set(encode_db_key(0, b"k0"), b"v".to_vec(), None, 0);
 
     select_via_dispatch(&mut store, 2);
-    let allowed: HashSet<Vec<u8>> = [b"k2_a".to_vec(), b"k2_b".to_vec()]
-        .into_iter()
-        .collect();
+    let allowed: HashSet<Vec<u8>> = [b"k2_a".to_vec(), b"k2_b".to_vec()].into_iter().collect();
     for _ in 0..100 {
         let out = dispatch_argv(&[b"RANDOMKEY".to_vec()], &mut store, 0).expect("randomkey");
         let RespFrame::BulkString(Some(name)) = out else {

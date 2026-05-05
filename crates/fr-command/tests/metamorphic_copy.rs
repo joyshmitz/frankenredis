@@ -45,8 +45,8 @@ fn mr_copy_preserves_absolute_expiry_across_db() {
         other => panic!("expected Remaining, got {other:?}"),
     };
 
-    let out = dispatch_argv(&copy_argv_db(b"foo", b"foo", 1), &mut store, now)
-        .expect("cross-db COPY");
+    let out =
+        dispatch_argv(&copy_argv_db(b"foo", b"foo", 1), &mut store, now).expect("cross-db COPY");
     assert_eq!(out, RespFrame::Integer(1));
 
     let pttl_dst = match store.pttl(&encode_db_key(1, b"foo"), now) {
@@ -65,8 +65,8 @@ fn mr_copy_no_ttl_stays_no_ttl() {
     let now = 1_000_000_u64;
     store.set(encode_db_key(0, b"foo"), b"bar".to_vec(), None, now);
 
-    let out = dispatch_argv(&copy_argv_db(b"foo", b"foo", 2), &mut store, now)
-        .expect("cross-db COPY");
+    let out =
+        dispatch_argv(&copy_argv_db(b"foo", b"foo", 2), &mut store, now).expect("cross-db COPY");
     assert_eq!(out, RespFrame::Integer(1));
     assert!(matches!(
         store.pttl(&encode_db_key(2, b"foo"), now),
@@ -81,18 +81,8 @@ fn mr_copy_target_collision_is_no_op_without_replace() {
     // future bug that loosens the collision guard.
     let mut store = Store::new();
     let now = 1_000_000_u64;
-    store.set(
-        encode_db_key(0, b"foo"),
-        b"src_payload".to_vec(),
-        None,
-        now,
-    );
-    store.set(
-        encode_db_key(1, b"foo"),
-        b"existing".to_vec(),
-        None,
-        now,
-    );
+    store.set(encode_db_key(0, b"foo"), b"src_payload".to_vec(), None, now);
+    store.set(encode_db_key(1, b"foo"), b"existing".to_vec(), None, now);
 
     let out = dispatch_argv(&copy_argv_db(b"foo", b"foo", 1), &mut store, now)
         .expect("collision dispatch ok");
@@ -122,18 +112,8 @@ fn mr_copy_replace_flag_overwrites_target() {
     // already exists, and the target adopts the source value.
     let mut store = Store::new();
     let now = 1_000_000_u64;
-    store.set(
-        encode_db_key(0, b"foo"),
-        b"src_payload".to_vec(),
-        None,
-        now,
-    );
-    store.set(
-        encode_db_key(1, b"foo"),
-        b"existing".to_vec(),
-        None,
-        now,
-    );
+    store.set(encode_db_key(0, b"foo"), b"src_payload".to_vec(), None, now);
+    store.set(encode_db_key(1, b"foo"), b"existing".to_vec(), None, now);
 
     let out = dispatch_argv(&copy_argv_db_replace(b"foo", b"foo", 1), &mut store, now)
         .expect("replace dispatch");
@@ -200,8 +180,7 @@ fn mr_copy_preserves_value_type_for_hash() {
         .expect("hset");
     assert_eq!(store.key_type(b"myh", now), Some("hash"));
 
-    let out = dispatch_argv(&copy_argv_db(b"myh", b"myh", 3), &mut store, now)
-        .expect("copy hash");
+    let out = dispatch_argv(&copy_argv_db(b"myh", b"myh", 3), &mut store, now).expect("copy hash");
     assert_eq!(out, RespFrame::Integer(1));
 
     let target = encode_db_key(3, b"myh");
@@ -218,24 +197,13 @@ fn mr_copy_round_trip_recovers_original_via_replace() {
     // after intermediate mutations to the source.
     let mut store = Store::new();
     let now = 1_000_000_u64;
-    store.set(
-        encode_db_key(0, b"foo"),
-        b"original".to_vec(),
-        None,
-        now,
-    );
+    store.set(encode_db_key(0, b"foo"), b"original".to_vec(), None, now);
 
-    let out = dispatch_argv(&copy_argv_db(b"foo", b"foo", 1), &mut store, now)
-        .expect("copy 0->1");
+    let out = dispatch_argv(&copy_argv_db(b"foo", b"foo", 1), &mut store, now).expect("copy 0->1");
     assert_eq!(out, RespFrame::Integer(1));
 
     // Mutate the source between the two halves.
-    store.set(
-        encode_db_key(0, b"foo"),
-        b"clobbered".to_vec(),
-        None,
-        now,
-    );
+    store.set(encode_db_key(0, b"foo"), b"clobbered".to_vec(), None, now);
     assert_eq!(
         store
             .get(&encode_db_key(0, b"foo"), now)
@@ -286,26 +254,17 @@ fn mr_select_then_copy_uses_selected_source_db() {
     // path. Composes j22p8 (SELECT fix) with op84s (COPY fix).
     let mut store = Store::new();
     let now = 1_000_000_u64;
-    store.set(
-        encode_db_key(2, b"foo"),
-        b"db2_payload".to_vec(),
-        None,
-        now,
-    );
+    store.set(encode_db_key(2, b"foo"), b"db2_payload".to_vec(), None, now);
 
-    let out = dispatch_argv(&[b"SELECT".to_vec(), b"2".to_vec()], &mut store, now)
-        .expect("select 2");
+    let out =
+        dispatch_argv(&[b"SELECT".to_vec(), b"2".to_vec()], &mut store, now).expect("select 2");
     assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
     assert_eq!(store.dispatch_client_ctx.db_index, 2);
 
     // COPY foo bar — source comes from db 2 (the selected one),
     // dest defaults to the same db without DB option.
     let out = dispatch_argv(
-        &[
-            b"COPY".to_vec(),
-            b"foo".to_vec(),
-            b"bar".to_vec(),
-        ],
+        &[b"COPY".to_vec(), b"foo".to_vec(), b"bar".to_vec()],
         &mut store,
         now,
     )

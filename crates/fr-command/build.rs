@@ -219,9 +219,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // (name, summary, complexity, since); empty strings stand in for
     // None and are filtered out at lookup time so command_docs_entry
     // only emits fields the upstream JSON declared. (frankenredis-f39s3)
-    out.push_str(
-        "const UPSTREAM_COMMAND_DOCS_META: &[(&str, &str, &str, &str)] = &[\n",
-    );
+    out.push_str("const UPSTREAM_COMMAND_DOCS_META: &[(&str, &str, &str, &str)] = &[\n");
     for (command, (summary, complexity, since)) in &docs_meta {
         out.push_str("    (\"");
         out.push_str(&escape_rust_string(command));
@@ -245,9 +243,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // version, message)]). Only commands with at least one history
     // entry appear; the consumer falls through to omitting the field
     // when binary_search misses. (frankenredis-az2a4)
-    out.push_str(
-        "const UPSTREAM_COMMAND_DOCS_HISTORY: &[(&str, &[(&str, &str)])] = &[\n",
-    );
+    out.push_str("const UPSTREAM_COMMAND_DOCS_HISTORY: &[(&str, &[(&str, &str)])] = &[\n");
     for (command, history) in &docs_history {
         out.push_str("    (\"");
         out.push_str(&escape_rust_string(command));
