@@ -5263,39 +5263,39 @@ impl Runtime {
 
     /// Feed a command to all monitor clients, formatted as Redis does.
     pub fn feed_monitors(&mut self, argv: &[Vec<u8>], now_ms: u64, db: usize) {
+        use std::io::Write as _;
         if self.server.monitor_clients.is_empty() {
             return;
         }
         let secs = now_ms / 1000;
         let usecs = (now_ms % 1000) * 1000;
-        let mut line = format!("+{secs}.{usecs:06} [{} 127.0.0.1:0]", db);
+        // Build directly into a Vec<u8>. The buffer is consumed as
+        // bytes by monitor_output anyway, so the prior String path
+        // forced char-validation on every printable push and a
+        // wasteful into_bytes re-walk. (frankenredis-588j1)
+        let mut line: Vec<u8> = Vec::with_capacity(64);
+        let _ = write!(line, "+{secs}.{usecs:06} [{db} 127.0.0.1:0]");
         for arg in argv {
-            line.push(' ');
-            line.push('"');
+            line.push(b' ');
+            line.push(b'"');
             for &b in arg.iter() {
                 if b == b'"' || b == b'\\' {
-                    line.push('\\');
-                    line.push(b as char);
+                    line.push(b'\\');
+                    line.push(b);
                 } else if !(32..=126).contains(&b) {
-                    // (frankenredis-v1twi) write! into the existing
-                    // String avoids the per-byte intermediate alloc
-                    // that push_str(&format!()) was paying — matters
-                    // for MONITOR streams over binary payloads (RDB
-                    // chunks, MIGRATE dumps) where most bytes hit
-                    // this branch.
+                    // (frankenredis-v1twi) write! into the running
+                    // buffer skips the per-byte format!() heap alloc
+                    // for non-printable bytes.
                     let _ = write!(line, "\\x{b:02x}");
                 } else {
-                    line.push(b as char);
+                    line.push(b);
                 }
             }
-            line.push('"');
+            line.push(b'"');
         }
-        line.push_str("\r\n");
-        let line_bytes = line.into_bytes();
+        line.extend_from_slice(b"\r\n");
         for &client_id in &self.server.monitor_clients {
-            self.server
-                .monitor_output
-                .push((client_id, line_bytes.clone()));
+            self.server.monitor_output.push((client_id, line.clone()));
         }
     }
 
