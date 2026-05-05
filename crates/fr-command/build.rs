@@ -123,9 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if flags.contains(&"WRITE") {
                 push_unique(categories, "write".to_string());
             }
-            if flags.contains(&"READONLY")
-                && !categories.iter().any(|c| c == "scripting")
-            {
+            if flags.contains(&"READONLY") && !categories.iter().any(|c| c == "scripting") {
                 push_unique(categories, "read".to_string());
             }
             if flags.contains(&"ADMIN") {

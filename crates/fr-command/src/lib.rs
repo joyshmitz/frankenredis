@@ -14,6 +14,7 @@ use fr_store::{
     glob_match, read_rss_bytes, sha1_hex_public,
 };
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write as _;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::OnceLock;
@@ -11608,10 +11609,11 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     // listener0 fields previously missing. (br-frankenredis-infoserver)
     if section_requested("server") {
         info.push_str("# Server\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "redis_version:{}-frankenredis\r\n",
             fr_store::REDIS_COMPAT_VERSION
-        ));
+        );
         info.push_str("redis_git_sha1:00000000\r\n");
         info.push_str("redis_git_dirty:0\r\n");
         info.push_str("redis_build_id:0\r\n");
@@ -11622,36 +11624,34 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("multiplexing_api:epoll\r\n");
         info.push_str("atomicvar_api:c11-builtin\r\n");
         info.push_str("gcc_version:0.0.0\r\n");
-        info.push_str(&format!("process_id:{}\r\n", store.server_pid));
+        let _ = write!(info, "process_id:{}\r\n", store.server_pid);
         info.push_str("process_supervised:no\r\n");
-        info.push_str(&format!("run_id:{}\r\n", store.server_run_id));
-        info.push_str(&format!("tcp_port:{}\r\n", store.server_port));
-        info.push_str(&format!(
-            "server_time_usec:{}\r\n",
-            now_ms.saturating_mul(1000)
-        ));
+        let _ = write!(info, "run_id:{}\r\n", store.server_run_id);
+        let _ = write!(info, "tcp_port:{}\r\n", store.server_port);
+        let _ = write!(info, "server_time_usec:{}\r\n", now_ms.saturating_mul(1000));
         // Upstream INFO server's uptime_in_seconds reports
         // (now - server_start), not the absolute now. fr's old
         // expression `now_ms / 1000` accidentally returned the
         // Unix timestamp. (br-frankenredis-uptime)
         let uptime_s = now_ms.saturating_sub(store.server_start_ms) / 1000;
-        info.push_str(&format!("uptime_in_seconds:{uptime_s}\r\n"));
-        info.push_str(&format!("uptime_in_days:{}\r\n", uptime_s / 86400));
-        info.push_str(&format!("hz:{}\r\n", store.server_hz));
-        info.push_str(&format!("configured_hz:{}\r\n", store.server_hz));
+        let _ = write!(info, "uptime_in_seconds:{uptime_s}\r\n");
+        let _ = write!(info, "uptime_in_days:{}\r\n", uptime_s / 86400);
+        let _ = write!(info, "hz:{}\r\n", store.server_hz);
+        let _ = write!(info, "configured_hz:{}\r\n", store.server_hz);
         // Redis LRU clock: seconds / 10, masked to 24 bits.
         let lru_clock = (now_ms / 10_000) & 0xFF_FFFF;
-        info.push_str(&format!("lru_clock:{lru_clock}\r\n"));
+        let _ = write!(info, "lru_clock:{lru_clock}\r\n");
         let exe = std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "/usr/local/bin/frankenredis".to_string());
-        info.push_str(&format!("executable:{exe}\r\n"));
+        let _ = write!(info, "executable:{exe}\r\n");
         info.push_str("config_file:\r\n");
         info.push_str("io_threads_active:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "listener0:name=tcp,bind=*,bind=-::*,port={}\r\n",
             store.server_port
-        ));
+        );
         info.push_str("\r\n");
     }
 
@@ -11663,24 +11663,19 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     if section_requested("clients") {
         let connected = store.stat_connected_clients.max(1); // at least 1 (the current client)
         info.push_str("# Clients\r\n");
-        info.push_str(&format!("connected_clients:{connected}\r\n"));
+        let _ = write!(info, "connected_clients:{connected}\r\n");
         info.push_str("cluster_connections:0\r\n");
-        info.push_str(&format!("maxclients:{}\r\n", store.server_maxclients));
+        let _ = write!(info, "maxclients:{}\r\n", store.server_maxclients);
         info.push_str("client_recent_max_input_buffer:0\r\n");
         info.push_str("client_recent_max_output_buffer:0\r\n");
-        info.push_str(&format!(
-            "blocked_clients:{}\r\n",
-            store.stat_blocked_clients
-        ));
-        info.push_str(&format!(
-            "tracking_clients:{}\r\n",
-            store.stat_tracking_clients
-        ));
+        let _ = write!(info, "blocked_clients:{}\r\n", store.stat_blocked_clients);
+        let _ = write!(info, "tracking_clients:{}\r\n", store.stat_tracking_clients);
         info.push_str("clients_in_timeout_table:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "total_blocking_keys:{}\r\n",
             store.stat_blocked_clients
-        ));
+        );
         info.push_str("total_blocking_keys_on_nokey:0\r\n");
         info.push_str("\r\n");
     }
@@ -11709,33 +11704,32 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         };
 
         info.push_str("# Memory\r\n");
-        info.push_str(&format!("used_memory:{used_memory}\r\n"));
-        info.push_str(&format!("used_memory_human:{used_memory_human}\r\n"));
-        info.push_str(&format!("used_memory_rss:{used_memory_rss}\r\n"));
-        info.push_str(&format!(
-            "used_memory_rss_human:{used_memory_rss_human}\r\n"
-        ));
-        info.push_str(&format!("used_memory_peak:{peak}\r\n"));
-        info.push_str(&format!("used_memory_peak_human:{peak_human}\r\n"));
-        info.push_str(&format!("used_memory_peak_perc:{peak_perc:.2}%\r\n"));
+        let _ = write!(info, "used_memory:{used_memory}\r\n");
+        let _ = write!(info, "used_memory_human:{used_memory_human}\r\n");
+        let _ = write!(info, "used_memory_rss:{used_memory_rss}\r\n");
+        let _ = write!(info, "used_memory_rss_human:{used_memory_rss_human}\r\n");
+        let _ = write!(info, "used_memory_peak:{peak}\r\n");
+        let _ = write!(info, "used_memory_peak_human:{peak_human}\r\n");
+        let _ = write!(info, "used_memory_peak_perc:{peak_perc:.2}%\r\n");
         info.push_str("used_memory_overhead:0\r\n");
         info.push_str("used_memory_startup:0\r\n");
-        info.push_str(&format!("used_memory_dataset:{used_memory}\r\n"));
+        let _ = write!(info, "used_memory_dataset:{used_memory}\r\n");
         info.push_str("used_memory_dataset_perc:100.00%\r\n");
         let maxmemory = store.maxmemory_bytes_live;
-        info.push_str(&format!("maxmemory:{maxmemory}\r\n"));
-        info.push_str(&format!(
+        let _ = write!(info, "maxmemory:{maxmemory}\r\n");
+        let _ = write!(
+            info,
             "maxmemory_human:{}\r\n",
             format_bytes_human(maxmemory)
-        ));
-        info.push_str(&format!("maxmemory_policy:{policy_str}\r\n"));
+        );
+        let _ = write!(info, "maxmemory_policy:{policy_str}\r\n");
         // Allocator-derived stats (placeholders since fr uses the
         // Rust system allocator). Upstream Redis 7.2 always emits
         // these, even with libc malloc — values are 0 / 1.0 then.
         // (br-frankenredis-infomemory)
-        info.push_str(&format!("allocator_allocated:{used_memory}\r\n"));
-        info.push_str(&format!("allocator_active:{used_memory}\r\n"));
-        info.push_str(&format!("allocator_resident:{used_memory_rss}\r\n"));
+        let _ = write!(info, "allocator_allocated:{used_memory}\r\n");
+        let _ = write!(info, "allocator_active:{used_memory}\r\n");
+        let _ = write!(info, "allocator_resident:{used_memory_rss}\r\n");
         info.push_str("total_system_memory:0\r\n");
         info.push_str("total_system_memory_human:0B\r\n");
         info.push_str("used_memory_lua:0\r\n");
@@ -11761,7 +11755,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("allocator_rss_bytes:0\r\n");
         info.push_str("rss_overhead_ratio:1.00\r\n");
         info.push_str("rss_overhead_bytes:0\r\n");
-        info.push_str(&format!("mem_fragmentation_ratio:{frag_ratio:.2}\r\n"));
+        let _ = write!(info, "mem_fragmentation_ratio:{frag_ratio:.2}\r\n");
         info.push_str("mem_fragmentation_bytes:0\r\n");
         info.push_str("mem_not_counted_for_evict:0\r\n");
         info.push_str("mem_replication_backlog:0\r\n");
@@ -11788,58 +11782,57 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("current_fork_perc:0.00\r\n");
         info.push_str("current_save_keys_processed:0\r\n");
         info.push_str("current_save_keys_total:0\r\n");
-        info.push_str(&format!("rdb_changes_since_last_save:{}\r\n", store.dirty));
+        let _ = write!(info, "rdb_changes_since_last_save:{}\r\n", store.dirty);
         info.push_str("rdb_bgsave_in_progress:0\r\n");
-        info.push_str(&format!(
-            "rdb_last_save_time:{}\r\n",
-            store.last_save_time_sec
-        ));
-        info.push_str(&format!(
+        let _ = write!(info, "rdb_last_save_time:{}\r\n", store.last_save_time_sec);
+        let _ = write!(
+            info,
             "rdb_last_bgsave_status:{}\r\n",
             if store.stat_rdb_last_bgsave_ok {
                 "ok"
             } else {
                 "err"
             }
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "rdb_last_bgsave_time_sec:{}\r\n",
             store
                 .stat_rdb_last_bgsave_time_sec
                 .map_or(-1, |ts| ts as i64)
-        ));
+        );
         info.push_str("rdb_current_bgsave_time_sec:-1\r\n");
-        info.push_str(&format!("rdb_saves:{}\r\n", store.stat_rdb_saves));
+        let _ = write!(info, "rdb_saves:{}\r\n", store.stat_rdb_saves);
         info.push_str("rdb_last_cow_size:0\r\n");
-        info.push_str(&format!(
-            "aof_enabled:{}\r\n",
-            usize::from(store.aof_enabled)
-        ));
+        let _ = write!(info, "aof_enabled:{}\r\n", usize::from(store.aof_enabled));
         info.push_str("aof_rewrite_in_progress:0\r\n");
         info.push_str("aof_rewrite_scheduled:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "aof_last_rewrite_time_sec:{}\r\n",
             store
                 .stat_aof_last_rewrite_time_sec
                 .map_or(-1, |ts| ts as i64)
-        ));
+        );
         info.push_str("aof_current_rewrite_time_sec:-1\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "aof_last_bgrewrite_status:{}\r\n",
             if store.stat_aof_last_bgrewrite_ok {
                 "ok"
             } else {
                 "err"
             }
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "aof_last_write_status:{}\r\n",
             if store.stat_aof_last_write_ok {
                 "ok"
             } else {
                 "err"
             }
-        ));
+        );
         info.push_str("aof_last_cow_size:0\r\n");
         info.push_str("aof_rewrites:0\r\n");
         info.push_str("aof_rewrites_consecutive_failures:0\r\n");
@@ -11853,94 +11846,93 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     // Stats section
     if section_requested("stats") {
         info.push_str("# Stats\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "total_connections_received:{}\r\n",
             store.stat_total_connections_received.max(1)
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "total_commands_processed:{}\r\n",
             store.stat_total_commands_processed
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "instantaneous_ops_per_sec:{}\r\n",
             store.instantaneous_ops_per_sec()
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "total_net_input_bytes:{}\r\n",
             store.stat_total_net_input_bytes
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "total_net_output_bytes:{}\r\n",
             store.stat_total_net_output_bytes
-        ));
+        );
         info.push_str("total_net_repl_input_bytes:0\r\n");
         info.push_str("total_net_repl_output_bytes:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "instantaneous_input_kbps:{:.2}\r\n",
             store.instantaneous_input_kbps()
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "instantaneous_output_kbps:{:.2}\r\n",
             store.instantaneous_output_kbps()
-        ));
+        );
         info.push_str("instantaneous_input_repl_kbps:0.00\r\n");
         info.push_str("instantaneous_output_repl_kbps:0.00\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "rejected_connections:{}\r\n",
             store.stat_rejected_connections
-        ));
-        info.push_str(&format!("sync_full:{}\r\n", store.stat_sync_full));
-        info.push_str(&format!(
-            "sync_partial_ok:{}\r\n",
-            store.stat_sync_partial_ok
-        ));
-        info.push_str(&format!(
-            "sync_partial_err:{}\r\n",
-            store.stat_sync_partial_err
-        ));
-        info.push_str(&format!("expired_keys:{}\r\n", store.stat_expired_keys));
-        info.push_str(&format!(
+        );
+        let _ = write!(info, "sync_full:{}\r\n", store.stat_sync_full);
+        let _ = write!(info, "sync_partial_ok:{}\r\n", store.stat_sync_partial_ok);
+        let _ = write!(info, "sync_partial_err:{}\r\n", store.stat_sync_partial_err);
+        let _ = write!(info, "expired_keys:{}\r\n", store.stat_expired_keys);
+        let _ = write!(
+            info,
             "expired_stale_perc:{:.2}\r\n",
             store.stat_expired_stale_perc as f64
-        ));
+        );
         info.push_str("expired_time_cap_reached_count:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "expire_cycle_cpu_milliseconds:{}\r\n",
             store.stat_expire_cycle_cpu_milliseconds
-        ));
-        info.push_str(&format!("evicted_keys:{}\r\n", store.stat_evicted_keys));
+        );
+        let _ = write!(info, "evicted_keys:{}\r\n", store.stat_evicted_keys);
         info.push_str("evicted_clients:0\r\n");
-        info.push_str(&format!(
-            "total_keys_expired:{}\r\n",
-            store.stat_expired_keys
-        ));
-        info.push_str(&format!(
-            "total_keys_evicted:{}\r\n",
-            store.stat_evicted_keys
-        ));
-        info.push_str(&format!("keyspace_hits:{}\r\n", store.stat_keyspace_hits));
-        info.push_str(&format!(
-            "keyspace_misses:{}\r\n",
-            store.stat_keyspace_misses
-        ));
-        info.push_str(&format!(
+        let _ = write!(info, "total_keys_expired:{}\r\n", store.stat_expired_keys);
+        let _ = write!(info, "total_keys_evicted:{}\r\n", store.stat_evicted_keys);
+        let _ = write!(info, "keyspace_hits:{}\r\n", store.stat_keyspace_hits);
+        let _ = write!(info, "keyspace_misses:{}\r\n", store.stat_keyspace_misses);
+        let _ = write!(
+            info,
             "pubsub_channels:{}\r\n",
             store.subscribed_channels.len()
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "pubsub_patterns:{}\r\n",
             store.subscribed_patterns.len()
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "pubsub_shardchannels:{}\r\n",
             store.subscribed_shard_channels.len()
-        ));
+        );
         // Upstream Redis 7.2 also emits pubsubshard_channels (legacy
         // alias for pubsub_shardchannels). (br-frankenredis-infostats)
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "pubsubshard_channels:{}\r\n",
             store.subscribed_shard_channels.len()
-        ));
+        );
         info.push_str("latest_fork_usec:0\r\n");
         info.push_str("total_forks:0\r\n");
         info.push_str("migrate_cached_sockets:0\r\n");
@@ -11954,23 +11946,27 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("tracking_total_keys:0\r\n");
         info.push_str("tracking_total_items:0\r\n");
         info.push_str("tracking_total_prefixes:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "unexpected_error_replies:{}\r\n",
             store.stat_unexpected_error_replies
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "total_error_replies:{}\r\n",
             store.stat_total_error_replies
-        ));
+        );
         info.push_str("dump_payload_sanitizations:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "total_reads_processed:{}\r\n",
             store.stat_total_reads_processed
-        ));
-        info.push_str(&format!(
+        );
+        let _ = write!(
+            info,
             "total_writes_processed:{}\r\n",
             store.stat_total_writes_processed
-        ));
+        );
         info.push_str("io_threaded_reads_processed:0\r\n");
         info.push_str("io_threaded_writes_processed:0\r\n");
         info.push_str("reply_buffer_shrinks:0\r\n");
@@ -11995,15 +11991,16 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("role:master\r\n");
         info.push_str("connected_slaves:0\r\n");
         info.push_str("master_failover_state:no-failover\r\n");
-        info.push_str(&format!("master_replid:{}\r\n", store.server_run_id));
+        let _ = write!(info, "master_replid:{}\r\n", store.server_run_id);
         info.push_str("master_replid2:0000000000000000000000000000000000000000\r\n");
         info.push_str("master_repl_offset:0\r\n");
         info.push_str("second_repl_offset:-1\r\n");
         info.push_str("repl_backlog_active:0\r\n");
-        info.push_str(&format!(
+        let _ = write!(
+            info,
             "repl_backlog_size:{}\r\n",
             store.server_repl_backlog_size
-        ));
+        );
         info.push_str("repl_backlog_first_byte_offset:0\r\n");
         info.push_str("repl_backlog_histlen:0\r\n");
         info.push_str("\r\n");
@@ -12013,12 +12010,12 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     if section_requested("cpu") {
         let (used_cpu_user, used_cpu_sys) = read_cpu_times();
         info.push_str("# CPU\r\n");
-        info.push_str(&format!("used_cpu_sys:{used_cpu_sys:.6}\r\n"));
-        info.push_str(&format!("used_cpu_user:{used_cpu_user:.6}\r\n"));
+        let _ = write!(info, "used_cpu_sys:{used_cpu_sys:.6}\r\n");
+        let _ = write!(info, "used_cpu_user:{used_cpu_user:.6}\r\n");
         info.push_str("used_cpu_sys_children:0.000000\r\n");
         info.push_str("used_cpu_user_children:0.000000\r\n");
-        info.push_str(&format!("used_cpu_sys_main_thread:{used_cpu_sys:.6}\r\n"));
-        info.push_str(&format!("used_cpu_user_main_thread:{used_cpu_user:.6}\r\n"));
+        let _ = write!(info, "used_cpu_sys_main_thread:{used_cpu_sys:.6}\r\n");
+        let _ = write!(info, "used_cpu_user_main_thread:{used_cpu_user:.6}\r\n");
         info.push_str("\r\n");
     }
 
@@ -12048,9 +12045,7 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             let keys = store.dbsize_in_db(db);
             if keys > 0 {
                 let expires = store.expires_in_db(db);
-                info.push_str(&format!(
-                    "db{db}:keys={keys},expires={expires},avg_ttl=0\r\n"
-                ));
+                let _ = write!(info, "db{db}:keys={keys},expires={expires},avg_ttl=0\r\n");
             }
         }
         info.push_str("\r\n");
@@ -16639,12 +16634,13 @@ fn latency_doctor_report(store: &Store) -> String {
             .map(|sample| sample.duration_ms)
             .max()
             .unwrap_or(latest_sample.duration_ms);
-        report.push_str(&format!(
-            "- {event}: {} samples, latest {} ms, max {} ms\n",
+        let _ = writeln!(
+            report,
+            "- {event}: {} samples, latest {} ms, max {} ms",
             history.len(),
             latest_sample.duration_ms,
             max
-        ));
+        );
     }
     report
 }
@@ -20986,10 +20982,7 @@ mod tests {
             0,
         )
         .expect("hexpire nx");
-        assert_eq!(
-            nx_skip,
-            RespFrame::Array(Some(vec![RespFrame::Integer(0)]))
-        );
+        assert_eq!(nx_skip, RespFrame::Array(Some(vec![RespFrame::Integer(0)])));
 
         // XX applies when a TTL exists; lowers it to 5.
         let xx_apply = dispatch_argv(
@@ -21026,10 +21019,7 @@ mod tests {
             0,
         )
         .expect("hexpire lt skip");
-        assert_eq!(
-            lt_skip,
-            RespFrame::Array(Some(vec![RespFrame::Integer(0)]))
-        );
+        assert_eq!(lt_skip, RespFrame::Array(Some(vec![RespFrame::Integer(0)])));
 
         // LT applies when proposed < current (1 < 5 → apply).
         let lt_apply = dispatch_argv(
