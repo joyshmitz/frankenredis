@@ -11840,7 +11840,21 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             std::mem::size_of::<usize>() * 8
         );
         info.push_str("monotonic_clock:POSIX clock_gettime\r\n");
-        info.push_str("multiplexing_api:epoll\r\n");
+        // (frankenredis-ksl7m) Map fr's mio-based eventloop to the
+        // syscall names upstream uses for each platform:
+        //   Linux            → epoll
+        //   macOS / *BSD     → kqueue
+        //   Solaris          → evport
+        //   Windows          → IOCP (mio uses I/O Completion Ports)
+        //   Other POSIX      → select (fallback)
+        let multiplexing = match std::env::consts::OS {
+            "linux" | "android" => "epoll",
+            "macos" | "ios" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => "kqueue",
+            "solaris" | "illumos" => "evport",
+            "windows" => "IOCP",
+            _ => "select",
+        };
+        let _ = write!(info, "multiplexing_api:{multiplexing}\r\n");
         info.push_str("atomicvar_api:c11-builtin\r\n");
         info.push_str("gcc_version:0.0.0\r\n");
         let _ = write!(info, "process_id:{}\r\n", store.server_pid);
@@ -39838,6 +39852,22 @@ mod tests {
         assert!(
             info.contains(&format!("arch_bits:{expected_arch_bits}\r\n")),
             "expected arch_bits:{expected_arch_bits} in: {info}"
+        );
+
+        // (frankenredis-ksl7m) multiplexing_api derives from the
+        // platform's mio backend. Same mapping as the handler so the
+        // assertion is stable across Linux / macOS / *BSD / Solaris /
+        // Windows.
+        let expected_multiplexing = match std::env::consts::OS {
+            "linux" | "android" => "epoll",
+            "macos" | "ios" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => "kqueue",
+            "solaris" | "illumos" => "evport",
+            "windows" => "IOCP",
+            _ => "select",
+        };
+        assert!(
+            info.contains(&format!("multiplexing_api:{expected_multiplexing}\r\n")),
+            "expected multiplexing_api:{expected_multiplexing} in: {info}"
         );
     }
 
