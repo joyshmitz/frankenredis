@@ -1491,6 +1491,7 @@
     {
       "name": "eval_pcall_catches_error",
       "now_ms": 100,
+      "comment": "Upstream Lua's error() builtin prepends 'user_script:1: ' to the message at default level (1). pcall returns the prefixed string as its second value. (frankenredis-orgvv aligned with q27hu)",
       "argv": [
         "EVAL",
         "local ok, err = pcall(error, 'boom') return err",
@@ -1498,7 +1499,7 @@
       ],
       "expect": {
         "kind": "bulk",
-        "value": "boom"
+        "value": "user_script:1: boom"
       }
     },
     {
@@ -2566,6 +2567,7 @@
     {
       "name": "eval_xpcall_error_with_handler",
       "now_ms": 0,
+      "comment": "error()'s 'user_script:1: ' prefix flows through xpcall's handler arg. (frankenredis-orgvv aligned with q27hu)",
       "argv": [
         "EVAL",
         "local ok, val = xpcall(function() error('boom') end, function(e) return 'caught: ' .. tostring(e) end)\nreturn val",
@@ -2573,7 +2575,7 @@
       ],
       "expect": {
         "kind": "bulk",
-        "value": "caught: boom"
+        "value": "caught: user_script:1: boom"
       }
     },
     {
@@ -3667,6 +3669,7 @@
     {
       "name": "eval_xpcall_with_handler",
       "now_ms": 0,
+      "comment": "Same as eval_xpcall_error_with_handler — error()'s prefix flows through. (frankenredis-orgvv aligned with q27hu)",
       "argv": [
         "EVAL",
         "local ok, msg = xpcall(function() error('boom') end, function(e) return 'handled: ' .. e end) return msg",
@@ -3674,7 +3677,7 @@
       ],
       "expect": {
         "kind": "bulk",
-        "value": "handled: boom"
+        "value": "handled: user_script:1: boom"
       }
     },
     {
