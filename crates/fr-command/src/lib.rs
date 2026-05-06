@@ -15444,8 +15444,13 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             pair("clients.normal", 0),
             pair("cluster.links", 0),
             pair("aof.buffer", 0),
-            pair("lua.caches", 0),
-            pair("functions.caches", 0),
+            // (frankenredis-t344m) Same data sources as INFO memory's
+            // used_memory_scripts (ymyrt) and used_memory_functions
+            // (2usb3). Upstream object.c::getMemoryOverheadData feeds
+            // both INFO memory and MEMORY STATS from
+            // evalScriptsMemory() / functionsMemoryOverhead().
+            pair("lua.caches", store.scripts_memory_bytes() as i64),
+            pair("functions.caches", store.functions_memory_bytes() as i64),
         ] {
             items.extend(kv);
         }
@@ -38826,6 +38831,93 @@ mod tests {
             info.contains(&format!("used_memory_vm_functions:{bytes_after}\r\n")),
             "expected used_memory_vm_functions:{bytes_after} in: {info}"
         );
+    }
+
+    #[test]
+    fn memory_stats_reports_live_lua_caches_and_functions_caches() {
+        // (frankenredis-t344m) MEMORY STATS lua.caches and
+        // functions.caches were hardcoded to 0 even after ymyrt and
+        // 2usb3 wired Store::scripts_memory_bytes() and
+        // Store::functions_memory_bytes() into INFO memory. Pin the
+        // baseline (0) and post-load live state via the MEMORY STATS
+        // command itself.
+        let mut store = Store::new();
+
+        // Baseline: empty store.
+        let out = dispatch_argv(
+            &[b"MEMORY".to_vec(), b"STATS".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("memory stats baseline");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected MEMORY STATS Array under RESP2"); // ubs:ignore — AI triage
+        };
+        // Find lua.caches and functions.caches by scanning the
+        // alternating-Array body.
+        let mut lua_caches: Option<i64> = None;
+        let mut functions_caches: Option<i64> = None;
+        for chunk in items.chunks(2) {
+            let RespFrame::BulkString(Some(key)) = &chunk[0] else { continue };
+            let RespFrame::Integer(value) = chunk[1] else { continue };
+            match key.as_slice() {
+                b"lua.caches" => lua_caches = Some(value),
+                b"functions.caches" => functions_caches = Some(value),
+                _ => {}
+            }
+        }
+        assert_eq!(lua_caches, Some(0), "baseline lua.caches");
+        assert_eq!(functions_caches, Some(0), "baseline functions.caches");
+
+        // Load script + library — counters must reflect live bytes.
+        dispatch_argv(
+            &[
+                b"SCRIPT".to_vec(),
+                b"LOAD".to_vec(),
+                b"return 1".to_vec(),
+            ],
+            &mut store,
+            1,
+        )
+        .expect("script load");
+        dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LOAD".to_vec(),
+                b"#!lua name=lib1\nredis.register_function('f', function() return 1 end)".to_vec(),
+            ],
+            &mut store,
+            2,
+        )
+        .expect("function load");
+
+        let expected_lua = store.scripts_memory_bytes() as i64;
+        let expected_funcs = store.functions_memory_bytes() as i64;
+        assert!(expected_lua > 0);
+        assert!(expected_funcs > 0);
+
+        let out = dispatch_argv(
+            &[b"MEMORY".to_vec(), b"STATS".to_vec()],
+            &mut store,
+            3,
+        )
+        .expect("memory stats loaded");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected MEMORY STATS Array under RESP2"); // ubs:ignore — AI triage
+        };
+        let mut lua_caches: Option<i64> = None;
+        let mut functions_caches: Option<i64> = None;
+        for chunk in items.chunks(2) {
+            let RespFrame::BulkString(Some(key)) = &chunk[0] else { continue };
+            let RespFrame::Integer(value) = chunk[1] else { continue };
+            match key.as_slice() {
+                b"lua.caches" => lua_caches = Some(value),
+                b"functions.caches" => functions_caches = Some(value),
+                _ => {}
+            }
+        }
+        assert_eq!(lua_caches, Some(expected_lua));
+        assert_eq!(functions_caches, Some(expected_funcs));
     }
 
     #[cfg(target_os = "linux")]
