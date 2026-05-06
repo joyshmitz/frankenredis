@@ -11819,8 +11819,26 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("redis_git_dirty:0\r\n");
         info.push_str("redis_build_id:0\r\n");
         info.push_str("redis_mode:standalone\r\n");
-        info.push_str("os:Linux\r\n");
-        info.push_str("arch_bits:64\r\n");
+        // (frankenredis-efkwg) Map Rust's lowercase OS const to
+        // upstream's uname-style capitalized form (upstream emits the
+        // full `uname -s` output here, e.g. "Linux", "Darwin").
+        let os_name = match std::env::consts::OS {
+            "linux" => "Linux",
+            "macos" => "Darwin",
+            "windows" => "Windows",
+            "freebsd" => "FreeBSD",
+            "openbsd" => "OpenBSD",
+            "netbsd" => "NetBSD",
+            "dragonfly" => "DragonFly",
+            "solaris" => "SunOS",
+            other => other,
+        };
+        let _ = write!(info, "os:{os_name}\r\n");
+        let _ = write!(
+            info,
+            "arch_bits:{}\r\n",
+            std::mem::size_of::<usize>() * 8
+        );
         info.push_str("monotonic_clock:POSIX clock_gettime\r\n");
         info.push_str("multiplexing_api:epoll\r\n");
         info.push_str("atomicvar_api:c11-builtin\r\n");
@@ -39781,6 +39799,45 @@ mod tests {
                     ])),
                 ])),
             ]))
+        );
+    }
+
+    #[test]
+    fn info_server_reports_runtime_os_and_arch_bits() {
+        // (frankenredis-efkwg) INFO Server's `os:` and `arch_bits:`
+        // were hardcoded ("Linux", 64). Replaced with runtime values
+        // from std::env::consts::OS and std::mem::size_of::<usize>().
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"server".to_vec()], &mut store, 0)
+            .expect("info server");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+
+        // Map the same way the handler does so the assertion is
+        // stable across Linux / macOS / Windows / *BSD targets.
+        let expected_os = match std::env::consts::OS {
+            "linux" => "Linux",
+            "macos" => "Darwin",
+            "windows" => "Windows",
+            "freebsd" => "FreeBSD",
+            "openbsd" => "OpenBSD",
+            "netbsd" => "NetBSD",
+            "dragonfly" => "DragonFly",
+            "solaris" => "SunOS",
+            other => other,
+        };
+        assert!(
+            info.contains(&format!("os:{expected_os}\r\n")),
+            "expected os:{expected_os} in: {info}"
+        );
+
+        // arch_bits derives from pointer width.
+        let expected_arch_bits = std::mem::size_of::<usize>() * 8;
+        assert!(
+            info.contains(&format!("arch_bits:{expected_arch_bits}\r\n")),
+            "expected arch_bits:{expected_arch_bits} in: {info}"
         );
     }
 
