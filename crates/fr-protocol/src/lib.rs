@@ -256,8 +256,39 @@ fn parse_frame_internal(
         b'%' => parse_resp3_map(input, next, depth, config),
         b'~' | b'>' => parse_array(input, next, depth, config),
         b'#' => parse_resp3_bool(input, next),
-        b',' | b'(' => {
+        b',' => {
+            // RESP3 double: ',<f64>\r\n'. The value must parse as a
+            // double (incl. 'inf', '-inf', 'nan'). Empty / non-
+            // numeric payloads are malformed — reject same way
+            // ny5fu rejects '_payload\r\n'. (frankenredis-u1xg5)
             let (line, consumed) = read_line(input, next)?;
+            let s = std::str::from_utf8(line)
+                .map_err(|_| RespParseError::InvalidUtf8)?;
+            if s.is_empty() || s.parse::<f64>().is_err() {
+                return Err(RespParseError::InvalidInteger);
+            }
+            Ok((RespFrame::BulkString(Some(s.as_bytes().to_vec())), consumed))
+        }
+        b'(' => {
+            // RESP3 big number: '(<base-10-integer>\r\n'. Body must
+            // be all decimal digits with optional leading +/- sign.
+            // Empty / non-numeric payloads are malformed.
+            // (frankenredis-u1xg5)
+            let (line, consumed) = read_line(input, next)?;
+            if line.is_empty() {
+                return Err(RespParseError::InvalidInteger);
+            }
+            let digits_start = match line[0] {
+                b'+' | b'-' => 1,
+                _ => 0,
+            };
+            if digits_start == line.len()
+                || line[digits_start..]
+                    .iter()
+                    .any(|b| !b.is_ascii_digit())
+            {
+                return Err(RespParseError::InvalidInteger);
+            }
             let s = std::str::from_utf8(line)
                 .map_err(|_| RespParseError::InvalidUtf8)?
                 .to_string();
@@ -1224,6 +1255,95 @@ mod tests {
                 .frame,
             RespFrame::BulkString(None)
         );
+    }
+
+    #[test]
+    fn resp3_double_rejects_empty_and_non_numeric_payloads() {
+        // (frankenredis-u1xg5) Continuing ny5fu's RESP3 strictness
+        // pass for the ',' (double) prefix. Empty / garbage payloads
+        // are malformed and must be rejected with InvalidInteger
+        // instead of silently passing as BulkString(Some(...)).
+        let allow = ParserConfig {
+            allow_resp3: true,
+            ..ParserConfig::default()
+        };
+        assert_eq!(
+            parse_frame_with_config(b",\r\n", &allow),
+            Err(RespParseError::InvalidInteger),
+            "empty double must reject"
+        );
+        assert_eq!(
+            parse_frame_with_config(b",abc\r\n", &allow),
+            Err(RespParseError::InvalidInteger),
+            "non-numeric double must reject"
+        );
+        assert_eq!(
+            parse_frame_with_config(b",1.2.3\r\n", &allow),
+            Err(RespParseError::InvalidInteger),
+            "double-dotted double must reject"
+        );
+
+        // Canonical doubles still parse to BulkString of the payload.
+        for ok in [
+            &b",3.14\r\n"[..],
+            &b",-0.5\r\n"[..],
+            &b",1e10\r\n"[..],
+            &b",inf\r\n"[..],
+            &b",-inf\r\n"[..],
+            &b",nan\r\n"[..],
+        ] {
+            let parsed = parse_frame_with_config(ok, &allow)
+                .unwrap_or_else(|err| panic!("canonical double {ok:?} should parse: {err:?}"));
+            assert!(matches!(parsed.frame, RespFrame::BulkString(Some(_))));
+        }
+    }
+
+    #[test]
+    fn resp3_big_number_rejects_empty_and_non_numeric_payloads() {
+        // (frankenredis-u1xg5) Same strictness for the '(' (big
+        // number) prefix. Body must be all decimal digits with an
+        // optional leading +/-.
+        let allow = ParserConfig {
+            allow_resp3: true,
+            ..ParserConfig::default()
+        };
+        assert_eq!(
+            parse_frame_with_config(b"(\r\n", &allow),
+            Err(RespParseError::InvalidInteger),
+            "empty big number must reject"
+        );
+        assert_eq!(
+            parse_frame_with_config(b"(abc\r\n", &allow),
+            Err(RespParseError::InvalidInteger),
+            "non-numeric big number must reject"
+        );
+        assert_eq!(
+            parse_frame_with_config(b"(+\r\n", &allow),
+            Err(RespParseError::InvalidInteger),
+            "sign-only big number must reject"
+        );
+        assert_eq!(
+            parse_frame_with_config(b"(1.5\r\n", &allow),
+            Err(RespParseError::InvalidInteger),
+            "non-integer big number must reject"
+        );
+        assert_eq!(
+            parse_frame_with_config(b"(123abc\r\n", &allow),
+            Err(RespParseError::InvalidInteger),
+            "trailing-garbage big number must reject"
+        );
+
+        // Canonical big numbers still parse.
+        for ok in [
+            &b"(0\r\n"[..],
+            &b"(12345\r\n"[..],
+            &b"(-42\r\n"[..],
+            &b"(+99999999999999999999\r\n"[..],
+        ] {
+            let parsed = parse_frame_with_config(ok, &allow)
+                .unwrap_or_else(|err| panic!("canonical big number {ok:?} should parse: {err:?}"));
+            assert!(matches!(parsed.frame, RespFrame::BulkString(Some(_))));
+        }
     }
 
     #[test]
