@@ -11125,6 +11125,24 @@ fn lcs(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
                 match_frames.push(RespFrame::Array(Some(vec![a_range, b_range])));
             }
         }
+        // Upstream t_string.c:863 wraps the IDX reply in
+        // addReplyMapLen(c, 2) — RESP3 wire shape is a 2-entry Map
+        // ('matches' → Array, 'len' → Integer); RESP2 stays the
+        // flat 4-element Array. Same shape pattern as i40x2 / e4njz /
+        // udl3y / asvh1 / 5d04d / ndz0j / 5h86s.
+        // (frankenredis-cz712)
+        if store.dispatch_client_ctx.resp_protocol_version == 3 {
+            return Ok(RespFrame::Map(Some(vec![
+                (
+                    RespFrame::BulkString(Some(b"matches".to_vec())),
+                    RespFrame::Array(Some(match_frames)),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"len".to_vec())),
+                    RespFrame::Integer(compute_lcs_len(&a, &b) as i64),
+                ),
+            ])));
+        }
         return Ok(RespFrame::Array(Some(vec![
             RespFrame::BulkString(Some(b"matches".to_vec())),
             RespFrame::Array(Some(match_frames)),
@@ -30138,6 +30156,68 @@ mod tests {
         )
         .expect("lcs");
         assert_eq!(out, RespFrame::BulkString(Some(Vec::new())));
+    }
+
+    #[test]
+    fn lcs_idx_under_resp3_returns_2_entry_map() {
+        // (frankenredis-cz712) Upstream t_string.c:863 wraps the LCS
+        // IDX reply in addReplyMapLen(c, 2), so the RESP3 wire shape
+        // is a 2-entry Map ('matches' → Array of match-ranges,
+        // 'len' → Integer). Pin both shapes (RESP2 + RESP3).
+        let mut store = Store::new();
+        store.set(b"k1".to_vec(), b"abcdef".to_vec(), None, 0);
+        store.set(b"k2".to_vec(), b"acef".to_vec(), None, 0);
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        let out = dispatch_argv(
+            &[
+                b"LCS".to_vec(),
+                b"k1".to_vec(),
+                b"k2".to_vec(),
+                b"IDX".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("lcs idx resp3");
+        let RespFrame::Map(Some(pairs)) = out else {
+            panic!("RESP3 LCS IDX must be Map, got {out:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(
+            pairs[0].0,
+            RespFrame::BulkString(Some(b"matches".to_vec()))
+        );
+        assert!(matches!(pairs[0].1, RespFrame::Array(Some(_))));
+        assert_eq!(pairs[1].0, RespFrame::BulkString(Some(b"len".to_vec())));
+        assert!(matches!(pairs[1].1, RespFrame::Integer(_)));
+    }
+
+    #[test]
+    fn lcs_idx_under_resp2_stays_flat_4_element_array() {
+        // (frankenredis-cz712) Companion pin under RESP2 — flat
+        // 4-element alternating-k/v Array.
+        let mut store = Store::new();
+        store.set(b"k1".to_vec(), b"abcdef".to_vec(), None, 0);
+        store.set(b"k2".to_vec(), b"acef".to_vec(), None, 0);
+        let out = dispatch_argv(
+            &[
+                b"LCS".to_vec(),
+                b"k1".to_vec(),
+                b"k2".to_vec(),
+                b"IDX".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("lcs idx resp2");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("RESP2 LCS IDX must be flat Array, got {out:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0], RespFrame::BulkString(Some(b"matches".to_vec())));
+        assert!(matches!(items[1], RespFrame::Array(Some(_))));
+        assert_eq!(items[2], RespFrame::BulkString(Some(b"len".to_vec())));
+        assert!(matches!(items[3], RespFrame::Integer(_)));
     }
 
     #[test]
