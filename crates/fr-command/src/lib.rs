@@ -14727,30 +14727,72 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         if argv.len() != 2 {
             return Err(client_wrong_subcommand_arity(sub));
         }
+        // (frankenredis-0o9vo) Mirror upstream networking.c::client
+        // Command help array line-for-line + addReplyHelp envelope.
+        // Frames are SimpleString to match upstream addReplyStatus
+        // (was BulkString — diverged from every other HELP handler in
+        // fr which uses hello_simple).
         Ok(RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(
-                b"CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_vec(),
-            )),
-            RespFrame::BulkString(Some(b"CACHING (YES|NO)".to_vec())),
-            RespFrame::BulkString(Some(b"GETNAME".to_vec())),
-            RespFrame::BulkString(Some(b"GETREDIR".to_vec())),
-            RespFrame::BulkString(Some(b"ID".to_vec())),
-            RespFrame::BulkString(Some(b"INFO".to_vec())),
-            RespFrame::BulkString(Some(b"KILL <option> ...".to_vec())),
-            RespFrame::BulkString(Some(
-                b"LIST [TYPE (NORMAL|MASTER|REPLICA|PUBSUB)] [ID <client-id> ...]".to_vec(),
-            )),
-            RespFrame::BulkString(Some(b"NO-EVICT (ON|OFF)".to_vec())),
-            RespFrame::BulkString(Some(b"NO-TOUCH (ON|OFF)".to_vec())),
-            RespFrame::BulkString(Some(b"PAUSE <timeout> [WRITE|ALL]".to_vec())),
-            RespFrame::BulkString(Some(b"REPLY (ON|OFF|SKIP)".to_vec())),
-            RespFrame::BulkString(Some(b"SETINFO <option> <value>".to_vec())),
-            RespFrame::BulkString(Some(b"SETNAME <connection-name>".to_vec())),
-            RespFrame::BulkString(Some(b"TRACKING (ON|OFF) ...".to_vec())),
-            RespFrame::BulkString(Some(b"TRACKINGINFO".to_vec())),
-            RespFrame::BulkString(Some(b"UNBLOCK <client-id> [TIMEOUT|ERROR]".to_vec())),
-            RespFrame::BulkString(Some(b"UNPAUSE".to_vec())),
-            RespFrame::BulkString(Some(b"HELP".to_vec())),
+            hello_simple("CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("CACHING (YES|NO)"),
+            hello_simple(
+                "    Enable/disable tracking of the keys for next command in OPTIN/OPTOUT modes.",
+            ),
+            hello_simple("GETREDIR"),
+            hello_simple(
+                "    Return the client ID we are redirecting to when tracking is enabled.",
+            ),
+            hello_simple("GETNAME"),
+            hello_simple("    Return the name of the current connection."),
+            hello_simple("ID"),
+            hello_simple("    Return the ID of the current connection."),
+            hello_simple("INFO"),
+            hello_simple("    Return information about the current client connection."),
+            hello_simple("KILL <ip:port>"),
+            hello_simple("    Kill connection made from <ip:port>."),
+            hello_simple("KILL <option> <value> [<option> <value> [...]]"),
+            hello_simple("    Kill connections. Options are:"),
+            hello_simple("    * ADDR (<ip:port>|<unixsocket>:0)"),
+            hello_simple("      Kill connections made from the specified address"),
+            hello_simple("    * LADDR (<ip:port>|<unixsocket>:0)"),
+            hello_simple("      Kill connections made to specified local address"),
+            hello_simple("    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)"),
+            hello_simple("      Kill connections by type."),
+            hello_simple("    * USER <username>"),
+            hello_simple("      Kill connections authenticated by <username>."),
+            hello_simple("    * SKIPME (YES|NO)"),
+            hello_simple("      Skip killing current connection (default: yes)."),
+            hello_simple("LIST [options ...]"),
+            hello_simple("    Return information about client connections. Options:"),
+            hello_simple("    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)"),
+            hello_simple("      Return clients of specified type."),
+            hello_simple("UNPAUSE"),
+            hello_simple("    Stop the current client pause, resuming traffic."),
+            hello_simple("PAUSE <timeout> [WRITE|ALL]"),
+            hello_simple("    Suspend all, or just write, clients for <timeout> milliseconds."),
+            hello_simple("REPLY (ON|OFF|SKIP)"),
+            hello_simple("    Control the replies sent to the current connection."),
+            hello_simple("SETNAME <name>"),
+            hello_simple("    Assign the name <name> to the current connection."),
+            hello_simple("SETINFO <option> <value>"),
+            hello_simple("    Set client meta attr. Options are:"),
+            hello_simple("    * LIB-NAME: the client lib name."),
+            hello_simple("    * LIB-VER: the client lib version."),
+            hello_simple("UNBLOCK <clientid> [TIMEOUT|ERROR]"),
+            hello_simple("    Unblock the specified blocked client."),
+            hello_simple(
+                "TRACKING (ON|OFF) [REDIRECT <id>] [BCAST] [PREFIX <prefix> [...]]",
+            ),
+            hello_simple("         [OPTIN] [OPTOUT] [NOLOOP]"),
+            hello_simple("    Control server assisted client side caching."),
+            hello_simple("TRACKINGINFO"),
+            hello_simple("    Report tracking status for the current connection."),
+            hello_simple("NO-EVICT (ON|OFF)"),
+            hello_simple("    Protect current client connection from eviction."),
+            hello_simple("NO-TOUCH (ON|OFF)"),
+            hello_simple("    Will not touch LRU/LFU stats when this mode is on."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])))
     } else {
         Err(CommandError::UnknownSubcommand {
@@ -41206,18 +41248,62 @@ mod tests {
 
     #[test]
     fn client_help_matches_runtime_shape() {
+        // (frankenredis-0o9vo) CLIENT HELP now matches upstream
+        // networking.c::clientCommand line-for-line: SimpleString
+        // frames + description + indented option detail per
+        // subcommand. Pin the new shape: every frame must be
+        // SimpleString (not BulkString), the standard envelope
+        // header must be present, and at least one description
+        // line must accompany each subcommand.
         let mut store = Store::new();
         let out = dispatch_argv(&[b"CLIENT".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
         let RespFrame::Array(Some(items)) = out else {
             panic!("expected array"); // ubs:ignore — AI triage
         };
-        assert!(items.contains(&RespFrame::BulkString(Some(
-            b"SETINFO <option> <value>".to_vec()
-        ))));
-        assert!(items.contains(&RespFrame::BulkString(Some(
-            b"UNBLOCK <client-id> [TIMEOUT|ERROR]".to_vec()
-        ))));
-        assert!(items.contains(&RespFrame::BulkString(Some(b"HELP".to_vec()))));
+
+        // Every frame must be SimpleString — was BulkString before fix.
+        for (i, frame) in items.iter().enumerate() {
+            assert!(
+                matches!(frame, RespFrame::SimpleString(_)),
+                "frame {i} must be SimpleString, got {frame:?}"
+            );
+        }
+
+        // Standard envelope from upstream addReplyHelp.
+        assert_eq!(
+            items[0],
+            RespFrame::SimpleString(
+                "CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
+            )
+        );
+
+        // Subcommand entries must include a description line. Pick
+        // a few key ones to spot-check.
+        assert!(items.contains(&RespFrame::SimpleString("SETINFO <option> <value>".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Set client meta attr. Options are:".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "UNBLOCK <clientid> [TIMEOUT|ERROR]".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Unblock the specified blocked client.".to_string()
+        )));
+
+        // Trailing 'HELP' / '    Print this help.' from upstream
+        // addReplyHelp.
+        assert!(items.contains(&RespFrame::SimpleString("HELP".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Print this help.".to_string()
+        )));
+
+        // Sanity on length: upstream emits ~50 lines (subcommand +
+        // description + options); fr now has 53.
+        assert!(
+            items.len() >= 50,
+            "expected ~50+ help lines, got {}",
+            items.len()
+        );
     }
 
     #[test]
