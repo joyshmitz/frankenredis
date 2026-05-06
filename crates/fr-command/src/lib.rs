@@ -7880,30 +7880,57 @@ fn cluster_slot_range_frames(slots: &BTreeSet<u16>) -> Vec<RespFrame> {
 }
 
 fn cluster_shards_reply(store: &Store) -> RespFrame {
-    let node = RespFrame::Array(Some(vec![
-        hello_bulk("id"),
-        RespFrame::BulkString(Some(store.server_run_id.as_bytes().to_vec())),
-        hello_bulk("port"),
-        RespFrame::Integer(i64::from(store.server_port)),
-        hello_bulk("ip"),
-        hello_bulk(""),
-        hello_bulk("endpoint"),
-        hello_bulk(""),
-        hello_bulk("role"),
-        hello_bulk("master"),
-        hello_bulk("replication-offset"),
-        RespFrame::Integer(0),
-        hello_bulk("health"),
-        hello_bulk("online"),
-    ]));
-    let shard = RespFrame::Array(Some(vec![
-        hello_bulk("slots"),
-        RespFrame::Array(Some(cluster_slot_range_frames(
-            &store.cluster_assigned_slots,
-        ))),
-        hello_bulk("nodes"),
-        RespFrame::Array(Some(vec![node])),
-    ]));
+    // Mirror upstream cluster.c — addShardReplyForClusterShards uses
+    // addReplyMapLen(c, 2) for the per-shard wrapper and addNodeToNodeReply
+    // uses addReplyMapLen(c, length) for the per-node frame. Under RESP3
+    // both must be Maps; RESP2 keeps the existing flat Array shape.
+    // (frankenredis-ec2rf)
+    let resp3 = store.dispatch_client_ctx.resp_protocol_version == 3;
+    let node = if resp3 {
+        RespFrame::Map(Some(vec![
+            (hello_bulk("id"), RespFrame::BulkString(Some(store.server_run_id.as_bytes().to_vec()))),
+            (hello_bulk("port"), RespFrame::Integer(i64::from(store.server_port))),
+            (hello_bulk("ip"), hello_bulk("")),
+            (hello_bulk("endpoint"), hello_bulk("")),
+            (hello_bulk("role"), hello_bulk("master")),
+            (hello_bulk("replication-offset"), RespFrame::Integer(0)),
+            (hello_bulk("health"), hello_bulk("online")),
+        ]))
+    } else {
+        RespFrame::Array(Some(vec![
+            hello_bulk("id"),
+            RespFrame::BulkString(Some(store.server_run_id.as_bytes().to_vec())),
+            hello_bulk("port"),
+            RespFrame::Integer(i64::from(store.server_port)),
+            hello_bulk("ip"),
+            hello_bulk(""),
+            hello_bulk("endpoint"),
+            hello_bulk(""),
+            hello_bulk("role"),
+            hello_bulk("master"),
+            hello_bulk("replication-offset"),
+            RespFrame::Integer(0),
+            hello_bulk("health"),
+            hello_bulk("online"),
+        ]))
+    };
+    let slots_frame = RespFrame::Array(Some(cluster_slot_range_frames(
+        &store.cluster_assigned_slots,
+    )));
+    let nodes_frame = RespFrame::Array(Some(vec![node]));
+    let shard = if resp3 {
+        RespFrame::Map(Some(vec![
+            (hello_bulk("slots"), slots_frame),
+            (hello_bulk("nodes"), nodes_frame),
+        ]))
+    } else {
+        RespFrame::Array(Some(vec![
+            hello_bulk("slots"),
+            slots_frame,
+            hello_bulk("nodes"),
+            nodes_frame,
+        ]))
+    };
     RespFrame::Array(Some(vec![shard]))
 }
 
@@ -36596,6 +36623,42 @@ mod tests {
             dispatch_argv(&[b"CLUSTER".to_vec(), b"MYSHARDID".to_vec()], &mut store, 0).unwrap();
         assert_eq!(out_again, out);
         assert_eq!(store.cluster_shard_id.len(), 40);
+    }
+
+    #[test]
+    fn cluster_shards_under_resp3_returns_nested_map_shape() {
+        // (frankenredis-ec2rf) Upstream cluster.c uses
+        // addReplyMapLen(c, 2) for the per-shard wrapper and
+        // addReplyMapLen(c, length) for the per-node frame. Pin the
+        // RESP3 wire shape: outer Array of shards, each shard a
+        // 2-entry Map ('slots' → Array, 'nodes' → Array of node
+        // Maps), each node a 7-entry Map (id, port, ip, endpoint,
+        // role, replication-offset, health).
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"SHARDS".to_vec()], &mut store, 0)
+            .expect("cluster shards resp3");
+        let RespFrame::Array(Some(shards)) = out else {
+            panic!("outer must be Array of shards"); // ubs:ignore — AI triage
+        };
+        assert_eq!(shards.len(), 1);
+        let RespFrame::Map(Some(shard_pairs)) = &shards[0] else {
+            panic!("shard must be 2-entry Map under RESP3"); // ubs:ignore — AI triage
+        };
+        assert_eq!(shard_pairs.len(), 2);
+        assert_eq!(shard_pairs[0].0, RespFrame::BulkString(Some(b"slots".to_vec())));
+        assert_eq!(shard_pairs[1].0, RespFrame::BulkString(Some(b"nodes".to_vec())));
+        let RespFrame::Array(Some(nodes)) = &shard_pairs[1].1 else {
+            panic!("nodes value must be Array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(nodes.len(), 1);
+        let RespFrame::Map(Some(node_pairs)) = &nodes[0] else {
+            panic!("node must be Map under RESP3"); // ubs:ignore — AI triage
+        };
+        assert_eq!(node_pairs.len(), 7);
+        assert_eq!(node_pairs[0].0, RespFrame::BulkString(Some(b"id".to_vec())));
+        assert_eq!(node_pairs[6].0, RespFrame::BulkString(Some(b"health".to_vec())));
     }
 
     #[test]
