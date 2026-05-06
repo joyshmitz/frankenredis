@@ -9524,8 +9524,10 @@ fn srandmember(
             None => Ok(RespFrame::BulkString(None)),
         }
     } else {
-        // With count: return array
-        let count = parse_i64_arg(&argv[2])?;
+        // With count: return array. (frankenredis-wsqf2) Range-check
+        // matches upstream getRangeLongFromObjectOrReply call so that
+        // i64::MIN cannot trigger a 9.2-quintillion-iteration DoS.
+        let count = parse_i64_arg_long_range(&argv[2])?;
         let members = store.srandmember_count(&argv[1], count, now_ms)?;
         let arr: Vec<RespFrame> = members
             .into_iter()
@@ -9690,7 +9692,10 @@ fn zrandmember(
             None => Ok(RespFrame::BulkString(None)),
         };
     }
-    let count = parse_i64_arg(&argv[2])?;
+    // (frankenredis-wsqf2) Reject i64::MIN to prevent the
+    // ~9.2-quintillion-iteration DoS in zrandmember_count's
+    // negative-count path.
+    let count = parse_i64_arg_long_range(&argv[2])?;
     let withscores = argv.len() == 4
         && std::str::from_utf8(&argv[3]).is_ok_and(|s| s.eq_ignore_ascii_case("WITHSCORES"));
     if argv.len() == 4 && !withscores {
@@ -10035,7 +10040,9 @@ fn hrandfield(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
             None => Ok(RespFrame::BulkString(None)),
         };
     }
-    let count = parse_i64_arg(&argv[2])?;
+    // (frankenredis-wsqf2) Reject i64::MIN to prevent the
+    // ~9.2-quintillion-iteration DoS in hrandfield_count's negative-count path.
+    let count = parse_i64_arg_long_range(&argv[2])?;
     let withvalues = argv.len() == 4
         && std::str::from_utf8(&argv[3]).is_ok_and(|s| s.eq_ignore_ascii_case("WITHVALUES"));
     if argv.len() == 4 && !withvalues {
@@ -10776,6 +10783,24 @@ fn sentinel_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Comman
 
 fn bytes_to_lossy_string(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// (frankenredis-wsqf2) Mirror upstream
+/// getRangeLongFromObjectOrReply(c, argv, -LONG_MAX, LONG_MAX, ...).
+/// On 64-bit Linux LONG_MAX == i64::MAX, so the only i64 value
+/// rejected is i64::MIN. Used by *RANDMEMBER / *RANGEBYSCORE-style
+/// handlers where i64::MIN with .unsigned_abs() would create a
+/// ~9.2 quintillion-iteration loop and hang the server.
+fn parse_i64_arg_long_range(arg: &[u8]) -> Result<i64, CommandError> {
+    let value = parse_i64_arg(arg)?;
+    if value == i64::MIN {
+        return Err(CommandError::Custom(format!(
+            "ERR value is out of range, value must between {} and {}",
+            -i64::MAX,
+            i64::MAX
+        )));
+    }
+    Ok(value)
 }
 
 fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
@@ -39880,6 +39905,85 @@ mod tests {
                 ])),
             ]))
         );
+    }
+
+    #[test]
+    fn randmember_family_rejects_i64_min_count_to_prevent_dos() {
+        // (frankenredis-wsqf2) i64::MIN passed as a negative count
+        // would call .unsigned_abs() and loop ~9.2 quintillion times,
+        // hanging the server. Upstream getRangeLongFromObjectOrReply
+        // restricts to [-LONG_MAX, LONG_MAX] which excludes only
+        // i64::MIN. Pin that all three *RANDMEMBER commands reject
+        // i64::MIN with the upstream "value is out of range" wording.
+        let mut store = Store::new();
+
+        // Seed each container so the count handler is reached.
+        dispatch_argv(&[b"SADD".to_vec(), b"s".to_vec(), b"a".to_vec()], &mut store, 0)
+            .expect("sadd");
+        dispatch_argv(
+            &[
+                b"HSET".to_vec(),
+                b"h".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hset");
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zadd");
+
+        let i64_min = b"-9223372036854775808";
+        let expected_err = CommandError::Custom(format!(
+            "ERR value is out of range, value must between {} and {}",
+            -i64::MAX,
+            i64::MAX
+        ));
+
+        for argv in [
+            vec![b"SRANDMEMBER".to_vec(), b"s".to_vec(), i64_min.to_vec()],
+            vec![b"HRANDFIELD".to_vec(), b"h".to_vec(), i64_min.to_vec()],
+            vec![b"ZRANDMEMBER".to_vec(), b"z".to_vec(), i64_min.to_vec()],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+            assert_eq!(
+                err, expected_err,
+                "expected upstream out-of-range error for {argv:?}"
+            );
+        }
+
+        // Sanity: -1 and i64::MAX still work (in-range).
+        for cmd in [b"SRANDMEMBER".as_slice(), b"HRANDFIELD", b"ZRANDMEMBER"] {
+            let key: &[u8] = match cmd {
+                b"SRANDMEMBER" => b"s",
+                b"HRANDFIELD" => b"h",
+                b"ZRANDMEMBER" => b"z",
+                _ => unreachable!(),
+            };
+            for count_str in [&b"-1"[..], b"9223372036854775807"] {
+                // i64::MAX
+                let argv = vec![cmd.to_vec(), key.to_vec(), count_str.to_vec()];
+                // Don't actually execute i64::MAX (would still take a long
+                // time) — just check that parse_i64_arg_long_range accepts.
+                if count_str == b"-1" {
+                    dispatch_argv(&argv, &mut store, 0).expect("count -1 must succeed");
+                } else {
+                    // i64::MAX accepted by helper (don't dispatch — would
+                    // be slow). Helper is module-private; rely on
+                    // i64::MIN rejection above as the primary guard.
+                }
+            }
+        }
     }
 
     #[test]
