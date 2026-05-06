@@ -6706,37 +6706,49 @@ impl Runtime {
     }
 
     fn handle_acl_help(&self) -> RespFrame {
+        // (frankenredis-7ysld) Mirror upstream acl.c::aclCommand HELP body
+        // line-for-line (vendored Redis 7.2.4). Frames are SimpleString
+        // (was BulkString — same divergence as the 0o9vo/vtege/kuthf/
+        // s574p/tnscz HELP cluster). Descriptions match upstream
+        // verbatim — fr was paraphrasing several entries (DRYRUN,
+        // GENPASS, LIST, LOG, SAVE, USERS) and using 'property' instead
+        // of upstream's 'attribute' for SETUSER.
         RespFrame::Array(Some(vec![
-            hello_bulk("ACL <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
-            hello_bulk("CAT [<category>]"),
-            hello_bulk(
+            hello_simple("ACL <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("CAT [<category>]"),
+            hello_simple(
                 "    List all commands that belong to <category>, or all command categories",
             ),
-            hello_bulk("    when no category is specified."),
-            hello_bulk("DELUSER <username> [<username> ...]"),
-            hello_bulk("    Delete a list of users."),
-            hello_bulk("DRYRUN <username> <command> [<arg> ...]"),
-            hello_bulk("    Test if a command would be allowed for the given user."),
-            hello_bulk("GENPASS [<bits>]"),
-            hello_bulk("    Generate a secure password."),
-            hello_bulk("GETUSER <username>"),
-            hello_bulk("    Get the user's details."),
-            hello_bulk("LIST"),
-            hello_bulk("    List users access rules in the ACL format."),
-            hello_bulk("LOAD"),
-            hello_bulk("    Reload users from the ACL file."),
-            hello_bulk("LOG [<count> | RESET]"),
-            hello_bulk("    List latest events denied because of ACLs."),
-            hello_bulk("SAVE"),
-            hello_bulk("    Save the current ACL rules to the ACL file."),
-            hello_bulk("SETUSER <username> <property> [<property> ...]"),
-            hello_bulk("    Create or modify a user with the specified properties."),
-            hello_bulk("USERS"),
-            hello_bulk("    List all usernames."),
-            hello_bulk("WHOAMI"),
-            hello_bulk("    Return the current connection username."),
-            hello_bulk("HELP"),
-            hello_bulk("    Print this help."),
+            hello_simple("    when no category is specified."),
+            hello_simple("DELUSER <username> [<username> ...]"),
+            hello_simple("    Delete a list of users."),
+            hello_simple("DRYRUN <username> <command> [<arg> ...]"),
+            hello_simple(
+                "    Returns whether the user can execute the given command without executing the command.",
+            ),
+            hello_simple("GETUSER <username>"),
+            hello_simple("    Get the user's details."),
+            hello_simple("GENPASS [<bits>]"),
+            hello_simple(
+                "    Generate a secure 256-bit user password. The optional `bits` argument can",
+            ),
+            hello_simple("    be used to specify a different size."),
+            hello_simple("LIST"),
+            hello_simple("    Show users details in config file format."),
+            hello_simple("LOAD"),
+            hello_simple("    Reload users from the ACL file."),
+            hello_simple("LOG [<count> | RESET]"),
+            hello_simple("    Show the ACL log entries."),
+            hello_simple("SAVE"),
+            hello_simple("    Save the current config to the ACL file."),
+            hello_simple("SETUSER <username> <attribute> [<attribute> ...]"),
+            hello_simple("    Create or modify a user with the specified attributes."),
+            hello_simple("USERS"),
+            hello_simple("    List all the registered usernames."),
+            hello_simple("WHOAMI"),
+            hello_simple("    Return the current connection username."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ]))
     }
 
@@ -12026,6 +12038,13 @@ fn parse_scan_cursor_arg(arg: &[u8]) -> Result<u64, CommandError> {
 
 fn hello_bulk(value: &str) -> RespFrame {
     RespFrame::BulkString(Some(value.as_bytes().to_vec()))
+}
+
+/// (frankenredis-7ysld) HELP-handler frames must be SimpleString to
+/// match upstream addReplyStatus / addReplyHelp wire format. Mirrors
+/// fr-command's identical helper.
+fn hello_simple(value: &str) -> RespFrame {
+    RespFrame::SimpleString(value.to_string())
 }
 
 fn build_hello_response(protocol_version: i64, client_id: u64) -> RespFrame {
@@ -22550,17 +22569,81 @@ mod tests {
 
     #[test]
     fn acl_help_lists_dryrun_subcommand() {
+        // (frankenredis-7ysld) ACL HELP now matches upstream 7.2.4
+        // line-for-line. SimpleString frames; full GENPASS/SETUSER
+        // wording; 'attribute' not 'property'.
         let mut rt = Runtime::default_strict();
         let reply = rt.execute_frame(command(&[b"ACL", b"HELP"]), 0);
         let RespFrame::Array(Some(items)) = reply else {
             unreachable!("expected ACL HELP to return an array");
         };
-        assert!(
-            items.contains(&RespFrame::BulkString(Some(
-                b"DRYRUN <username> <command> [<arg> ...]".to_vec()
-            ))),
-            "ACL HELP should list DRYRUN"
+
+        for (i, frame) in items.iter().enumerate() {
+            assert!(
+                matches!(frame, RespFrame::SimpleString(_)),
+                "frame {i} must be SimpleString, got {frame:?}"
+            );
+        }
+
+        // Standard envelope.
+        assert_eq!(
+            items[0],
+            RespFrame::SimpleString(
+                "ACL <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
+            )
         );
+
+        // Upstream 7.2.4 wording verbatim.
+        assert!(items.contains(&RespFrame::SimpleString(
+            "DRYRUN <username> <command> [<arg> ...]".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Returns whether the user can execute the given command without executing the command.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Generate a secure 256-bit user password. The optional `bits` argument can".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    be used to specify a different size.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "SETUSER <username> <attribute> [<attribute> ...]".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Create or modify a user with the specified attributes.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    List all the registered usernames.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Show users details in config file format.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Show the ACL log entries.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Save the current config to the ACL file.".to_string()
+        )));
+
+        // Old paraphrased wording must NOT be present.
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s.contains("<property>")
+        )));
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s == "    Generate a secure password."
+        )));
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s == "    List all usernames."
+        )));
+
+        // Trailing HELP block.
+        assert!(items.contains(&RespFrame::SimpleString("HELP".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Print this help.".to_string()
+        )));
     }
 
     #[test]
