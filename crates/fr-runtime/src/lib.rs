@@ -6781,25 +6781,44 @@ impl Runtime {
             // First, get all current values via CONFIG GET *
             let current_config =
                 self.handle_config_get(&[b"CONFIG".to_vec(), b"GET".to_vec(), b"*".to_vec()]);
-            if let RespFrame::Array(Some(pairs)) = current_config {
-                for chunk in pairs.chunks(2) {
-                    if let (RespFrame::BulkString(Some(k)), RespFrame::BulkString(Some(v))) =
-                        (&chunk[0], &chunk[1])
+            // (frankenredis-5h86s) handle_config_get returns RespFrame::Map
+            // under RESP3 (i40x2-family) and Array under RESP2. The
+            // rewriter must accept both shapes — the prior version
+            // matched only Array, so a CONFIG REWRITE issued from a
+            // RESP3 session silently truncated the config file to a
+            // single blank line because the if-let didn't match.
+            let mut record = |k: &RespFrame, v: &RespFrame| {
+                if let (RespFrame::BulkString(Some(key)), RespFrame::BulkString(Some(val))) =
+                    (k, v)
+                {
+                    let key = String::from_utf8_lossy(key);
+                    let val = String::from_utf8_lossy(val);
+                    // Some parameters shouldn't be in the config file or need special handling
+                    if key == "appendonly"
+                        || key == "dir"
+                        || key == "dbfilename"
+                        || key == "aclfile"
+                        || key == "save"
                     {
-                        let key = String::from_utf8_lossy(k);
-                        let val = String::from_utf8_lossy(v);
-                        // Some parameters shouldn't be in the config file or need special handling
-                        if key == "appendonly"
-                            || key == "dir"
-                            || key == "dbfilename"
-                            || key == "aclfile"
-                            || key == "save"
-                        {
-                            // these are usually fine
+                        // these are usually fine
+                    }
+                    lines.push(format!("{key} {val}"));
+                }
+            };
+            match &current_config {
+                RespFrame::Array(Some(pairs)) => {
+                    for chunk in pairs.chunks(2) {
+                        if chunk.len() == 2 {
+                            record(&chunk[0], &chunk[1]);
                         }
-                        lines.push(format!("{key} {val}"));
                     }
                 }
+                RespFrame::Map(Some(pairs)) => {
+                    for (k, v) in pairs {
+                        record(k, v);
+                    }
+                }
+                _ => {}
             }
 
             let content = lines.join("\n") + "\n";
@@ -18749,6 +18768,46 @@ mod tests {
             err.starts_with("ERR Rewriting config file: "),
             "unexpected rewrite error: {err}"
         );
+    }
+
+    #[test]
+    fn config_rewrite_under_resp3_writes_non_empty_config_file() {
+        // (frankenredis-5h86s) handle_config_get returns RespFrame::Map
+        // under RESP3 (i40x2-family fix). The CONFIG REWRITE handler
+        // previously matched only RespFrame::Array, so a REWRITE
+        // issued from a HELLO 3 session silently truncated the
+        // config file to a single blank '\n'. After the fix,
+        // both Map and Array shapes are accepted.
+        let mut rt = Runtime::default_strict();
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "fr_runtime_config_rewrite_resp3_{}_{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("redis.conf");
+        rt.set_config_file_path(Some(path.clone()));
+
+        // Promote the session to RESP3 so handle_config_get emits Map.
+        let hello = rt.execute_frame(command(&[b"HELLO", b"3"]), 0);
+        assert!(matches!(hello, RespFrame::Map(_)));
+
+        let reply = rt.execute_frame(command(&[b"CONFIG", b"REWRITE"]), 1);
+        assert_eq!(reply, RespFrame::SimpleString("OK".to_string()));
+
+        let written = std::fs::read_to_string(&path).expect("read config file");
+        assert!(
+            written.lines().count() > 10,
+            "config file should have many lines after REWRITE; got {} lines:\n{}",
+            written.lines().count(),
+            written
+        );
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
