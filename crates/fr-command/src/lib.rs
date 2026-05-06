@@ -16894,7 +16894,11 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         let debug_info = format!(
             "Value at:0x0 refcount:{refcount} encoding:{encoding} serializedlength:{serialized_len} lru:{idle_secs} lru_seconds_idle:{idle_secs} hexpired_fields:{hexpired_fields}"
         );
-        Ok(RespFrame::BulkString(Some(debug_info.into_bytes())))
+        // (frankenredis-gmqk1) Upstream debug.c::debugCommand uses
+        // addReplyStatusFormat which emits a SimpleString frame
+        // ("+...\r\n"), not a BulkString. Same wire-shape rule as the
+        // HELP cluster (0o9vo / vtege / kuthf / s574p / tnscz / 7ysld).
+        Ok(RespFrame::SimpleString(debug_info))
     } else if sub.eq_ignore_ascii_case("DIGEST") {
         // DEBUG DIGEST - compute a hash digest of the entire database
         if argv.len() != 2 {
@@ -22137,11 +22141,10 @@ mod tests {
             0,
         )
         .expect("debug object");
-        if let RespFrame::BulkString(Some(bytes)) = out {
-            let s = String::from_utf8(bytes).unwrap();
+        if let RespFrame::SimpleString(s) = out {
             assert!(s.contains("hexpired_fields:0"), "initial: {s}");
         } else {
-            panic!("expected bulk string");
+            panic!("expected SimpleString (frankenredis-gmqk1)");
         }
 
         // Set a past TTL; the next HGET reaps the field.
@@ -22171,11 +22174,10 @@ mod tests {
             200,
         )
         .expect("debug object after reap");
-        if let RespFrame::BulkString(Some(bytes)) = after {
-            let s = String::from_utf8(bytes).unwrap();
+        if let RespFrame::SimpleString(s) = after {
             assert!(s.contains("hexpired_fields:1"), "after reap: {s}");
         } else {
-            panic!("expected bulk string");
+            panic!("expected SimpleString (frankenredis-gmqk1)");
         }
     }
 
@@ -34589,10 +34591,10 @@ mod tests {
             1,
         )
         .expect("debug object shared");
-        let RespFrame::BulkString(Some(info)) = out else {
-            panic!("expected bulk string"); // ubs:ignore — AI triage
+        // (frankenredis-gmqk1) DEBUG OBJECT now emits SimpleString.
+        let RespFrame::SimpleString(info) = out else {
+            panic!("expected SimpleString"); // ubs:ignore — AI triage
         };
-        let info = String::from_utf8(info).expect("utf8");
         let expected = format!("refcount:{}", i32::MAX);
         assert!(
             info.contains(&expected),
@@ -34613,10 +34615,9 @@ mod tests {
             3,
         )
         .expect("debug object big");
-        let RespFrame::BulkString(Some(info)) = out else {
-            panic!("expected bulk string"); // ubs:ignore — AI triage
+        let RespFrame::SimpleString(info) = out else {
+            panic!("expected SimpleString"); // ubs:ignore — AI triage
         };
-        let info = String::from_utf8(info).expect("utf8");
         assert!(info.contains("refcount:1"), "{info}");
     }
 
@@ -34636,10 +34637,11 @@ mod tests {
             20,
         )
         .expect("debug object");
-        let RespFrame::BulkString(Some(info)) = out else {
-            panic!("expected bulk string"); // ubs:ignore — AI triage
+        // (frankenredis-gmqk1) Upstream uses addReplyStatusFormat
+        // (SimpleString); fr now emits SimpleString to match.
+        let RespFrame::SimpleString(info) = out else {
+            panic!("expected SimpleString"); // ubs:ignore — AI triage
         };
-        let info = String::from_utf8(info).expect("utf8");
         assert!(info.contains("refcount:1"), "{info}");
         assert!(info.contains("encoding:embstr"), "{info}");
         assert!(info.contains("serializedlength:"), "{info}");
