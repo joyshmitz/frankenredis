@@ -16881,13 +16881,18 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         };
         let serialized_len = store.memory_usage_for_key(key, now_ms).unwrap_or(0);
         let idle_secs = store.object_idletime(key, now_ms).unwrap_or(0);
+        // (frankenredis-az4t9) Mirror upstream debug.c::debugCommand which
+        // emits val->refcount — INT_MAX for shared integer objects in
+        // [0, 10000), 1 otherwise. Reuses the same Store::object_refcount
+        // helper that powers OBJECT REFCOUNT (frankenredis-ljrt6).
+        let refcount = store.object_refcount(key, now_ms).unwrap_or(1);
         // Redis 7.4 extends DEBUG OBJECT for hashes with the
         // hexpired_fields:<n> counter (br-frankenredis-25re). Emit it
         // unconditionally for every value — non-hash types always show
         // 0 because they never accumulate the counter.
         let hexpired_fields = store.hash_field_expired_count(key);
         let debug_info = format!(
-            "Value at:0x0 refcount:1 encoding:{encoding} serializedlength:{serialized_len} lru:{idle_secs} lru_seconds_idle:{idle_secs} hexpired_fields:{hexpired_fields}"
+            "Value at:0x0 refcount:{refcount} encoding:{encoding} serializedlength:{serialized_len} lru:{idle_secs} lru_seconds_idle:{idle_secs} hexpired_fields:{hexpired_fields}"
         );
         Ok(RespFrame::BulkString(Some(debug_info.into_bytes())))
     } else if sub.eq_ignore_ascii_case("DIGEST") {
@@ -34557,6 +34562,62 @@ mod tests {
             .expect("debug reload");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
         assert!(store.take_debug_reload_requested());
+    }
+
+    #[test]
+    fn debug_object_reports_int_max_refcount_for_shared_integer_value() {
+        // (frankenredis-az4t9) DEBUG OBJECT now reuses Store::object_
+        // refcount (introduced in ljrt6) instead of hardcoding 1, so
+        // it correctly reports INT_MAX for shared integers in [0, 10000)
+        // — matching upstream val->refcount semantics.
+        let mut store = Store::new();
+
+        // Small integer in shared range → refcount = INT_MAX.
+        dispatch_argv(
+            &[b"SET".to_vec(), b"shared".to_vec(), b"42".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set integer");
+        let out = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"OBJECT".to_vec(),
+                b"shared".to_vec(),
+            ],
+            &mut store,
+            1,
+        )
+        .expect("debug object shared");
+        let RespFrame::BulkString(Some(info)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(info).expect("utf8");
+        let expected = format!("refcount:{}", i32::MAX);
+        assert!(
+            info.contains(&expected),
+            "expected {expected} in: {info}"
+        );
+        assert!(info.contains("encoding:int"), "{info}");
+
+        // Integer outside shared range → refcount = 1.
+        dispatch_argv(
+            &[b"SET".to_vec(), b"big".to_vec(), b"10001".to_vec()],
+            &mut store,
+            2,
+        )
+        .expect("set big int");
+        let out = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"OBJECT".to_vec(), b"big".to_vec()],
+            &mut store,
+            3,
+        )
+        .expect("debug object big");
+        let RespFrame::BulkString(Some(info)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(info).expect("utf8");
+        assert!(info.contains("refcount:1"), "{info}");
     }
 
     #[test]
