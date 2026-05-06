@@ -260,8 +260,8 @@ fn parse_frame_internal(
             // then return the next real frame. Upstream uses this
             // to attach per-reply metadata that RESP2 clients don't
             // understand.
-            let (_attr, consumed) = parse_resp3_map(input, next, depth + 1, config)?;
-            parse_frame_internal(input, consumed, depth + 1, config)
+            let (_attr, consumed) = parse_resp3_map(input, next, depth, config)?;
+            parse_frame_internal(input, consumed, depth, config)
         }
         b'!' => parse_resp3_blob_error(input, next, config),
         other => Err(RespParseError::InvalidPrefix(other)),
@@ -1176,6 +1176,25 @@ mod tests {
         // Blob error → Error.
         let parsed = parse_frame_with_config(b"!5\r\nWRONG\r\n", &allow).unwrap();
         assert_eq!(parsed.frame, RespFrame::Error("WRONG".to_string()));
+    }
+
+    #[test]
+    fn resp3_attribute_wrapper_does_not_spend_extra_recursion_depth() {
+        let allow_tight_depth = ParserConfig {
+            max_recursion_depth: 1,
+            allow_resp3: true,
+            ..ParserConfig::default()
+        };
+
+        let parsed = parse_frame_with_config(
+            b"|1\r\n+meta\r\n+value\r\n*1\r\n+OK\r\n",
+            &allow_tight_depth,
+        )
+        .expect("attribute metadata must not consume the wrapped frame's depth budget");
+        assert_eq!(
+            parsed.frame,
+            RespFrame::Array(Some(vec![RespFrame::SimpleString("OK".to_string())]))
+        );
     }
 
     #[test]

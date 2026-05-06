@@ -156,8 +156,7 @@ fn fuzz_resp_parser_resp3_seeds_parse_to_expected_variants() {
     }
 
     // = verbatim — fr strips the 4-byte `txt:` prefix, leaving body.
-    let result =
-        parse_frame_with_config(&load("resp3_verbatim_text"), &allow).expect("verbatim");
+    let result = parse_frame_with_config(&load("resp3_verbatim_text"), &allow).expect("verbatim");
     let RespFrame::BulkString(Some(body)) = result.frame else {
         panic!("resp3_verbatim_text should parse to BulkString");
     };
