@@ -15403,23 +15403,21 @@ fn slowlog_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Command
                 subcommand: "GET".to_string(),
             });
         }
-        if let Some(count_arg) = argv.get(2) {
-            let count = parse_i64_arg(count_arg)?;
-            if count < -1 {
-                return Err(CommandError::Custom(
-                    "ERR count should be greater than or equal to -1".to_string(),
-                ));
+        let count = match argv.get(2) {
+            Some(count_arg) => {
+                let parsed = parse_i64_arg(count_arg)?;
+                if parsed < -1 {
+                    return Err(CommandError::Custom(
+                        "ERR count should be greater than or equal to -1".to_string(),
+                    ));
+                }
+                if parsed == -1 {
+                    store.slowlog_len()
+                } else {
+                    usize::try_from(parsed).map_err(|_| CommandError::InvalidInteger)?
+                }
             }
-        }
-        let count = if let Some(count_arg) = argv.get(2) {
-            let count = parse_i64_arg(count_arg)?;
-            if count == -1 {
-                store.slowlog_len()
-            } else {
-                usize::try_from(count).map_err(|_| CommandError::InvalidInteger)?
-            }
-        } else {
-            10
+            None => 10,
         };
         let entries = store
             .get_slowlog(count)
