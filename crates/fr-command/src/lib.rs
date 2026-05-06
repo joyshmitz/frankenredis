@@ -17122,28 +17122,71 @@ fn latency_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Command
                 .collect()
         };
 
-        let result: Vec<RespFrame> = histograms
+        // (frankenredis-cgjlc) Mirror upstream latency.c::fillCommandCDF +
+        // latencyCommand HISTOGRAM dispatch. Inner CDF is a 2-entry Map of
+        // {calls, histogram_usec} where histogram_usec is itself a Map of
+        // bucket_us → cumulative_count. Outer envelope is a Map of
+        // cmd_name → inner CDF. Under RESP2 every Map flattens to an
+        // alternating-Array of length 2*N.
+        let resp = store.dispatch_client_ctx.resp_protocol_version;
+        let outer_pairs: Vec<(RespFrame, RespFrame)> = histograms
             .into_iter()
             .map(|(cmd, hist)| {
-                // Build histogram map: calls -> count, then bucket_start_us -> bucket_count
-                let mut map_items = vec![
-                    RespFrame::BulkString(Some(b"calls".to_vec())),
-                    RespFrame::Integer(i64::try_from(hist.calls).unwrap_or(i64::MAX)),
+                let bucket_pairs: Vec<(RespFrame, RespFrame)> = hist
+                    .to_buckets()
+                    .into_iter()
+                    .map(|(bucket_start_us, count)| {
+                        (
+                            RespFrame::Integer(
+                                i64::try_from(bucket_start_us).unwrap_or(i64::MAX),
+                            ),
+                            RespFrame::Integer(i64::try_from(count).unwrap_or(i64::MAX)),
+                        )
+                    })
+                    .collect();
+                let histogram_usec = if resp == 3 {
+                    RespFrame::Map(Some(bucket_pairs))
+                } else {
+                    let mut flat = Vec::with_capacity(bucket_pairs.len() * 2);
+                    for (k, v) in bucket_pairs {
+                        flat.push(k);
+                        flat.push(v);
+                    }
+                    RespFrame::Array(Some(flat))
+                };
+                let cdf_pairs: Vec<(RespFrame, RespFrame)> = vec![
+                    (
+                        RespFrame::BulkString(Some(b"calls".to_vec())),
+                        RespFrame::Integer(i64::try_from(hist.calls).unwrap_or(i64::MAX)),
+                    ),
+                    (
+                        RespFrame::BulkString(Some(b"histogram_usec".to_vec())),
+                        histogram_usec,
+                    ),
                 ];
-                for (bucket_start_us, count) in hist.to_buckets() {
-                    map_items.push(RespFrame::Integer(
-                        i64::try_from(bucket_start_us).unwrap_or(i64::MAX),
-                    ));
-                    map_items.push(RespFrame::Integer(i64::try_from(count).unwrap_or(i64::MAX)));
-                }
-                RespFrame::Array(Some(vec![
-                    RespFrame::BulkString(Some(cmd.as_bytes().to_vec())),
-                    RespFrame::Array(Some(map_items)),
-                ]))
+                let cdf = if resp == 3 {
+                    RespFrame::Map(Some(cdf_pairs))
+                } else {
+                    let mut flat = Vec::with_capacity(cdf_pairs.len() * 2);
+                    for (k, v) in cdf_pairs {
+                        flat.push(k);
+                        flat.push(v);
+                    }
+                    RespFrame::Array(Some(flat))
+                };
+                (RespFrame::BulkString(Some(cmd.as_bytes().to_vec())), cdf)
             })
             .collect();
-
-        Ok(RespFrame::Array(Some(result)))
+        if resp == 3 {
+            Ok(RespFrame::Map(Some(outer_pairs)))
+        } else {
+            let mut flat = Vec::with_capacity(outer_pairs.len() * 2);
+            for (k, v) in outer_pairs {
+                flat.push(k);
+                flat.push(v);
+            }
+            Ok(RespFrame::Array(Some(flat)))
+        }
     } else if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
             return Err(CommandError::WrongSubcommandArity {
@@ -34448,15 +34491,18 @@ mod tests {
         store.record_command_histogram("GET", 50); // 50us -> bucket 6 [32, 64)
         store.record_command_histogram("SET", 200); // 200us -> bucket 8 [128, 256)
 
-        // LATENCY HISTOGRAM (all commands) should return GET and SET
+        // (frankenredis-cgjlc) Upstream latencyCommand HISTOGRAM emits an
+        // outer Map of cmd_name → CDF. Under RESP2 that flattens to an
+        // alternating Array: cmd_name, cdf, cmd_name, cdf, ...
         let out = dispatch_argv(&[b"LATENCY".to_vec(), b"HISTOGRAM".to_vec()], &mut store, 0)
             .expect("latency histogram");
         let RespFrame::Array(Some(items)) = out else {
             panic!("expected array");
         };
-        assert_eq!(items.len(), 2); // GET and SET
+        // 2 commands × 2 (name + cdf) = 4 outer slots
+        assert_eq!(items.len(), 4);
 
-        // LATENCY HISTOGRAM GET should return only GET
+        // LATENCY HISTOGRAM GET should return only GET → 2 outer slots
         let out = dispatch_argv(
             &[b"LATENCY".to_vec(), b"HISTOGRAM".to_vec(), b"GET".to_vec()],
             &mut store,
@@ -34466,22 +34512,27 @@ mod tests {
         let RespFrame::Array(Some(items)) = out else {
             panic!("expected array");
         };
-        assert_eq!(items.len(), 1);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], RespFrame::BulkString(Some(b"GET".to_vec())));
 
-        // Check GET histogram structure
-        let RespFrame::Array(Some(ref get_entry)) = items[0] else {
-            panic!("expected array entry");
-        };
-        assert_eq!(get_entry.len(), 2);
-        assert_eq!(get_entry[0], RespFrame::BulkString(Some(b"GET".to_vec())));
-
-        let RespFrame::Array(Some(ref histogram)) = get_entry[1] else {
+        // Inner CDF is a 2-entry Map { calls, histogram_usec } — flat
+        // alternating-array under RESP2.
+        let RespFrame::Array(Some(ref cdf)) = items[1] else {
             panic!("expected histogram array");
         };
-        // Should have "calls" followed by bucket data
-        assert!(histogram.len() >= 2);
-        assert_eq!(histogram[0], RespFrame::BulkString(Some(b"calls".to_vec())));
-        assert_eq!(histogram[1], RespFrame::Integer(2)); // 2 GET calls
+        assert_eq!(cdf.len(), 4); // 2 entries × 2 slots
+        assert_eq!(cdf[0], RespFrame::BulkString(Some(b"calls".to_vec())));
+        assert_eq!(cdf[1], RespFrame::Integer(2)); // 2 GET calls
+        assert_eq!(
+            cdf[2],
+            RespFrame::BulkString(Some(b"histogram_usec".to_vec()))
+        );
+        let RespFrame::Array(Some(ref buckets)) = cdf[3] else {
+            panic!("expected histogram_usec array");
+        };
+        // bucket_us → count flat array, even length, non-empty for 2 calls
+        assert!(buckets.len() >= 2);
+        assert!(buckets.len().is_multiple_of(2));
 
         // LATENCY HISTOGRAM for non-existent command returns empty
         let out = dispatch_argv(
@@ -34495,6 +34546,51 @@ mod tests {
         )
         .expect("latency histogram nonexistent");
         assert_eq!(out, RespFrame::Array(Some(vec![])));
+    }
+
+    #[test]
+    fn latency_histogram_under_resp3_returns_nested_map_shape() {
+        // (frankenredis-cgjlc) Upstream latencyCommand HISTOGRAM uses
+        // setDeferredMapLen for the outer envelope, fillCommandCDF emits
+        // addReplyMapLen(c,2) for the inner CDF, and histogram_usec is
+        // setDeferredMapLen — three nested Maps under RESP3.
+        let mut store = Store::new();
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        store.record_command_histogram("GET", 100);
+        store.record_command_histogram("GET", 50);
+
+        let out = dispatch_argv(
+            &[b"LATENCY".to_vec(), b"HISTOGRAM".to_vec(), b"GET".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("latency histogram GET resp3");
+
+        let RespFrame::Map(Some(outer)) = out else {
+            panic!("RESP3 outer must be Map, got non-Map"); // ubs:ignore — AI triage
+        };
+        assert_eq!(outer.len(), 1);
+        assert_eq!(outer[0].0, RespFrame::BulkString(Some(b"GET".to_vec())));
+
+        let RespFrame::Map(Some(ref cdf)) = outer[0].1 else {
+            panic!("RESP3 CDF must be Map"); // ubs:ignore — AI triage
+        };
+        assert_eq!(cdf.len(), 2);
+        assert_eq!(cdf[0].0, RespFrame::BulkString(Some(b"calls".to_vec())));
+        assert_eq!(cdf[0].1, RespFrame::Integer(2));
+        assert_eq!(
+            cdf[1].0,
+            RespFrame::BulkString(Some(b"histogram_usec".to_vec()))
+        );
+
+        let RespFrame::Map(Some(ref buckets)) = cdf[1].1 else {
+            panic!("RESP3 histogram_usec must be Map"); // ubs:ignore — AI triage
+        };
+        assert!(!buckets.is_empty());
+        for (bucket_us, count) in buckets {
+            assert!(matches!(bucket_us, RespFrame::Integer(_)));
+            assert!(matches!(count, RespFrame::Integer(_)));
+        }
     }
 
     #[test]
