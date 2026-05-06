@@ -1370,7 +1370,7 @@ pub fn dispatch_argv(
         Some(CommandId::Quit) => return quit(argv, store),
         Some(CommandId::Select) => return select(argv, store),
         Some(CommandId::Info) => return info(argv, store, now_ms),
-        Some(CommandId::Command) => return command_cmd(argv),
+        Some(CommandId::Command) => return command_cmd(argv, store),
         Some(CommandId::Config) => return config_cmd(argv, store, now_ms),
         Some(CommandId::Client) => return client_cmd(argv, store),
         Some(CommandId::Time) => return time_cmd(argv, now_ms),
@@ -12735,7 +12735,7 @@ fn dispatch_acl_permission_error_for_argv(
         .map(DispatchAclPermissionError::Channel)
 }
 
-fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn command_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
     if argv.len() == 1 {
         // COMMAND with no sub-command: return full command info for all commands
         let entries: Vec<RespFrame> = COMMAND_TABLE
@@ -12847,14 +12847,21 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
         }
         Ok(RespFrame::Array(Some(entries)))
     } else if sub.eq_ignore_ascii_case("DOCS") {
-        let docs = if argv.len() == 2 {
+        // Upstream server.c::commandDocsCommand wraps the outer reply
+        // and each per-command entry in addReplyMapLen — RESP3 wire
+        // shape is a Map of {command_name → command_doc_map};
+        // RESP2 stays the flat 2N alternating-element Array. Same
+        // shape pattern as i40x2/e4njz/udl3y/asvh1/5d04d/ndz0j/5h86s/
+        // cz712/ec2rf. (frankenredis-q11am)
+        let resp = store.dispatch_client_ctx.resp_protocol_version;
+        let docs_pairs: Vec<(RespFrame, RespFrame)> = if argv.len() == 2 {
             COMMAND_TABLE
                 .iter()
-                .flat_map(|&(name, arity, flags, first_key, last_key, step)| {
-                    [
+                .map(|&(name, arity, flags, first_key, last_key, step)| {
+                    (
                         RespFrame::BulkString(Some(name.as_bytes().to_vec())),
-                        command_docs_entry(name, arity, flags, first_key, last_key, step),
-                    ]
+                        command_docs_entry(name, arity, flags, first_key, last_key, step, resp),
+                    )
                 })
                 .collect()
         } else {
@@ -12865,15 +12872,23 @@ fn command_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
                     let &(name, arity, flags, first_key, last_key, step) = COMMAND_TABLE
                         .iter()
                         .find(|&&(name, ..)| name.eq_ignore_ascii_case(cmd_name))?;
-                    Some([
+                    Some((
                         RespFrame::BulkString(Some(name.as_bytes().to_vec())),
-                        command_docs_entry(name, arity, flags, first_key, last_key, step),
-                    ])
+                        command_docs_entry(name, arity, flags, first_key, last_key, step, resp),
+                    ))
                 })
-                .flatten()
                 .collect()
         };
-        Ok(RespFrame::Array(Some(docs)))
+        if resp == 3 {
+            Ok(RespFrame::Map(Some(docs_pairs)))
+        } else {
+            let mut flat = Vec::with_capacity(docs_pairs.len() * 2);
+            for (k, v) in docs_pairs {
+                flat.push(k);
+                flat.push(v);
+            }
+            Ok(RespFrame::Array(Some(flat)))
+        }
     } else if sub.eq_ignore_ascii_case("GETKEYS") {
         // COMMAND GETKEYS <command> [args...]
         if argv.len() < 3 {
@@ -13124,6 +13139,7 @@ fn command_docs_entry(
     first_key: i64,
     last_key: i64,
     step: i64,
+    resp_protocol_version: i64,
 ) -> RespFrame {
     let group = command_group_for_docs(name, flags);
     // Look up upstream metadata harvested at build time from
@@ -13189,7 +13205,24 @@ fn command_docs_entry(
     entry.push(RespFrame::Array(Some(command_docs_arguments(
         arity, first_key, last_key, step,
     ))));
-    RespFrame::Array(Some(entry))
+    // (frankenredis-q11am) Upstream server.c::commandDocsCommand
+    // wraps each per-command entry in addReplyMapLen — RESP3 wire
+    // shape is a Map of (key, value) pairs; RESP2 stays the flat
+    // alternating Array. Pair up the entry vec when emitting Map.
+    if resp_protocol_version == 3 {
+        assert!(
+            entry.len().is_multiple_of(2),
+            "command_docs_entry must produce balanced k/v pairs"
+        );
+        let mut pairs = Vec::with_capacity(entry.len() / 2);
+        let mut iter = entry.into_iter();
+        while let (Some(k), Some(v)) = (iter.next(), iter.next()) {
+            pairs.push((k, v));
+        }
+        RespFrame::Map(Some(pairs))
+    } else {
+        RespFrame::Array(Some(entry))
+    }
 }
 
 fn command_docs_arguments(arity: i64, first_key: i64, last_key: i64, step: i64) -> Vec<RespFrame> {
@@ -38312,6 +38345,73 @@ mod tests {
         };
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"group".to_vec()))));
         assert!(doc_fields.contains(&RespFrame::BulkString(Some(b"string".to_vec()))));
+    }
+
+    #[test]
+    fn command_docs_under_resp3_returns_outer_and_inner_maps() {
+        // (frankenredis-q11am) Upstream server.c::commandDocsCommand
+        // wraps the outer reply AND each per-command entry in
+        // addReplyMapLen — RESP3 wire shape is a Map of
+        // {command_name → command_doc_map}; RESP2 stays the flat
+        // alternating-element Array. Pin both the outer envelope and
+        // the inner doc shape under each protocol.
+        let mut store = Store::new();
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        let out = dispatch_argv(
+            &[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"GET".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("command docs resp3");
+        let RespFrame::Map(Some(outer)) = out else {
+            panic!("RESP3 outer must be Map, got {out:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(outer.len(), 1);
+        assert_eq!(outer[0].0, RespFrame::BulkString(Some(b"get".to_vec())));
+        let RespFrame::Map(Some(inner)) = &outer[0].1 else {
+            panic!("RESP3 inner doc must be Map, got {:?}", outer[0].1); // ubs:ignore — AI triage
+        };
+        // First inner key is 'summary' (matches f39s3 pin).
+        assert_eq!(
+            inner[0].0,
+            RespFrame::BulkString(Some(b"summary".to_vec()))
+        );
+        assert_eq!(
+            inner[0].1,
+            RespFrame::BulkString(Some(b"Returns the string value of a key.".to_vec()))
+        );
+    }
+
+    #[test]
+    fn command_docs_under_resp2_stays_flat_outer_and_inner_array() {
+        // (frankenredis-q11am) Companion pin under RESP2 — both outer
+        // and inner stay flat alternating Arrays.
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[b"COMMAND".to_vec(), b"DOCS".to_vec(), b"GET".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("command docs resp2");
+        let RespFrame::Array(Some(outer_items)) = out else {
+            panic!("RESP2 outer must be flat Array, got {out:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(outer_items.len(), 2);
+        assert_eq!(
+            outer_items[0],
+            RespFrame::BulkString(Some(b"get".to_vec()))
+        );
+        let RespFrame::Array(Some(inner_items)) = &outer_items[1] else {
+            panic!("RESP2 inner doc must be flat Array, got {:?}", outer_items[1]); // ubs:ignore — AI triage
+        };
+        assert_eq!(
+            inner_items[0],
+            RespFrame::BulkString(Some(b"summary".to_vec()))
+        );
+        assert_eq!(
+            inner_items[1],
+            RespFrame::BulkString(Some(b"Returns the string value of a key.".to_vec()))
+        );
     }
 
     #[test]
