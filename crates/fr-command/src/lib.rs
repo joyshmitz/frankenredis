@@ -15265,16 +15265,38 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         }
         // Single db.0 sub-map (FrankenRedis runs with 16 dbs but we
         // only surface the active one to keep the reply compact;
-        // upstream emits one entry per db that is non-empty).
+        // upstream emits one entry per db that is non-empty). Per
+        // upstream object.c:1602 the per-db value is itself a Map
+        // of 3 (key, value) pairs under RESP3 — flat 6-element
+        // Array under RESP2. udl3y's outer-Map conversion preserved
+        // whatever shape this inner emits, so branching here is the
+        // right level of granularity. (frankenredis-ndz0j)
         items.push(RespFrame::BulkString(Some(b"db.0".to_vec())));
-        items.push(RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec())),
-            RespFrame::Integer(0),
-            RespFrame::BulkString(Some(b"overhead.hashtable.expires".to_vec())),
-            RespFrame::Integer(0),
-            RespFrame::BulkString(Some(b"overhead.hashtable.slot-to-keys".to_vec())),
-            RespFrame::Integer(0),
-        ])));
+        if store.dispatch_client_ctx.resp_protocol_version == 3 {
+            items.push(RespFrame::Map(Some(vec![
+                (
+                    RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec())),
+                    RespFrame::Integer(0),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"overhead.hashtable.expires".to_vec())),
+                    RespFrame::Integer(0),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"overhead.hashtable.slot-to-keys".to_vec())),
+                    RespFrame::Integer(0),
+                ),
+            ])));
+        } else {
+            items.push(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec())),
+                RespFrame::Integer(0),
+                RespFrame::BulkString(Some(b"overhead.hashtable.expires".to_vec())),
+                RespFrame::Integer(0),
+                RespFrame::BulkString(Some(b"overhead.hashtable.slot-to-keys".to_vec())),
+                RespFrame::Integer(0),
+            ])));
+        }
         for kv in [
             pair("overhead.total", 0),
             pair("keys.count", total_keys),
@@ -30587,6 +30609,62 @@ mod tests {
         assert_eq!(
             keys_first_3[2],
             &RespFrame::BulkString(Some(b"startup.allocated".to_vec()))
+        );
+    }
+
+    #[test]
+    fn memory_stats_db_sub_map_shape_matches_protocol() {
+        // (frankenredis-ndz0j) Upstream object.c:1602 emits per-db
+        // sub-maps via addReplyMapLen(c, 3) inside the outer Map.
+        // udl3y converted the OUTER level only; the inner db.0
+        // value was still a flat 6-element Array under RESP3.
+        // Pin both shapes here.
+        let mut store = Store::new();
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        let out = dispatch_argv(&[b"MEMORY".to_vec(), b"STATS".to_vec()], &mut store, 0)
+            .expect("memory stats resp3");
+        let RespFrame::Map(Some(entries)) = out else {
+            panic!("RESP3 outer must be Map"); // ubs:ignore — AI triage
+        };
+        let db0 = entries
+            .iter()
+            .find(|(k, _)| matches!(k, RespFrame::BulkString(Some(b)) if b.as_slice() == b"db.0"))
+            .map(|(_, v)| v)
+            .expect("db.0 entry present under RESP3");
+        let RespFrame::Map(Some(db0_pairs)) = db0 else {
+            panic!("RESP3 db.0 value must be Map (was {db0:?})"); // ubs:ignore — AI triage
+        };
+        assert_eq!(db0_pairs.len(), 3);
+        assert_eq!(
+            db0_pairs[0].0,
+            RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec()))
+        );
+        assert_eq!(
+            db0_pairs[2].0,
+            RespFrame::BulkString(Some(b"overhead.hashtable.slot-to-keys".to_vec()))
+        );
+
+        // RESP2 keeps the flat 6-element Array.
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"MEMORY".to_vec(), b"STATS".to_vec()], &mut store, 0)
+            .expect("memory stats resp2");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("RESP2 must be flat Array"); // ubs:ignore — AI triage
+        };
+        // Find db.0 in the flat array — it's followed by the Array
+        // value at the next index.
+        let db0_idx = items
+            .iter()
+            .position(|frame| matches!(frame, RespFrame::BulkString(Some(b)) if b.as_slice() == b"db.0"))
+            .expect("db.0 key present under RESP2");
+        let db0_value = &items[db0_idx + 1];
+        let RespFrame::Array(Some(db0_inner)) = db0_value else {
+            panic!("RESP2 db.0 value must be Array (was {db0_value:?})"); // ubs:ignore — AI triage
+        };
+        assert_eq!(db0_inner.len(), 6, "flat 6-element shape under RESP2");
+        assert_eq!(
+            db0_inner[0],
+            RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec()))
         );
     }
 
