@@ -1559,6 +1559,16 @@ pub struct LuaState<'a> {
     /// tracking, so the yield must error rather than silently drop
     /// iterations on resume. (frankenredis-ztawj)
     nested_exec_stmts_depth: usize,
+    /// True iff exec_stmt is currently dispatching a bare
+    /// Stmt::Expression (a stmt that's a single discarded-result
+    /// expression). Combined with nested_exec_stmts_depth == 0,
+    /// this is the only context where coroutine.yield can be
+    /// resumed correctly: bw15's offset-based PC tracking can
+    /// re-enter at next_pc only when yield was the whole stmt
+    /// (no surrounding LocalAssign / Assign / Return / function-
+    /// arg evaluation that would have its bind step skipped).
+    /// (frankenredis-gdbca)
+    inside_bare_expression_stmt: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1759,6 +1769,7 @@ impl<'a> LuaState<'a> {
             current_coroutine: None,
             pending_yield: None,
             nested_exec_stmts_depth: 0,
+            inside_bare_expression_stmt: false,
         }
     }
 
@@ -1960,8 +1971,15 @@ impl<'a> LuaState<'a> {
             }
             Stmt::Break => Ok(ControlFlow::Break),
             Stmt::Expression(expr) => {
-                self.eval_expr(expr, env, varargs)?;
-                Ok(ControlFlow::None)
+                // Mark the bare-expression-stmt scope so yield
+                // (called from inside this expr) can verify it's
+                // resumable. Save/restore in case Stmt::Expression
+                // is reached inside a nested function call where
+                // the flag was already true. (frankenredis-gdbca)
+                let prev = std::mem::replace(&mut self.inside_bare_expression_stmt, true);
+                let result = self.eval_expr(expr, env, varargs).map(|_| ControlFlow::None);
+                self.inside_bare_expression_stmt = prev;
+                result
             }
             Stmt::LocalAssign(names, exprs) => {
                 let vals = self.eval_expr_list(exprs, env, varargs)?;
@@ -2583,7 +2601,15 @@ impl<'a> LuaState<'a> {
         // depth check. (frankenredis-ztawj)
         let previous_nested_depth =
             std::mem::replace(&mut self.nested_exec_stmts_depth, 0);
+        // Reset the bare-stmt flag too — the coroutine body's outer
+        // stmts are dispatched by exec_coroutine_stmts (not by an
+        // outer Stmt::Expression), so the flag must start false and
+        // be set per-stmt by exec_stmt's Stmt::Expression arm.
+        // (frankenredis-gdbca)
+        let previous_bare_stmt =
+            std::mem::replace(&mut self.inside_bare_expression_stmt, false);
         let run_result = self.exec_coroutine_stmts(&func.body, pc, &mut env, &mut func_varargs);
+        self.inside_bare_expression_stmt = previous_bare_stmt;
         self.nested_exec_stmts_depth = previous_nested_depth;
         self.current_coroutine = previous_coroutine;
         self.pending_yield = previous_yield;
@@ -3498,7 +3524,18 @@ impl<'a> LuaState<'a> {
                 // letting the impl produce wrong results.
                 if self.current_coroutine.is_none()
                     || self.nested_exec_stmts_depth > 0
+                    || !self.inside_bare_expression_stmt
                 {
+                    // (frankenredis-gdbca) Reject yield as part of
+                    // LocalAssign / Assign / Return / function-arg
+                    // evaluation: bw15's PC tracking advances next_pc
+                    // past the whole containing stmt, so the bind /
+                    // assign / return step would be silently skipped
+                    // on resume — producing nil values where the
+                    // user expected resume args. Until the resume
+                    // mechanism captures yield-call return values,
+                    // the only safe yield site is a bare
+                    // Stmt::Expression at the body's outer level.
                     return Err(
                         "attempt to yield across metamethod/C-call boundary".to_string(),
                     );
@@ -6303,6 +6340,61 @@ mod tests {
             Ok(RespFrame::Array(Some(vec![
                 RespFrame::Integer(8),
                 RespFrame::Integer(12),
+            ])))
+        );
+    }
+
+    #[test]
+    fn coroutine_yield_in_local_assign_errors_instead_of_returning_nil() {
+        // (frankenredis-gdbca) bw15's PC tracking advances next_pc
+        // past the whole containing stmt, so 'local v =
+        // coroutine.yield()' would have v unbound on resume —
+        // producing nil where upstream Lua passes the resume args.
+        // Until the resume mechanism captures yield-call return
+        // values, yield-as-non-bare-stmt is rejected with the
+        // upstream Lua 5.1 boundary wording.
+        let mut store = Store::new();
+        let script = b"
+            local co = coroutine.create(function()
+                local v = coroutine.yield()
+                return v
+            end)
+            local ok, err = coroutine.resume(co)
+            return {tostring(ok), err}
+        ";
+        let result = eval_script(script, &[], &[], &mut store, 0);
+        assert_eq!(
+            result,
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"false".to_vec())),
+                RespFrame::BulkString(Some(
+                    b"attempt to yield across metamethod/C-call boundary".to_vec()
+                )),
+            ])))
+        );
+    }
+
+    #[test]
+    fn coroutine_yield_in_return_stmt_errors() {
+        // (frankenredis-gdbca) Same defensive gate covers
+        // 'return coroutine.yield()' — the return stmt's eval_expr
+        // would never reach the ControlFlow::Return on resume.
+        let mut store = Store::new();
+        let script = b"
+            local co = coroutine.create(function()
+                return coroutine.yield()
+            end)
+            local ok, err = coroutine.resume(co)
+            return {tostring(ok), err}
+        ";
+        let result = eval_script(script, &[], &[], &mut store, 0);
+        assert_eq!(
+            result,
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"false".to_vec())),
+                RespFrame::BulkString(Some(
+                    b"attempt to yield across metamethod/C-call boundary".to_vec()
+                )),
             ])))
         );
     }
