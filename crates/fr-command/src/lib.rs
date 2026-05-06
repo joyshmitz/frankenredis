@@ -9405,6 +9405,16 @@ fn setrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     }
     let offset_u64 = u64::try_from(offset).map_err(|_| CommandError::InvalidInteger)?;
     let added_len = argv[3].len();
+    // (frankenredis-23ngn) Upstream t_string.c::setrangeCommand
+    // short-circuits an EMPTY value BEFORE checkStringLength: a
+    // missing key returns 0, an existing string returns its current
+    // length, an existing non-string is WRONGTYPE. The size check
+    // never runs in this path, so `SETRANGE k 600000000 ""` must
+    // not surface 'string exceeds maximum allowed size'.
+    if added_len == 0 {
+        let cur = store.strlen(&argv[1], now_ms)?;
+        return Ok(RespFrame::Integer(i64::try_from(cur).unwrap_or(i64::MAX)));
+    }
     if offset_u64.saturating_add(added_len as u64) > 536_870_912 {
         // Upstream reply: "string exceeds maximum allowed size
         // (proto-max-bulk-len)" (br-frankenredis-68ql).
@@ -28638,6 +28648,81 @@ mod tests {
             negative_offset,
             CommandError::Custom("ERR offset is out of range".to_string())
         );
+    }
+
+    #[test]
+    fn setrange_empty_value_short_circuits_before_size_check() {
+        // (frankenredis-23ngn) Upstream t_string.c::setrangeCommand
+        // returns the current strlen (or 0 for missing keys) without
+        // running checkStringLength when value is empty. fr was
+        // emitting 'string exceeds maximum allowed size' for offsets
+        // > 512 MiB even when value was zero-length.
+        let mut store = Store::new();
+
+        // Missing key, empty value, huge offset → Integer(0).
+        let out = dispatch_argv(
+            &[
+                b"SETRANGE".to_vec(),
+                b"nokey".to_vec(),
+                b"600000000".to_vec(),
+                b"".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("missing key + empty value must short-circuit to 0");
+        assert_eq!(out, RespFrame::Integer(0));
+        // Must NOT have created the key.
+        let exists = dispatch_argv(
+            &[b"EXISTS".to_vec(), b"nokey".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("exists");
+        assert_eq!(exists, RespFrame::Integer(0));
+
+        // Existing string, empty value, huge offset → Integer(strlen).
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed");
+        let out = dispatch_argv(
+            &[
+                b"SETRANGE".to_vec(),
+                b"k".to_vec(),
+                b"600000000".to_vec(),
+                b"".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("existing key + empty value must return strlen");
+        assert_eq!(out, RespFrame::Integer(5));
+        // Value must be unchanged.
+        let val = dispatch_argv(&[b"GET".to_vec(), b"k".to_vec()], &mut store, 0).expect("get");
+        assert_eq!(val, RespFrame::BulkString(Some(b"hello".to_vec())));
+
+        // Existing non-string + empty value → WRONGTYPE.
+        dispatch_argv(
+            &[b"RPUSH".to_vec(), b"lst".to_vec(), b"a".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("rpush");
+        let err = dispatch_argv(
+            &[
+                b"SETRANGE".to_vec(),
+                b"lst".to_vec(),
+                b"600000000".to_vec(),
+                b"".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("non-string + empty value must WRONGTYPE");
+        assert_eq!(err, CommandError::Store(StoreError::WrongType));
     }
 
     #[test]
