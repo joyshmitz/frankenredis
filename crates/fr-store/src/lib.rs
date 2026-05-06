@@ -10180,6 +10180,37 @@ impl Store {
             .sum()
     }
 
+    /// (frankenredis-2usb3) Approximate functionsMemoryOverhead for
+    /// INFO memory's used_memory_functions / used_memory_vm_functions.
+    /// Sums per-library raw code length + library-name + optional
+    /// description + per-function name/description/flag bytes. Doesn't
+    /// model the Lua engine's cached-bytecode overhead (engine-internal)
+    /// but tracks the dominant data-bearing term that monitoring tools
+    /// watch for function-cache growth.
+    #[must_use]
+    pub fn functions_memory_bytes(&self) -> usize {
+        self.function_libraries
+            .values()
+            .map(|lib| {
+                let mut total = lib.code.len();
+                total = total.saturating_add(lib.name.len());
+                if let Some(desc) = &lib.description {
+                    total = total.saturating_add(desc.len());
+                }
+                for func in &lib.functions {
+                    total = total.saturating_add(func.name.len());
+                    if let Some(desc) = &func.description {
+                        total = total.saturating_add(desc.len());
+                    }
+                    for flag in &func.flags {
+                        total = total.saturating_add(flag.len());
+                    }
+                }
+                total
+            })
+            .sum()
+    }
+
     pub fn script_load(&mut self, script: &[u8]) -> String {
         let sha1_hex = sha1_hex(script);
         self.script_cache.insert(sha1_hex.clone(), script.to_vec());

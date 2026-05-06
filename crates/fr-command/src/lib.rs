@@ -11937,10 +11937,16 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         let _ = write!(info, "number_of_cached_scripts:{scripts_cached}\r\n");
         let _ = write!(info, "number_of_functions:{func_count}\r\n");
         let _ = write!(info, "number_of_libraries:{lib_count}\r\n");
-        info.push_str("used_memory_vm_functions:0\r\n");
+        // (frankenredis-2usb3) Mirror upstream functions.c::functions
+        // MemoryOverhead. Sum per-library raw code length + name +
+        // description + per-function name/description/flag bytes.
+        // used_memory_vm_functions == used_memory_functions in fr (one
+        // engine, no separate VM heap accounting).
+        let functions_bytes = store.functions_memory_bytes();
+        let _ = write!(info, "used_memory_vm_functions:{functions_bytes}\r\n");
         info.push_str("used_memory_vm_total:0\r\n");
         info.push_str("used_memory_vm_total_human:0B\r\n");
-        info.push_str("used_memory_functions:0\r\n");
+        let _ = write!(info, "used_memory_functions:{functions_bytes}\r\n");
         // (frankenredis-ymyrt) used_memory_scripts mirrors upstream's
         // mh->lua_caches = evalScriptsMemory(). Same source as
         // used_memory_lua above.
@@ -38755,6 +38761,70 @@ mod tests {
         assert!(
             info.contains(&format!("used_memory_lua_human:{expected}B\r\n")),
             "expected used_memory_lua_human:{expected}B in: {info}"
+        );
+    }
+
+    #[test]
+    fn info_memory_reports_real_used_memory_functions_bytes() {
+        // (frankenredis-2usb3) used_memory_functions /
+        // used_memory_vm_functions were stubbed to 0 even though
+        // FunctionLibrary.code holds the raw library code. Pin
+        // baseline + post-load shapes.
+        let mut store = Store::new();
+
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"memory".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("info memory baseline");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(info.contains("used_memory_functions:0\r\n"));
+        assert!(info.contains("used_memory_vm_functions:0\r\n"));
+
+        // Load a library — counter must reflect the code byte count
+        // plus per-library/per-function metadata bytes.
+        let body = b"#!lua name=mylib\nredis.register_function('f', function() return 1 end)";
+        dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LOAD".to_vec(),
+                body.to_vec(),
+            ],
+            &mut store,
+            1,
+        )
+        .expect("function load");
+
+        let bytes_after = store.functions_memory_bytes();
+        // Sanity: counter must include at least the raw code length.
+        assert!(
+            bytes_after >= body.len(),
+            "functions_memory_bytes ({bytes_after}) must include the raw \
+             code length ({}) at minimum",
+            body.len()
+        );
+
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"memory".to_vec()],
+            &mut store,
+            2,
+        )
+        .expect("info memory loaded");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(
+            info.contains(&format!("used_memory_functions:{bytes_after}\r\n")),
+            "expected used_memory_functions:{bytes_after} in: {info}"
+        );
+        assert!(
+            info.contains(&format!("used_memory_vm_functions:{bytes_after}\r\n")),
+            "expected used_memory_vm_functions:{bytes_after} in: {info}"
         );
     }
 
