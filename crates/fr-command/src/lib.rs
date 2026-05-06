@@ -8677,6 +8677,14 @@ fn function_cmd(
         if store.script_nesting_level >= 1 {
             return Err(script_noscript_command_error());
         }
+        // (frankenredis-1dfox) Upstream functions.c::functionListCommand
+        // emits per-library + per-function as Maps under RESP3
+        // (addReplyMapLen(c, with_code ? 4 : 3) for the library and
+        // addReplyMapLen(c, 3) for each function). RESP2 stays the
+        // existing flat alternating-k/v Array. Same shape pattern
+        // as i40x2/e4njz/udl3y/asvh1/5d04d/ndz0j/5h86s/cz712/ec2rf/
+        // q11am.
+        let resp = store.dispatch_client_ctx.resp_protocol_version;
         let libs = store.function_list(pattern.as_deref());
         let mut result = Vec::new();
         for lib in libs {
@@ -8715,23 +8723,40 @@ fn function_cmd(
                 .functions
                 .iter()
                 .map(|f| {
-                    let func_entries = vec![
-                        RespFrame::BulkString(Some(b"name".to_vec())),
-                        RespFrame::BulkString(Some(f.name.as_bytes().to_vec())),
-                        RespFrame::BulkString(Some(b"description".to_vec())),
-                        match &f.description {
-                            Some(d) => RespFrame::BulkString(Some(d.as_bytes().to_vec())),
-                            None => RespFrame::BulkString(None),
-                        },
-                        RespFrame::BulkString(Some(b"flags".to_vec())),
-                        RespFrame::Array(Some(
-                            f.flags
-                                .iter()
-                                .map(|fl| RespFrame::BulkString(Some(fl.as_bytes().to_vec())))
-                                .collect(),
-                        )),
-                    ];
-                    RespFrame::Array(Some(func_entries))
+                    let name_frame =
+                        RespFrame::BulkString(Some(f.name.as_bytes().to_vec()));
+                    let desc_frame = match &f.description {
+                        Some(d) => RespFrame::BulkString(Some(d.as_bytes().to_vec())),
+                        None => RespFrame::BulkString(None),
+                    };
+                    let flags_frame = RespFrame::Array(Some(
+                        f.flags
+                            .iter()
+                            .map(|fl| RespFrame::BulkString(Some(fl.as_bytes().to_vec())))
+                            .collect(),
+                    ));
+                    if resp == 3 {
+                        RespFrame::Map(Some(vec![
+                            (RespFrame::BulkString(Some(b"name".to_vec())), name_frame),
+                            (
+                                RespFrame::BulkString(Some(b"description".to_vec())),
+                                desc_frame,
+                            ),
+                            (
+                                RespFrame::BulkString(Some(b"flags".to_vec())),
+                                flags_frame,
+                            ),
+                        ]))
+                    } else {
+                        RespFrame::Array(Some(vec![
+                            RespFrame::BulkString(Some(b"name".to_vec())),
+                            name_frame,
+                            RespFrame::BulkString(Some(b"description".to_vec())),
+                            desc_frame,
+                            RespFrame::BulkString(Some(b"flags".to_vec())),
+                            flags_frame,
+                        ]))
+                    }
                 })
                 .collect();
             entries.push(RespFrame::Array(Some(funcs)));
@@ -8739,7 +8764,20 @@ fn function_cmd(
                 entries.push(RespFrame::BulkString(Some(b"library_code".to_vec())));
                 entries.push(RespFrame::BulkString(Some(lib.code.clone())));
             }
-            result.push(RespFrame::Array(Some(entries)));
+            if resp == 3 {
+                assert!(
+                    entries.len().is_multiple_of(2),
+                    "FUNCTION LIST library entries must be balanced k/v pairs"
+                );
+                let mut pairs = Vec::with_capacity(entries.len() / 2);
+                let mut iter = entries.into_iter();
+                while let (Some(k), Some(v)) = (iter.next(), iter.next()) {
+                    pairs.push((k, v));
+                }
+                result.push(RespFrame::Map(Some(pairs)));
+            } else {
+                result.push(RespFrame::Array(Some(entries)));
+            }
         }
         Ok(RespFrame::Array(Some(result)))
     } else if sub.eq_ignore_ascii_case("STATS") {
@@ -38995,6 +39033,70 @@ mod tests {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"FUNCTION".to_vec(), b"LIST".to_vec()], &mut store, 0).unwrap();
         assert_eq!(out, RespFrame::Array(Some(Vec::new())));
+    }
+
+    #[test]
+    fn function_list_under_resp3_returns_nested_map_per_library_and_function() {
+        // (frankenredis-1dfox) Upstream functions.c::functionListCommand
+        // emits per-library Map (3 or 4 entries: library_name, engine,
+        // functions, [library_code]) and per-function Map (3 entries:
+        // name, description, flags) under RESP3. fr was emitting flat
+        // Array shapes for both.
+        let mut store = Store::new();
+        let library = b"#!lua name=mylib\nredis.register_function('echo', function(keys, args) return args[1] end)";
+        dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LOAD".to_vec(),
+                library.to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("function load");
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        let out =
+            dispatch_argv(&[b"FUNCTION".to_vec(), b"LIST".to_vec()], &mut store, 0).expect("list");
+        let RespFrame::Array(Some(libs)) = out else {
+            panic!("outer must be Array of libraries"); // ubs:ignore — AI triage
+        };
+        assert_eq!(libs.len(), 1);
+        let RespFrame::Map(Some(lib_pairs)) = &libs[0] else {
+            panic!("library must be Map under RESP3, got {:?}", libs[0]); // ubs:ignore — AI triage
+        };
+        assert_eq!(lib_pairs.len(), 3);
+        assert_eq!(
+            lib_pairs[0].0,
+            RespFrame::BulkString(Some(b"library_name".to_vec()))
+        );
+        assert_eq!(
+            lib_pairs[1].0,
+            RespFrame::BulkString(Some(b"engine".to_vec()))
+        );
+        assert_eq!(
+            lib_pairs[2].0,
+            RespFrame::BulkString(Some(b"functions".to_vec()))
+        );
+        let RespFrame::Array(Some(funcs)) = &lib_pairs[2].1 else {
+            panic!("functions value must be Array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(funcs.len(), 1);
+        let RespFrame::Map(Some(func_pairs)) = &funcs[0] else {
+            panic!("function must be Map under RESP3, got {:?}", funcs[0]); // ubs:ignore — AI triage
+        };
+        assert_eq!(func_pairs.len(), 3);
+        assert_eq!(
+            func_pairs[0].0,
+            RespFrame::BulkString(Some(b"name".to_vec()))
+        );
+        assert_eq!(
+            func_pairs[1].0,
+            RespFrame::BulkString(Some(b"description".to_vec()))
+        );
+        assert_eq!(
+            func_pairs[2].0,
+            RespFrame::BulkString(Some(b"flags".to_vec()))
+        );
     }
 
     #[test]
