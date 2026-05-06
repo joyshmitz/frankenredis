@@ -9698,6 +9698,11 @@ fn zrandmember(
     let count = parse_i64_arg_long_range(&argv[2])?;
     let withscores = argv.len() == 4
         && std::str::from_utf8(&argv[3]).is_ok_and(|s| s.eq_ignore_ascii_case("WITHSCORES"));
+    // (frankenredis-sntxr) WITHSCORES emits 2 elements per row, so
+    // upstream tightens the count range to [-LONG_MAX/2, LONG_MAX/2].
+    if withscores {
+        require_count_fits_half_long_range(count)?;
+    }
     if argv.len() == 4 && !withscores {
         return Err(CommandError::SyntaxError);
     }
@@ -10050,6 +10055,11 @@ fn hrandfield(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     let count = parse_i64_arg_long_range(&argv[2])?;
     let withvalues = argv.len() == 4
         && std::str::from_utf8(&argv[3]).is_ok_and(|s| s.eq_ignore_ascii_case("WITHVALUES"));
+    // (frankenredis-sntxr) WITHVALUES emits 2 elements per row, so
+    // upstream tightens the count range to [-LONG_MAX/2, LONG_MAX/2].
+    if withvalues {
+        require_count_fits_half_long_range(count)?;
+    }
     if argv.len() == 4 && !withvalues {
         return Err(CommandError::SyntaxError);
     }
@@ -10806,6 +10816,23 @@ fn parse_i64_arg_long_range(arg: &[u8]) -> Result<i64, CommandError> {
         )));
     }
     Ok(value)
+}
+
+/// (frankenredis-sntxr) Tighter bound used by HRANDFIELD WITHVALUES
+/// and ZRANDMEMBER WITHSCORES — restricts count to [-LONG_MAX/2,
+/// LONG_MAX/2] so that count*2 (one member + one value/score per row)
+/// can't overflow the reply length field. Matches upstream
+/// t_zset.c::zrandmemberCommand line 4376 and t_hash.c::hrandfield
+/// Command line 1146 ("value is out of range" with no range hint in
+/// the message).
+fn require_count_fits_half_long_range(count: i64) -> Result<(), CommandError> {
+    let half = i64::MAX / 2;
+    if count < -half || count > half {
+        return Err(CommandError::Custom(
+            "ERR value is out of range".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_i64_arg(arg: &[u8]) -> Result<i64, CommandError> {
@@ -39910,6 +39937,106 @@ mod tests {
                 ])),
             ]))
         );
+    }
+
+    #[test]
+    fn hrandfield_zrandmember_with_pair_modifier_enforce_half_long_range() {
+        // (frankenredis-sntxr) Upstream restricts count to
+        // [-LONG_MAX/2, LONG_MAX/2] when WITHVALUES (HRANDFIELD) /
+        // WITHSCORES (ZRANDMEMBER) is set, so count*2 in the reply
+        // length can't overflow. Pin both commands rejecting just-
+        // outside-half boundary values with the upstream error
+        // wording, while accepting at-half values.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"HSET".to_vec(),
+                b"h".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hset");
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zadd");
+
+        let half = i64::MAX / 2;
+        let just_over = (half + 1).to_string().into_bytes();
+        let just_under = (-(half) - 1).to_string().into_bytes();
+        let expected_err =
+            CommandError::Custom("ERR value is out of range".to_string());
+
+        // HRANDFIELD WITHVALUES rejects (LONG_MAX/2 + 1).
+        let err = dispatch_argv(
+            &[
+                b"HRANDFIELD".to_vec(),
+                b"h".to_vec(),
+                just_over.clone(),
+                b"WITHVALUES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, expected_err);
+
+        // HRANDFIELD WITHVALUES rejects -(LONG_MAX/2 + 1).
+        let err = dispatch_argv(
+            &[
+                b"HRANDFIELD".to_vec(),
+                b"h".to_vec(),
+                just_under.clone(),
+                b"WITHVALUES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, expected_err);
+
+        // ZRANDMEMBER WITHSCORES rejects same boundaries.
+        let err = dispatch_argv(
+            &[
+                b"ZRANDMEMBER".to_vec(),
+                b"z".to_vec(),
+                just_over,
+                b"WITHSCORES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, expected_err);
+
+        let err = dispatch_argv(
+            &[
+                b"ZRANDMEMBER".to_vec(),
+                b"z".to_vec(),
+                just_under,
+                b"WITHSCORES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, expected_err);
+
+        // Sanity: at the half boundary, neither variant rejects.
+        // half=4611686018427387903 is too large to actually dispatch
+        // through HRANDFIELD/ZRANDMEMBER (would allocate huge result
+        // vec), so the in-range case is exercised by the dispatch
+        // tests for typical small values elsewhere in this module.
     }
 
     #[test]
