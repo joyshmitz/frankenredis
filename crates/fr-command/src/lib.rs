@@ -4305,7 +4305,7 @@ fn zrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
                 pairs = pairs.into_iter().skip(offset).collect();
             }
         }
-        zrange_emit(pairs, withscores)
+        zrange_emit_with_resp(pairs, withscores, store.dispatch_client_ctx.resp_protocol_version)
     } else if bylex {
         let min_lex = &argv[2];
         let max_lex = &argv[3];
@@ -4330,14 +4330,15 @@ fn zrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
             }
         }
         if withscores {
-            // For lex ranges, get scores individually
-            let mut frames = Vec::with_capacity(members.len() * 2);
-            for m in &members {
-                let score = store.zscore(&argv[1], m, now_ms)?.unwrap_or(0.0);
-                frames.push(RespFrame::BulkString(Some(m.clone())));
-                frames.push(RespFrame::BulkString(Some(score.to_string().into_bytes())));
+            // (frankenredis-jnf53) Lex ranges look up scores individually
+            // and feed the (member, score) pairs through the same shape
+            // helper so RESP3 emits Array<[member, score]>.
+            let mut pairs: Vec<(Vec<u8>, f64)> = Vec::with_capacity(members.len());
+            for m in members {
+                let score = store.zscore(&argv[1], &m, now_ms)?.unwrap_or(0.0);
+                pairs.push((m, score));
             }
-            Ok(RespFrame::Array(Some(frames)))
+            zrange_emit_with_resp(pairs, true, store.dispatch_client_ctx.resp_protocol_version)
         } else {
             let frames = members
                 .into_iter()
@@ -4349,12 +4350,13 @@ fn zrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         // Default: by rank (index)
         let start = parse_i64_arg(&argv[2])?;
         let stop = parse_i64_arg(&argv[3])?;
+        let resp = store.dispatch_client_ctx.resp_protocol_version;
         if rev {
             let pairs = store.zrevrange_withscores(&argv[1], start, stop, now_ms)?;
-            zrange_emit(pairs, withscores)
+            zrange_emit_with_resp(pairs, withscores, resp)
         } else if withscores {
             let pairs = store.zrange_withscores(&argv[1], start, stop, now_ms)?;
-            zrange_emit(pairs, true)
+            zrange_emit_with_resp(pairs, true, resp)
         } else {
             let members = store.zrange(&argv[1], start, stop, now_ms)?;
             let frames = members
@@ -4366,20 +4368,40 @@ fn zrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     }
 }
 
-/// Helper to emit ZRANGE results with optional WITHSCORES.
-fn zrange_emit(pairs: Vec<(Vec<u8>, f64)>, withscores: bool) -> Result<RespFrame, CommandError> {
-    if withscores {
+/// (frankenredis-jnf53) Upstream t_zset.c::zrangeResultEmitCBufferToClient
+/// wraps each (member, score) pair in `addReplyArrayLen(c, 2)` when
+/// `c->resp > 2` and skips that wrapper under RESP2 — so the wire under
+/// RESP3 is Array<[member, score]> while under RESP2 it stays flat
+/// alternating. Mirror that here.
+fn zrange_emit_with_resp(
+    pairs: Vec<(Vec<u8>, f64)>,
+    withscores: bool,
+    resp_protocol_version: i64,
+) -> Result<RespFrame, CommandError> {
+    if !withscores {
+        let frames = pairs
+            .into_iter()
+            .map(|(m, _)| RespFrame::BulkString(Some(m)))
+            .collect();
+        return Ok(RespFrame::Array(Some(frames)));
+    }
+    if resp_protocol_version == 3 {
+        let frames = pairs
+            .into_iter()
+            .map(|(member, score)| {
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(member)),
+                    RespFrame::BulkString(Some(score.to_string().into_bytes())),
+                ]))
+            })
+            .collect();
+        Ok(RespFrame::Array(Some(frames)))
+    } else {
         let mut frames = Vec::with_capacity(pairs.len() * 2);
         for (member, score) in pairs {
             frames.push(RespFrame::BulkString(Some(member)));
             frames.push(RespFrame::BulkString(Some(score.to_string().into_bytes())));
         }
-        Ok(RespFrame::Array(Some(frames)))
-    } else {
-        let frames = pairs
-            .into_iter()
-            .map(|(m, _)| RespFrame::BulkString(Some(m)))
-            .collect();
         Ok(RespFrame::Array(Some(frames)))
     }
 }
@@ -4399,14 +4421,14 @@ fn zrevrange(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     }
     let members = store.zrevrange(&argv[1], start, stop, now_ms)?;
     if withscores {
-        // Need scores too - get them individually
-        let mut frames = Vec::with_capacity(members.len() * 2);
-        for m in &members {
-            frames.push(RespFrame::BulkString(Some(m.clone())));
-            let score = store.zscore(&argv[1], m, now_ms)?.unwrap_or(0.0);
-            frames.push(RespFrame::BulkString(Some(score.to_string().into_bytes())));
+        // (frankenredis-jnf53) Route through zrange_emit_with_resp so the
+        // RESP3 wire is Array<[member, score]> and RESP2 stays flat.
+        let mut pairs: Vec<(Vec<u8>, f64)> = Vec::with_capacity(members.len());
+        for m in members {
+            let score = store.zscore(&argv[1], &m, now_ms)?.unwrap_or(0.0);
+            pairs.push((m, score));
         }
-        Ok(RespFrame::Array(Some(frames)))
+        zrange_emit_with_resp(pairs, true, store.dispatch_client_ctx.resp_protocol_version)
     } else {
         let frames = members
             .into_iter()
@@ -4464,7 +4486,7 @@ fn zrangebyscore(
             pairs = pairs.into_iter().skip(offset).collect();
         }
     }
-    zrange_emit(pairs, withscores)
+    zrange_emit_with_resp(pairs, withscores, store.dispatch_client_ctx.resp_protocol_version)
 }
 
 fn zcount(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
@@ -9630,20 +9652,10 @@ fn zrandmember(
         return Err(CommandError::SyntaxError);
     }
     let pairs = store.zrandmember_count(&argv[1], count, now_ms)?;
-    if withscores {
-        let mut frames = Vec::with_capacity(pairs.len() * 2);
-        for (member, score) in pairs {
-            frames.push(RespFrame::BulkString(Some(member)));
-            frames.push(RespFrame::BulkString(Some(score.to_string().into_bytes())));
-        }
-        Ok(RespFrame::Array(Some(frames)))
-    } else {
-        let frames = pairs
-            .into_iter()
-            .map(|(m, _)| RespFrame::BulkString(Some(m)))
-            .collect();
-        Ok(RespFrame::Array(Some(frames)))
-    }
+    // (frankenredis-jnf53) Mirror ZRANGE WITHSCORES wire shape: under
+    // RESP3 wrap each (member, score) in a 2-element Array; under RESP2
+    // emit flat alternating.
+    zrange_emit_with_resp(pairs, withscores, store.dispatch_client_ctx.resp_protocol_version)
 }
 
 fn zmscore(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
@@ -10039,7 +10051,7 @@ fn zrevrangebyscore(
             pairs = pairs.into_iter().skip(offset).collect();
         }
     }
-    zrange_emit(pairs, withscores)
+    zrange_emit_with_resp(pairs, withscores, store.dispatch_client_ctx.resp_protocol_version)
 }
 
 fn zrangebylex(
@@ -23155,6 +23167,156 @@ mod tests {
                 RespFrame::BulkString(Some(b"2".to_vec())),
             ]))
         );
+    }
+
+    #[test]
+    fn zrange_withscores_under_resp3_returns_array_of_pair_subarrays() {
+        // (frankenredis-jnf53) Upstream t_zset.c::zrangeResultEmitCBuffer
+        // ToClient wraps each (member, score) in addReplyArrayLen(c, 2)
+        // when c->resp > 2. Pin the wire shape: outer Array of length N
+        // (one element per pair), each element is a 2-Array
+        // [member, score]. Parallel ZRANGEBYSCORE/BYLEX/REV/RANDMEMBER
+        // share the same helper so this test guards the family.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+                b"2".to_vec(),
+                b"b".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zadd");
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+
+        let out = dispatch_argv(
+            &[
+                b"ZRANGE".to_vec(),
+                b"zs".to_vec(),
+                b"0".to_vec(),
+                b"-1".to_vec(),
+                b"WITHSCORES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zrange withscores resp3");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"a".to_vec())),
+                    RespFrame::BulkString(Some(b"1".to_vec())),
+                ])),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"b".to_vec())),
+                    RespFrame::BulkString(Some(b"2".to_vec())),
+                ])),
+            ]))
+        );
+
+        // ZRANGEBYSCORE WITHSCORES exercises the same helper.
+        let out = dispatch_argv(
+            &[
+                b"ZRANGEBYSCORE".to_vec(),
+                b"zs".to_vec(),
+                b"-inf".to_vec(),
+                b"+inf".to_vec(),
+                b"WITHSCORES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zrangebyscore withscores resp3");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected outer Array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 2);
+        for entry in &items {
+            let RespFrame::Array(Some(pair)) = entry else {
+                panic!("each pair must be 2-Array under RESP3"); // ubs:ignore — AI triage
+            };
+            assert_eq!(pair.len(), 2);
+        }
+
+        // ZRANGE BYSCORE REV WITHSCORES — same helper, different
+        // ingestion path.
+        let out = dispatch_argv(
+            &[
+                b"ZRANGE".to_vec(),
+                b"zs".to_vec(),
+                b"+inf".to_vec(),
+                b"-inf".to_vec(),
+                b"BYSCORE".to_vec(),
+                b"REV".to_vec(),
+                b"WITHSCORES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zrange byscore rev withscores resp3");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected outer Array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 2);
+        for entry in &items {
+            let RespFrame::Array(Some(pair)) = entry else {
+                panic!("each REV pair must be 2-Array under RESP3"); // ubs:ignore — AI triage
+            };
+            assert_eq!(pair.len(), 2);
+        }
+
+        // ZREVRANGE WITHSCORES — score lookup path.
+        let out = dispatch_argv(
+            &[
+                b"ZREVRANGE".to_vec(),
+                b"zs".to_vec(),
+                b"0".to_vec(),
+                b"-1".to_vec(),
+                b"WITHSCORES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zrevrange withscores resp3");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected outer Array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 2);
+        for entry in &items {
+            let RespFrame::Array(Some(pair)) = entry else {
+                panic!("each ZREVRANGE pair must be 2-Array under RESP3"); // ubs:ignore — AI triage
+            };
+            assert_eq!(pair.len(), 2);
+        }
+
+        // RESP2 must still flatten — the test above pins RESP2 shape;
+        // double-check ZRANGEBYSCORE here for the same store.
+        store.dispatch_client_ctx.resp_protocol_version = 2;
+        let out = dispatch_argv(
+            &[
+                b"ZRANGEBYSCORE".to_vec(),
+                b"zs".to_vec(),
+                b"-inf".to_vec(),
+                b"+inf".to_vec(),
+                b"WITHSCORES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zrangebyscore withscores resp2");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected outer Array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0], RespFrame::BulkString(Some(b"a".to_vec())));
+        assert_eq!(items[1], RespFrame::BulkString(Some(b"1".to_vec())));
+        assert_eq!(items[2], RespFrame::BulkString(Some(b"b".to_vec())));
+        assert_eq!(items[3], RespFrame::BulkString(Some(b"2".to_vec())));
     }
 
     #[test]
