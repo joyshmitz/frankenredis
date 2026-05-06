@@ -828,6 +828,18 @@ impl MaxmemoryPolicy {
     pub fn tracks_lfu(self) -> bool {
         matches!(self, Self::AllkeysLfu | Self::VolatileLfu)
     }
+
+    /// (frankenredis-ljrt6) Mirror upstream server.h's
+    /// MAXMEMORY_FLAG_NO_SHARED_INTEGERS = LRU|LFU. When maxmemory is
+    /// engaged with an LRU/LFU policy, shared integer interning is
+    /// disabled so each entry carries its own LRU/LFU tracking field.
+    #[must_use]
+    pub fn forbids_shared_integers(self) -> bool {
+        matches!(
+            self,
+            Self::AllkeysLru | Self::VolatileLru | Self::AllkeysLfu | Self::VolatileLfu
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -3111,6 +3123,46 @@ impl Store {
             let idle_ms = now_ms.saturating_sub(entry.last_access_ms);
             idle_ms / 1000
         })
+    }
+
+    /// (frankenredis-ljrt6) Mirror upstream tryObjectEncoding's shared-
+    /// integer rule. When the value is a canonical decimal string in
+    /// [0, OBJ_SHARED_INTEGERS) and shared interning is enabled (default
+    /// maxmemory = 0 OR a non-LRU/LFU policy), upstream returns
+    /// shared.integers[value] whose refcount is OBJ_SHARED_REFCOUNT
+    /// (= INT_MAX = i32::MAX). Otherwise refcount is 1.
+    ///
+    /// fr does not actually intern shared integers (full owned-bytes
+    /// implementation), so this reports the value upstream WOULD report
+    /// given the same encoding state.
+    pub fn object_refcount(&mut self, key: &[u8], now_ms: u64) -> Option<i64> {
+        if !self.record_keyspace_lookup(key, now_ms) {
+            return None;
+        }
+        let entry = self.entries.get(key)?;
+        let Value::String(v) = &entry.value else {
+            return Some(1);
+        };
+        if entry.force_raw_encoding || entry.force_string_encoding {
+            return Some(1);
+        }
+        let Ok(s) = std::str::from_utf8(v) else {
+            return Some(1);
+        };
+        let Ok(n) = s.parse::<i64>() else {
+            return Some(1);
+        };
+        if n.to_string() != s {
+            return Some(1);
+        }
+        const OBJ_SHARED_INTEGERS: i64 = 10000;
+        if !(0..OBJ_SHARED_INTEGERS).contains(&n) {
+            return Some(1);
+        }
+        if self.maxmemory_bytes_live > 0 && self.maxmemory_policy.forbids_shared_integers() {
+            return Some(1);
+        }
+        Some(i64::from(i32::MAX))
     }
 
     /// Return the LFU access frequency counter for a key without mutating it.

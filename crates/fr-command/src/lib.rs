@@ -15087,10 +15087,13 @@ fn object_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
                 subcommand: sub.to_string(),
             });
         }
-        if store.exists_no_touch(&argv[2], now_ms) {
-            Ok(RespFrame::Integer(1))
-        } else {
-            Ok(RespFrame::BulkString(None))
+        // (frankenredis-ljrt6) Mirror upstream OBJECT REFCOUNT for shared
+        // integer objects: refcount = INT_MAX when the value is a
+        // canonical decimal in [0, 10000) and shared interning is
+        // enabled.
+        match store.object_refcount(&argv[2], now_ms) {
+            Some(n) => Ok(RespFrame::Integer(n)),
+            None => Ok(RespFrame::BulkString(None)),
         }
     } else if sub.eq_ignore_ascii_case("IDLETIME") {
         if argv.len() != 3 {
@@ -44351,6 +44354,7 @@ mod tests {
         .expect("missing refcount reply");
         assert_eq!(missing_refcount, RespFrame::BulkString(None));
 
+        // Non-integer string: refcount = 1.
         dispatch_argv(
             &[b"SET".to_vec(), b"obj".to_vec(), b"v".to_vec()],
             &mut store,
@@ -44364,6 +44368,109 @@ mod tests {
         )
         .expect("existing refcount reply");
         assert_eq!(existing_refcount, RespFrame::Integer(1));
+    }
+
+    #[test]
+    fn object_refcount_reports_int_max_for_shared_integer_objects() {
+        // (frankenredis-ljrt6) Upstream tryObjectEncoding interns canonical
+        // decimal integers in [0, OBJ_SHARED_INTEGERS=10000) when shared
+        // integers are enabled (default maxmemory == 0 or a non-LRU/LFU
+        // policy). The interned object's refcount is OBJ_SHARED_REFCOUNT
+        // = INT_MAX = i32::MAX.
+        let mut store = Store::new();
+
+        // Small integer in [0, 10000) — shared object.
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"5".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set k 5");
+        let out = dispatch_argv(
+            &[b"OBJECT".to_vec(), b"REFCOUNT".to_vec(), b"k".to_vec()],
+            &mut store,
+            1,
+        )
+        .expect("refcount k");
+        assert_eq!(out, RespFrame::Integer(i64::from(i32::MAX)));
+
+        // Boundary: 9999 (shared).
+        dispatch_argv(
+            &[b"SET".to_vec(), b"hi".to_vec(), b"9999".to_vec()],
+            &mut store,
+            2,
+        )
+        .expect("set hi 9999");
+        assert_eq!(
+            dispatch_argv(
+                &[b"OBJECT".to_vec(), b"REFCOUNT".to_vec(), b"hi".to_vec()],
+                &mut store,
+                3,
+            )
+            .expect("refcount hi"),
+            RespFrame::Integer(i64::from(i32::MAX))
+        );
+
+        // Boundary: 10000 (NOT shared — refcount 1).
+        dispatch_argv(
+            &[b"SET".to_vec(), b"big".to_vec(), b"10000".to_vec()],
+            &mut store,
+            4,
+        )
+        .expect("set big 10000");
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"OBJECT".to_vec(),
+                    b"REFCOUNT".to_vec(),
+                    b"big".to_vec(),
+                ],
+                &mut store,
+                5,
+            )
+            .expect("refcount big"),
+            RespFrame::Integer(1)
+        );
+
+        // Negative integer: NOT shared.
+        dispatch_argv(
+            &[b"SET".to_vec(), b"neg".to_vec(), b"-1".to_vec()],
+            &mut store,
+            6,
+        )
+        .expect("set neg -1");
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"OBJECT".to_vec(),
+                    b"REFCOUNT".to_vec(),
+                    b"neg".to_vec(),
+                ],
+                &mut store,
+                7,
+            )
+            .expect("refcount neg"),
+            RespFrame::Integer(1)
+        );
+
+        // LRU/LFU policy with maxmemory > 0 disables shared integers.
+        store.maxmemory_policy = fr_store::MaxmemoryPolicy::AllkeysLru;
+        store.maxmemory_bytes_live = 1024 * 1024;
+        dispatch_argv(
+            &[b"SET".to_vec(), b"lk".to_vec(), b"7".to_vec()],
+            &mut store,
+            8,
+        )
+        .expect("set lk 7");
+        assert_eq!(
+            dispatch_argv(
+                &[b"OBJECT".to_vec(), b"REFCOUNT".to_vec(), b"lk".to_vec()],
+                &mut store,
+                9,
+            )
+            .expect("refcount lk under LRU+maxmemory"),
+            RespFrame::Integer(1)
+        );
     }
 
     #[test]
