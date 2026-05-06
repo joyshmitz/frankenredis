@@ -306,5 +306,8 @@ fn golden_unsupported_resp3_attribute_prefix() {
 
 #[test]
 fn golden_unsupported_resp3_blob_error_prefix() {
-    parse_and_snapshot("unsupported_resp3_blob_error_prefix", b"!21\r\nSYNTAX invalid syntax\r\n");
+    parse_and_snapshot(
+        "unsupported_resp3_blob_error_prefix",
+        b"!21\r\nSYNTAX invalid syntax\r\n",
+    );
 }

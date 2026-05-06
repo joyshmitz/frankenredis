@@ -264,7 +264,10 @@ fn parse_frame_internal(
             Ok((RespFrame::BulkString(Some(s.into_bytes())), consumed))
         }
         b'_' => {
-            let (_line, consumed) = read_line(input, next)?;
+            let (line, consumed) = read_line(input, next)?;
+            if !line.is_empty() {
+                return Err(RespParseError::InvalidBulkLength);
+            }
             Ok((RespFrame::BulkString(None), consumed))
         }
         b'=' => parse_resp3_verbatim(input, next, config),
@@ -1198,6 +1201,29 @@ mod tests {
         // Blob error → Error.
         let parsed = parse_frame_with_config(b"!5\r\nWRONG\r\n", &allow).unwrap();
         assert_eq!(parsed.frame, RespFrame::Error("WRONG".to_string()));
+    }
+
+    #[test]
+    fn resp3_null_rejects_non_empty_payload() {
+        let allow = ParserConfig {
+            allow_resp3: true,
+            ..ParserConfig::default()
+        };
+
+        assert_eq!(
+            parse_frame_with_config(b"_payload\r\n", &allow),
+            Err(RespParseError::InvalidBulkLength)
+        );
+        assert_eq!(
+            parse_frame_with_config(b"_0\r\n", &allow),
+            Err(RespParseError::InvalidBulkLength)
+        );
+        assert_eq!(
+            parse_frame_with_config(b"_\r\n", &allow)
+                .expect("canonical RESP3 null must parse")
+                .frame,
+            RespFrame::BulkString(None)
+        );
     }
 
     #[test]
