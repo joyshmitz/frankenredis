@@ -10164,6 +10164,22 @@ impl Store {
         self.script_cache.len()
     }
 
+    /// (frankenredis-ymyrt) Approximate evalScriptsMemory for INFO
+    /// memory's used_memory_scripts / used_memory_lua counters. Sums
+    /// the sha-key length (40 hex chars per upstream sdsZmallocSize)
+    /// plus the body bytes for every cached script. Doesn't model
+    /// the Lua dict overhead (implementation-specific) but tracks
+    /// the dominant data-bearing term that monitoring tools watch
+    /// for script-memory growth.
+    #[must_use]
+    pub fn scripts_memory_bytes(&self) -> usize {
+        const SHA_HEX_LEN: usize = 40;
+        self.script_cache
+            .values()
+            .map(|body| SHA_HEX_LEN.saturating_add(body.len()))
+            .sum()
+    }
+
     pub fn script_load(&mut self, script: &[u8]) -> String {
         let sha1_hex = sha1_hex(script);
         self.script_cache.insert(sha1_hex.clone(), script.to_vec());

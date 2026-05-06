@@ -11913,10 +11913,21 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         let _ = write!(info, "allocator_resident:{used_memory_rss}\r\n");
         info.push_str("total_system_memory:0\r\n");
         info.push_str("total_system_memory_human:0B\r\n");
-        info.push_str("used_memory_lua:0\r\n");
+        // (frankenredis-ymyrt) Mirror upstream eval.c::evalScriptsMemory.
+        // Sum per-script sha (40 hex chars) + body bytes; dict overhead
+        // is implementation-specific and skipped. used_memory_lua and
+        // used_memory_scripts_eval share the same counter upstream
+        // (lctx.lua_scripts_mem) — fr has only one Lua context, so
+        // both lines emit the same value.
+        let scripts_bytes = store.scripts_memory_bytes();
+        let _ = write!(info, "used_memory_lua:{scripts_bytes}\r\n");
         info.push_str("used_memory_vm_eval:0\r\n");
-        info.push_str("used_memory_lua_human:0B\r\n");
-        info.push_str("used_memory_scripts_eval:0\r\n");
+        let _ = write!(
+            info,
+            "used_memory_lua_human:{}\r\n",
+            format_bytes_human(scripts_bytes)
+        );
+        let _ = write!(info, "used_memory_scripts_eval:{scripts_bytes}\r\n");
         // (frankenredis-8tk8h) Mirror upstream server.c INFO memory:
         // number_of_cached_scripts = dictSize(server.lua_scripts);
         // number_of_libraries     = engineLibrariesNum();
@@ -11930,8 +11941,15 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("used_memory_vm_total:0\r\n");
         info.push_str("used_memory_vm_total_human:0B\r\n");
         info.push_str("used_memory_functions:0\r\n");
-        info.push_str("used_memory_scripts:0\r\n");
-        info.push_str("used_memory_scripts_human:0B\r\n");
+        // (frankenredis-ymyrt) used_memory_scripts mirrors upstream's
+        // mh->lua_caches = evalScriptsMemory(). Same source as
+        // used_memory_lua above.
+        let _ = write!(info, "used_memory_scripts:{scripts_bytes}\r\n");
+        let _ = write!(
+            info,
+            "used_memory_scripts_human:{}\r\n",
+            format_bytes_human(scripts_bytes)
+        );
         info.push_str("maxmemory_reservation:0\r\n");
         info.push_str("maxmemory_reservation_human:0B\r\n");
         info.push_str("maxmemory_desired:0\r\n");
@@ -38663,6 +38681,80 @@ mod tests {
         assert!(
             info.contains("number_of_libraries:1\r\n"),
             "expected 1 library in: {info}"
+        );
+    }
+
+    #[test]
+    fn info_memory_reports_real_used_memory_scripts_and_lua_bytes() {
+        // (frankenredis-ymyrt) used_memory_scripts / used_memory_lua /
+        // used_memory_scripts_eval / used_memory_lua_human were stubbed
+        // to 0/0B even though Store::script_cache contains the body
+        // bytes. The new helper Store::scripts_memory_bytes() approximates
+        // upstream evalScriptsMemory: per-entry sha (40 hex chars) +
+        // body bytes.
+        let mut store = Store::new();
+
+        // Empty: all four counters report 0.
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"memory".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("info memory baseline");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(info.contains("used_memory_scripts:0\r\n"));
+        assert!(info.contains("used_memory_scripts_human:0B\r\n"));
+        assert!(info.contains("used_memory_lua:0\r\n"));
+        assert!(info.contains("used_memory_lua_human:0B\r\n"));
+        assert!(info.contains("used_memory_scripts_eval:0\r\n"));
+
+        // SCRIPT LOAD a body of known size — counter reflects 40-byte
+        // sha overhead + body bytes.
+        let body = b"return 1";
+        dispatch_argv(
+            &[
+                b"SCRIPT".to_vec(),
+                b"LOAD".to_vec(),
+                body.to_vec(),
+            ],
+            &mut store,
+            1,
+        )
+        .expect("script load");
+        let expected = 40 + body.len();
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"memory".to_vec()],
+            &mut store,
+            2,
+        )
+        .expect("info memory loaded");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(
+            info.contains(&format!("used_memory_scripts:{expected}\r\n")),
+            "expected used_memory_scripts:{expected} in: {info}"
+        );
+        assert!(
+            info.contains(&format!("used_memory_lua:{expected}\r\n")),
+            "expected used_memory_lua:{expected} in: {info}"
+        );
+        assert!(
+            info.contains(&format!("used_memory_scripts_eval:{expected}\r\n")),
+            "expected used_memory_scripts_eval:{expected} in: {info}"
+        );
+        // Human formatter emits 'NB' for sub-KB byte counts.
+        assert!(
+            info.contains(&format!("used_memory_scripts_human:{expected}B\r\n")),
+            "expected used_memory_scripts_human:{expected}B in: {info}"
+        );
+        assert!(
+            info.contains(&format!("used_memory_lua_human:{expected}B\r\n")),
+            "expected used_memory_lua_human:{expected}B in: {info}"
         );
     }
 
