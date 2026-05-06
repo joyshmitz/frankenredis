@@ -11917,9 +11917,15 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("used_memory_vm_eval:0\r\n");
         info.push_str("used_memory_lua_human:0B\r\n");
         info.push_str("used_memory_scripts_eval:0\r\n");
-        info.push_str("number_of_cached_scripts:0\r\n");
-        info.push_str("number_of_functions:0\r\n");
-        info.push_str("number_of_libraries:0\r\n");
+        // (frankenredis-8tk8h) Mirror upstream server.c INFO memory:
+        // number_of_cached_scripts = dictSize(server.lua_scripts);
+        // number_of_libraries     = engineLibrariesNum();
+        // number_of_functions     = sum of per-library function counts.
+        let scripts_cached = store.script_count();
+        let (lib_count, func_count) = store.function_stats();
+        let _ = write!(info, "number_of_cached_scripts:{scripts_cached}\r\n");
+        let _ = write!(info, "number_of_functions:{func_count}\r\n");
+        let _ = write!(info, "number_of_libraries:{lib_count}\r\n");
         info.push_str("used_memory_vm_functions:0\r\n");
         info.push_str("used_memory_vm_total:0\r\n");
         info.push_str("used_memory_vm_total_human:0B\r\n");
@@ -38589,6 +38595,75 @@ mod tests {
         assert!(info.contains("tracking_clients:1\r\n"));
         assert!(info.contains("maxmemory:2048\r\n"));
         assert!(info.contains("maxmemory_human:2.00K\r\n"));
+    }
+
+    #[test]
+    fn info_memory_reports_real_script_function_library_counts() {
+        // (frankenredis-8tk8h) INFO memory used to hardcode
+        // number_of_cached_scripts/functions/libraries to 0 even though
+        // SCRIPT LOAD and FUNCTION LOAD populate real counters in
+        // Store. Pin the live values.
+        let mut store = Store::new();
+
+        // Baseline: empty stores → all three zero.
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"memory".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("info memory baseline");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(info.contains("number_of_cached_scripts:0\r\n"));
+        assert!(info.contains("number_of_functions:0\r\n"));
+        assert!(info.contains("number_of_libraries:0\r\n"));
+
+        // Load a script and a function library — counters should reflect them.
+        dispatch_argv(
+            &[
+                b"SCRIPT".to_vec(),
+                b"LOAD".to_vec(),
+                b"return 1".to_vec(),
+            ],
+            &mut store,
+            1,
+        )
+        .expect("script load");
+        dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LOAD".to_vec(),
+                b"#!lua name=lib1\nredis.register_function('f1', function() return 1 end)\nredis.register_function('f2', function() return 2 end)".to_vec(),
+            ],
+            &mut store,
+            2,
+        )
+        .expect("function load");
+
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"memory".to_vec()],
+            &mut store,
+            3,
+        )
+        .expect("info memory loaded");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(
+            info.contains("number_of_cached_scripts:1\r\n"),
+            "expected 1 cached script in: {info}"
+        );
+        assert!(
+            info.contains("number_of_functions:2\r\n"),
+            "expected 2 functions in: {info}"
+        );
+        assert!(
+            info.contains("number_of_libraries:1\r\n"),
+            "expected 1 library in: {info}"
+        );
     }
 
     #[cfg(target_os = "linux")]

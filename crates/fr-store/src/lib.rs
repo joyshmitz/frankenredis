@@ -10155,6 +10155,15 @@ impl Store {
     }
 
     /// Load a script into the cache, returning its SHA1 hex digest.
+    /// (frankenredis-8tk8h) Number of scripts currently cached via
+    /// SCRIPT LOAD / EVAL fallback insert. Mirrors upstream
+    /// dictSize(server.lua_scripts), exposed via INFO memory's
+    /// number_of_cached_scripts.
+    #[must_use]
+    pub fn script_count(&self) -> usize {
+        self.script_cache.len()
+    }
+
     pub fn script_load(&mut self, script: &[u8]) -> String {
         let sha1_hex = sha1_hex(script);
         self.script_cache.insert(sha1_hex.clone(), script.to_vec());
