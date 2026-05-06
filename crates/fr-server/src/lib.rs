@@ -117,6 +117,14 @@ pub fn split_inline_args(line: &[u8]) -> Result<Vec<Vec<u8>>, &'static str> {
                 return Err("ERR Protocol error: unbalanced quotes in request");
             }
             i += 1;
+            // (frankenredis-z1h45) Upstream sdssplitargs requires the
+            // closing quote to be followed by whitespace or end-of-line:
+            //     if (*(p+1) && !isspace(*(p+1))) goto err;
+            // Otherwise inputs like `"foo"bar` would silently split into
+            // ["foo", "bar"] — wire-format conformance + security gap.
+            if i < line.len() && line[i] != b' ' && line[i] != b'\t' {
+                return Err("ERR Protocol error: unbalanced quotes in request");
+            }
             args.push(arg);
         } else if line[i] == b'\'' {
             i += 1;
@@ -135,6 +143,12 @@ pub fn split_inline_args(line: &[u8]) -> Result<Vec<Vec<u8>>, &'static str> {
             }
             args.push(arg);
             i += 1;
+            // (frankenredis-z1h45) Upstream's same closing-quote rule
+            // applies to single-quoted tokens too — line 1064-1067 of
+            // sds.c::sdssplitargs.
+            if i < line.len() && line[i] != b' ' && line[i] != b'\t' {
+                return Err("ERR Protocol error: unbalanced quotes in request");
+            }
         } else {
             let start = i;
             while i < line.len() && line[i] != b' ' && line[i] != b'\t' {
@@ -199,5 +213,44 @@ mod tests {
     fn inline_single_quotes() {
         let args = split_inline_args(b"SET key 'hello world'").unwrap();
         assert_eq!(args[2], b"hello world");
+    }
+
+    #[test]
+    fn inline_closing_double_quote_must_be_followed_by_whitespace() {
+        // (frankenredis-z1h45) Upstream sds.c::sdssplitargs lines
+        // 1049-1053 require the closing `"` to be followed by space
+        // or end-of-line. fr was silently splitting `SET key "hello"world`
+        // into ["SET", "key", "hello", "world"]; now rejects.
+        let result = split_inline_args(b"SET key \"hello\"world");
+        assert!(result.is_err());
+
+        // No trailer after closing quote → still ok.
+        let args = split_inline_args(b"SET key \"hello\"").unwrap();
+        assert_eq!(args[2], b"hello");
+
+        // Whitespace after closing quote → ok.
+        let args = split_inline_args(b"SET key \"hello\" extra").unwrap();
+        assert_eq!(args, vec![b"SET".to_vec(), b"key".to_vec(), b"hello".to_vec(), b"extra".to_vec()]);
+
+        // Tab after closing quote → ok.
+        let args = split_inline_args(b"SET key \"hello\"\textra").unwrap();
+        assert_eq!(args[2], b"hello");
+        assert_eq!(args[3], b"extra");
+    }
+
+    #[test]
+    fn inline_closing_single_quote_must_be_followed_by_whitespace() {
+        // (frankenredis-z1h45) Same rule for single-quoted tokens —
+        // upstream sds.c lines 1064-1068.
+        let result = split_inline_args(b"SET key 'hello'world");
+        assert!(result.is_err());
+
+        // No trailer → ok.
+        let args = split_inline_args(b"SET key 'hello'").unwrap();
+        assert_eq!(args[2], b"hello");
+
+        // Whitespace trailer → ok.
+        let args = split_inline_args(b"SET key 'hello' world").unwrap();
+        assert_eq!(args, vec![b"SET".to_vec(), b"key".to_vec(), b"hello".to_vec(), b"world".to_vec()]);
     }
 }
