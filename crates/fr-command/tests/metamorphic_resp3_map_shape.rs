@@ -72,8 +72,7 @@ fn assert_shape_contract(label: &str, resp2: &RespFrame, resp3: &RespFrame) {
         "{label}: RESP2 Array length must be 2× RESP3 Map entry count"
     );
     let array_pairs = flat_array_to_pairs(items);
-    for (i, ((map_k, map_v), (arr_k, arr_v))) in
-        entries.iter().zip(array_pairs.iter()).enumerate()
+    for (i, ((map_k, map_v), (arr_k, arr_v))) in entries.iter().zip(array_pairs.iter()).enumerate()
     {
         assert_eq!(
             map_k, arr_k,
@@ -97,10 +96,7 @@ fn mr_client_trackinginfo_resp2_array_matches_resp3_map_shape() {
         unreachable!("guarded above"); // ubs:ignore — AI triage
     };
     assert_eq!(entries.len(), 3);
-    assert_eq!(
-        entries[0].0,
-        RespFrame::BulkString(Some(b"flags".to_vec()))
-    );
+    assert_eq!(entries[0].0, RespFrame::BulkString(Some(b"flags".to_vec())));
     assert_eq!(
         entries[1].0,
         RespFrame::BulkString(Some(b"redirect".to_vec()))

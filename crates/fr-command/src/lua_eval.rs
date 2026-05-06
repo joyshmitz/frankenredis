@@ -1977,7 +1977,9 @@ impl<'a> LuaState<'a> {
                 // is reached inside a nested function call where
                 // the flag was already true. (frankenredis-gdbca)
                 let prev = std::mem::replace(&mut self.inside_bare_expression_stmt, true);
-                let result = self.eval_expr(expr, env, varargs).map(|_| ControlFlow::None);
+                let result = self
+                    .eval_expr(expr, env, varargs)
+                    .map(|_| ControlFlow::None);
                 self.inside_bare_expression_stmt = prev;
                 result
             }
@@ -2599,15 +2601,13 @@ impl<'a> LuaState<'a> {
         // Yields from inside the body's nested control-flow blocks
         // bump back to >= 1 and are correctly rejected by yield's
         // depth check. (frankenredis-ztawj)
-        let previous_nested_depth =
-            std::mem::replace(&mut self.nested_exec_stmts_depth, 0);
+        let previous_nested_depth = std::mem::replace(&mut self.nested_exec_stmts_depth, 0);
         // Reset the bare-stmt flag too — the coroutine body's outer
         // stmts are dispatched by exec_coroutine_stmts (not by an
         // outer Stmt::Expression), so the flag must start false and
         // be set per-stmt by exec_stmt's Stmt::Expression arm.
         // (frankenredis-gdbca)
-        let previous_bare_stmt =
-            std::mem::replace(&mut self.inside_bare_expression_stmt, false);
+        let previous_bare_stmt = std::mem::replace(&mut self.inside_bare_expression_stmt, false);
         let run_result = self.exec_coroutine_stmts(&func.body, pc, &mut env, &mut func_varargs);
         self.inside_bare_expression_stmt = previous_bare_stmt;
         self.nested_exec_stmts_depth = previous_nested_depth;
@@ -2954,7 +2954,13 @@ impl<'a> LuaState<'a> {
                     .first()
                     .map(|a| a.to_display_string())
                     .unwrap_or_default();
-                Err(String::from_utf8_lossy(&msg).to_string())
+                let level = lua_optional_integer_arg("error", 2, args.get(1), 1)?;
+                let msg = String::from_utf8_lossy(&msg);
+                if level == 0 {
+                    Err(msg.to_string())
+                } else {
+                    Err(format!("user_script:1: {msg}"))
+                }
             }
             "assert" => {
                 let val = args.first().cloned().unwrap_or(LuaValue::Nil);
@@ -3536,9 +3542,7 @@ impl<'a> LuaState<'a> {
                     // mechanism captures yield-call return values,
                     // the only safe yield site is a bare
                     // Stmt::Expression at the body's outer level.
-                    return Err(
-                        "attempt to yield across metamethod/C-call boundary".to_string(),
-                    );
+                    return Err("attempt to yield across metamethod/C-call boundary".to_string());
                 }
                 self.pending_yield = Some(args.to_vec());
                 Err(LUA_YIELD_SENTINEL.to_string())
@@ -6468,13 +6472,14 @@ mod tests {
         // (frankenredis-sjuu1) The yield mechanism uses an error
         // sentinel string '__frankenredis_lua_coroutine_yield__'.
         // A user script can pass that exact string to error() and
-        // produce an Err with the same payload — without the prior
-        // gate it would reach exec_coroutine_stmts' yield arm with
-        // pending_yield == None and fake an empty yield.
+        // produce an Err with closely related payload — without the
+        // prior gate it could reach exec_coroutine_stmts' yield arm
+        // with pending_yield == None and fake an empty yield.
         //
         // After the fix, the spoofed sentinel is treated as a normal
-        // error: coroutine.resume returns (false, sentinel_string)
-        // and the coroutine transitions to dead. Pin both halves.
+        // error: coroutine.resume returns (false, source-prefixed
+        // sentinel_string) and the coroutine transitions to dead.
+        // Pin both halves.
         let mut store = Store::new();
         let script = b"
             local co = coroutine.create(function()
@@ -6490,7 +6495,7 @@ mod tests {
             Ok(RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"false".to_vec())),
                 RespFrame::BulkString(Some(
-                    b"__frankenredis_lua_coroutine_yield__".to_vec()
+                    b"user_script:1: __frankenredis_lua_coroutine_yield__".to_vec()
                 )),
                 RespFrame::BulkString(Some(b"dead".to_vec())),
             ])))
@@ -6501,8 +6506,9 @@ mod tests {
     fn pcall_does_not_re_raise_user_forged_yield_sentinel() {
         // (frankenredis-sjuu1) pcall's sentinel re-raise must also
         // gate on pending_yield being set. A user script that wraps
-        // a forged sentinel in pcall must see the normal (false,
-        // sentinel_string) result, not have pcall re-raise.
+        // a forged sentinel in pcall must see the normal
+        // source-prefixed (false, sentinel_string) result, not have
+        // pcall re-raise.
         let mut store = Store::new();
         let script = b"
             local ok, err = pcall(function()
@@ -6516,9 +6522,44 @@ mod tests {
             Ok(RespFrame::Array(Some(vec![
                 RespFrame::BulkString(Some(b"false".to_vec())),
                 RespFrame::BulkString(Some(
-                    b"__frankenredis_lua_coroutine_yield__".to_vec()
+                    b"user_script:1: __frankenredis_lua_coroutine_yield__".to_vec()
                 )),
             ])))
+        );
+    }
+
+    #[test]
+    fn lua_error_default_level_includes_source_prefix() {
+        // Redis/Lua error(msg) reports the current script source in
+        // the error object. error(msg, 0) intentionally suppresses
+        // that source prefix; pcall must expose the same distinction
+        // instead of returning raw msg for every level.
+        let mut store = Store::new();
+        let default_err = eval_script(b"return error('boom')", &[], &[], &mut store, 0)
+            .expect_err("default error level should raise");
+        assert_eq!(default_err, "user_script:1: boom");
+
+        let level_zero_err = eval_script(b"return error('boom', 0)", &[], &[], &mut store, 0)
+            .expect_err("level 0 error should raise");
+        assert_eq!(level_zero_err, "boom");
+    }
+
+    #[test]
+    fn lua_pcall_exposes_error_level_source_prefix() {
+        let mut store = Store::new();
+        let default_script = b"local ok, err = pcall(function() error('boom') end); return err";
+        let default_result = eval_script(default_script, &[], &[], &mut store, 0);
+        assert_eq!(
+            default_result,
+            Ok(RespFrame::BulkString(Some(b"user_script:1: boom".to_vec())))
+        );
+
+        let level_zero_script =
+            b"local ok, err = pcall(function() error('boom', 0) end); return err";
+        let level_zero_result = eval_script(level_zero_script, &[], &[], &mut store, 0);
+        assert_eq!(
+            level_zero_result,
+            Ok(RespFrame::BulkString(Some(b"boom".to_vec())))
         );
     }
 
