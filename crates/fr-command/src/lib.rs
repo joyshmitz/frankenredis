@@ -11398,8 +11398,12 @@ fn compute_lcs(a: &[u8], b: &[u8]) -> Result<Vec<u8>, CommandError> {
         return Ok(Vec::new());
     }
     if m.saturating_mul(n) > LCS_MAX_DP_SIZE {
+        // (frankenredis-ruc5t) Match upstream t_string.c line 812
+        // wording. fr's prior 'too long without LEN flag' message
+        // was invented and didn't match any upstream addReplyError.
         return Err(CommandError::Custom(
-            "ERR The strings are too long to compute the LCS without LEN flag.".to_string(),
+            "ERR Insufficient memory, transient memory for LCS exceeds proto-max-bulk-len"
+                .to_string(),
         ));
     }
     // DP table: flat Vec for cache efficiency
@@ -11443,8 +11447,12 @@ fn compute_lcs_matches(
         return Ok(Vec::new());
     }
     if m.saturating_mul(n) > LCS_MAX_DP_SIZE {
+        // (frankenredis-ruc5t) Match upstream t_string.c line 812
+        // wording. fr's prior 'too long without LEN flag' message
+        // was invented and didn't match any upstream addReplyError.
         return Err(CommandError::Custom(
-            "ERR The strings are too long to compute the LCS without LEN flag.".to_string(),
+            "ERR Insufficient memory, transient memory for LCS exceeds proto-max-bulk-len"
+                .to_string(),
         ));
     }
     let cols = n + 1;
@@ -30906,6 +30914,68 @@ mod tests {
         )
         .expect("lcs");
         assert_eq!(out, RespFrame::BulkString(Some(Vec::new())));
+    }
+
+    #[test]
+    fn lcs_oversize_emits_upstream_proto_max_bulk_len_wording() {
+        // (frankenredis-ruc5t) Upstream t_string.c:812 emits
+        // 'Insufficient memory, transient memory for LCS exceeds
+        // proto-max-bulk-len' when the DP table size exceeds the
+        // proto_max_bulk_len cap. fr was inventing a 'too long without
+        // LEN flag' message that doesn't appear in upstream sources.
+        // Reproduce by passing two strings whose len-product exceeds
+        // LCS_MAX_DP_SIZE (16M entries) — the early bail-out fires
+        // BEFORE any DP allocation, so 4097-byte strings are enough.
+        let mut store = Store::new();
+        let big_a = vec![b'a'; 4097];
+        let big_b = vec![b'b'; 4097];
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k1".to_vec(), big_a],
+            &mut store,
+            0,
+        )
+        .expect("set k1");
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k2".to_vec(), big_b],
+            &mut store,
+            0,
+        )
+        .expect("set k2");
+
+        // Plain LCS path → compute_lcs.
+        let err = dispatch_argv(
+            &[b"LCS".to_vec(), b"k1".to_vec(), b"k2".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("oversize plain LCS should error");
+        assert_eq!(
+            err,
+            CommandError::Custom(
+                "ERR Insufficient memory, transient memory for LCS exceeds proto-max-bulk-len"
+                    .to_string()
+            )
+        );
+
+        // IDX path → compute_lcs_matches.
+        let err = dispatch_argv(
+            &[
+                b"LCS".to_vec(),
+                b"k1".to_vec(),
+                b"k2".to_vec(),
+                b"IDX".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("oversize IDX LCS should error");
+        assert_eq!(
+            err,
+            CommandError::Custom(
+                "ERR Insufficient memory, transient memory for LCS exceeds proto-max-bulk-len"
+                    .to_string()
+            )
+        );
     }
 
     #[test]
