@@ -15462,31 +15462,55 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         // Array under RESP2. udl3y's outer-Map conversion preserved
         // whatever shape this inner emits, so branching here is the
         // right level of granularity. (frankenredis-ndz0j)
-        items.push(RespFrame::BulkString(Some(b"db.0".to_vec())));
-        if store.dispatch_client_ctx.resp_protocol_version == 3 {
-            items.push(RespFrame::Map(Some(vec![
-                (
+        // (frankenredis-0lsoy) Mirror upstream object.c::getMemoryOverhead
+        // Data: iterate every db, emit db.<j> only when keys exist in
+        // it. fr was hardcoding a single db.0 with all-zero inner
+        // counters even on an empty store and was never reporting non-
+        // default dbs that held the actual workload.
+        //
+        // overhead.hashtable.main approximates upstream
+        // dictMemUsage(db->dict) at ~64 bytes per dictEntry (siphash key
+        // + value pointer + next-bucket pointer + overhead). Real
+        // upstream uses a dict-impl-specific term; fr tracks the
+        // dominant data-bearing factor that monitoring tools watch.
+        const DICT_ENTRY_BYTES: i64 = 64;
+        let resp_v3 = store.dispatch_client_ctx.resp_protocol_version == 3;
+        for db in 0..store.database_count {
+            let keys = store.dbsize_in_db(db);
+            if keys == 0 {
+                continue;
+            }
+            let expires = store.expires_in_db(db);
+            let main_bytes = (keys as i64).saturating_mul(DICT_ENTRY_BYTES);
+            let expires_bytes = (expires as i64).saturating_mul(DICT_ENTRY_BYTES);
+            items.push(RespFrame::BulkString(Some(format!("db.{db}").into_bytes())));
+            if resp_v3 {
+                items.push(RespFrame::Map(Some(vec![
+                    (
+                        RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec())),
+                        RespFrame::Integer(main_bytes),
+                    ),
+                    (
+                        RespFrame::BulkString(Some(b"overhead.hashtable.expires".to_vec())),
+                        RespFrame::Integer(expires_bytes),
+                    ),
+                    (
+                        RespFrame::BulkString(Some(
+                            b"overhead.hashtable.slot-to-keys".to_vec(),
+                        )),
+                        RespFrame::Integer(0),
+                    ),
+                ])));
+            } else {
+                items.push(RespFrame::Array(Some(vec![
                     RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec())),
-                    RespFrame::Integer(0),
-                ),
-                (
+                    RespFrame::Integer(main_bytes),
                     RespFrame::BulkString(Some(b"overhead.hashtable.expires".to_vec())),
-                    RespFrame::Integer(0),
-                ),
-                (
+                    RespFrame::Integer(expires_bytes),
                     RespFrame::BulkString(Some(b"overhead.hashtable.slot-to-keys".to_vec())),
                     RespFrame::Integer(0),
-                ),
-            ])));
-        } else {
-            items.push(RespFrame::Array(Some(vec![
-                RespFrame::BulkString(Some(b"overhead.hashtable.main".to_vec())),
-                RespFrame::Integer(0),
-                RespFrame::BulkString(Some(b"overhead.hashtable.expires".to_vec())),
-                RespFrame::Integer(0),
-                RespFrame::BulkString(Some(b"overhead.hashtable.slot-to-keys".to_vec())),
-                RespFrame::Integer(0),
-            ])));
+                ])));
+            }
         }
         for kv in [
             pair("overhead.total", 0),
@@ -31065,8 +31089,16 @@ mod tests {
         // udl3y converted the OUTER level only; the inner db.0
         // value was still a flat 6-element Array under RESP3.
         // Pin both shapes here.
+        // (frankenredis-0lsoy) Upstream skips empty dbs — seed a key
+        // in db 0 first so the db.0 entry is emitted.
         let mut store = Store::new();
         store.dispatch_client_ctx.resp_protocol_version = 3;
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set k v");
         let out = dispatch_argv(&[b"MEMORY".to_vec(), b"STATS".to_vec()], &mut store, 0)
             .expect("memory stats resp3");
         let RespFrame::Map(Some(entries)) = out else {
@@ -31092,6 +31124,13 @@ mod tests {
 
         // RESP2 keeps the flat 6-element Array.
         let mut store = Store::new();
+        // (frankenredis-0lsoy) Same skip-empty-dbs rule; seed a key.
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set k v");
         let out = dispatch_argv(&[b"MEMORY".to_vec(), b"STATS".to_vec()], &mut store, 0)
             .expect("memory stats resp2");
         let RespFrame::Array(Some(items)) = out else {
@@ -38918,6 +38957,104 @@ mod tests {
         }
         assert_eq!(lua_caches, Some(expected_lua));
         assert_eq!(functions_caches, Some(expected_funcs));
+    }
+
+    #[test]
+    fn memory_stats_iterates_all_non_empty_dbs_and_skips_empty_ones() {
+        // (frankenredis-0lsoy) Upstream MEMORY STATS emits one db.<n>
+        // entry per non-empty db. fr was hardcoding a single db.0 with
+        // zero counters regardless of which db actually held data. Pin
+        // the new behavior: empty store has no db.<n> entries; a key
+        // in db 5 surfaces a db.5 entry (and nothing else); two dbs
+        // populated → two db.<n> entries.
+
+        // 1. Empty store: zero db.<n> entries.
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[b"MEMORY".to_vec(), b"STATS".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("memory stats empty");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected Array under RESP2"); // ubs:ignore — AI triage
+        };
+        let count_db_entries = |items: &[RespFrame]| -> usize {
+            items
+                .iter()
+                .filter(|f| matches!(
+                    f,
+                    RespFrame::BulkString(Some(b)) if b.starts_with(b"db.")
+                ))
+                .count()
+        };
+        assert_eq!(
+            count_db_entries(&items),
+            0,
+            "empty store should not emit any db.<n> entry"
+        );
+
+        // 2. Single key in db 5 → only db.5 emitted. fr-command's SET
+        // handler stores at the raw key (no per-db namespacing), so
+        // seed the per-db state directly via the store API using
+        // encode_db_key.
+        let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(5, b"k"),
+            b"v".to_vec(),
+            None,
+            0,
+        );
+        let out = dispatch_argv(
+            &[b"MEMORY".to_vec(), b"STATS".to_vec()],
+            &mut store,
+            2,
+        )
+        .expect("memory stats db5");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected Array under RESP2"); // ubs:ignore — AI triage
+        };
+        let db_keys: Vec<&[u8]> = items
+            .iter()
+            .filter_map(|f| match f {
+                RespFrame::BulkString(Some(b)) if b.starts_with(b"db.") => Some(b.as_slice()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(db_keys, vec![b"db.5".as_slice()]);
+
+        // 3. Two dbs populated → both emitted in order.
+        let mut store = Store::new();
+        store.set(fr_store::encode_db_key(0, b"k0"), b"v".to_vec(), None, 0);
+        store.set(fr_store::encode_db_key(3, b"k3"), b"v".to_vec(), None, 0);
+        let out = dispatch_argv(
+            &[b"MEMORY".to_vec(), b"STATS".to_vec()],
+            &mut store,
+            3,
+        )
+        .expect("memory stats two dbs");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected Array under RESP2"); // ubs:ignore — AI triage
+        };
+        let db_keys: Vec<&[u8]> = items
+            .iter()
+            .filter_map(|f| match f {
+                RespFrame::BulkString(Some(b)) if b.starts_with(b"db.") => Some(b.as_slice()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(db_keys, vec![b"db.0".as_slice(), b"db.3".as_slice()]);
+
+        // 4. overhead.hashtable.main reflects per-db key count × 64.
+        let db3_idx = items
+            .iter()
+            .position(|f| matches!(f, RespFrame::BulkString(Some(b)) if b.as_slice() == b"db.3"))
+            .expect("db.3 idx");
+        let RespFrame::Array(Some(db3_inner)) = &items[db3_idx + 1] else {
+            panic!("db.3 inner must be Array under RESP2"); // ubs:ignore — AI triage
+        };
+        // Inner [main_key, main_val, expires_key, expires_val, slot_key, slot_val]
+        assert_eq!(db3_inner[1], RespFrame::Integer(64)); // 1 key × 64
     }
 
     #[cfg(target_os = "linux")]
