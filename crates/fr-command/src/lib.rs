@@ -13047,25 +13047,32 @@ fn command_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErro
                 subcommand: "HELP".to_string(),
             });
         }
+        // (frankenredis-vtege) Mirror upstream server.c::commandHelp
+        // Command line-for-line + addReplyHelp envelope. Frames are
+        // SimpleString (was BulkString — diverged from every other
+        // HELP handler in fr that uses hello_simple).
         Ok(RespFrame::Array(Some(vec![
-            hello_bulk("(no subcommand)"),
-            hello_bulk("    Return details about all Redis commands."),
-            hello_bulk("COUNT"),
-            hello_bulk("    Return the total number of commands in this Redis server."),
-            hello_bulk("LIST"),
-            hello_bulk("    Return a list of all commands in this Redis server."),
-            hello_bulk("INFO [<command-name> ...]"),
-            hello_bulk("    Return details about multiple Redis commands."),
-            hello_bulk("    If no command names are given, documentation details for all"),
-            hello_bulk("    commands are returned."),
-            hello_bulk("DOCS [<command-name> ...]"),
-            hello_bulk("    Return documentation details about multiple Redis commands."),
-            hello_bulk("    If no command names are given, documentation details for all"),
-            hello_bulk("    commands are returned."),
-            hello_bulk("GETKEYS <full-command>"),
-            hello_bulk("    Return the keys from a full Redis command."),
-            hello_bulk("GETKEYSANDFLAGS <full-command>"),
-            hello_bulk("    Return the keys and the access flags from a full Redis command."),
+            hello_simple("COMMAND <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("(no subcommand)"),
+            hello_simple("    Return details about all Redis commands."),
+            hello_simple("COUNT"),
+            hello_simple("    Return the total number of commands in this Redis server."),
+            hello_simple("LIST"),
+            hello_simple("    Return a list of all commands in this Redis server."),
+            hello_simple("INFO [<command-name> ...]"),
+            hello_simple("    Return details about multiple Redis commands."),
+            hello_simple("    If no command names are given, documentation details for all"),
+            hello_simple("    commands are returned."),
+            hello_simple("DOCS [<command-name> ...]"),
+            hello_simple("    Return documentation details about multiple Redis commands."),
+            hello_simple("    If no command names are given, documentation details for all"),
+            hello_simple("    commands are returned."),
+            hello_simple("GETKEYS <full-command>"),
+            hello_simple("    Return the keys from a full Redis command."),
+            hello_simple("GETKEYSANDFLAGS <full-command>"),
+            hello_simple("    Return the keys and the access flags from a full Redis command."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])))
     } else {
         Err(CommandError::UnknownSubcommand {
@@ -39752,14 +39759,45 @@ mod tests {
 
     #[test]
     fn command_help_lists_getkeysandflags() {
+        // (frankenredis-vtege) COMMAND HELP now matches upstream:
+        // SimpleString frames (was BulkString), plus the standard
+        // addReplyHelp envelope (header + trailing HELP block). Pin
+        // the new shape.
         let mut store = Store::new();
         let out = dispatch_argv(&[b"COMMAND".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
         let RespFrame::Array(Some(items)) = out else {
             panic!("expected help array"); // ubs:ignore — AI triage
         };
-        assert!(items.contains(&RespFrame::BulkString(Some(
-            b"GETKEYSANDFLAGS <full-command>".to_vec()
-        ))));
+
+        // Every frame must be SimpleString.
+        for (i, frame) in items.iter().enumerate() {
+            assert!(
+                matches!(frame, RespFrame::SimpleString(_)),
+                "frame {i} must be SimpleString, got {frame:?}"
+            );
+        }
+
+        // Standard envelope from upstream addReplyHelp.
+        assert_eq!(
+            items[0],
+            RespFrame::SimpleString(
+                "COMMAND <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
+            )
+        );
+
+        // Body entry from upstream commandHelpCommand.
+        assert!(items.contains(&RespFrame::SimpleString(
+            "GETKEYSANDFLAGS <full-command>".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Return the keys and the access flags from a full Redis command.".to_string()
+        )));
+
+        // Trailing HELP block from upstream addReplyHelp.
+        assert!(items.contains(&RespFrame::SimpleString("HELP".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Print this help.".to_string()
+        )));
     }
 
     // ── REPLICAOF / SLAVEOF tests ───────────────────────────────────
