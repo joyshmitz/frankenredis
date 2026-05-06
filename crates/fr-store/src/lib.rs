@@ -1261,6 +1261,11 @@ pub struct Store {
     pub last_save_time_sec: u64,
     /// Number of successful SAVE/BGSAVE operations observed by this store.
     pub stat_rdb_saves: u64,
+    /// (frankenredis-f1f8f) Cumulative count of completed AOF rewrites.
+    /// Mirrors upstream server.aof_rewrites_count, exposed via INFO
+    /// persistence's aof_rewrites field. Incremented in
+    /// record_aof_rewrite alongside the time-stamp update.
+    pub stat_aof_rewrites: u64,
     /// Unix timestamp of the last successful BGSAVE, if any.
     pub stat_rdb_last_bgsave_time_sec: Option<u64>,
     /// Unix timestamp of the last successful AOF rewrite, if any.
@@ -1501,6 +1506,7 @@ impl Default for Store {
             dirty: 0,
             last_save_time_sec: 0,
             stat_rdb_saves: 0,
+            stat_aof_rewrites: 0,
             stat_rdb_last_bgsave_time_sec: None,
             stat_aof_last_rewrite_time_sec: None,
             stat_rdb_last_bgsave_ok: true,
@@ -1657,6 +1663,8 @@ impl Store {
 
     pub fn record_aof_rewrite(&mut self, now_ms: u64) {
         self.stat_aof_last_rewrite_time_sec = Some(now_ms / 1000);
+        // (frankenredis-f1f8f) Mirror upstream's aof_rewrites_count.
+        self.stat_aof_rewrites = self.stat_aof_rewrites.saturating_add(1);
     }
 
     pub fn record_bgsave_status(&mut self, ok: bool) {

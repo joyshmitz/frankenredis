@@ -12097,7 +12097,10 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             }
         );
         info.push_str("aof_last_cow_size:0\r\n");
-        info.push_str("aof_rewrites:0\r\n");
+        // (frankenredis-f1f8f) Live counter incremented on each
+        // record_aof_rewrite() call, mirroring upstream's
+        // server.aof_rewrites_count.
+        let _ = write!(info, "aof_rewrites:{}\r\n", store.stat_aof_rewrites);
         info.push_str("aof_rewrites_consecutive_failures:0\r\n");
         info.push_str("module_fork_in_progress:0\r\n");
         info.push_str("module_fork_last_cow_size:0\r\n");
@@ -39813,6 +39816,47 @@ mod tests {
                     ])),
                 ])),
             ]))
+        );
+    }
+
+    #[test]
+    fn info_persistence_reports_live_aof_rewrites_counter() {
+        // (frankenredis-f1f8f) aof_rewrites was hardcoded to 0 even
+        // though Store::record_aof_rewrite fires on every BGREWRITEAOF.
+        // Pin baseline (0) and post-rewrite live state (3 after three
+        // record_aof_rewrite calls).
+        let mut store = Store::new();
+
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"persistence".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("info persistence baseline");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(info.contains("aof_rewrites:0\r\n"));
+
+        // Trigger three rewrites.
+        store.record_aof_rewrite(1_000);
+        store.record_aof_rewrite(2_000);
+        store.record_aof_rewrite(3_000);
+
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"persistence".to_vec()],
+            &mut store,
+            4_000,
+        )
+        .expect("info persistence after rewrites");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8");
+        assert!(
+            info.contains("aof_rewrites:3\r\n"),
+            "expected aof_rewrites:3 in: {info}"
         );
     }
 
