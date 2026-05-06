@@ -13595,18 +13595,25 @@ fn config_cmd(
                 subcommand: "HELP".to_string(),
             });
         }
+        // (frankenredis-kuthf) Mirror upstream config.c::configHelpCommand
+        // (vendored Redis 7.2.4) line-for-line. Frames are SimpleString
+        // (was BulkString) and the body uses upstream's single-pattern
+        // / single-directive wording (the multi-arg forms are runtime
+        // capabilities, not part of the 7.2.4 HELP text).
         Ok(RespFrame::Array(Some(vec![
-            hello_bulk("CONFIG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
-            hello_bulk("GET <pattern> [<pattern> ...]"),
-            hello_bulk("    Return configuration parameters matching the specified patterns."),
-            hello_bulk("SET <parameter> <value> [<parameter> <value> ...]"),
-            hello_bulk("    Set configuration parameters to the specified values."),
-            hello_bulk("RESETSTAT"),
-            hello_bulk("    Reset statistics reported by INFO."),
-            hello_bulk("REWRITE"),
-            hello_bulk("    Rewrite the configuration file with the current in-memory settings."),
-            hello_bulk("HELP"),
-            hello_bulk("    Print this help."),
+            hello_simple("CONFIG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("GET <pattern>"),
+            hello_simple(
+                "    Return parameters matching the glob-like <pattern> and their values.",
+            ),
+            hello_simple("SET <directive> <value>"),
+            hello_simple("    Set the configuration <directive> to <value>."),
+            hello_simple("RESETSTAT"),
+            hello_simple("    Reset statistics reported by the INFO command."),
+            hello_simple("REWRITE"),
+            hello_simple("    Rewrite the configuration file."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])))
     } else {
         Err(CommandError::UnknownSubcommand {
@@ -39755,6 +39762,71 @@ mod tests {
                 ])),
             ]))
         );
+    }
+
+    #[test]
+    fn config_help_matches_vendored_724_wording_with_simple_string_frames() {
+        // (frankenredis-kuthf) CONFIG HELP now mirrors vendored
+        // Redis 7.2.4 config.c::configHelpCommand line-for-line. Two
+        // contracts pinned: every frame is SimpleString (was
+        // BulkString — same divergence as 0o9vo CLIENT and vtege
+        // COMMAND), and the body uses upstream's single-pattern /
+        // single-directive wording (multi-arg HELP wording was from
+        // a newer Redis).
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"CONFIG".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected array"); // ubs:ignore — AI triage
+        };
+
+        for (i, frame) in items.iter().enumerate() {
+            assert!(
+                matches!(frame, RespFrame::SimpleString(_)),
+                "frame {i} must be SimpleString, got {frame:?}"
+            );
+        }
+
+        // Standard envelope.
+        assert_eq!(
+            items[0],
+            RespFrame::SimpleString(
+                "CONFIG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
+            )
+        );
+
+        // Upstream 7.2.4 wording — single pattern / single directive.
+        assert!(items.contains(&RespFrame::SimpleString("GET <pattern>".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Return parameters matching the glob-like <pattern> and their values.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "SET <directive> <value>".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Set the configuration <directive> to <value>.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Reset statistics reported by the INFO command.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Rewrite the configuration file.".to_string()
+        )));
+
+        // The OLD multi-pattern wording must NOT be present anymore.
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s.contains("<pattern> [<pattern> ...]")
+        )));
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s.contains("<parameter> <value>")
+        )));
+
+        // Trailing HELP block.
+        assert!(items.contains(&RespFrame::SimpleString("HELP".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Print this help.".to_string()
+        )));
     }
 
     #[test]
