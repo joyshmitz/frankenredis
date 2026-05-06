@@ -57,8 +57,31 @@ fn flat_array_to_pairs(items: &[RespFrame]) -> Vec<(RespFrame, RespFrame)> {
         .collect()
 }
 
+/// (frankenredis-ndz0j) Some commands (e.g. MEMORY STATS) carry nested
+/// Map↔flat-Array pairs at the value level too. Recursively rewrite a
+/// RESP3 Map into the equivalent RESP2 flat-Array shape so the two
+/// trees can be compared structurally without false negatives at
+/// nested layers.
+fn canonicalize_to_resp2_shape(frame: &RespFrame) -> RespFrame {
+    match frame {
+        RespFrame::Map(Some(entries)) => {
+            let mut flat = Vec::with_capacity(entries.len() * 2);
+            for (k, v) in entries {
+                flat.push(canonicalize_to_resp2_shape(k));
+                flat.push(canonicalize_to_resp2_shape(v));
+            }
+            RespFrame::Array(Some(flat))
+        }
+        RespFrame::Array(Some(items)) => {
+            RespFrame::Array(Some(items.iter().map(canonicalize_to_resp2_shape).collect()))
+        }
+        other => other.clone(),
+    }
+}
+
 /// Assert RESP2 flat Array of length 2N matches RESP3 Map of length N
-/// in key order + paired values.
+/// in key order + paired values. Nested Map↔flat-Array divergences at
+/// the value level are normalized via canonicalize_to_resp2_shape.
 fn assert_shape_contract(label: &str, resp2: &RespFrame, resp3: &RespFrame) {
     let RespFrame::Array(Some(items)) = resp2 else {
         panic!("{label}: RESP2 reply must be Array, got {resp2:?}"); // ubs:ignore — AI triage
@@ -74,12 +97,16 @@ fn assert_shape_contract(label: &str, resp2: &RespFrame, resp3: &RespFrame) {
     let array_pairs = flat_array_to_pairs(items);
     for (i, ((map_k, map_v), (arr_k, arr_v))) in entries.iter().zip(array_pairs.iter()).enumerate()
     {
+        let map_k_norm = canonicalize_to_resp2_shape(map_k);
+        let arr_k_norm = canonicalize_to_resp2_shape(arr_k);
         assert_eq!(
-            map_k, arr_k,
+            map_k_norm, arr_k_norm,
             "{label}: pair {i} key mismatch — Map key {map_k:?} != Array key {arr_k:?}"
         );
+        let map_v_norm = canonicalize_to_resp2_shape(map_v);
+        let arr_v_norm = canonicalize_to_resp2_shape(arr_v);
         assert_eq!(
-            map_v, arr_v,
+            map_v_norm, arr_v_norm,
             "{label}: pair {i} value mismatch — Map value {map_v:?} != Array value {arr_v:?}"
         );
     }
@@ -168,6 +195,250 @@ fn mr_function_stats_resp3_outer_keys_match_resp2_array_keys() {
     );
 }
 
+/// Run argv against a pre-seeded store under RESP2 and RESP3.
+/// The `seed` closure is called twice with a fresh store each time so
+/// the two protocol runs see byte-identical state.
+fn run_both_protocols_with_seed(
+    seed: impl Fn(&mut Store) + Copy,
+    argv: &[Vec<u8>],
+) -> (RespFrame, RespFrame) {
+    let mut store = Store::new();
+    seed(&mut store);
+    let resp2 = dispatch_argv(argv, &mut store, 0).expect("RESP2 dispatch");
+
+    let mut store = Store::new();
+    seed(&mut store);
+    store.dispatch_client_ctx.resp_protocol_version = 3;
+    let resp3 = dispatch_argv(argv, &mut store, 0).expect("RESP3 dispatch");
+
+    (resp2, resp3)
+}
+
+#[test]
+fn mr_zrange_withscores_resp3_pairs_match_resp2_flat_alternating() {
+    // jnf53 contract: under RESP2+WITHSCORES the wire is flat
+    // [m1, s1, m2, s2, ...]; under RESP3+WITHSCORES it's
+    // [[m1, s1], [m2, s2], ...]. The (member, score) tuples extracted
+    // from each form must be byte-identical and ordered.
+    //
+    // Family covered by a shared helper (zrange_emit_with_resp): a
+    // future regression that breaks one ingestion path also breaks the
+    // others. Pin three of them — ZRANGE rank, ZRANGEBYSCORE,
+    // ZRANGE BYSCORE REV — to catch helper rewires.
+    let seed = |store: &mut Store| {
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+                b"2".to_vec(),
+                b"b".to_vec(),
+                b"3".to_vec(),
+                b"c".to_vec(),
+            ],
+            store,
+            0,
+        )
+        .expect("zadd");
+    };
+
+    for argv in [
+        vec![
+            b"ZRANGE".to_vec(),
+            b"zs".to_vec(),
+            b"0".to_vec(),
+            b"-1".to_vec(),
+            b"WITHSCORES".to_vec(),
+        ],
+        vec![
+            b"ZRANGEBYSCORE".to_vec(),
+            b"zs".to_vec(),
+            b"-inf".to_vec(),
+            b"+inf".to_vec(),
+            b"WITHSCORES".to_vec(),
+        ],
+        vec![
+            b"ZRANGE".to_vec(),
+            b"zs".to_vec(),
+            b"+inf".to_vec(),
+            b"-inf".to_vec(),
+            b"BYSCORE".to_vec(),
+            b"REV".to_vec(),
+            b"WITHSCORES".to_vec(),
+        ],
+    ] {
+        let (resp2, resp3) = run_both_protocols_with_seed(seed, &argv);
+        let RespFrame::Array(Some(flat)) = &resp2 else {
+            panic!("{argv:?}: RESP2 must be flat Array, got {resp2:?}"); // ubs:ignore — AI triage
+        };
+        let RespFrame::Array(Some(pairs)) = &resp3 else {
+            panic!("{argv:?}: RESP3 must be outer Array, got {resp3:?}"); // ubs:ignore — AI triage
+        };
+        assert!(
+            flat.len().is_multiple_of(2),
+            "{argv:?}: RESP2 flat array must have even length"
+        );
+        assert_eq!(
+            flat.len(),
+            pairs.len() * 2,
+            "{argv:?}: RESP2 flat length must equal 2× RESP3 outer pair count"
+        );
+        for (i, pair) in pairs.iter().enumerate() {
+            let RespFrame::Array(Some(pair_items)) = pair else {
+                panic!("{argv:?}: RESP3 element {i} must be 2-Array, got {pair:?}"); // ubs:ignore — AI triage
+            };
+            assert_eq!(pair_items.len(), 2);
+            assert_eq!(
+                pair_items[0], flat[i * 2],
+                "{argv:?}: pair {i} member byte drift"
+            );
+            assert_eq!(
+                pair_items[1],
+                flat[i * 2 + 1],
+                "{argv:?}: pair {i} score byte drift"
+            );
+        }
+    }
+}
+
+#[test]
+fn mr_zpop_with_count_resp3_pairs_match_resp2_flat_alternating() {
+    // 1g3ao contract: ZPOPMIN/ZPOPMAX with COUNT under RESP3 wraps
+    // each (member, score) in a 2-Array; under RESP2 stays flat. Since
+    // ZPOP destructively pops, seed-twice and pop both for ZPOPMIN
+    // and (separately) for ZPOPMAX with the same count.
+    for command in [&b"ZPOPMIN"[..], &b"ZPOPMAX"[..]] {
+        let seed = |store: &mut Store| {
+            dispatch_argv(
+                &[
+                    b"ZADD".to_vec(),
+                    b"zs".to_vec(),
+                    b"1".to_vec(),
+                    b"a".to_vec(),
+                    b"2".to_vec(),
+                    b"b".to_vec(),
+                    b"3".to_vec(),
+                    b"c".to_vec(),
+                ],
+                store,
+                0,
+            )
+            .expect("zadd");
+        };
+        let argv = vec![command.to_vec(), b"zs".to_vec(), b"2".to_vec()];
+        let (resp2, resp3) = run_both_protocols_with_seed(seed, &argv);
+        let RespFrame::Array(Some(flat)) = &resp2 else {
+            panic!("RESP2 {command:?} must be flat Array, got {resp2:?}"); // ubs:ignore — AI triage
+        };
+        let RespFrame::Array(Some(pairs)) = &resp3 else {
+            panic!("RESP3 {command:?} must be outer Array, got {resp3:?}"); // ubs:ignore — AI triage
+        };
+        assert_eq!(
+            flat.len(),
+            pairs.len() * 2,
+            "{command:?}: RESP2 flat length == 2× RESP3 pair count"
+        );
+        for (i, pair) in pairs.iter().enumerate() {
+            let RespFrame::Array(Some(pair_items)) = pair else {
+                panic!("{command:?}: RESP3 element {i} must be 2-Array"); // ubs:ignore — AI triage
+            };
+            assert_eq!(pair_items[0], flat[i * 2]);
+            assert_eq!(pair_items[1], flat[i * 2 + 1]);
+        }
+    }
+}
+
+#[test]
+fn mr_lcs_idx_resp3_map_outer_matches_resp2_flat_alternating() {
+    // cz712 contract: LCS IDX under RESP2 emits flat alternating Array
+    // of 4 entries (matches, len, [WITHMATCHLEN ...]); under RESP3
+    // emits Map of 2 entries. The well-known keys are the same in both
+    // forms.
+    let seed = |store: &mut Store| {
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k1".to_vec(), b"ohmytext".to_vec()],
+            store,
+            0,
+        )
+        .expect("set k1");
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k2".to_vec(), b"mynewtext".to_vec()],
+            store,
+            0,
+        )
+        .expect("set k2");
+    };
+    let (resp2, resp3) = run_both_protocols_with_seed(
+        seed,
+        &[
+            b"LCS".to_vec(),
+            b"k1".to_vec(),
+            b"k2".to_vec(),
+            b"IDX".to_vec(),
+        ],
+    );
+    assert_shape_contract("LCS IDX", &resp2, &resp3);
+
+    let RespFrame::Map(Some(entries)) = &resp3 else {
+        unreachable!("guarded by assert_shape_contract"); // ubs:ignore — AI triage
+    };
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[0].0,
+        RespFrame::BulkString(Some(b"matches".to_vec()))
+    );
+    assert_eq!(entries[1].0, RespFrame::BulkString(Some(b"len".to_vec())));
+}
+
+#[test]
+fn mr_latency_histogram_resp3_map_outer_matches_resp2_flat_alternating() {
+    // cgjlc contract: LATENCY HISTOGRAM emits a 3-deep nested Map under
+    // RESP3 / 3-deep nested flat-Array under RESP2. Pin the outer
+    // shape contract: cmd_name keys at even RESP2 indices = RESP3
+    // outer Map keys.
+    let seed = |store: &mut Store| {
+        store.record_command_histogram("GET", 100);
+        store.record_command_histogram("GET", 50);
+        store.record_command_histogram("SET", 200);
+    };
+    let argv = vec![b"LATENCY".to_vec(), b"HISTOGRAM".to_vec()];
+    let (resp2, resp3) = run_both_protocols_with_seed(seed, &argv);
+
+    let RespFrame::Array(Some(flat)) = &resp2 else {
+        panic!("RESP2 LATENCY HISTOGRAM must be flat Array"); // ubs:ignore — AI triage
+    };
+    let RespFrame::Map(Some(outer)) = &resp3 else {
+        panic!("RESP3 LATENCY HISTOGRAM must be Map"); // ubs:ignore — AI triage
+    };
+    assert_eq!(flat.len(), outer.len() * 2);
+    // Keys (cmd names) at even RESP2 indices must match RESP3 outer
+    // Map keys in order.
+    for (i, (k, _v)) in outer.iter().enumerate() {
+        assert_eq!(k, &flat[i * 2], "outer cmd-name drift at index {i}");
+    }
+    // Each value (CDF) under RESP3 is a Map with 'calls' +
+    // 'histogram_usec' keys; under RESP2 it's a flat 4-entry Array
+    // with the same keys at even indices.
+    for (i, (_k, v)) in outer.iter().enumerate() {
+        let RespFrame::Map(Some(cdf)) = v else {
+            panic!("RESP3 CDF at {i} must be Map"); // ubs:ignore — AI triage
+        };
+        assert_eq!(cdf.len(), 2);
+        assert_eq!(cdf[0].0, RespFrame::BulkString(Some(b"calls".to_vec())));
+        assert_eq!(
+            cdf[1].0,
+            RespFrame::BulkString(Some(b"histogram_usec".to_vec()))
+        );
+        let RespFrame::Array(Some(cdf_flat)) = &flat[i * 2 + 1] else {
+            panic!("RESP2 CDF at {i} must be flat Array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(cdf_flat.len(), 4);
+        assert_eq!(cdf_flat[0], cdf[0].0);
+        assert_eq!(cdf_flat[2], cdf[1].0);
+    }
+}
+
 #[test]
 fn mr_protocol_switch_does_not_alter_data() {
     // The wire shape must change with protocol but the underlying
@@ -191,12 +462,17 @@ fn mr_protocol_switch_does_not_alter_data() {
         for (i, ((map_k, map_v), (arr_k, arr_v))) in
             entries.iter().zip(array_pairs.iter()).enumerate()
         {
+            // (frankenredis-ndz0j) Nested Map↔flat-Array divergences
+            // are intentional under RESP3 (e.g. MEMORY STATS db.<n>
+            // sub-map) — normalize before comparing.
             assert_eq!(
-                map_k, arr_k,
+                canonicalize_to_resp2_shape(map_k),
+                canonicalize_to_resp2_shape(arr_k),
                 "{argv:?} pair {i} key drift across protocol switch"
             );
             assert_eq!(
-                map_v, arr_v,
+                canonicalize_to_resp2_shape(map_v),
+                canonicalize_to_resp2_shape(arr_v),
                 "{argv:?} pair {i} value drift across protocol switch"
             );
         }
