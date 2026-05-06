@@ -291,3 +291,20 @@ fn golden_unsupported_resp3_big_number_prefix() {
 fn golden_unsupported_resp3_push_prefix() {
     parse_and_snapshot("unsupported_resp3_push_prefix", b">1\r\n");
 }
+
+// (frankenredis-4glel) Round out the fail-closed RESP3 prefix
+// matrix — '=', '|', '!' previously had no golden.
+#[test]
+fn golden_unsupported_resp3_verbatim_prefix() {
+    parse_and_snapshot("unsupported_resp3_verbatim_prefix", b"=15\r\ntxt:hello\r\n");
+}
+
+#[test]
+fn golden_unsupported_resp3_attribute_prefix() {
+    parse_and_snapshot("unsupported_resp3_attribute_prefix", b"|1\r\n+k\r\n+v\r\n");
+}
+
+#[test]
+fn golden_unsupported_resp3_blob_error_prefix() {
+    parse_and_snapshot("unsupported_resp3_blob_error_prefix", b"!21\r\nSYNTAX invalid syntax\r\n");
+}
