@@ -9858,13 +9858,13 @@ fn bitpos(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     if argv.len() > 6 {
         return Err(CommandError::SyntaxError);
     }
+    // (frankenredis-abpzk) Mirror upstream bitops.c lines 905-927:
+    // start parses first, then for argc==6 the BIT|BYTE modifier
+    // is validated, THEN end parses. Inverting end and unit caused
+    // `BITPOS key 1 0 NOTANINT BADUNIT` to surface a parse error
+    // instead of upstream's syntax error on the bad modifier.
     let start = if argv.len() >= 4 {
         Some(parse_i64_arg(&argv[3])?)
-    } else {
-        None
-    };
-    let end = if argv.len() >= 5 {
-        Some(parse_i64_arg(&argv[4])?)
     } else {
         None
     };
@@ -9878,6 +9878,11 @@ fn bitpos(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
         }
     } else {
         BitRangeUnit::Byte
+    };
+    let end = if argv.len() >= 5 {
+        Some(parse_i64_arg(&argv[4])?)
+    } else {
+        None
     };
     let pos = store.bitpos(&argv[1], bit_val == 1, start, end, unit, now_ms)?;
     Ok(RespFrame::Integer(pos))
@@ -29206,6 +29211,38 @@ mod tests {
             0,
         )
         .expect_err("BITPOS with more than six arguments should fail");
+
+        assert_eq!(err, CommandError::SyntaxError);
+    }
+
+    #[test]
+    fn bitpos_argc6_unit_check_beats_end_parse() {
+        // (frankenredis-abpzk) Upstream bitops.c lines 912-923 validates
+        // the BIT|BYTE modifier on argv[5] BEFORE parsing argv[4] as the
+        // end offset. fr's prior order (start → end → unit) surfaced an
+        // integer parse error when both end was malformed AND unit was
+        // bad; upstream surfaces the syntax error on the unit token.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"bm".to_vec(), b"hello".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("SET bm");
+
+        let err = dispatch_argv(
+            &[
+                b"BITPOS".to_vec(),
+                b"bm".to_vec(),
+                b"1".to_vec(),
+                b"0".to_vec(),
+                b"NOTANINT".to_vec(),
+                b"BADUNIT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("BITPOS bm 1 0 NOTANINT BADUNIT must be a syntax error");
 
         assert_eq!(err, CommandError::SyntaxError);
     }
