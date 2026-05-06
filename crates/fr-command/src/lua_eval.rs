@@ -1550,6 +1550,15 @@ pub struct LuaState<'a> {
     script_started_at: Instant,
     current_coroutine: Option<LuaCoroutine>,
     pending_yield: Option<Vec<LuaValue>>,
+    /// Depth of nested exec_stmts calls. The coroutine resume path
+    /// (exec_coroutine_stmts → exec_stmt) keeps this at 0 for top-
+    /// level body statements; any nested control-flow block (for,
+    /// while, repeat, if-then, function-call body) bumps it via
+    /// exec_stmts. coroutine.yield inspects it: yielding from a
+    /// nested scope cannot be resumed by bw15's outer-stmt PC
+    /// tracking, so the yield must error rather than silently drop
+    /// iterations on resume. (frankenredis-ztawj)
+    nested_exec_stmts_depth: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -1749,6 +1758,7 @@ impl<'a> LuaState<'a> {
             script_started_at: Instant::now(),
             current_coroutine: None,
             pending_yield: None,
+            nested_exec_stmts_depth: 0,
         }
     }
 
@@ -1906,18 +1916,35 @@ impl<'a> LuaState<'a> {
         env: &mut Env,
         varargs: &mut Vec<LuaValue>,
     ) -> Result<ControlFlow, String> {
+        // Bump nested-exec depth so coroutine.yield can detect it's
+        // about to fire from inside a control-flow block / function-
+        // call body. bw15's resume_coroutine only tracks outer-stmt
+        // PC, so yielding from a nested scope would silently drop
+        // iterations on resume. The decrement runs even on error
+        // via a manual fallthrough so the counter stays balanced.
+        // (frankenredis-ztawj)
+        self.nested_exec_stmts_depth = self.nested_exec_stmts_depth.saturating_add(1);
+        let mut outcome: Result<ControlFlow, String> = Ok(ControlFlow::None);
         for stmt in stmts {
             self.iterations += 1;
             if self.iterations > MAX_ITERATIONS {
-                return Err("script exceeded maximum iteration count".to_string());
+                outcome = Err("script exceeded maximum iteration count".to_string());
+                break;
             }
-            let cf = self.exec_stmt(stmt, env, varargs)?;
-            match cf {
-                ControlFlow::None => {}
-                other => return Ok(other),
+            match self.exec_stmt(stmt, env, varargs) {
+                Ok(ControlFlow::None) => {}
+                Ok(other) => {
+                    outcome = Ok(other);
+                    break;
+                }
+                Err(err) => {
+                    outcome = Err(err);
+                    break;
+                }
             }
         }
-        Ok(ControlFlow::None)
+        self.nested_exec_stmts_depth = self.nested_exec_stmts_depth.saturating_sub(1);
+        outcome
     }
 
     fn exec_stmt(
@@ -2547,7 +2574,17 @@ impl<'a> LuaState<'a> {
 
         let previous_coroutine = self.current_coroutine.replace(coroutine.clone());
         let previous_yield = self.pending_yield.take();
+        // Reset nested-exec depth at the coroutine boundary so a yield
+        // from the body's outer-stmt level reads as depth 0 (resumable
+        // by exec_coroutine_stmts' PC tracking) even though eval_script
+        // and any enclosing call_function bumped the outer counter.
+        // Yields from inside the body's nested control-flow blocks
+        // bump back to >= 1 and are correctly rejected by yield's
+        // depth check. (frankenredis-ztawj)
+        let previous_nested_depth =
+            std::mem::replace(&mut self.nested_exec_stmts_depth, 0);
         let run_result = self.exec_coroutine_stmts(&func.body, pc, &mut env, &mut func_varargs);
+        self.nested_exec_stmts_depth = previous_nested_depth;
         self.current_coroutine = previous_coroutine;
         self.pending_yield = previous_yield;
 
@@ -3447,12 +3484,27 @@ impl<'a> LuaState<'a> {
                 ),
             },
             "coroutine.yield" => {
-                if self.current_coroutine.is_some() {
-                    self.pending_yield = Some(args.to_vec());
-                    Err(LUA_YIELD_SENTINEL.to_string())
-                } else {
-                    Err("attempt to yield across metamethod/C-call boundary".to_string())
+                // (frankenredis-ztawj) Yield is only resumable when
+                // it fires from the coroutine's OUTER statement
+                // level. resume_coroutine + exec_coroutine_stmts
+                // track the next-pc at outer-stmt granularity, so a
+                // yield from inside any nested exec_stmts call
+                // (for / while / repeat / if-then bodies, function-
+                // call bodies, pcall / xpcall lambdas) cannot be
+                // resumed correctly — the outer for-loop / call /
+                // pcall would be skipped on the next resume,
+                // silently dropping iterations. Reject those cases
+                // with the upstream Lua 5.1 wording instead of
+                // letting the impl produce wrong results.
+                if self.current_coroutine.is_none()
+                    || self.nested_exec_stmts_depth > 0
+                {
+                    return Err(
+                        "attempt to yield across metamethod/C-call boundary".to_string(),
+                    );
                 }
+                self.pending_yield = Some(args.to_vec());
+                Err(LUA_YIELD_SENTINEL.to_string())
             }
             "coroutine.running" => {
                 if let Some(coroutine) = &self.current_coroutine {
@@ -6251,6 +6303,70 @@ mod tests {
             Ok(RespFrame::Array(Some(vec![
                 RespFrame::Integer(8),
                 RespFrame::Integer(12),
+            ])))
+        );
+    }
+
+    #[test]
+    fn coroutine_yield_inside_for_loop_errors_instead_of_silently_dropping_iterations() {
+        // (frankenredis-ztawj) bw15's resume_coroutine + exec_
+        // coroutine_stmts only track next_pc at the outer-stmt
+        // level, so a yield from inside a for-loop body cannot be
+        // resumed correctly — the loop would be skipped entirely
+        // on the next resume, silently dropping iterations 2..N.
+        // The fix detects this via nested_exec_stmts_depth > 0 at
+        // yield time and returns the upstream Lua 5.1 wording
+        // 'attempt to yield across metamethod/C-call boundary'
+        // instead of producing wrong results.
+        let mut store = Store::new();
+        let script = b"
+            local co = coroutine.create(function()
+                for i = 1, 3 do
+                    coroutine.yield(i)
+                end
+            end)
+            local ok, err = coroutine.resume(co)
+            return {tostring(ok), err}
+        ";
+        let result = eval_script(script, &[], &[], &mut store, 0);
+        assert_eq!(
+            result,
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"false".to_vec())),
+                RespFrame::BulkString(Some(
+                    b"attempt to yield across metamethod/C-call boundary".to_vec()
+                )),
+            ])))
+        );
+    }
+
+    #[test]
+    fn coroutine_yield_inside_pcall_errors_per_lua_5_1_semantics() {
+        // (frankenredis-ztawj) Lua 5.1 doesn't allow yielding across
+        // a pcall boundary. fr's nested_exec_stmts_depth check
+        // catches this case (pcall's inner function call bumps
+        // depth via exec_stmts) so the yield surfaces as an
+        // error rather than silently dropping the rest of the
+        // pcall'd body on resume.
+        let mut store = Store::new();
+        let script = b"
+            local co = coroutine.create(function()
+                pcall(function() coroutine.yield(1) end)
+                return 'after-pcall'
+            end)
+            local ok, err = coroutine.resume(co)
+            return {tostring(ok), err}
+        ";
+        let result = eval_script(script, &[], &[], &mut store, 0);
+        // After the depth check, yield-inside-pcall errors. pcall
+        // catches the error and returns (false, msg). The body
+        // then continues to 'return after-pcall' — so resume
+        // completes successfully with that value. Pin both halves.
+        assert_eq!(
+            result,
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"true".to_vec())),
+                RespFrame::BulkString(Some(b"after-pcall".to_vec())),
             ])))
         );
     }
