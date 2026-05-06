@@ -7237,16 +7237,23 @@ fn xinfo(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
                     subcommand: "HELP".to_string(),
                 });
             }
+            // (frankenredis-tnscz) Mirror upstream t_stream.c::xinfo
+            // Command HELP body line-for-line (vendored Redis 7.2.4).
+            // Frames are SimpleString (was BulkString — same as the
+            // 0o9vo / vtege / kuthf / s574p HELP cluster). The
+            // STREAM line preserves upstream's missing-closing-bracket
+            // typo ('[FULL [COUNT <count>]' — one ']' instead of two)
+            // for byte-for-byte wire parity.
             return Ok(RespFrame::Array(Some(vec![
-                hello_bulk("XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
-                hello_bulk("CONSUMERS <key> <groupname>"),
-                hello_bulk("    Show consumers of <groupname>."),
-                hello_bulk("GROUPS <key>"),
-                hello_bulk("    Show groups of stream <key>."),
-                hello_bulk("STREAM <key> [FULL [COUNT <count>]]"),
-                hello_bulk("    Show information about stream <key>."),
-                hello_bulk("HELP"),
-                hello_bulk("    Print this help."),
+                hello_simple("XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+                hello_simple("CONSUMERS <key> <groupname>"),
+                hello_simple("    Show consumers of <groupname>."),
+                hello_simple("GROUPS <key>"),
+                hello_simple("    Show the stream consumer groups."),
+                hello_simple("STREAM <key> [FULL [COUNT <count>]"),
+                hello_simple("    Show information about the stream."),
+                hello_simple("HELP"),
+                hello_simple("    Print this help."),
             ])));
         }
         return Err(CommandError::UnknownSubcommand {
@@ -39775,6 +39782,71 @@ mod tests {
                 ])),
             ]))
         );
+    }
+
+    #[test]
+    fn xinfo_help_matches_vendored_724_wording_with_simple_string_frames() {
+        // (frankenredis-tnscz) XINFO HELP now mirrors vendored Redis
+        // 7.2.4 t_stream.c::xinfoCommand line-for-line. Three contracts
+        // pinned: every frame is SimpleString (was BulkString — same
+        // as the 0o9vo / vtege / kuthf / s574p cluster), descriptions
+        // match upstream's terser wording exactly, and the STREAM
+        // line preserves upstream's missing-closing-bracket typo.
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"XINFO".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected array"); // ubs:ignore — AI triage
+        };
+
+        for (i, frame) in items.iter().enumerate() {
+            assert!(
+                matches!(frame, RespFrame::SimpleString(_)),
+                "frame {i} must be SimpleString, got {frame:?}"
+            );
+        }
+
+        // Standard envelope.
+        assert_eq!(
+            items[0],
+            RespFrame::SimpleString(
+                "XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
+            )
+        );
+
+        // Upstream 7.2.4 descriptions (terser).
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Show the stream consumer groups.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Show information about the stream.".to_string()
+        )));
+
+        // Preserve upstream's missing-closing-bracket typo for parity.
+        assert!(items.contains(&RespFrame::SimpleString(
+            "STREAM <key> [FULL [COUNT <count>]".to_string()
+        )));
+
+        // Old paraphrased wording must NOT be present.
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s == "    Show groups of stream <key>."
+        )));
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s == "    Show information about stream <key>."
+        )));
+        // Both-brackets-closed wording must NOT be present (upstream typo
+        // preservation).
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s.contains("[COUNT <count>]]")
+        )));
+
+        // Trailing HELP block.
+        assert!(items.contains(&RespFrame::SimpleString("HELP".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Print this help.".to_string()
+        )));
     }
 
     #[test]
