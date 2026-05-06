@@ -2490,7 +2490,15 @@ impl<'a> LuaState<'a> {
                 Ok(ControlFlow::None) => {}
                 Ok(ControlFlow::Return(vals)) => return Ok(CoroutineRun::Complete(vals)),
                 Ok(ControlFlow::Break) => return Ok(CoroutineRun::Complete(vec![LuaValue::Nil])),
-                Err(err) if is_lua_yield_signal(&err) => {
+                Err(err) if is_lua_yield_signal(&err) && self.pending_yield.is_some() => {
+                    // (frankenredis-sjuu1) Real coroutine.yield always
+                    // sets pending_yield BEFORE returning the sentinel.
+                    // Gating on pending_yield.is_some() prevents a user
+                    // script from forging the yield via
+                    // error('__frankenredis_lua_coroutine_yield__'),
+                    // which would otherwise reach this arm with
+                    // pending_yield == None and produce a spoofed
+                    // empty yield.
                     let values = self.pending_yield.take().unwrap_or_default();
                     return Ok(CoroutineRun::Yield {
                         values,
@@ -2907,7 +2915,14 @@ impl<'a> LuaState<'a> {
                         new_vals.extend(vals);
                         Ok(new_vals)
                     }
-                    Err(msg) if is_lua_yield_signal(&msg) => Err(msg),
+                    // (frankenredis-sjuu1) Re-raise only a REAL yield —
+                    // pending_yield must be set by an actual call to
+                    // coroutine.yield. A user script that forges the
+                    // sentinel via error('__...') has pending_yield ==
+                    // None and falls through to the regular Err arm.
+                    Err(msg) if is_lua_yield_signal(&msg) && self.pending_yield.is_some() => {
+                        Err(msg)
+                    }
                     Err(msg) => Ok(vec![LuaValue::Bool(false), LuaValue::Str(msg.into_bytes())]),
                 }
             }
@@ -2923,7 +2938,11 @@ impl<'a> LuaState<'a> {
                         new_vals.extend(vals);
                         Ok(new_vals)
                     }
-                    Err(msg) if is_lua_yield_signal(&msg) => Err(msg),
+                    // (frankenredis-sjuu1) Same gating as pcall — only
+                    // re-raise a real yield signaled by coroutine.yield.
+                    Err(msg) if is_lua_yield_signal(&msg) && self.pending_yield.is_some() => {
+                        Err(msg)
+                    }
                     Err(msg) => {
                         // Call error handler with the error message
                         let err_val = LuaValue::Str(msg.into_bytes());
@@ -6232,6 +6251,65 @@ mod tests {
             Ok(RespFrame::Array(Some(vec![
                 RespFrame::Integer(8),
                 RespFrame::Integer(12),
+            ])))
+        );
+    }
+
+    #[test]
+    fn coroutine_yield_sentinel_cannot_be_forged_via_user_error() {
+        // (frankenredis-sjuu1) The yield mechanism uses an error
+        // sentinel string '__frankenredis_lua_coroutine_yield__'.
+        // A user script can pass that exact string to error() and
+        // produce an Err with the same payload — without the prior
+        // gate it would reach exec_coroutine_stmts' yield arm with
+        // pending_yield == None and fake an empty yield.
+        //
+        // After the fix, the spoofed sentinel is treated as a normal
+        // error: coroutine.resume returns (false, sentinel_string)
+        // and the coroutine transitions to dead. Pin both halves.
+        let mut store = Store::new();
+        let script = b"
+            local co = coroutine.create(function()
+                error('__frankenredis_lua_coroutine_yield__')
+            end)
+            local ok, err = coroutine.resume(co)
+            local s = coroutine.status(co)
+            return {tostring(ok), err, s}
+        ";
+        let result = eval_script(script, &[], &[], &mut store, 0);
+        assert_eq!(
+            result,
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"false".to_vec())),
+                RespFrame::BulkString(Some(
+                    b"__frankenredis_lua_coroutine_yield__".to_vec()
+                )),
+                RespFrame::BulkString(Some(b"dead".to_vec())),
+            ])))
+        );
+    }
+
+    #[test]
+    fn pcall_does_not_re_raise_user_forged_yield_sentinel() {
+        // (frankenredis-sjuu1) pcall's sentinel re-raise must also
+        // gate on pending_yield being set. A user script that wraps
+        // a forged sentinel in pcall must see the normal (false,
+        // sentinel_string) result, not have pcall re-raise.
+        let mut store = Store::new();
+        let script = b"
+            local ok, err = pcall(function()
+                error('__frankenredis_lua_coroutine_yield__')
+            end)
+            return {tostring(ok), err}
+        ";
+        let result = eval_script(script, &[], &[], &mut store, 0);
+        assert_eq!(
+            result,
+            Ok(RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"false".to_vec())),
+                RespFrame::BulkString(Some(
+                    b"__frankenredis_lua_coroutine_yield__".to_vec()
+                )),
             ])))
         );
     }
