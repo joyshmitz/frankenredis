@@ -7062,20 +7062,33 @@ fn xgroup(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
                 subcommand: "HELP".to_string(),
             });
         }
+        // (frankenredis-s574p) Mirror upstream t_stream.c::xgroupCommand
+        // HELP body line-for-line (vendored Redis 7.2.4). Frames are
+        // SimpleString (was BulkString — same divergence as 0o9vo /
+        // vtege / kuthf). Placeholders use upstream syntax (`<id|$>`,
+        // `<consumer>`) and the CREATE entry surfaces the MKSTREAM /
+        // ENTRIESREAD option detail; SETID surfaces the
+        // [ENTRIESREAD entries_read] option.
         return Ok(RespFrame::Array(Some(vec![
-            hello_bulk("XGROUP <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
-            hello_bulk("CREATE <key> <groupname> <id-or-$> [MKSTREAM]"),
-            hello_bulk("    Create a new consumer group."),
-            hello_bulk("CREATECONSUMER <key> <groupname> <consumername>"),
-            hello_bulk("    Create a new consumer in the specified group."),
-            hello_bulk("DELCONSUMER <key> <groupname> <consumername>"),
-            hello_bulk("    Remove a consumer from the specified group."),
-            hello_bulk("DESTROY <key> <groupname>"),
-            hello_bulk("    Destroy a consumer group."),
-            hello_bulk("SETID <key> <groupname> <id-or-$>"),
-            hello_bulk("    Set the consumer group last delivered ID."),
-            hello_bulk("HELP"),
-            hello_bulk("    Print this help."),
+            hello_simple("XGROUP <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("CREATE <key> <groupname> <id|$> [option]"),
+            hello_simple("    Create a new consumer group. Options are:"),
+            hello_simple("    * MKSTREAM"),
+            hello_simple("      Create the empty stream if it does not exist."),
+            hello_simple("    * ENTRIESREAD entries_read"),
+            hello_simple(
+                "      Set the group's entries_read counter (internal use).",
+            ),
+            hello_simple("CREATECONSUMER <key> <groupname> <consumer>"),
+            hello_simple("    Create a new consumer in the specified group."),
+            hello_simple("DELCONSUMER <key> <groupname> <consumer>"),
+            hello_simple("    Remove the specified consumer."),
+            hello_simple("DESTROY <key> <groupname>"),
+            hello_simple("    Remove the specified group."),
+            hello_simple("SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]"),
+            hello_simple("    Set the current group ID and entries_read counter."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])));
     }
 
@@ -39762,6 +39775,80 @@ mod tests {
                 ])),
             ]))
         );
+    }
+
+    #[test]
+    fn xgroup_help_matches_vendored_724_wording_with_simple_string_frames() {
+        // (frankenredis-s574p) XGROUP HELP now mirrors vendored Redis
+        // 7.2.4 t_stream.c::xgroupCommand line-for-line. Three
+        // contracts pinned: every frame is SimpleString (was
+        // BulkString — same as 0o9vo / vtege / kuthf), placeholders
+        // use upstream syntax (<id|$>, <consumer>), and CREATE/SETID
+        // surface the MKSTREAM / ENTRIESREAD option detail.
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"XGROUP".to_vec(), b"HELP".to_vec()], &mut store, 0).unwrap();
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected array"); // ubs:ignore — AI triage
+        };
+
+        for (i, frame) in items.iter().enumerate() {
+            assert!(
+                matches!(frame, RespFrame::SimpleString(_)),
+                "frame {i} must be SimpleString, got {frame:?}"
+            );
+        }
+
+        // Standard envelope.
+        assert_eq!(
+            items[0],
+            RespFrame::SimpleString(
+                "XGROUP <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
+            )
+        );
+
+        // Upstream 7.2.4 placeholder syntax + option detail.
+        assert!(items.contains(&RespFrame::SimpleString(
+            "CREATE <key> <groupname> <id|$> [option]".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString("    * MKSTREAM".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "      Create the empty stream if it does not exist.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    * ENTRIESREAD entries_read".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Set the current group ID and entries_read counter.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Remove the specified consumer.".to_string()
+        )));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Remove the specified group.".to_string()
+        )));
+
+        // Old paraphrased wording must NOT be present.
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s.contains("<consumername>")
+        )));
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s.contains("<id-or-$>")
+        )));
+        assert!(!items.iter().any(|f| matches!(
+            f,
+            RespFrame::SimpleString(s) if s == "    Destroy a consumer group."
+        )));
+
+        // Trailing HELP block.
+        assert!(items.contains(&RespFrame::SimpleString("HELP".to_string())));
+        assert!(items.contains(&RespFrame::SimpleString(
+            "    Print this help.".to_string()
+        )));
     }
 
     #[test]
