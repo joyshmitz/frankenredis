@@ -9887,7 +9887,12 @@ fn lpos(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
             if i >= argv.len() {
                 return Err(CommandError::SyntaxError);
             }
-            rank = parse_i64_arg(&argv[i])?;
+            // (frankenredis-xiome) Upstream lposCommand uses
+            // getRangeLongFromObjectOrReply(c, argv, -LONG_MAX, LONG_MAX,
+            // &rank, NULL) which rejects only i64::MIN. fr was accepting
+            // it and silently returning an empty array (skip overflow
+            // never matches anything).
+            rank = parse_i64_arg_long_range(&argv[i])?;
             if rank == 0 {
                 return Ok(RespFrame::Error(
                     "ERR RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list"
@@ -39905,6 +39910,83 @@ mod tests {
                 ])),
             ]))
         );
+    }
+
+    #[test]
+    fn lpos_rank_rejects_i64_min_with_upstream_out_of_range_error() {
+        // (frankenredis-xiome) Upstream t_list.c::lposCommand uses
+        // getRangeLongFromObjectOrReply(c, argv, -LONG_MAX, LONG_MAX,
+        // ...) which rejects only i64::MIN. fr was accepting it and
+        // silently returning empty (skip overflow never matched any
+        // element). Pin the upstream error wording.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"RPUSH".to_vec(),
+                b"l".to_vec(),
+                b"a".to_vec(),
+                b"b".to_vec(),
+                b"c".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("rpush");
+
+        let i64_min = b"-9223372036854775808";
+        let err = dispatch_argv(
+            &[
+                b"LPOS".to_vec(),
+                b"l".to_vec(),
+                b"a".to_vec(),
+                b"RANK".to_vec(),
+                i64_min.to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom(format!(
+                "ERR value is out of range, value must between {} and {}",
+                -i64::MAX,
+                i64::MAX
+            ))
+        );
+
+        // RANK = -1 (legitimate) still works.
+        let out = dispatch_argv(
+            &[
+                b"LPOS".to_vec(),
+                b"l".to_vec(),
+                b"a".to_vec(),
+                b"RANK".to_vec(),
+                b"-1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("rank -1 must succeed");
+        assert_eq!(out, RespFrame::Integer(0));
+
+        // RANK = 0 still hits the bespoke 'RANK can't be zero' error.
+        let err = dispatch_argv(
+            &[
+                b"LPOS".to_vec(),
+                b"l".to_vec(),
+                b"a".to_vec(),
+                b"RANK".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("rank 0 returns Error frame");
+        let RespFrame::Error(msg) = err else {
+            panic!("expected Error frame for RANK 0"); // ubs:ignore — AI triage
+        };
+        assert!(msg.starts_with("ERR RANK can't be zero"));
     }
 
     #[test]
