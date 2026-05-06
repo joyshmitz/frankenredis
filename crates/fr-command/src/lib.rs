@@ -4532,6 +4532,35 @@ fn parse_zpop_count(arg: &[u8]) -> Result<usize, CommandError> {
     }
 }
 
+/// (frankenredis-1g3ao) Upstream zpopMinMaxCommand sets
+/// use_nested_array = (c->resp > 2 && count != -1). Under RESP3 with the
+/// COUNT form, each (member, score) is wrapped in a 2-Array; under RESP2
+/// or the no-COUNT form, the wire stays flat.
+fn zpop_count_emit(
+    pairs: Vec<(Vec<u8>, f64)>,
+    resp_protocol_version: i64,
+) -> RespFrame {
+    if resp_protocol_version == 3 {
+        let frames = pairs
+            .into_iter()
+            .map(|(member, score)| {
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(member)),
+                    RespFrame::BulkString(Some(score.to_string().into_bytes())),
+                ]))
+            })
+            .collect();
+        RespFrame::Array(Some(frames))
+    } else {
+        let mut frames = Vec::with_capacity(pairs.len() * 2);
+        for (member, score) in pairs {
+            frames.push(RespFrame::BulkString(Some(member)));
+            frames.push(RespFrame::BulkString(Some(score.to_string().into_bytes())));
+        }
+        RespFrame::Array(Some(frames))
+    }
+}
+
 fn zpopmin(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 || argv.len() > 3 {
         return Err(CommandError::WrongArity("ZPOPMIN"));
@@ -4548,12 +4577,10 @@ fn zpopmin(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame
         }
         let count = count as usize;
         let pairs = store.zpopmin_count(&argv[1], count, now_ms)?;
-        let mut frames = Vec::with_capacity(pairs.len() * 2);
-        for (member, score) in pairs {
-            frames.push(RespFrame::BulkString(Some(member)));
-            frames.push(RespFrame::BulkString(Some(score.to_string().into_bytes())));
-        }
-        return Ok(RespFrame::Array(Some(frames)));
+        return Ok(zpop_count_emit(
+            pairs,
+            store.dispatch_client_ctx.resp_protocol_version,
+        ));
     }
     match store.zpopmin(&argv[1], now_ms)? {
         Some((member, score)) => Ok(RespFrame::Array(Some(vec![
@@ -4571,12 +4598,10 @@ fn zpopmax(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame
     if argv.len() == 3 {
         let count = parse_zpop_count(&argv[2])?;
         let pairs = store.zpopmax_count(&argv[1], count, now_ms)?;
-        let mut frames = Vec::with_capacity(pairs.len() * 2);
-        for (member, score) in pairs {
-            frames.push(RespFrame::BulkString(Some(member)));
-            frames.push(RespFrame::BulkString(Some(score.to_string().into_bytes())));
-        }
-        return Ok(RespFrame::Array(Some(frames)));
+        return Ok(zpop_count_emit(
+            pairs,
+            store.dispatch_client_ctx.resp_protocol_version,
+        ));
     }
     match store.zpopmax(&argv[1], now_ms)? {
         Some((member, score)) => Ok(RespFrame::Array(Some(vec![
@@ -41744,6 +41769,93 @@ mod tests {
             }
             other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
+    }
+
+    #[test]
+    fn zpop_with_count_under_resp3_returns_array_of_pair_subarrays() {
+        // (frankenredis-1g3ao) Upstream zpopMinMaxCommand sets
+        // use_nested_array = (c->resp > 2 && count != -1). With COUNT
+        // and RESP3, each (member, score) is wrapped in a 2-Array.
+        // Without COUNT (-1), the wire stays flat regardless.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+                b"2".to_vec(),
+                b"b".to_vec(),
+                b"3".to_vec(),
+                b"c".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zadd");
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+
+        let out = dispatch_argv(
+            &[b"ZPOPMIN".to_vec(), b"zs".to_vec(), b"2".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("zpopmin count resp3");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"a".to_vec())),
+                    RespFrame::BulkString(Some(b"1".to_vec())),
+                ])),
+                RespFrame::Array(Some(vec![
+                    RespFrame::BulkString(Some(b"b".to_vec())),
+                    RespFrame::BulkString(Some(b"2".to_vec())),
+                ])),
+            ]))
+        );
+
+        // ZPOPMAX with count under RESP3 — same shape.
+        let out = dispatch_argv(
+            &[b"ZPOPMAX".to_vec(), b"zs".to_vec(), b"1".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("zpopmax count resp3");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"c".to_vec())),
+                RespFrame::BulkString(Some(b"3".to_vec())),
+            ]))]))
+        );
+
+        // No-COUNT form must stay flat 2-Array under RESP3 (upstream's
+        // count == -1 disables nested wrapping).
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"zs".to_vec(),
+                b"5".to_vec(),
+                b"d".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zadd d");
+        let out = dispatch_argv(
+            &[b"ZPOPMIN".to_vec(), b"zs".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("zpopmin no count resp3");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"d".to_vec())),
+                RespFrame::BulkString(Some(b"5".to_vec())),
+            ]))
+        );
     }
 
     #[test]
