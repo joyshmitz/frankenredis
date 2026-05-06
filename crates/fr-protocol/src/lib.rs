@@ -192,17 +192,30 @@ pub fn parse_frame_with_config(
     input: &[u8],
     config: &ParserConfig,
 ) -> Result<ParseResult, RespParseError> {
-    let (frame, consumed) = parse_frame_internal(input, 0, 0, config)?;
+    let (frame, consumed) = parse_frame_internal(input, 0, 0, 0, config)?;
     Ok(ParseResult { frame, consumed })
 }
+
+/// Maximum number of consecutive RESP3 attribute prefixes ('|...')
+/// the parser will follow before returning RecursionLimitExceeded.
+/// Independent of `max_recursion_depth` because the attribute branch
+/// is depth-transparent (xfxtd) — without a separate cap an attacker
+/// could send '|N\r\n+k\r\n+v\r\n' × M as untrusted input and grow
+/// the Rust call stack linearly with M, regardless of the recursion-
+/// depth budget. (frankenredis-oafun)
+const RESP3_ATTRIBUTE_CHAIN_LIMIT: usize = 8;
 
 fn parse_frame_internal(
     input: &[u8],
     start: usize,
     depth: usize,
+    attr_chain_depth: usize,
     config: &ParserConfig,
 ) -> Result<(RespFrame, usize), RespParseError> {
     if depth > config.max_recursion_depth {
+        return Err(RespParseError::RecursionLimitExceeded);
+    }
+    if attr_chain_depth > RESP3_ATTRIBUTE_CHAIN_LIMIT {
         return Err(RespParseError::RecursionLimitExceeded);
     }
     let prefix = *input.get(start).ok_or(RespParseError::Incomplete)?;
@@ -259,9 +272,13 @@ fn parse_frame_internal(
             // Attribute: parse the attribute map and discard it,
             // then return the next real frame. Upstream uses this
             // to attach per-reply metadata that RESP2 clients don't
-            // understand.
+            // understand. The attribute is transparent for the
+            // depth budget (xfxtd) — but chained attribute prefixes
+            // ('|...|...|...frame') must still be capped so an
+            // attacker can't grow the Rust call stack at the same
+            // depth without bound. (frankenredis-oafun)
             let (_attr, consumed) = parse_resp3_map(input, next, depth, config)?;
-            parse_frame_internal(input, consumed, depth, config)
+            parse_frame_internal(input, consumed, depth, attr_chain_depth + 1, config)
         }
         b'!' => parse_resp3_blob_error(input, next, config),
         other => Err(RespParseError::InvalidPrefix(other)),
@@ -291,7 +308,10 @@ fn parse_resp3_map(
     }
     let mut items = Vec::with_capacity(pair_count.min(1024));
     for _ in 0..pair_count {
-        let (item, consumed) = parse_frame_internal(input, cursor, depth + 1, config)?;
+        // Child frames reset attr_chain_depth: each k/v pair is its
+        // own independent frame, not part of the outer attribute
+        // chain. (frankenredis-oafun)
+        let (item, consumed) = parse_frame_internal(input, cursor, depth + 1, 0, config)?;
         items.push(item);
         cursor = consumed;
     }
@@ -422,7 +442,9 @@ fn parse_array(
     }
     let mut items = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
-        let (item, consumed) = parse_frame_internal(input, cursor, depth + 1, config)?;
+        // Child frames reset attr_chain_depth — each array element
+        // is its own independent frame. (frankenredis-oafun)
+        let (item, consumed) = parse_frame_internal(input, cursor, depth + 1, 0, config)?;
         items.push(item);
         cursor = consumed;
     }
@@ -1176,6 +1198,54 @@ mod tests {
         // Blob error → Error.
         let parsed = parse_frame_with_config(b"!5\r\nWRONG\r\n", &allow).unwrap();
         assert_eq!(parsed.frame, RespFrame::Error("WRONG".to_string()));
+    }
+
+    #[test]
+    fn resp3_attribute_chain_is_capped_independently_of_recursion_depth() {
+        // (frankenredis-oafun) The xfxtd fix made the attribute branch
+        // depth-transparent, so without a separate chain cap a
+        // malicious peer could send '|1\r\n+k\r\n+v\r\n' × N to grow
+        // the parser's Rust call stack linearly at the same depth.
+        // RESP3_ATTRIBUTE_CHAIN_LIMIT (8) catches that. Generate a
+        // 16-deep chain wrapping a single SimpleString and assert
+        // the parser rejects it cleanly with RecursionLimitExceeded
+        // — well before any real workload would trip the cap.
+        let mut payload = Vec::new();
+        for _ in 0..16 {
+            payload.extend_from_slice(b"|1\r\n+k\r\n+v\r\n");
+        }
+        payload.extend_from_slice(b"+OK\r\n");
+
+        let cfg = ParserConfig {
+            // Very generous depth budget to isolate the chain cap as
+            // the actual rejection signal.
+            max_recursion_depth: 1024,
+            allow_resp3: true,
+            ..ParserConfig::default()
+        };
+        let result = parse_frame_with_config(&payload, &cfg);
+        assert_eq!(result, Err(RespParseError::RecursionLimitExceeded));
+    }
+
+    #[test]
+    fn resp3_attribute_chain_under_cap_still_parses() {
+        // (frankenredis-oafun) 7 chained attributes (well under the
+        // cap of 8) must still resolve to the wrapped frame. Pins
+        // that the cap doesn't accidentally reject legitimately
+        // multi-attribute replies.
+        let mut payload = Vec::new();
+        for _ in 0..7 {
+            payload.extend_from_slice(b"|1\r\n+k\r\n+v\r\n");
+        }
+        payload.extend_from_slice(b"+OK\r\n");
+
+        let cfg = ParserConfig {
+            max_recursion_depth: 1024,
+            allow_resp3: true,
+            ..ParserConfig::default()
+        };
+        let parsed = parse_frame_with_config(&payload, &cfg).expect("7 attrs must parse");
+        assert_eq!(parsed.frame, RespFrame::SimpleString("OK".to_string()));
     }
 
     #[test]
