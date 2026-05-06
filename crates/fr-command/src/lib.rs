@@ -9781,15 +9781,21 @@ fn parse_bit_offset_or_reply(arg: &[u8]) -> Result<i64, CommandError> {
 }
 
 fn bitcount(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
-    // Upstream bitcountCommand (t_string.c) short-circuits to Integer(0)
-    // when the key doesn't exist — BEFORE argv-shape validation — so a
-    // nonexistent key with too many args returns 0 instead of a syntax
-    // error. Match that precedence. (br-frankenredis-ugkf)
+    // Upstream bitcountCommand (bitops.c lines 805-854) short-circuits
+    // to Integer(0) when the key doesn't exist — BEFORE argv-shape
+    // validation — so a nonexistent key with too many args returns 0
+    // instead of a syntax error. (br-frankenredis-ugkf)
     if argv.len() < 2 {
         return Err(CommandError::WrongArity("BITCOUNT"));
     }
-    if !store.exists(&argv[1], now_ms) {
-        return Ok(RespFrame::Integer(0));
+    // (frankenredis-oss8i) Match upstream's precedence: lookup +
+    // WRONGTYPE check happen BEFORE any argv parsing. Otherwise
+    // `BITCOUNT listkey BAD BAD BADUNIT` returns SyntaxError instead
+    // of WRONGTYPE.
+    match store.key_type(&argv[1], now_ms) {
+        None => return Ok(RespFrame::Integer(0)),
+        Some("string") => {}
+        Some(_) => return Err(CommandError::Store(StoreError::WrongType)),
     }
     let (start, end, unit) = match argv.len() {
         2 => (None, None, BitRangeUnit::Byte),
@@ -9799,6 +9805,11 @@ fn bitcount(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
             BitRangeUnit::Byte,
         ),
         5 => {
+            // (frankenredis-oss8i) Upstream parses start/end BEFORE
+            // checking the BIT|BYTE modifier (bitops.c lines 815-830),
+            // so a malformed integer takes precedence over a bad unit.
+            let start = parse_i64_arg(&argv[2])?;
+            let end = parse_i64_arg(&argv[3])?;
             let unit = if argv[4].eq_ignore_ascii_case(b"bit") {
                 BitRangeUnit::Bit
             } else if argv[4].eq_ignore_ascii_case(b"byte") {
@@ -9806,11 +9817,7 @@ fn bitcount(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
             } else {
                 return Err(CommandError::SyntaxError);
             };
-            (
-                Some(parse_i64_arg(&argv[2])?),
-                Some(parse_i64_arg(&argv[3])?),
-                unit,
-            )
+            (Some(start), Some(end), unit)
         }
         _ => return Err(CommandError::SyntaxError),
     };
@@ -29089,6 +29096,61 @@ mod tests {
         )
         .expect_err("bitcount invalid unit should fail");
         assert_eq!(err, CommandError::SyntaxError);
+    }
+
+    #[test]
+    fn bitcount_wrongtype_wins_over_arg_parse_errors() {
+        // (frankenredis-oss8i) Upstream bitops.c::bitcountCommand runs
+        // the lookupKeyReadOrReply + checkType sequence at lines 806-807
+        // BEFORE any argv parsing. fr was returning SyntaxError because
+        // the unit check fired before the type check.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"RPUSH".to_vec(), b"lst".to_vec(), b"a".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed list");
+        let err = dispatch_argv(
+            &[
+                b"BITCOUNT".to_vec(),
+                b"lst".to_vec(),
+                b"BAD".to_vec(),
+                b"BAD".to_vec(),
+                b"BADUNIT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("WRONGTYPE should beat SyntaxError");
+        assert_eq!(err, CommandError::Store(StoreError::WrongType));
+    }
+
+    #[test]
+    fn bitcount_invalid_start_beats_invalid_unit() {
+        // (frankenredis-oss8i) Upstream parses start (argv[2]) then end
+        // (argv[3]) BEFORE the BIT|BYTE check (bitops.c lines 815-830),
+        // so a malformed integer takes precedence over a bad unit.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"hello".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed key");
+        let err = dispatch_argv(
+            &[
+                b"BITCOUNT".to_vec(),
+                b"k".to_vec(),
+                b"BAD".to_vec(),
+                b"0".to_vec(),
+                b"BADUNIT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("integer parse should beat unit syntax");
+        assert_eq!(err, CommandError::InvalidInteger);
     }
 
     #[test]
