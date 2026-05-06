@@ -6521,30 +6521,80 @@ impl Runtime {
     }
 
     fn acl_log_entry_frame(&self, entry: &AclLogEntry, now_ms: u64) -> RespFrame {
-        RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(b"count".to_vec())),
-            RespFrame::Integer(entry.count as i64),
-            RespFrame::BulkString(Some(b"reason".to_vec())),
-            RespFrame::BulkString(Some(entry.reason.as_bytes().to_vec())),
-            RespFrame::BulkString(Some(b"context".to_vec())),
-            RespFrame::BulkString(Some(entry.context.as_bytes().to_vec())),
-            RespFrame::BulkString(Some(b"object".to_vec())),
-            RespFrame::BulkString(Some(entry.object.as_bytes().to_vec())),
-            RespFrame::BulkString(Some(b"username".to_vec())),
-            RespFrame::BulkString(Some(entry.username.clone())),
-            RespFrame::BulkString(Some(b"age-seconds".to_vec())),
-            RespFrame::BulkString(Some(
-                acl_log_age_seconds(now_ms, entry.updated_at_ms).into_bytes(),
-            )),
-            RespFrame::BulkString(Some(b"client-info".to_vec())),
-            RespFrame::BulkString(Some(entry.client_info.as_bytes().to_vec())),
-            RespFrame::BulkString(Some(b"entry-id".to_vec())),
-            RespFrame::Integer(entry.entry_id as i64),
-            RespFrame::BulkString(Some(b"timestamp-created".to_vec())),
-            RespFrame::Integer(entry.created_at_ms as i64),
-            RespFrame::BulkString(Some(b"timestamp-last-updated".to_vec())),
-            RespFrame::Integer(entry.updated_at_ms as i64),
-        ]))
+        // Mirror upstream acl.c::aclCommand 'log' branch which uses
+        // addReplyMapLen(c, 10) — RESP3 wire shape is a Map of 10
+        // (key, value) pairs; RESP2 stays the existing flat Array
+        // of alternating k/v entries. Same shape pattern as
+        // CLIENT TRACKINGINFO (i40x2), ACL GETUSER (e4njz), MEMORY
+        // STATS (udl3y), FUNCTION STATS (asvh1). (frankenredis-5d04d)
+        let age_seconds = acl_log_age_seconds(now_ms, entry.updated_at_ms).into_bytes();
+        if self.session.resp_protocol_version == 3 {
+            RespFrame::Map(Some(vec![
+                (
+                    RespFrame::BulkString(Some(b"count".to_vec())),
+                    RespFrame::Integer(entry.count as i64),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"reason".to_vec())),
+                    RespFrame::BulkString(Some(entry.reason.as_bytes().to_vec())),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"context".to_vec())),
+                    RespFrame::BulkString(Some(entry.context.as_bytes().to_vec())),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"object".to_vec())),
+                    RespFrame::BulkString(Some(entry.object.as_bytes().to_vec())),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"username".to_vec())),
+                    RespFrame::BulkString(Some(entry.username.clone())),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"age-seconds".to_vec())),
+                    RespFrame::BulkString(Some(age_seconds)),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"client-info".to_vec())),
+                    RespFrame::BulkString(Some(entry.client_info.as_bytes().to_vec())),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"entry-id".to_vec())),
+                    RespFrame::Integer(entry.entry_id as i64),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"timestamp-created".to_vec())),
+                    RespFrame::Integer(entry.created_at_ms as i64),
+                ),
+                (
+                    RespFrame::BulkString(Some(b"timestamp-last-updated".to_vec())),
+                    RespFrame::Integer(entry.updated_at_ms as i64),
+                ),
+            ]))
+        } else {
+            RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"count".to_vec())),
+                RespFrame::Integer(entry.count as i64),
+                RespFrame::BulkString(Some(b"reason".to_vec())),
+                RespFrame::BulkString(Some(entry.reason.as_bytes().to_vec())),
+                RespFrame::BulkString(Some(b"context".to_vec())),
+                RespFrame::BulkString(Some(entry.context.as_bytes().to_vec())),
+                RespFrame::BulkString(Some(b"object".to_vec())),
+                RespFrame::BulkString(Some(entry.object.as_bytes().to_vec())),
+                RespFrame::BulkString(Some(b"username".to_vec())),
+                RespFrame::BulkString(Some(entry.username.clone())),
+                RespFrame::BulkString(Some(b"age-seconds".to_vec())),
+                RespFrame::BulkString(Some(age_seconds)),
+                RespFrame::BulkString(Some(b"client-info".to_vec())),
+                RespFrame::BulkString(Some(entry.client_info.as_bytes().to_vec())),
+                RespFrame::BulkString(Some(b"entry-id".to_vec())),
+                RespFrame::Integer(entry.entry_id as i64),
+                RespFrame::BulkString(Some(b"timestamp-created".to_vec())),
+                RespFrame::Integer(entry.created_at_ms as i64),
+                RespFrame::BulkString(Some(b"timestamp-last-updated".to_vec())),
+                RespFrame::Integer(entry.updated_at_ms as i64),
+            ]))
+        }
     }
 
     fn acl_log_entries_response(&self, count: Option<usize>, now_ms: u64) -> RespFrame {
@@ -21036,6 +21086,70 @@ mod tests {
             matches!(&reply, RespFrame::BulkString(Some(b)) if std::str::from_utf8(b).map(|s| s.contains("no permissions")).unwrap_or(false)),
             "DEL should be denied despite +@all, got: {reply:?}"
         );
+    }
+
+    #[test]
+    fn acl_log_under_resp3_returns_map_per_entry() {
+        // (frankenredis-5d04d) Upstream acl.c::aclCommand 'log'
+        // emits each entry via addReplyMapLen(c, 10) — the RESP3
+        // wire shape is a Map of 10 (key, value) pairs per entry,
+        // wrapped in an outer Array (one entry per ACL deny). fr
+        // was emitting a flat 20-element Array per entry regardless
+        // of session.resp_protocol_version. Same shape pattern as
+        // CLIENT TRACKINGINFO (i40x2), ACL GETUSER (e4njz), MEMORY
+        // STATS (udl3y), FUNCTION STATS (asvh1).
+        let mut rt = Runtime::default_strict();
+        rt.session.client_id = 4;
+        rt.session.last_command_name = "auth".to_string();
+        rt.record_acl_log_event("auth", "AUTH".to_string(), b"default".to_vec(), 1_000);
+
+        let hello = rt.execute_frame(command(&[b"HELLO", b"3"]), 1);
+        assert!(
+            matches!(hello, RespFrame::Map(_)),
+            "HELLO 3 should reply with a Map, got {hello:?}"
+        );
+
+        let reply = rt.execute_frame(command(&[b"ACL", b"LOG"]), 5_500);
+        let RespFrame::Array(Some(entries)) = reply else {
+            panic!("ACL LOG outer reply must be Array of entries"); // ubs:ignore — AI triage
+        };
+        assert!(!entries.is_empty(), "must have one ACL log entry");
+        let RespFrame::Map(Some(pairs)) = &entries[0] else {
+            panic!("entry must be Map under RESP3, got {:?}", entries[0]); // ubs:ignore — AI triage
+        };
+        assert_eq!(pairs.len(), 10, "Map should have exactly 10 entries");
+        // Spot-check the canonical key order against upstream.
+        assert_eq!(pairs[0].0, RespFrame::BulkString(Some(b"count".to_vec())));
+        assert_eq!(pairs[1].0, RespFrame::BulkString(Some(b"reason".to_vec())));
+        assert_eq!(pairs[4].0, RespFrame::BulkString(Some(b"username".to_vec())));
+        assert_eq!(
+            pairs[9].0,
+            RespFrame::BulkString(Some(b"timestamp-last-updated".to_vec()))
+        );
+    }
+
+    #[test]
+    fn acl_log_under_resp2_stays_flat_array_per_entry() {
+        // (frankenredis-5d04d) Companion pin: under RESP2 each entry
+        // is the existing 20-element flat Array of alternating k/v.
+        let mut rt = Runtime::default_strict();
+        rt.session.client_id = 4;
+        rt.session.last_command_name = "auth".to_string();
+        rt.record_acl_log_event("auth", "AUTH".to_string(), b"default".to_vec(), 1_000);
+
+        let reply = rt.execute_frame(command(&[b"ACL", b"LOG"]), 5_500);
+        let RespFrame::Array(Some(entries)) = reply else {
+            panic!("ACL LOG outer reply must be Array of entries"); // ubs:ignore — AI triage
+        };
+        assert!(!entries.is_empty());
+        let RespFrame::Array(Some(items)) = &entries[0] else {
+            panic!("entry must be flat Array under RESP2, got {:?}", entries[0]); // ubs:ignore — AI triage
+        };
+        assert_eq!(items.len(), 20, "flat shape: 10 keys + 10 values");
+        assert_eq!(items[0], RespFrame::BulkString(Some(b"count".to_vec())));
+        assert_eq!(items[2], RespFrame::BulkString(Some(b"reason".to_vec())));
+        assert_eq!(items[16], RespFrame::BulkString(Some(b"timestamp-created".to_vec())));
+        assert_eq!(items[18], RespFrame::BulkString(Some(b"timestamp-last-updated".to_vec())));
     }
 
     #[test]
