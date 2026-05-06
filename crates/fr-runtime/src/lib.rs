@@ -4196,8 +4196,14 @@ impl Runtime {
         if let Ok(argv) = &argv_result {
             self.session.last_command_name = client_info_command_name(argv);
         }
-        let current_session = self.session.clone();
-        self.record_client_session(&current_session);
+        // (frankenredis-2prp1) Inline the record_client_session call to
+        // avoid the redundant clone — the BTreeMap insert below already
+        // clones for ownership. Disjoint field borrows (self.session
+        // immut for the value + key, self.server mut for the insert)
+        // satisfy the borrow checker.
+        self.server
+            .client_sessions
+            .insert(self.session.client_id, self.session.clone());
         let processed_counts = argv_result
             .as_ref()
             .ok()
