@@ -2696,8 +2696,11 @@ fn append(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame,
     let current_len = store.strlen(&argv[1], now_ms)?;
     let added_len = argv[2].len();
     if current_len.saturating_add(added_len) > 536_870_912 {
+        // (frankenredis-ga4j1) Upstream t_string.c::checkStringLength
+        // line 48 names the *config knob* (proto_max_bulk_len), not a
+        // fixed byte size. Matches SETRANGE wording at line 9422 above.
         return Ok(RespFrame::Error(
-            "ERR string exceeds maximum allowed size (512MB)".to_string(),
+            "ERR string exceeds maximum allowed size (proto-max-bulk-len)".to_string(),
         ));
     }
     let new_len = store.append(&argv[1], &argv[2], now_ms)?;

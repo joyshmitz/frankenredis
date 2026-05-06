@@ -2734,8 +2734,11 @@ impl Store {
         let end_bit = bit_offset.saturating_add(u64::from(bits));
         let needed_bytes = end_bit.div_ceil(8) as usize;
         if needed_bytes > 512 * 1024 * 1024 {
+            // (frankenredis-ga4j1) Mirror upstream
+            // t_string.c::checkStringLength wording — names the
+            // proto_max_bulk_len config knob, not a fixed byte size.
             return Err(StoreError::GenericError(
-                "ERR string exceeds maximum allowed size (512MB)".to_string(),
+                "ERR string exceeds maximum allowed size (proto-max-bulk-len)".to_string(),
             ));
         }
 
