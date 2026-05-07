@@ -21533,6 +21533,36 @@ mod tests {
     }
 
     #[test]
+    fn debug_without_subcommand_replies_wrong_arity_before_security_gate() {
+        // Pin upstream server.c::processCommand ordering: the table-
+        // level commandCheckArity runs BEFORE the CMD_PROTECTED gate,
+        // so DEBUG alone (argc=1) emits "wrong number of arguments
+        // for 'debug' command" — not the long enable-debug-command
+        // security message. (frankenredis-qcel)
+        let mut rt = Runtime::default_strict();
+        // enable_debug_command defaults to "no", so the security gate
+        // would fire for any argc>=2 if not for the arity short-circuit.
+        let arity = rt.execute_frame(command(&[b"DEBUG"]), 0);
+        assert_eq!(
+            arity,
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'debug' command".to_string()
+            )
+        );
+
+        // Sanity: argc>=2 with disabled gate still surfaces the
+        // security message (so we know the gate isn't broken).
+        let gated = rt.execute_frame(command(&[b"DEBUG", b"OBJECT", b"k"]), 1);
+        let RespFrame::Error(msg) = gated else {
+            panic!("expected error, got {gated:?}");
+        };
+        assert!(
+            msg.starts_with("ERR DEBUG command not allowed."),
+            "{msg}"
+        );
+    }
+
+    #[test]
     fn acl_dryrun_validates_command_existence_and_arity_before_acl_gate() {
         // Pin upstream acl.c::aclCommand DRYRUN ordering: command-
         // existence and table-arity checks fire BEFORE the ACL
