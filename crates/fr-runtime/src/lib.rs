@@ -21451,6 +21451,54 @@ mod tests {
     }
 
     #[test]
+    fn acl_log_and_cat_extra_args_match_upstream_subcommand_syntax_error() {
+        // Pin upstream acl.c::aclCommand fallthrough envelope for the
+        // arity = -2 ACL subcommands LOG and CAT. extra args surface
+        // the addReplySubcommandSyntaxError reply, NOT the standard
+        // 'wrong number of arguments for acl|<sub> command' wording
+        // (frankenredis-egom). The subcommand token preserves the
+        // user-typed casing.
+        let mut rt = Runtime::default_strict();
+
+        let log_extra = rt.execute_frame(
+            command(&[b"ACL", b"LOG", b"0", b"RESET"]),
+            0,
+        );
+        assert_eq!(
+            log_extra,
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'LOG'. Try ACL HELP."
+                    .to_string()
+            )
+        );
+
+        let cat_extra = rt.execute_frame(
+            command(&[b"ACL", b"CAT", b"read", b"extra"]),
+            1,
+        );
+        assert_eq!(
+            cat_extra,
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'CAT'. Try ACL HELP."
+                    .to_string()
+            )
+        );
+
+        // Casing preserves user-typed token.
+        let log_extra_lower = rt.execute_frame(
+            command(&[b"ACL", b"log", b"0", b"RESET"]),
+            2,
+        );
+        assert_eq!(
+            log_extra_lower,
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'log'. Try ACL HELP."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
     fn acl_dryrun_validates_command_existence_and_arity_before_acl_gate() {
         // Pin upstream acl.c::aclCommand DRYRUN ordering: command-
         // existence and table-arity checks fire BEFORE the ACL
