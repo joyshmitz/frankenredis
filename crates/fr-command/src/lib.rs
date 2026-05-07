@@ -42844,6 +42844,26 @@ mod tests {
     }
 
     #[test]
+    fn command_getkeys_rejects_missing_arguments() {
+        // Pins upstream WrongArity wording for COMMAND|GETKEYS
+        // (commands.def declares arity=-3). Mirrors the
+        // GETKEYSANDFLAGS pin above. (frankenredis-tkr0)
+        let mut store = Store::new();
+        let out = dispatch_argv(
+            &[b"COMMAND".to_vec(), b"GETKEYS".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'command|getkeys' command".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn command_getkeys_and_flags_match_upstream_error_taxonomy() {
         let mut store = Store::new();
 
