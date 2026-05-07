@@ -12278,7 +12278,16 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
         info.push_str("redis_git_sha1:00000000\r\n");
         info.push_str("redis_git_dirty:0\r\n");
         info.push_str("redis_build_id:0\r\n");
-        info.push_str("redis_mode:standalone\r\n");
+        // Upstream server.c::genRedisInfoString:5469-5471 selects
+        // redis_mode from server flags: "cluster" when cluster_enabled,
+        // "sentinel" when sentinel_mode, else "standalone". fr does
+        // not track sentinel_mode so only the cluster/standalone
+        // branch matters. (frankenredis-xa8u4)
+        info.push_str(if store.cluster_enabled {
+            "redis_mode:cluster\r\n"
+        } else {
+            "redis_mode:standalone\r\n"
+        });
         // (frankenredis-efkwg) Map Rust's lowercase OS const to
         // upstream's uname-style capitalized form (upstream emits the
         // full `uname -s` output here, e.g. "Linux", "Darwin").
@@ -32885,6 +32894,32 @@ mod tests {
         assert!(info.contains("# Server\r\n"));
         assert!(info.contains("# Clients\r\n"));
         assert!(!info.contains("# Memory\r\n"));
+    }
+
+    // (frankenredis-xa8u4) Upstream server.c::genRedisInfoString:
+    // 5469-5471 selects redis_mode based on cluster_enabled /
+    // sentinel_mode. fr previously hardcoded 'standalone'.
+    #[test]
+    fn info_server_section_reflects_redis_mode_cluster_when_enabled() {
+        let mut store = Store::new();
+        // Default — cluster off → standalone.
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"server".to_vec()], &mut store, 0)
+            .expect("info server off");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8 info");
+        assert!(info.contains("redis_mode:standalone\r\n"), "got {info:?}");
+
+        // Flip cluster_enabled — INFO must now report cluster.
+        store.cluster_enabled = true;
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"server".to_vec()], &mut store, 0)
+            .expect("info server on");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8 info");
+        assert!(info.contains("redis_mode:cluster\r\n"), "got {info:?}");
     }
 
     // (frankenredis-5w0rd) Upstream server.c::genRedisInfoString emits
