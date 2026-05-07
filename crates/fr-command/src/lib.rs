@@ -30664,6 +30664,65 @@ mod tests {
     }
 
     #[test]
+    fn bitpos_missing_key_short_circuits_before_arg_parse() {
+        // Pin upstream t_string.c::bitposCommand ordering: missing
+        // key returns (bit ? -1 : 0) regardless of any trailing
+        // argument validity, since lookupKey runs first.
+        // (frankenredis-4urm)
+        let mut store = Store::new();
+
+        // bit=1, missing key → -1 even with bogus trailing junk
+        let bit1 = dispatch_argv(
+            &[
+                b"BITPOS".to_vec(),
+                b"nokey".to_vec(),
+                b"1".to_vec(),
+                b"0".to_vec(),
+                b"-1".to_vec(),
+                b"NOSUCH".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("bitpos missing");
+        assert_eq!(bit1, RespFrame::Integer(-1));
+
+        // bit=0, missing key → 0 even with bogus 7-arg form
+        let bit0 = dispatch_argv(
+            &[
+                b"BITPOS".to_vec(),
+                b"nokey".to_vec(),
+                b"0".to_vec(),
+                b"0".to_vec(),
+                b"-1".to_vec(),
+                b"BYTE".to_vec(),
+                b"BIT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("bitpos missing bit0");
+        assert_eq!(bit0, RespFrame::Integer(0));
+
+        // Sanity: bit-arg validation still runs first (must be 0 or 1)
+        // so bit=2 errors even before the key-lookup short-circuit.
+        let bad_bit = dispatch_argv(
+            &[
+                b"BITPOS".to_vec(),
+                b"nokey".to_vec(),
+                b"2".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("bitpos bad bit");
+        assert_eq!(
+            bad_bit,
+            CommandError::Custom("ERR The bit argument must be 1 or 0.".to_string())
+        );
+    }
+
+    #[test]
     fn bitpos_too_many_arguments_is_syntax_error() {
         // Upstream t_string.c::bitposCommand looks up the key BEFORE
         // parsing trailing args, so this assertion needs a present
