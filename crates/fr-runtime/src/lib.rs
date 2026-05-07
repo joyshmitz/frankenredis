@@ -16399,6 +16399,49 @@ mod tests {
     }
 
     #[test]
+    fn client_kill_filter_error_wordings_match_upstream() {
+        // Pins four wording divergences caught by ad-hoc differential
+        // probe vs vendored 7.2.4 (frankenredis-lkoh):
+        //   - ID with non-numeric or <=0 -> "client-id should be greater than 0"
+        //     (networking.c::clientCommand:3128)
+        //   - LADDR with no matching session -> integer 0 (no error)
+        //     (networking.c::clientCommand:3158, getClientSockname mismatch)
+        //   - USER with unknown name -> "No such user '<name>'"
+        //     (networking.c::clientCommand:3164)
+        //   - SKIPME with non-yes/no -> "syntax error"
+        //     (networking.c::clientCommand:3174)
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"KILL", b"ID", b"abc"]), 1),
+            RespFrame::Error("ERR client-id should be greater than 0".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"KILL", b"ID", b"0"]), 2),
+            RespFrame::Error("ERR client-id should be greater than 0".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"KILL", b"ID", b"-3"]), 3),
+            RespFrame::Error("ERR client-id should be greater than 0".to_string())
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"KILL", b"LADDR", b"1.1.1.1:1"]), 4),
+            RespFrame::Integer(0)
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"KILL", b"USER", b"baduser"]), 5),
+            RespFrame::Error("ERR No such user 'baduser'".to_string())
+        );
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"CLIENT", b"KILL", b"SKIPME", b"BAD"]), 6),
+            RespFrame::Error("ERR syntax error".to_string())
+        );
+    }
+
+    #[test]
     fn slowlog_get_uses_redis_default_count_and_minus_one_means_all() {
         let mut rt = Runtime::default_strict();
         rt.server.store.slowlog_max_len = 64;
