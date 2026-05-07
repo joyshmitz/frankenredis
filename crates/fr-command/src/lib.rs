@@ -32466,6 +32466,67 @@ mod tests {
     }
 
     #[test]
+    fn lmpop_zmpop_blmpop_bzmpop_unparseable_numkeys_and_count_match_upstream() {
+        // Pin upstream t_list.c::lmpopGenericCommand and
+        // t_zset.c::zmpopGenericCommand wording for unparseable
+        // numkeys / COUNT inputs (frankenredis-3wyg). Both surface
+        // the same "numkeys should be greater than 0" / "count should
+        // be greater than 0" wording as non-positive cases — the
+        // generic InvalidInteger reply is the regression. Covers
+        // LMPOP/ZMPOP plus their blocking BLMPOP/BZMPOP cousins.
+        let mut store = Store::new();
+
+        let cases: &[(&[&[u8]], &str)] = &[
+            (
+                &[b"LMPOP", b"BAD", b"k", b"LEFT"],
+                "ERR numkeys should be greater than 0",
+            ),
+            (
+                &[b"LMPOP", b"1", b"k", b"LEFT", b"COUNT", b"BAD"],
+                "ERR count should be greater than 0",
+            ),
+            (
+                &[b"ZMPOP", b"BAD", b"k", b"MIN"],
+                "ERR numkeys should be greater than 0",
+            ),
+            (
+                &[b"ZMPOP", b"1", b"k", b"MIN", b"COUNT", b"BAD"],
+                "ERR count should be greater than 0",
+            ),
+            (
+                &[b"BLMPOP", b"0", b"BAD", b"k", b"LEFT"],
+                "ERR numkeys should be greater than 0",
+            ),
+            (
+                &[b"BLMPOP", b"0", b"1", b"k", b"LEFT", b"COUNT", b"BAD"],
+                "ERR count should be greater than 0",
+            ),
+            (
+                &[b"BZMPOP", b"0", b"BAD", b"k", b"MIN"],
+                "ERR numkeys should be greater than 0",
+            ),
+            (
+                &[b"BZMPOP", b"0", b"1", b"k", b"MIN", b"COUNT", b"BAD"],
+                "ERR count should be greater than 0",
+            ),
+        ];
+
+        for (argv_in, expected) in cases {
+            let argv: Vec<Vec<u8>> = argv_in.iter().map(|s| s.to_vec()).collect();
+            let out = dispatch_argv(&argv, &mut store, 0);
+            let got = match out {
+                Ok(RespFrame::Error(s)) => s,
+                Err(e) => match e.to_resp() {
+                    RespFrame::Error(s) => s,
+                    other => panic!("expected error, got {other:?}"),
+                },
+                other => panic!("expected error frame for {argv_in:?}, got {other:?}"),
+            };
+            assert_eq!(&got, *expected, "argv: {argv_in:?}");
+        }
+    }
+
+    #[test]
     fn lmpop_non_positive_numkeys_and_count_match_redis_errors() {
         let mut store = Store::new();
         for (argv, expected) in [
