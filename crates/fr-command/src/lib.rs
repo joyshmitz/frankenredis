@@ -8427,14 +8427,33 @@ fn cluster_cmd(
         return Ok(RespFrame::SimpleString("BUMPED 1".to_string()));
     }
     if sub.eq_ignore_ascii_case("SET-CONFIG-EPOCH") {
-        // Upstream commands.def declares CLUSTER SET-CONFIG-EPOCH
-        // with arity = 3, so missing/extra args trigger the
-        // table-level WrongArity check before clusterCommand runs.
-        // (br-frankenredis-clusterord)
+        // Upstream cluster.c::clusterCommand:6420+ validates the
+        // epoch arg and replies with one of:
+        //   - "Invalid config epoch specified: <epoch>" (negative)
+        //   - "The user can assign a config epoch only when the
+        //      node does not know any other node." (peer dict > 1)
+        //   - "Node config epoch is already non-zero" (configEpoch != 0)
+        //   - OK on success
+        // commands.def declares arity = 3 so missing/extra args
+        // trigger the table-level WrongArity check before
+        // clusterCommand runs. (br-frankenredis-clusterord, frankenredis-pfamt)
         if argv.len() != 3 {
             return Err(cluster_wrong_subcommand_arity(sub));
         }
-        return Err(cluster_disabled_error());
+        if !store.cluster_enabled {
+            return Err(cluster_disabled_error());
+        }
+        let epoch = parse_i64_arg(&argv[2])?;
+        if epoch < 0 {
+            return Err(CommandError::Custom(format!(
+                "ERR Invalid config epoch specified: {epoch}"
+            )));
+        }
+        // fr does not yet model a per-node configEpoch or a peer
+        // node dict, so the "already non-zero" and "knows other
+        // nodes" branches can't be reproduced. The happy-path OK
+        // reply matches upstream once those preconditions hold.
+        return Ok(RespFrame::SimpleString("OK".to_string()));
     }
     if sub.eq_ignore_ascii_case("SLOTSTATE") {
         return Err(cluster_disabled_error());
@@ -40171,7 +40190,10 @@ mod tests {
             RespFrame::SimpleString("BUMPED 1".to_string())
         );
 
-        // SET-CONFIG-EPOCH / SLOTSTATE still blanket-errored (follow-up).
+        // SET-CONFIG-EPOCH: cluster_enabled, positive epoch → OK (the
+        // peer-dict and configEpoch state checks aren't modelled in
+        // fr's stub yet, so the happy path always succeeds).
+        // (frankenredis-pfamt)
         assert_eq!(
             dispatch_argv(
                 &[
@@ -40182,9 +40204,38 @@ mod tests {
                 &mut store,
                 0,
             )
-            .unwrap_err(),
-            cluster_disabled_error()
+            .unwrap(),
+            RespFrame::SimpleString("OK".to_string())
         );
+        // Negative epoch is rejected with the upstream message.
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SET-CONFIG-EPOCH".to_vec(),
+                    b"-1".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::Custom("ERR Invalid config epoch specified: -1".to_string())
+        );
+        // Non-integer arg surfaces the standard InvalidInteger error.
+        assert!(matches!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SET-CONFIG-EPOCH".to_vec(),
+                    b"notanint".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::InvalidInteger
+        ));
+        // SLOTSTATE remains a follow-up stub.
     }
 
     // ── CLIENT KILL/PAUSE/UNPAUSE tests ─────────────────────────────
