@@ -34445,6 +34445,75 @@ mod tests {
     }
 
     #[test]
+    fn zset_score_and_limit_error_wordings_match_upstream() {
+        // Pins three small upstream wording divergences caught by
+        // differential probe vs vendored 7.2.4 (frankenredis-uczv):
+        //   - ZRANGEBYSCORE bad bound -> "ERR min or max is not a float"
+        //     (t_zset.c::zslParseRange)
+        //   - ZUNIONSTORE WEIGHTS bad -> "ERR weight value is not a float"
+        //     (t_zset.c::zunionInterAggregateGenericCommand WEIGHTS branch)
+        //   - ZINTERCARD LIMIT negative / bad -> "ERR LIMIT can't be negative"
+        //     (t_zset.c::zinterCardCommand)
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let assert_custom = |argv: &[&[u8]], wanted: &str| {
+            let argv: Vec<Vec<u8>> = argv.iter().map(|s| s.to_vec()).collect();
+            // Either Err(Custom) or Ok(RespFrame::Error) is acceptable;
+            // both serialize identically on the wire.
+            let result = dispatch_argv(&argv, &mut Store::new(), 0);
+            let dispatched_via_err =
+                matches!(&result, Err(CommandError::Custom(s)) if s == wanted);
+            let dispatched_via_ok =
+                matches!(&result, Ok(RespFrame::Error(s)) if s == wanted);
+            assert!(
+                dispatched_via_err || dispatched_via_ok,
+                "{wanted:?} not produced — got {result:?}"
+            );
+        };
+
+        // Seed dest store via dispatch_argv to guarantee parser path.
+        let zadd = dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let _ = zadd;
+
+        assert_custom(
+            &[b"ZRANGEBYSCORE", b"z", b"BAD-BOUND", b"5"],
+            "ERR min or max is not a float",
+        );
+        assert_custom(
+            &[b"ZUNIONSTORE", b"dst", b"1", b"z", b"WEIGHTS", b"BAD"],
+            "ERR weight value is not a float",
+        );
+        assert_custom(
+            &[b"ZINTERCARD", b"1", b"z", b"LIMIT", b"-1"],
+            "ERR LIMIT can't be negative",
+        );
+        assert_custom(
+            &[b"ZINTERCARD", b"1", b"z", b"LIMIT", b"BAD"],
+            "ERR LIMIT can't be negative",
+        );
+    }
+
+    #[test]
     fn zunion_basic() {
         let mut store = Store::new();
         dispatch_argv(
