@@ -29608,6 +29608,137 @@ mod tests {
     }
 
     #[test]
+    fn xautoclaim_error_wordings_match_upstream() {
+        // Pin upstream xautoclaimCommand wordings (frankenredis-rqr7):
+        //   - min-idle-time non-numeric -> "Invalid min-idle-time argument for XAUTOCLAIM"
+        //   - min-idle-time negative    -> silently clamped to 0
+        //   - COUNT non-numeric or <=0  -> "COUNT must be > 0"
+        //   - COUNT without value       -> SyntaxError
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        // min-idle-time non-numeric.
+        let bad_min = dispatch_argv(
+            &[
+                b"XAUTOCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"abc".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xautoclaim bad min-idle");
+        assert_eq!(
+            bad_min,
+            CommandError::Custom("ERR Invalid min-idle-time argument for XAUTOCLAIM".to_string())
+        );
+
+        // min-idle-time negative -> success (clamped to 0).
+        let neg_min = dispatch_argv(
+            &[
+                b"XAUTOCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"-100".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xautoclaim neg min-idle");
+        assert!(matches!(neg_min, RespFrame::Array(Some(_))));
+
+        // COUNT non-numeric.
+        let bad_count = dispatch_argv(
+            &[
+                b"XAUTOCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"0".to_vec(),
+                b"0".to_vec(),
+                b"COUNT".to_vec(),
+                b"abc".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xautoclaim bad COUNT");
+        assert_eq!(
+            bad_count,
+            CommandError::Custom("ERR COUNT must be > 0".to_string())
+        );
+
+        // COUNT zero / negative.
+        for c in [b"0".as_slice(), b"-1".as_slice()] {
+            let err = dispatch_argv(
+                &[
+                    b"XAUTOCLAIM".to_vec(),
+                    b"s".to_vec(),
+                    b"g".to_vec(),
+                    b"c".to_vec(),
+                    b"0".to_vec(),
+                    b"0".to_vec(),
+                    b"COUNT".to_vec(),
+                    c.to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect_err("xautoclaim non-positive COUNT");
+            assert_eq!(
+                err,
+                CommandError::Custom("ERR COUNT must be > 0".to_string()),
+                "{c:?}"
+            );
+        }
+
+        // COUNT without value -> SyntaxError.
+        let count_no_value = dispatch_argv(
+            &[
+                b"XAUTOCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"0".to_vec(),
+                b"0".to_vec(),
+                b"COUNT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xautoclaim COUNT no value");
+        assert_eq!(count_no_value, CommandError::SyntaxError);
+    }
+
+    #[test]
     fn xclaim_error_wordings_match_upstream() {
         // Pin upstream xclaimCommand wordings caught by differential
         // probe vs vendored 7.2.4 (frankenredis-rsls):
