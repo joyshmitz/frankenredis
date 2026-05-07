@@ -17457,6 +17457,56 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         Ok(RespFrame::SimpleString(
             "Quicklist structure printed on stdout".to_string(),
         ))
+    } else if sub.eq_ignore_ascii_case("CONFIG-REWRITE-FORCE-ALL") {
+        // Upstream debug.c::debugCommand:962-967 calls
+        // rewriteConfig(server.configfile, 1) and returns +OK or an
+        // error. fr has no on-disk config rewrite path (config is in-
+        // memory via CONFIG SET); accept-and-OK matches the wire
+        // contract. (frankenredis-eejfm)
+        if argv.len() != 2 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'CONFIG-REWRITE-FORCE-ALL'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("DROP-CLUSTER-PACKET-FILTER") {
+        // Upstream debug.c::debugCommand:597-602 parses argv[2] as a
+        // long via getLongFromObjectOrReply and stores it on
+        // server.cluster_drop_packet_filter, replying +OK. fr has no
+        // cluster-packet-filter; validate the integer arg and accept-
+        // and-OK. (frankenredis-eejfm)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'DROP-CLUSTER-PACKET-FILTER'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        // Validate the packet-type integer matches upstream's
+        // getLongFromObjectOrReply behavior. parse_i64_arg returns
+        // CommandError::InvalidInteger which serializes to
+        // "ERR value is not an integer or out of range" — same wire
+        // shape as upstream.
+        let _packet_type = parse_i64_arg(&argv[2])?;
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("CLIENT-EVICTION") {
+        // Upstream debug.c::debugCommand:968-988 emits a Verbatim
+        // bucket-stats block when maxmemory-clients-buckets is
+        // configured, otherwise returns 'ERR maxmemory-clients is
+        // disabled.'. fr has no client-memory-usage tracking, so the
+        // disabled error is the correct reply. (frankenredis-eejfm)
+        if argv.len() != 2 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'CLIENT-EVICTION'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        Ok(RespFrame::Error(
+            "ERR maxmemory-clients is disabled.".to_string(),
+        ))
     } else if sub.eq_ignore_ascii_case("REPLICATE") {
         // Upstream debug.c::debugCommand:867-870 calls
         // replicationFeedSlaves(...) to propagate the trailing args to
@@ -35738,6 +35788,129 @@ mod tests {
         assert!(info.contains("serializedlength:"), "{info}");
         assert!(info.contains("lru:"), "{info}");
         assert!(info.contains("lru_seconds_idle:"), "{info}");
+    }
+
+    #[test]
+    fn debug_config_rewrite_force_all_drop_cluster_packet_filter_client_eviction_match_upstream() {
+        // Upstream debug.c::debugCommand:
+        //   CONFIG-REWRITE-FORCE-ALL       at 962-967  → +OK / error
+        //   DROP-CLUSTER-PACKET-FILTER <n> at 597-602  → +OK after long parse
+        //   CLIENT-EVICTION                at 968-988  → ERR or Verbatim bucket
+        //                                                stats. fr has no client
+        //                                                mem buckets → ERR.
+        // (frankenredis-eejfm)
+        let mut store = Store::new();
+
+        // CONFIG-REWRITE-FORCE-ALL → +OK
+        let crfa = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"CONFIG-REWRITE-FORCE-ALL".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug crfa");
+        assert_eq!(crfa, RespFrame::SimpleString("OK".to_string()));
+
+        // CONFIG-REWRITE-FORCE-ALL with extra arg → unknown-subcommand error
+        let crfa_bad = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"CONFIG-REWRITE-FORCE-ALL".to_vec(),
+                b"x".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("crfa takes no args");
+        assert_eq!(
+            crfa_bad,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'CONFIG-REWRITE-FORCE-ALL'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
+
+        // DROP-CLUSTER-PACKET-FILTER with parseable integer → +OK
+        for v in [b"-1".as_slice(), b"0", b"7", b"42"] {
+            let out = dispatch_argv(
+                &[
+                    b"DEBUG".to_vec(),
+                    b"DROP-CLUSTER-PACKET-FILTER".to_vec(),
+                    v.to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_or_else(|_| panic!("dcpf {} ok", std::str::from_utf8(v).unwrap()));
+            assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        }
+
+        // DROP-CLUSTER-PACKET-FILTER with bad integer → InvalidInteger error.
+        let dcpf_bad = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"DROP-CLUSTER-PACKET-FILTER".to_vec(),
+                b"notanint".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("dcpf needs int");
+        assert!(matches!(dcpf_bad, CommandError::InvalidInteger));
+
+        // DROP-CLUSTER-PACKET-FILTER with no arg → unknown-subcommand error.
+        let dcpf_arity = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"DROP-CLUSTER-PACKET-FILTER".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("dcpf needs packet-type");
+        assert_eq!(
+            dcpf_arity,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'DROP-CLUSTER-PACKET-FILTER'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
+
+        // CLIENT-EVICTION → ERR maxmemory-clients is disabled.
+        let ce = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"CLIENT-EVICTION".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("client-eviction returns Error frame");
+        assert_eq!(
+            ce,
+            RespFrame::Error("ERR maxmemory-clients is disabled.".to_string())
+        );
+
+        // CLIENT-EVICTION with extra arg → unknown-subcommand error.
+        let ce_bad = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"CLIENT-EVICTION".to_vec(),
+                b"x".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("client-eviction takes no args");
+        assert_eq!(
+            ce_bad,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'CLIENT-EVICTION'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
     }
 
     #[test]
