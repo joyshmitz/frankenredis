@@ -6947,6 +6947,12 @@ impl Runtime {
             return config_wrong_subcommand_arity("GET");
         }
         let mut entries = Vec::new();
+        // Upstream config.c::configGetCommand uses a `matches` dict to
+        // dedupe entries across multiple patterns — each parameter is
+        // returned only once even when multiple patterns (or repeats
+        // of the same pattern) match it. Track seen keys
+        // case-insensitively to mirror that. (frankenredis-8xgpr)
+        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
         // Redis 7+ supports multiple patterns: CONFIG GET pattern1 pattern2 ...
         for arg in &argv[2..] {
             let raw_pattern = match std::str::from_utf8(arg) {
@@ -6974,6 +6980,29 @@ impl Runtime {
                     idx += 2;
                 }
             }
+            // Drop any pair whose key was already in `seen`; record
+            // newly-seen keys for subsequent patterns. Walk the tail
+            // added by this pattern only.
+            let mut idx = before;
+            let mut deduped = Vec::with_capacity(entries.len() - before);
+            while idx + 1 < entries.len() {
+                let key_lc = match &entries[idx] {
+                    RespFrame::BulkString(Some(name)) => name.to_ascii_lowercase(),
+                    _ => {
+                        deduped.push(entries[idx].clone());
+                        deduped.push(entries[idx + 1].clone());
+                        idx += 2;
+                        continue;
+                    }
+                };
+                if seen.insert(key_lc) {
+                    deduped.push(entries[idx].clone());
+                    deduped.push(entries[idx + 1].clone());
+                }
+                idx += 2;
+            }
+            entries.truncate(before);
+            entries.extend(deduped);
         }
         // RESP3 callers receive a Map (key → value); RESP2 callers
         // continue to receive the alternating-key/value Array form.
@@ -17649,11 +17678,16 @@ mod tests {
         let reset = rt.execute_frame(command(&[b"CLUSTER", b"RESET"]), 0);
         assert_eq!(reset, cluster_disabled);
 
+        // (frankenredis-53ati) With cluster mode off, the upstream
+        // top-of-clusterCommand cluster_enabled gate fires before the
+        // unknown-subcommand fallthrough — so even a typo'd
+        // subcommand surfaces "cluster support disabled" rather than
+        // the unknown-subcommand wording. The unknown-subcommand
+        // wording is asserted with cluster_enabled=true in
+        // cluster_unknown_subcommand_with_cluster_enabled_reports_unknown_subcommand
+        // (fr-command crate).
         let unknown = rt.execute_frame(command(&[b"CLUSTER", b"NOPE"]), 0);
-        assert_eq!(
-            unknown,
-            RespFrame::Error("ERR unknown subcommand 'NOPE'. Try CLUSTER HELP.".to_string())
-        );
+        assert_eq!(unknown, cluster_disabled);
 
         let keyslot_wrong_arity = rt.execute_frame(command(&[b"CLUSTER", b"KEYSLOT"]), 0);
         assert_eq!(
@@ -19540,6 +19574,49 @@ mod tests {
                 RespFrame::BulkString(Some(b"lazyfree-lazy-user-del".to_vec())),
                 RespFrame::BulkString(Some(b"no".to_vec())),
             ]))
+        );
+    }
+
+    #[test]
+    // (frankenredis-8xgpr) Upstream config.c::configGetCommand uses a
+    // `matches` dict to dedupe entries across multiple patterns, so
+    // `CONFIG GET maxmemory maxmemory` and overlapping pattern lists
+    // emit each parameter exactly once.
+    #[test]
+    fn config_get_dedupes_entries_when_patterns_overlap() {
+        let mut rt = Runtime::default_strict();
+        // Repeated literal pattern → one (key,value) pair only.
+        let RespFrame::Array(Some(items)) = rt.execute_frame(
+            command(&[b"CONFIG", b"GET", b"maxmemory", b"maxmemory"]),
+            0,
+        ) else {
+            panic!("expected array reply from CONFIG GET");
+        };
+        assert_eq!(
+            items.len(),
+            2,
+            "duplicate `maxmemory` patterns must collapse to a single pair, got {items:?}"
+        );
+        // Literal followed by glob that also matches `maxmemory` → still one pair for `maxmemory`.
+        let RespFrame::Array(Some(items)) = rt.execute_frame(
+            command(&[b"CONFIG", b"GET", b"maxmemory", b"maxmemory*"]),
+            1,
+        ) else {
+            panic!("expected array reply from CONFIG GET");
+        };
+        let mut maxmemory_count = 0;
+        let mut idx = 0;
+        while idx + 1 < items.len() {
+            if let RespFrame::BulkString(Some(name)) = &items[idx]
+                && name.eq_ignore_ascii_case(b"maxmemory")
+            {
+                maxmemory_count += 1;
+            }
+            idx += 2;
+        }
+        assert_eq!(
+            maxmemory_count, 1,
+            "literal+glob overlap must yield `maxmemory` once, items={items:?}"
         );
     }
 
