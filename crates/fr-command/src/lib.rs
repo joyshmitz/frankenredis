@@ -15616,8 +15616,12 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
                 subcommand: "MALLOC-STATS".to_string(),
             });
         }
+        // (frankenredis-mxypx) Match upstream object.c:1674 fallback
+        // wording (`#else addReplyBulkCString("Stats not supported for
+        // the current allocator")`). fr is built without jemalloc and
+        // does not expose allocator stats.
         Ok(RespFrame::BulkString(Some(
-            b"Memory allocator stats not available".to_vec(),
+            b"Stats not supported for the current allocator".to_vec(),
         )))
     } else if sub.eq_ignore_ascii_case("PURGE") {
         if argv.len() != 2 {
@@ -31561,6 +31565,23 @@ mod tests {
         let out = dispatch_argv(&[b"MEMORY".to_vec(), b"HELP".to_vec()], &mut store, 0)
             .expect("memory help");
         assert!(matches!(out, RespFrame::Array(Some(_))));
+    }
+
+    #[test]
+    fn memory_malloc_stats_matches_upstream_no_jemalloc_wording() {
+        // (frankenredis-mxypx) Upstream object.c:1674 emits
+        // 'Stats not supported for the current allocator' when built
+        // without jemalloc. fr previously emitted an invented
+        // 'Memory allocator stats not available' string.
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"MEMORY".to_vec(), b"MALLOC-STATS".to_vec()], &mut store, 0)
+            .expect("malloc-stats");
+        assert_eq!(
+            out,
+            RespFrame::BulkString(Some(
+                b"Stats not supported for the current allocator".to_vec()
+            ))
+        );
     }
 
     #[test]
