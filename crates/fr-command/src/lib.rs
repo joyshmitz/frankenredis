@@ -29852,6 +29852,50 @@ mod tests {
     }
 
     #[test]
+    fn info_server_uptime_in_seconds_is_relative_to_startup_not_unix_epoch() {
+        // Pin upstream server.c::genRedisInfoString uptime semantics
+        // (frankenredis-ifj5): uptime_in_seconds = (now - server_start)
+        // / 1000, NOT the absolute Unix timestamp. Source-level fix at
+        // lib.rs:12338 plus Store::server_start_ms (fr-store/src/lib.rs:
+        // 1326). Differential probe vs vendored 7.2.4 confirmed fr was
+        // previously emitting ~1.7e9 (Unix ms / 1000).
+        let mut store = Store::new();
+        // Pin server_start_ms to a known value so the assertion
+        // tolerates any wall-clock drift in the suite.
+        store.server_start_ms = 1_000_000;
+        let now_ms = 1_000_000 + 30_000; // 30 seconds later
+        let out = dispatch_argv(
+            &[b"INFO".to_vec(), b"server".to_vec()],
+            &mut store,
+            now_ms,
+        )
+        .expect("INFO server");
+        let body = match out {
+            RespFrame::BulkString(Some(b)) => String::from_utf8(b).expect("info utf8"),
+            other => panic!("expected BulkString from INFO, got {other:?}"),
+        };
+        assert!(
+            body.contains("uptime_in_seconds:30\r\n"),
+            "expected uptime_in_seconds:30 in INFO server: {body}"
+        );
+        assert!(
+            body.contains("uptime_in_days:0\r\n"),
+            "expected uptime_in_days:0 in INFO server: {body}"
+        );
+        // Regression guard: uptime must not approach the absolute
+        // wall-clock value. (Pre-fix value was ~1.7e9.)
+        for line in body.lines() {
+            if let Some(val) = line.strip_prefix("uptime_in_seconds:") {
+                let v: u64 = val.trim().parse().expect("uptime numeric");
+                assert!(
+                    v < 1_000_000_000,
+                    "uptime_in_seconds={v} looks like a Unix timestamp, not seconds-since-startup"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn scan_family_rejects_novalues_except_hscan_and_function_list_libraryname_wording() {
         // Pin upstream parity for two scoped wording divergences
         // (frankenredis-bvw2):
