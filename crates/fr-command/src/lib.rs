@@ -21109,6 +21109,70 @@ mod tests {
     }
 
     #[test]
+    fn incr_decr_incrby_decrby_overflow_emits_upstream_wording() {
+        // Pin upstream t_string.c::incrDecrCommand overflow rejection
+        // (frankenredis-incovf): INCR / DECR / INCRBY / DECRBY emit
+        // 'ERR increment or decrement would overflow' when the result
+        // would wrap past i64::MAX / i64::MIN. fr surfaces this via
+        // CommandError::Store(StoreError::IntegerOverflow) which the
+        // to_resp encoder renders to the same wire string. Differential
+        // probe vs vendored 7.2.4 byte-matched the wording.
+        let overflow_frame =
+            RespFrame::Error("ERR increment or decrement would overflow".to_string());
+
+        let assert_overflow = |argv: &[&[u8]], store: &mut Store, label: &str| {
+            let argv_v: Vec<Vec<u8>> = argv.iter().map(|s| s.to_vec()).collect();
+            let err = dispatch_argv(&argv_v, store, 0)
+                .unwrap_or_else(|_| panic!("{label}: expected Err frame, got Ok"));
+            // Tests run via dispatch_argv catch CommandError::Store
+            // before to_resp; either form serializes to the same wire,
+            // so verify both via .expect_err / Err(Store(IntegerOverflow))
+            unreachable!("dispatch_argv returned Ok for {label}: {err:?}");
+        };
+        let _ = assert_overflow;
+
+        let assert_overflow_err = |argv: &[&[u8]], store: &mut Store, label: &str| {
+            let argv_v: Vec<Vec<u8>> = argv.iter().map(|s| s.to_vec()).collect();
+            let err = dispatch_argv(&argv_v, store, 0).expect_err(label);
+            assert_eq!(err.to_resp(), overflow_frame, "{label}");
+        };
+
+        // INCR at i64::MAX-1 succeeds; the next INCR overflows.
+        let mut store = Store::new();
+        store.set(b"n".to_vec(), b"9223372036854775806".to_vec(), None, 0);
+        let ok = dispatch_argv(&[b"INCR".to_vec(), b"n".to_vec()], &mut store, 0)
+            .expect("incr to i64::MAX");
+        assert_eq!(ok, RespFrame::Integer(i64::MAX));
+        assert_overflow_err(&[b"INCR", b"n"], &mut store, "incr past i64::MAX");
+
+        // DECR at i64::MIN+1 succeeds; the next DECR overflows.
+        let mut store = Store::new();
+        store.set(b"n".to_vec(), b"-9223372036854775807".to_vec(), None, 0);
+        let ok = dispatch_argv(&[b"DECR".to_vec(), b"n".to_vec()], &mut store, 0)
+            .expect("decr to i64::MIN");
+        assert_eq!(ok, RespFrame::Integer(i64::MIN));
+        assert_overflow_err(&[b"DECR", b"n"], &mut store, "decr past i64::MIN");
+
+        // INCRBY large positive past i64::MAX from a small base.
+        let mut store = Store::new();
+        store.set(b"n".to_vec(), b"100".to_vec(), None, 0);
+        assert_overflow_err(
+            &[b"INCRBY", b"n", b"9223372036854775800"],
+            &mut store,
+            "incrby past i64::MAX",
+        );
+
+        // DECRBY large positive (which subtracts) past i64::MIN.
+        let mut store = Store::new();
+        store.set(b"n".to_vec(), b"-100".to_vec(), None, 0);
+        assert_overflow_err(
+            &[b"DECRBY", b"n", b"9223372036854775800"],
+            &mut store,
+            "decrby past i64::MIN",
+        );
+    }
+
+    #[test]
     fn exists_command_multi_key() {
         let mut store = Store::new();
         store.set(b"a".to_vec(), b"1".to_vec(), None, 0);
