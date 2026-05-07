@@ -47059,6 +47059,83 @@ mod tests {
     }
 
     #[test]
+    fn hscan_sscan_zscan_missing_key_replies_emptyscan_before_arg_parse() {
+        // Pin upstream t_hash.c::hscanCommand / t_set.c::sscanCommand /
+        // t_zset.c::zscanCommand ordering: lookupKeyReadOrReply runs
+        // *before* scanGenericCommand, so a missing key replies with
+        // shared.emptyscan ([0, []]) regardless of trailing args.
+        // Generic 'syntax error' for unknown trailers is the
+        // regression. (frankenredis-qbbe)
+        let mut store = Store::new();
+
+        // Sanity: existing key with bad arg still surfaces syntax error.
+        dispatch_argv(
+            &[
+                b"HSET".to_vec(),
+                b"h".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        let bad_arg = dispatch_argv(
+            &[
+                b"HSCAN".to_vec(),
+                b"h".to_vec(),
+                b"0".to_vec(),
+                b"NOVALUES".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("hscan extra arg");
+        assert_eq!(bad_arg, CommandError::SyntaxError);
+
+        let empty_scan = RespFrame::Array(Some(vec![
+            RespFrame::BulkString(Some(b"0".to_vec())),
+            RespFrame::Array(Some(vec![])),
+        ]));
+
+        for cmd in [b"HSCAN".as_slice(), b"SSCAN".as_slice(), b"ZSCAN".as_slice()] {
+            // Trailing junk is silently ignored when the key is missing.
+            let out = dispatch_argv(
+                &[
+                    cmd.to_vec(),
+                    b"nokey".to_vec(),
+                    b"0".to_vec(),
+                    b"BOGUS_ARG".to_vec(),
+                    b"more_bogus".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("scan missing key");
+            assert_eq!(out, empty_scan, "{cmd:?}");
+        }
+
+        // Wrong-type for HSCAN (the same key h is a hash → use SSCAN
+        // against it to surface WRONGTYPE).
+        let wrongtype = dispatch_argv(
+            &[
+                b"SSCAN".to_vec(),
+                b"h".to_vec(),
+                b"0".to_vec(),
+                b"BOGUS".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("sscan wrong type");
+        assert!(
+            matches!(&wrongtype, CommandError::Store(StoreError::WrongType)),
+            "expected WRONGTYPE, got {wrongtype:?}"
+        );
+    }
+
+    #[test]
     fn lpop_count_nonexistent_returns_nil() {
         let mut store = Store::new();
         let out = dispatch_argv(
