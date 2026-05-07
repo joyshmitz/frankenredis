@@ -29852,6 +29852,71 @@ mod tests {
     }
 
     #[test]
+    fn parse_f64_arg_rejects_overflow_to_infinity_like_redis() {
+        // Pin upstream util.c::string2d ERANGE rejection for
+        // overflow-to-infinity (frankenredis-uxwm). Rust's parse::<f64>
+        // silently saturates "1e500" to f64::INFINITY; we must reject
+        // such inputs while still accepting explicit infinity literals.
+        // Differential probe vs vendored redis 7.2.4 (ZADD z <v> a)
+        // confirmed:
+        //   1e500, -1e500             -> "ERR value is not a valid float"
+        //   1e308, inf, +inf, -inf,
+        //   infinity, Infinity, 1.5   -> accepted
+        let mut store = Store::new();
+
+        // Overflow-to-infinity must surface ValueNotFloat at the ZADD
+        // arity boundary.
+        for bad in [b"1e500".as_slice(), b"-1e500", b"1e1000", b"+1e500"] {
+            let err = dispatch_argv(
+                &[b"ZADD".to_vec(), b"z".to_vec(), bad.to_vec(), b"m".to_vec()],
+                &mut store,
+                0,
+            )
+            .expect_err("zadd overflow");
+            assert_eq!(
+                err,
+                CommandError::Store(fr_store::StoreError::ValueNotFloat),
+                "bad={:?}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+
+        // Explicit infinity literals are still accepted (case
+        // variants and optional sign).
+        for good in [
+            b"inf".as_slice(),
+            b"+inf",
+            b"-inf",
+            b"INF",
+            b"infinity",
+            b"Infinity",
+            b"-Infinity",
+            b"1e308",
+            b"1.5",
+            b"0",
+        ] {
+            let mut s = Store::new();
+            let out = dispatch_argv(
+                &[
+                    b"ZADD".to_vec(),
+                    b"z".to_vec(),
+                    good.to_vec(),
+                    b"m".to_vec(),
+                ],
+                &mut s,
+                0,
+            )
+            .expect("zadd ok");
+            assert_eq!(
+                out,
+                RespFrame::Integer(1),
+                "good={:?}",
+                String::from_utf8_lossy(good)
+            );
+        }
+    }
+
+    #[test]
     fn zincrby_zadd_incr_nan_error_wording_matches_upstream() {
         // Pin upstream t_zset.c NaN-result wording for ZINCRBY and
         // ZADD INCR (frankenredis-r76j): "resulting score is not a
