@@ -44370,6 +44370,45 @@ mod tests {
     }
 
     #[test]
+    fn info_stats_emits_full_upstream_field_set_including_acl_eventloop_and_pubsubshard() {
+        // Pin the 12 INFO stats fields that vendored Redis 7.2 emits but
+        // fr was missing — clients that grep on these names see fields
+        // disappear (frankenredis-qgep). All values are 0 stubs because
+        // fr doesn't model ACL access denials, eventloop instrumentation,
+        // active defrag time, or eviction-exceeded time; this pin locks
+        // the field-set parseability, not the value semantics.
+        // Differential probe vs vendored 7.2.4 captured the names from
+        // server.c::genRedisInfoString (5760-5882).
+        let mut store = Store::new();
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"stats".to_vec()], &mut store, 0)
+            .expect("info stats");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string from INFO stats");
+        };
+        let info = String::from_utf8(bytes).expect("utf8 info");
+
+        for required in [
+            "acl_access_denied_auth:",
+            "acl_access_denied_cmd:",
+            "acl_access_denied_key:",
+            "acl_access_denied_channel:",
+            "eventloop_cycles:",
+            "eventloop_duration_sum:",
+            "eventloop_duration_cmd_sum:",
+            "instantaneous_eventloop_cycles_per_sec:",
+            "instantaneous_eventloop_duration_usec:",
+            "pubsubshard_channels:",
+            "total_active_defrag_time:",
+            "total_eviction_exceeded_time:",
+        ] {
+            assert!(
+                info.contains(required),
+                "INFO stats missing upstream field {required:?}; body=\n{info}"
+            );
+        }
+    }
+
+    #[test]
     fn info_stats_reports_network_byte_counters() {
         let mut store = Store::new();
         store.stat_total_net_input_bytes = 12345;
