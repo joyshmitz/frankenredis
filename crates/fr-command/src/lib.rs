@@ -8990,6 +8990,12 @@ fn function_cmd(
                 subcommand: "RESTORE".to_string(),
             });
         }
+        // Upstream FUNCTION RESTORE carries CMD_NOSCRIPT — fire the
+        // noscript guard before the extra-arg / policy parse checks.
+        // (frankenredis-yrm7e)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         if argv.len() > 4 {
             return Err(CommandError::Custom(
                 "ERR unknown subcommand or wrong number of arguments for 'RESTORE'. Try FUNCTION HELP."
@@ -9001,9 +9007,6 @@ fn function_cmd(
         } else {
             ""
         };
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
-        }
         match store.function_restore(&argv[2], policy) {
             Ok(()) => Ok(RespFrame::SimpleString("OK".to_string())),
             Err(e) => Err(CommandError::Store(e)),
@@ -9012,15 +9015,17 @@ fn function_cmd(
         // (br-frankenredis-ngn0) — upstream functions.c::functionsCommand
         // emits the FLUSH-specific subcommand error, not a generic
         // wrong-arity reply.
+        // Upstream FUNCTION FLUSH carries CMD_NOSCRIPT (commands.def
+        // line 5140) — the flag is checked at dispatch level before
+        // any handler-level extra-arg or mode validation.
+        // (frankenredis-yrm7e)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         if argv.len() > 3 {
             return Err(CommandError::Custom(
                 "ERR unknown subcommand or wrong number of arguments for 'FLUSH'. Try FUNCTION HELP.".to_string(),
             ));
-        }
-        // Upstream FUNCTION FLUSH carries CMD_NOSCRIPT — fire the
-        // noscript guard before mode validation. (frankenredis-yrm7e)
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
         }
         if argv.len() == 3 {
             let mode =
@@ -16929,22 +16934,18 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::Array(Some(results)))
     } else if sub.eq_ignore_ascii_case("FLUSH") {
         // Upstream commands.def declares SCRIPT FLUSH with arity = -2
-        // (variadic), and eval.c::scriptCommand validates the mode
-        // arg via a single equality check, surfacing the same
-        // 'SCRIPT FLUSH only support SYNC|ASYNC option' for *any*
-        // unrecognised tail — including extra args. (br-frankenredis-scrflush)
+        // (variadic) and CMD_NOSCRIPT. The flag is checked at the
+        // dispatch level before the handler runs, so any arity-correct
+        // scripted call surfaces the noscript reply BEFORE the
+        // handler-level extra-arg / mode validation.
+        // (br-frankenredis-scrflush, frankenredis-yrm7e)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         if argv.len() > 3 {
             return Err(CommandError::Custom(
                 "ERR SCRIPT FLUSH only support SYNC|ASYNC option".to_string(),
             ));
-        }
-        // Upstream SCRIPT FLUSH carries CMD_NOSCRIPT — script.c
-        // evaluates that flag before the handler-level mode check,
-        // so a scripted call with an invalid mode must surface the
-        // noscript reply rather than 'only support SYNC|ASYNC'.
-        // (frankenredis-yrm7e)
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
         }
         if argv.len() == 3 {
             let mode =
@@ -35030,7 +35031,14 @@ mod tests {
     }
 
     #[test]
-    fn script_admin_subcommands_rejected_from_scripts_after_validation() {
+    fn script_admin_subcommands_rejected_from_scripts_after_arity_check() {
+        // (frankenredis-yrm7e) Upstream commands.def lines 5318-5322
+        // mark SCRIPT DEBUG/EXISTS/FLUSH/KILL with CMD_NOSCRIPT.
+        // script.c::scriptCommand at legacy_redis_code/redis/src/
+        // script.c:524-532 evaluates the subcommand-specific arity
+        // FIRST and CMD_NOSCRIPT SECOND, both before the handler
+        // runs. So inside a script: arity wins over noscript, but
+        // noscript wins over every handler-level mode/option error.
         let mut store = Store::new();
         store.script_nesting_level = 1;
 
@@ -35055,18 +35063,6 @@ mod tests {
                     subcommand: "EXISTS".to_string(),
                 },
             ),
-            // Upstream emits the FLUSH-mode wording for any
-            // unrecognised tail beyond `[SYNC|ASYNC]`, including
-            // extra args. (br-frankenredis-scrflush)
-            (
-                vec![
-                    b"SCRIPT".to_vec(),
-                    b"FLUSH".to_vec(),
-                    b"SYNC".to_vec(),
-                    b"EXTRA".to_vec(),
-                ],
-                CommandError::Custom("ERR SCRIPT FLUSH only support SYNC|ASYNC option".to_string()),
-            ),
             (
                 vec![b"SCRIPT".to_vec(), b"DEBUG".to_vec()],
                 CommandError::WrongSubcommandArity {
@@ -35087,34 +35083,25 @@ mod tests {
             assert_eq!(err, expected, "argv: {argv:?}");
         }
 
-        let invalid_flush = dispatch_argv(
-            &[b"SCRIPT".to_vec(), b"FLUSH".to_vec(), b"LATER".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect("invalid script flush should return error frame");
-        assert_eq!(
-            invalid_flush,
-            RespFrame::Error("ERR SCRIPT FLUSH only support SYNC|ASYNC option".to_string())
-        );
-
-        let invalid_debug = dispatch_argv(
-            &[b"SCRIPT".to_vec(), b"DEBUG".to_vec(), b"MAYBE".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect_err("invalid script debug mode");
-        assert_eq!(
-            invalid_debug,
-            CommandError::Custom("ERR Use SCRIPT DEBUG YES/SYNC/NO".to_string())
-        );
-
+        // Every arity-correct scripted SCRIPT subcommand call —
+        // including bad mode args and FLUSH extra-args (FLUSH has
+        // arity -2, so argc=4 passes table arity) — surfaces the
+        // noscript reply rather than the handler's mode/extra-arg
+        // error. (frankenredis-yrm7e)
         let noscript_cases = [
             vec![b"SCRIPT".to_vec(), b"LOAD".to_vec(), b"return 1".to_vec()],
             vec![b"SCRIPT".to_vec(), b"EXISTS".to_vec(), b"deadbeef".to_vec()],
             vec![b"SCRIPT".to_vec(), b"FLUSH".to_vec()],
             vec![b"SCRIPT".to_vec(), b"FLUSH".to_vec(), b"SYNC".to_vec()],
+            vec![b"SCRIPT".to_vec(), b"FLUSH".to_vec(), b"LATER".to_vec()],
+            vec![
+                b"SCRIPT".to_vec(),
+                b"FLUSH".to_vec(),
+                b"SYNC".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
             vec![b"SCRIPT".to_vec(), b"DEBUG".to_vec(), b"NO".to_vec()],
+            vec![b"SCRIPT".to_vec(), b"DEBUG".to_vec(), b"MAYBE".to_vec()],
             vec![b"SCRIPT".to_vec(), b"KILL".to_vec()],
         ];
         for argv in noscript_cases {
@@ -41594,7 +41581,12 @@ mod tests {
     }
 
     #[test]
-    fn function_admin_subcommands_rejected_from_scripts_after_validation() {
+    fn function_admin_subcommands_rejected_from_scripts_after_arity_check() {
+        // (frankenredis-yrm7e) Upstream commands.def lines 5138-5146
+        // mark FUNCTION DELETE/DUMP/FLUSH/KILL/LIST/LOAD/RESTORE/STATS
+        // with CMD_NOSCRIPT. Mirror script.c's arity-then-noscript
+        // ordering: arity wins over noscript, noscript wins over
+        // every handler-level mode/option/extra-arg error.
         let mut store = Store::new();
         store.script_nesting_level = 1;
 
@@ -41612,55 +41604,37 @@ mod tests {
             }
         );
 
-        let restore_shape = dispatch_argv(
-            &[
-                b"FUNCTION".to_vec(),
-                b"RESTORE".to_vec(),
-                b"payload".to_vec(),
-                b"FLUSH".to_vec(),
-                b"EXTRA".to_vec(),
-            ],
-            &mut store,
-            0,
-        )
-        .unwrap_err();
-        assert_eq!(
-            restore_shape,
-            CommandError::Custom(
-                "ERR unknown subcommand or wrong number of arguments for 'RESTORE'. Try FUNCTION HELP."
-                    .to_string(),
-            )
-        );
-
-        let flush_mode = dispatch_argv(
-            &[b"FUNCTION".to_vec(), b"FLUSH".to_vec(), b"BOGUS".to_vec()],
-            &mut store,
-            0,
-        )
-        .unwrap();
-        assert_eq!(
-            flush_mode,
-            RespFrame::Error("ERR FUNCTION FLUSH only supports SYNC|ASYNC option".to_string())
-        );
-
         let library =
             b"#!lua name=scriptlib\nredis.register_function('echo', function(keys, args) return args[1] end)";
         for argv in [
             vec![b"FUNCTION".to_vec(), b"LIST".to_vec()],
+            vec![b"FUNCTION".to_vec(), b"LIST".to_vec(), b"NOSUCH".to_vec()],
             vec![b"FUNCTION".to_vec(), b"STATS".to_vec()],
             vec![b"FUNCTION".to_vec(), b"LOAD".to_vec(), library.to_vec()],
             vec![b"FUNCTION".to_vec(), b"DELETE".to_vec(), b"mylib".to_vec()],
             vec![b"FUNCTION".to_vec(), b"DUMP".to_vec()],
             vec![b"FUNCTION".to_vec(), b"FLUSH".to_vec()],
+            vec![b"FUNCTION".to_vec(), b"FLUSH".to_vec(), b"BOGUS".to_vec()],
             vec![b"FUNCTION".to_vec(), b"KILL".to_vec()],
             vec![
                 b"FUNCTION".to_vec(),
                 b"RESTORE".to_vec(),
                 b"payload".to_vec(),
             ],
+            vec![
+                b"FUNCTION".to_vec(),
+                b"RESTORE".to_vec(),
+                b"payload".to_vec(),
+                b"FLUSH".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
         ] {
             let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
-            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+            assert_eq!(
+                err,
+                CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
+                "argv: {argv:?}"
+            );
         }
     }
 
