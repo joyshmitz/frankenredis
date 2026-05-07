@@ -34655,6 +34655,104 @@ mod tests {
     }
 
     #[test]
+    fn zrange_shape_combination_wordings_match_upstream() {
+        // Pin three ZRANGE shape-combination wordings caught by
+        // differential probe vs vendored 7.2.4 t_zset.c::
+        // zrangeGenericCommand (frankenredis-06pl):
+        //   - LIMIT without BYSCORE/BYLEX -> verbose syntax-error envelope
+        //   - WITHSCORES + BYLEX           -> conflict envelope
+        //   - BYLEX with non-[/(/-/+ bound -> "min or max not valid string range item"
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let limit_no_shape = dispatch_argv(
+            &[
+                b"ZRANGE".to_vec(),
+                b"z".to_vec(),
+                b"0".to_vec(),
+                b"-1".to_vec(),
+                b"LIMIT".to_vec(),
+                b"0".to_vec(),
+                b"5".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let got = match limit_no_shape {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(
+            got,
+            "ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX"
+                .to_string()
+        );
+
+        let withscores_bylex = dispatch_argv(
+            &[
+                b"ZRANGE".to_vec(),
+                b"z".to_vec(),
+                b"-".to_vec(),
+                b"+".to_vec(),
+                b"WITHSCORES".to_vec(),
+                b"BYLEX".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let got = match withscores_bylex {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(
+            got,
+            "ERR syntax error, WITHSCORES not supported in combination with BYLEX".to_string()
+        );
+
+        let bylex_bad_bound = dispatch_argv(
+            &[
+                b"ZRANGE".to_vec(),
+                b"z".to_vec(),
+                b"0".to_vec(),
+                b"-1".to_vec(),
+                b"BYLEX".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let got = match bylex_bad_bound {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(
+            got,
+            "ERR min or max not valid string range item".to_string()
+        );
+    }
+
+    #[test]
     fn zset_score_and_limit_error_wordings_match_upstream() {
         // Pins three small upstream wording divergences caught by
         // differential probe vs vendored 7.2.4 (frankenredis-uczv):
