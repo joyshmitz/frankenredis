@@ -29739,6 +29739,95 @@ mod tests {
     }
 
     #[test]
+    fn zincrby_zadd_incr_nan_error_wording_matches_upstream() {
+        // Pin upstream t_zset.c NaN-result wording for ZINCRBY and
+        // ZADD INCR (frankenredis-r76j): "resulting score is not a
+        // number (NaN)" — distinct from INCRBYFLOAT's "increment
+        // would produce NaN or Infinity" wording (which is preserved
+        // for the float-string command at dispatch boundary).
+        let mut store = Store::new();
+        // Seed +inf score; -inf increment yields NaN.
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"inf".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let zincrby_nan = dispatch_argv(
+            &[
+                b"ZINCRBY".to_vec(),
+                b"z".to_vec(),
+                b"-inf".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("zincrby nan");
+        assert_eq!(
+            zincrby_nan,
+            CommandError::Custom(
+                "ERR resulting score is not a number (NaN)".to_string()
+            )
+        );
+
+        let zadd_incr_nan = dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"INCR".to_vec(),
+                b"-inf".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("zadd incr nan");
+        assert_eq!(
+            zadd_incr_nan,
+            CommandError::Custom(
+                "ERR resulting score is not a number (NaN)".to_string()
+            )
+        );
+
+        // Sanity: INCRBYFLOAT keeps the original wording.
+        dispatch_argv(
+            &[
+                b"SET".to_vec(),
+                b"f".to_vec(),
+                b"inf".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        let incrbyfloat = dispatch_argv(
+            &[
+                b"INCRBYFLOAT".to_vec(),
+                b"f".to_vec(),
+                b"-inf".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let got = match incrbyfloat {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(got, "ERR increment would produce NaN or Infinity".to_string());
+    }
+
+    #[test]
     fn xpending_arity_validation_matches_upstream() {
         // Pin upstream xpendingCommand arity validation
         // (frankenredis-nslr): argc ∈ {3, 6, 7, 8, 9} OK; argc=4 and
