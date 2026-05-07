@@ -11519,6 +11519,20 @@ slave_priority:{}\r\n",
         } else if argv.len() < 3 {
             return CommandError::WrongArity("PSYNC").to_resp();
         }
+        // Upstream replication.c::syncCommand:971-976 rejects PSYNC/SYNC
+        // when fr is itself a replica and the master link isn't fully
+        // connected — serving stale data as a sync source would break
+        // the consistency invariant for chain-replicas. Once the link
+        // recovers (state == "connected") chained replication is
+        // allowed again. (frankenredis-tplbw)
+        if let ReplicationRoleState::Replica { state, .. } =
+            &self.server.replication_runtime_state.role
+            && *state != "connected"
+        {
+            return RespFrame::Error(
+                "NOMASTERLINK Can't SYNC while not connected with my master".to_string(),
+            );
+        }
         let (requested_replid, requested_offset) = if is_sync {
             ("?", -1)
         } else {
@@ -17013,6 +17027,47 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"SLAVEOF"]), 0),
             RespFrame::Error("ERR wrong number of arguments for 'slaveof' command".to_string())
+        );
+    }
+
+    #[test]
+    fn psync_rejects_when_replica_master_link_is_disconnected() {
+        // Upstream replication.c::syncCommand:971-976 rejects PSYNC/SYNC
+        // when fr is itself a replica and the master link isn't fully
+        // connected. Serving stale data as a sync source would break
+        // the consistency invariant for chain-replicas.
+        // (frankenredis-tplbw)
+        let mut rt = Runtime::default_strict();
+        // Enter Replica role via REPLICAOF — initial state is "connect"
+        // (not "connected"), so the master link is not yet established.
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"6380"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        let psync = rt.execute_frame(command(&[b"PSYNC", b"?", b"-1"]), 1);
+        assert_eq!(
+            psync,
+            RespFrame::Error(
+                "NOMASTERLINK Can't SYNC while not connected with my master".to_string()
+            )
+        );
+        let sync = rt.execute_frame(command(&[b"SYNC"]), 2);
+        assert_eq!(
+            sync,
+            RespFrame::Error(
+                "NOMASTERLINK Can't SYNC while not connected with my master".to_string()
+            )
+        );
+
+        // Master role keeps working.
+        let mut rt = Runtime::default_strict();
+        let ok = rt.execute_frame(command(&[b"PSYNC", b"?", b"-1"]), 0);
+        assert_eq!(
+            ok,
+            RespFrame::SimpleString(
+                "FULLRESYNC 0000000000000000000000000000000000000000 0".to_string()
+            )
         );
     }
 
