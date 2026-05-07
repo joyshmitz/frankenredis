@@ -41169,6 +41169,73 @@ mod tests {
     }
 
     #[test]
+    fn bitfield_invalid_type_and_overflow_wordings_match_upstream() {
+        // Pin upstream bitops.c::bitfieldCommand error wordings caught
+        // by differential probe vs vendored 7.2.4 (frankenredis-bfwo).
+        // Both wordings are emitted at multiple sites in lib.rs; this
+        // test locks the wire-visible reply for the most common forms.
+        //
+        //   BITFIELD k GET u200 0   -> "Invalid bitfield type" (unsigned > 63)
+        //   BITFIELD k GET u0 0     -> "Invalid bitfield type" (zero-bit)
+        //   BITFIELD k GET i65 0    -> "Invalid bitfield type" (signed > 64)
+        //   BITFIELD k OVERFLOW BAD -> "Invalid OVERFLOW type specified"
+        let mut store = Store::new();
+        let invalid_type =
+            "ERR Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.";
+
+        for argv_in in [
+            vec![
+                b"BITFIELD".to_vec(),
+                b"bf".to_vec(),
+                b"GET".to_vec(),
+                b"u200".to_vec(),
+                b"0".to_vec(),
+            ],
+            vec![
+                b"BITFIELD".to_vec(),
+                b"bf".to_vec(),
+                b"GET".to_vec(),
+                b"u0".to_vec(),
+                b"0".to_vec(),
+            ],
+            vec![
+                b"BITFIELD".to_vec(),
+                b"bf".to_vec(),
+                b"GET".to_vec(),
+                b"i65".to_vec(),
+                b"0".to_vec(),
+            ],
+        ] {
+            let out = dispatch_argv(&argv_in, &mut store, 0).expect("bitfield invalid type");
+            assert_eq!(
+                out,
+                RespFrame::Error(invalid_type.to_string()),
+                "argv={argv_in:?}"
+            );
+        }
+
+        let overflow_bad = dispatch_argv(
+            &[
+                b"BITFIELD".to_vec(),
+                b"bf".to_vec(),
+                b"OVERFLOW".to_vec(),
+                b"BANANA".to_vec(),
+                b"INCRBY".to_vec(),
+                b"u8".to_vec(),
+                b"0".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("bitfield overflow");
+        assert_eq!(
+            overflow_bad,
+            RespFrame::Error("ERR Invalid OVERFLOW type specified".to_string())
+        );
+    }
+
+    #[test]
     fn bitfield_hash_offset() {
         let mut store = Store::new();
         // SET u8 at #1 (= bit offset 8) to 42
