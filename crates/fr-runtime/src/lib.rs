@@ -13601,6 +13601,37 @@ mod tests {
     }
 
     #[test]
+    fn hello_unknown_option_and_setname_missing_arg_match_upstream() {
+        // Pins upstream networking.c::helloCommand wording for two
+        // additional malformed-option contexts caught by ad-hoc
+        // differential probe vs vendored 7.2.4 (frankenredis-1xx0):
+        //   - HELLO 3 BADKW    -> "Syntax error in HELLO option 'BADKW'"
+        //   - HELLO 3 SETNAME  -> "Syntax error in HELLO option 'SETNAME'"
+        // Generic "ERR syntax error" is the regression. Case is
+        // preserved from the wire bytes.
+        let mut rt = Runtime::default_strict();
+
+        let unknown_kw = rt.execute_frame(command(&[b"HELLO", b"3", b"BADKW"]), 0);
+        assert_eq!(
+            unknown_kw,
+            RespFrame::Error("ERR Syntax error in HELLO option 'BADKW'".to_string())
+        );
+
+        let setname_missing = rt.execute_frame(command(&[b"HELLO", b"3", b"SETNAME"]), 1);
+        assert_eq!(
+            setname_missing,
+            RespFrame::Error("ERR Syntax error in HELLO option 'SETNAME'".to_string())
+        );
+
+        // Lowercase 'auth' must round-trip case-preserved.
+        let lower_auth = rt.execute_frame(command(&[b"HELLO", b"3", b"auth"]), 2);
+        assert_eq!(
+            lower_auth,
+            RespFrame::Error("ERR Syntax error in HELLO option 'auth'".to_string())
+        );
+    }
+
+    #[test]
     fn hello_uses_last_auth_in_chain() {
         let mut rt = Runtime::default_strict();
         rt.add_user(b"alice".to_vec(), b"secret1".to_vec());
