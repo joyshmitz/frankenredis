@@ -17685,6 +17685,32 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
                     .to_string(),
             )),
         }
+    } else if sub.eq_ignore_ascii_case("CLUSTERLINK") {
+        // Upstream debug.c::debugCommand handles
+        // `DEBUG CLUSTERLINK KILL <direction> <node-id>` (argc=5):
+        // when cluster mode is disabled, the subcommand replies
+        // "Debug option only available for cluster mode enabled setup!"
+        // — a debug-specific string distinct from the regular
+        // "ERR This instance has cluster support disabled" used by
+        // CLUSTER * subcommands. Other arg shapes fall through to
+        // the generic unknown-subcommand error, matching upstream's
+        // `&& c->argc == 5` gating. (frankenredis-1iosf)
+        if argv.len() != 5 || !argv[2].eq_ignore_ascii_case(b"KILL") {
+            return Ok(RespFrame::Error(format!(
+                "ERR unknown subcommand or wrong number of arguments for '{}'. Try DEBUG HELP.",
+                sub.to_ascii_uppercase()
+            )));
+        }
+        if !store.cluster_enabled {
+            return Ok(RespFrame::Error(
+                "ERR Debug option only available for cluster mode enabled setup!".to_string(),
+            ));
+        }
+        // fr does not maintain a cluster topology of peer nodes, so
+        // node lookup always misses — match upstream's
+        // "Unknown node <name>" wording.
+        let node_id = String::from_utf8_lossy(&argv[4]);
+        Ok(RespFrame::Error(format!("ERR Unknown node {node_id}")))
     } else {
         Ok(RespFrame::Error(format!(
             "ERR unknown subcommand or wrong number of arguments for '{}'. Try DEBUG HELP.",
@@ -35653,6 +35679,103 @@ mod tests {
         assert_eq!(
             out,
             RespFrame::SimpleString("Apparently Redis did not crash: test passed".to_string())
+        );
+    }
+
+    // (frankenredis-1iosf) Mirror upstream debug.c's CLUSTERLINK KILL
+    // arm: when cluster is disabled, return the debug-specific string;
+    // when enabled but the node id is unknown, surface "Unknown node
+    // <id>"; out-of-shape calls (wrong arity, missing KILL) fall through
+    // to the generic unknown-subcommand error.
+    #[test]
+    fn debug_clusterlink_kill_reports_cluster_disabled_when_off() {
+        let mut store = Store::new();
+        store.cluster_enabled = false;
+        let out = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"CLUSTERLINK".to_vec(),
+                b"KILL".to_vec(),
+                b"all".to_vec(),
+                b"deadbeef".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug clusterlink kill");
+        assert_eq!(
+            out,
+            RespFrame::Error(
+                "ERR Debug option only available for cluster mode enabled setup!".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn debug_clusterlink_kill_reports_unknown_node_when_cluster_enabled() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        let out = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"CLUSTERLINK".to_vec(),
+                b"KILL".to_vec(),
+                b"from".to_vec(),
+                b"nonexistent-node".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug clusterlink kill");
+        assert_eq!(
+            out,
+            RespFrame::Error("ERR Unknown node nonexistent-node".to_string())
+        );
+    }
+
+    #[test]
+    fn debug_clusterlink_wrong_shape_falls_through_to_unknown_subcommand() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        // Wrong arity (3 instead of 5).
+        let out = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"CLUSTERLINK".to_vec(),
+                b"KILL".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug clusterlink wrong arity");
+        assert_eq!(
+            out,
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'CLUSTERLINK'. \
+                 Try DEBUG HELP."
+                    .to_string(),
+            )
+        );
+        // Wrong second arg (not KILL).
+        let out = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"CLUSTERLINK".to_vec(),
+                b"REVIVE".to_vec(),
+                b"all".to_vec(),
+                b"node".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug clusterlink non-KILL");
+        assert_eq!(
+            out,
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'CLUSTERLINK'. \
+                 Try DEBUG HELP."
+                    .to_string(),
+            )
         );
     }
 
