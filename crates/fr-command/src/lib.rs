@@ -9117,6 +9117,17 @@ fn function_cmd(
     }
 }
 
+/// Remap parse_eval_args' generic InvalidInteger error into FCALL's
+/// upstream-specific 'Bad number of keys provided' wording.
+/// (frankenredis-ascgr)
+fn fcall_map_eval_arg_error(err: CommandError) -> CommandError {
+    if matches!(err, CommandError::InvalidInteger) {
+        CommandError::Custom("ERR Bad number of keys provided".to_string())
+    } else {
+        err
+    }
+}
+
 fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
     // FCALL function numkeys [key ...] [arg ...]
     let cmd_name = std::str::from_utf8(&argv[0]).unwrap_or("FCALL");
@@ -9130,7 +9141,7 @@ fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         }));
     }
     if store.script_nesting_level >= 1 {
-        parse_eval_args(argv)?;
+        parse_eval_args(argv).map_err(fcall_map_eval_arg_error)?;
         return Err(script_noscript_command_error());
     }
     let func_name = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -9165,7 +9176,13 @@ fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         ));
     }
 
-    let (_numkeys, keys, args) = parse_eval_args(argv)?;
+    // (frankenredis-ascgr) Upstream functions.c::fcallCommandGeneric
+    // line 638-641 uses `getLongLongFromObject` (no _OrReply suffix)
+    // and emits a bespoke 'Bad number of keys provided' for
+    // non-integer numkeys, distinct from EVAL's generic 'value is
+    // not an integer' wording. parse_eval_args returns InvalidInteger
+    // for that case; remap it to FCALL's specific wording.
+    let (_numkeys, keys, args) = parse_eval_args(argv).map_err(fcall_map_eval_arg_error)?;
 
     // Transform the library code for execution:
     // 1. Strip the #!lua name=... header line (not valid Lua)
@@ -42366,6 +42383,49 @@ mod tests {
                 "argv: {argv:?}"
             );
         }
+    }
+
+    #[test]
+    fn fcall_non_integer_numkeys_uses_upstream_specific_wording() {
+        // (frankenredis-ascgr) Upstream functions.c::fcallCommandGeneric
+        // line 638-641 emits 'Bad number of keys provided' when argv[2]
+        // can't be parsed as an integer — distinct from EVAL's generic
+        // 'value is not an integer or out of range'. fr was sharing the
+        // EVAL-shaped parse_eval_args helper, which leaked the EVAL
+        // wording into FCALL's parse path. The lookup happens BEFORE
+        // numkeys parsing in upstream, so this only fires when the
+        // function exists.
+        let mut store = Store::new();
+        // Load a trivial function so the lookup succeeds and the
+        // numkeys parser actually runs. FCALL_RO has its own
+        // write-flag pre-check that fires before the numkeys parse
+        // (fr does not currently surface the no-writes flag from the
+        // Lua source — separate gap, out of scope here), so this
+        // regression test only exercises FCALL. The numkeys parsing
+        // path is identical for both, so a single FCALL probe pins
+        // the wording.
+        dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LOAD".to_vec(),
+                b"#!lua name=lib\nredis.register_function('f', function() return 1 end)"
+                    .to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("FUNCTION LOAD seed");
+
+        let out = dispatch_argv(
+            &[b"FCALL".to_vec(), b"f".to_vec(), b"NOTANINT".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("non-integer numkeys must error after function lookup");
+        assert_eq!(
+            out,
+            CommandError::Custom("ERR Bad number of keys provided".to_string())
+        );
     }
 
     #[test]
