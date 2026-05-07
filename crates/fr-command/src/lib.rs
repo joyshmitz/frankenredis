@@ -17385,6 +17385,78 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             "key_sds_len:{key_len}, key_sds_avail:0, key_zmalloc: {key_len}, \
              val_sds_len:{val_len}, val_sds_avail:0, val_zmalloc: {val_len}"
         )))
+    } else if sub.eq_ignore_ascii_case("STRUCTSIZE") {
+        // Upstream debug.c::debugCommand:878-888 returns a BulkString with
+        // C-internals struct sizes. fr has no equivalent C structs; we
+        // surface upstream-typical values so tooling that parses bits:N to
+        // detect arch keeps working. The other fields stay informational.
+        // (frankenredis-wcedk)
+        if argv.len() != 2 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'STRUCTSIZE'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        let bits = (usize::BITS) as i64; // 64 on 64-bit hosts.
+        Ok(RespFrame::BulkString(Some(
+            format!(
+                "bits:{bits} robj:16 dictentry:24 sdshdr5:1 sdshdr8:3 sdshdr16:5 sdshdr32:9 sdshdr64:17 "
+            )
+            .into_bytes(),
+        )))
+    } else if sub.eq_ignore_ascii_case("LISTPACK") {
+        // Upstream debug.c::debugCommand:680-691 looks up the key, then:
+        //   ERR no such key                       if missing
+        //   ERR Not a listpack encoded object.    if encoding != listpack
+        //   +Listpack structure printed on stdout otherwise (lpRepr stdout)
+        // fr has no listpack repr to print, so we skip the print and
+        // return the canned status. (frankenredis-wcedk)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'LISTPACK'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        let key = &argv[2];
+        let Some(encoding) = store.object_encoding(key, now_ms) else {
+            return Ok(RespFrame::Error("ERR no such key".to_string()));
+        };
+        if encoding != "listpack" && encoding != "listpack_ex" {
+            return Ok(RespFrame::Error(
+                "ERR Not a listpack encoded object.".to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString(
+            "Listpack structure printed on stdout".to_string(),
+        ))
+    } else if sub.eq_ignore_ascii_case("QUICKLIST") {
+        // Upstream debug.c::debugCommand:692-706 accepts argc 3 or 4
+        // (optional `full` 0/1 verbosity flag). Returns:
+        //   ERR no such key                        if missing
+        //   ERR Not a quicklist encoded object.    if encoding != quicklist
+        //   +Quicklist structure printed on stdout otherwise
+        // (frankenredis-wcedk)
+        if argv.len() != 3 && argv.len() != 4 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'QUICKLIST'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        let key = &argv[2];
+        let Some(encoding) = store.object_encoding(key, now_ms) else {
+            return Ok(RespFrame::Error("ERR no such key".to_string()));
+        };
+        if encoding != "quicklist" {
+            return Ok(RespFrame::Error(
+                "ERR Not a quicklist encoded object.".to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString(
+            "Quicklist structure printed on stdout".to_string(),
+        ))
     } else if sub.eq_ignore_ascii_case("REPLICATE") {
         // Upstream debug.c::debugCommand:867-870 calls
         // replicationFeedSlaves(...) to propagate the trailing args to
@@ -35666,6 +35738,151 @@ mod tests {
         assert!(info.contains("serializedlength:"), "{info}");
         assert!(info.contains("lru:"), "{info}");
         assert!(info.contains("lru_seconds_idle:"), "{info}");
+    }
+
+    #[test]
+    fn debug_structsize_listpack_quicklist_match_upstream_wire_shapes() {
+        // Upstream debug.c::debugCommand:
+        //   STRUCTSIZE  at 878-888 → $BulkString with "bits:N robj:N ..."
+        //   LISTPACK    at 680-691 → ERR no such key | ERR Not a listpack...
+        //                            | +Listpack structure printed on stdout
+        //   QUICKLIST   at 692-706 → ERR no such key | ERR Not a quicklist...
+        //                            | +Quicklist structure printed on stdout
+        // (frankenredis-wcedk)
+        let mut store = Store::new();
+
+        // STRUCTSIZE: returns a BulkString with key:value tokens.
+        let structsize = dispatch_argv(&[b"DEBUG".to_vec(), b"STRUCTSIZE".to_vec()], &mut store, 0)
+            .expect("debug structsize");
+        let RespFrame::BulkString(Some(bytes)) = structsize else {
+            panic!("expected BulkString from DEBUG STRUCTSIZE, got {structsize:?}");
+        };
+        let body = std::str::from_utf8(&bytes).unwrap();
+        assert!(body.starts_with("bits:"), "structsize must start with bits: token, got {body}");
+        assert!(body.contains("robj:"));
+        assert!(body.contains("dictentry:"));
+        assert!(body.contains("sdshdr5:"));
+        assert!(body.contains("sdshdr64:"));
+
+        // STRUCTSIZE wrong-arity → unknown-subcommand error.
+        let bad_ss = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"STRUCTSIZE".to_vec(), b"x".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect_err("structsize takes no args");
+        assert_eq!(
+            bad_ss,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'STRUCTSIZE'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
+
+        // LISTPACK / QUICKLIST: missing key → "no such key".
+        let lp_missing = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"LISTPACK".to_vec(),
+                b"absent".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("listpack missing");
+        assert_eq!(lp_missing, RespFrame::Error("ERR no such key".to_string()));
+
+        let ql_missing = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"QUICKLIST".to_vec(),
+                b"absent".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("quicklist missing");
+        assert_eq!(ql_missing, RespFrame::Error("ERR no such key".to_string()));
+
+        // Seed a small list. Default fr encoding for a 1-element small list
+        // is "listpack" (legacy_list mode under the size budget).
+        dispatch_argv(
+            &[b"RPUSH".to_vec(), b"smalllist".to_vec(), b"a".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed list");
+        let lp_ok = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"LISTPACK".to_vec(),
+                b"smalllist".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("listpack ok");
+        assert_eq!(
+            lp_ok,
+            RespFrame::SimpleString("Listpack structure printed on stdout".to_string())
+        );
+
+        // The same key is listpack-encoded, so QUICKLIST must reject it.
+        let ql_wrong = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"QUICKLIST".to_vec(),
+                b"smalllist".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("quicklist wrong-encoding");
+        assert_eq!(
+            ql_wrong,
+            RespFrame::Error("ERR Not a quicklist encoded object.".to_string())
+        );
+
+        // Conversely, LISTPACK on a string must reject.
+        dispatch_argv(
+            &[b"SET".to_vec(), b"strkey".to_vec(), b"v".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed string");
+        let lp_wrong = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"LISTPACK".to_vec(), b"strkey".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("listpack wrong-encoding");
+        assert_eq!(
+            lp_wrong,
+            RespFrame::Error("ERR Not a listpack encoded object.".to_string())
+        );
+
+        // Wrong-arity for LISTPACK / QUICKLIST.
+        let bad_lp = dispatch_argv(&[b"DEBUG".to_vec(), b"LISTPACK".to_vec()], &mut store, 0)
+            .expect_err("listpack needs key");
+        assert_eq!(
+            bad_lp,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'LISTPACK'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
+        let bad_ql = dispatch_argv(&[b"DEBUG".to_vec(), b"QUICKLIST".to_vec()], &mut store, 0)
+            .expect_err("quicklist needs key");
+        assert_eq!(
+            bad_ql,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'QUICKLIST'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
     }
 
     #[test]
