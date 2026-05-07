@@ -2469,18 +2469,28 @@ fn set(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, Co
             }
             expiry_mode = ExpiryMode::KeepTtl;
         } else if option.eq_ignore_ascii_case("NX") {
+            // (frankenredis-24276) Upstream
+            // parseExtendedStringArgumentsOrReply (t_string.c lines
+            // 216-225) gates NX behind `!(*flags & OBJ_SET_XX)` and
+            // XX behind `!(*flags & OBJ_SET_NX)`, rejecting the
+            // conflict EAGERLY. fr previously accumulated both flags
+            // and only checked after the loop, which let a later
+            // malformed EX/PX integer surface 'value is not an
+            // integer or out of range' before the conflict was seen.
+            if xx {
+                return Err(CommandError::SyntaxError);
+            }
             nx = true;
         } else if option.eq_ignore_ascii_case("XX") {
+            if nx {
+                return Err(CommandError::SyntaxError);
+            }
             xx = true;
         } else if option.eq_ignore_ascii_case("GET") {
             get = true;
         } else {
             return Err(CommandError::SyntaxError);
         }
-    }
-
-    if nx && xx {
-        return Err(CommandError::SyntaxError);
     }
 
     let old_value = if get {
@@ -19885,6 +19895,67 @@ mod tests {
         store.set(b"k".to_vec(), b"old".to_vec(), None, 0);
         let out2 = dispatch_argv(&argv, &mut store, 0).expect("set XX on existing");
         assert_eq!(out2, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn set_nx_xx_conflict_fires_before_trailing_integer_parse() {
+        // (frankenredis-24276) Upstream parseExtendedStringArgumentsOrReply
+        // (t_string.c lines 216-225) rejects the second of NX/XX
+        // EAGERLY at parse time. fr was deferring the conflict check
+        // until after the option loop, which let a later malformed
+        // EX/PX/EXAT/PXAT integer surface 'value is not an integer
+        // or out of range' before the NX+XX SyntaxError.
+        let mut store = Store::new();
+
+        // NX → XX with a malformed EX integer afterwards.
+        let err = dispatch_argv(
+            &[
+                b"SET".to_vec(),
+                b"k".to_vec(),
+                b"v".to_vec(),
+                b"NX".to_vec(),
+                b"XX".to_vec(),
+                b"EX".to_vec(),
+                b"NOTANINT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("NX+XX conflict should beat EX parse");
+        assert_eq!(err, CommandError::SyntaxError);
+
+        // XX → NX symmetric.
+        let err = dispatch_argv(
+            &[
+                b"SET".to_vec(),
+                b"k".to_vec(),
+                b"v".to_vec(),
+                b"XX".to_vec(),
+                b"NX".to_vec(),
+                b"PX".to_vec(),
+                b"NOTANINT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("XX+NX conflict should beat PX parse");
+        assert_eq!(err, CommandError::SyntaxError);
+
+        // Existing NX-only path must still work.
+        let ok = dispatch_argv(
+            &[
+                b"SET".to_vec(),
+                b"k".to_vec(),
+                b"v".to_vec(),
+                b"NX".to_vec(),
+                b"EX".to_vec(),
+                b"5".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("NX EX 5 should set");
+        assert_eq!(ok, RespFrame::SimpleString("OK".to_string()));
     }
 
     #[test]
