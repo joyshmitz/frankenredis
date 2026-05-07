@@ -8197,11 +8197,47 @@ fn cluster_cmd(
         if argv.len() != 2 {
             return Err(cluster_wrong_subcommand_arity(sub));
         }
-        // NODES still stubbed when cluster_enabled is true —
-        // synthesizing the per-node line format (id, ip:port@bus,
-        // flags, master, pings, pongs, epoch, link, slots) is a
-        // follow-up. (frankenredis-u5he7)
-        return Err(cluster_disabled_error());
+        if !store.cluster_enabled {
+            return Err(cluster_disabled_error());
+        }
+        // Mirror upstream cluster.c::clusterGenNodeDescription:5251-5328
+        // for the single self node:
+        //   <id> <ip:port@cport> myself,master - 0 0 0 connected <slot ranges>
+        // The cluster bus port follows upstream's default offset
+        // convention (port + 10000). (frankenredis-bdokn)
+        let cport = u32::from(store.server_port).saturating_add(10000);
+        let mut line = format!(
+            "{id} 127.0.0.1:{port}@{cport} myself,master - 0 0 0 connected",
+            id = store.server_run_id,
+            port = store.server_port,
+        );
+        // Emit assigned slot ranges (single slot prints as a single
+        // integer; contiguous runs print as start-end, matching
+        // upstream's representation).
+        let mut iter = store.cluster_assigned_slots.iter().copied();
+        if let Some(mut start) = iter.next() {
+            let mut end = start;
+            for slot in iter {
+                if end.checked_add(1) == Some(slot) {
+                    end = slot;
+                } else {
+                    if start == end {
+                        line.push_str(&format!(" {start}"));
+                    } else {
+                        line.push_str(&format!(" {start}-{end}"));
+                    }
+                    start = slot;
+                    end = slot;
+                }
+            }
+            if start == end {
+                line.push_str(&format!(" {start}"));
+            } else {
+                line.push_str(&format!(" {start}-{end}"));
+            }
+        }
+        line.push('\n');
+        return Ok(RespFrame::BulkString(Some(line.into_bytes())));
     }
     if sub.eq_ignore_ascii_case("SLOTS") {
         if argv.len() != 2 {
@@ -40128,6 +40164,48 @@ mod tests {
             Some(&RespFrame::SimpleString(
                 "CLUSTER <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
             ))
+        );
+    }
+
+    // (frankenredis-bdokn) Upstream cluster.c::clusterGenNodeDescription
+    // emits per-node lines '<id> <ip:port@cport> <flags> <master>
+    // <pings> <pongs> <epoch> <link> [<slot ranges>]'. fr emits one
+    // line for the self node with deterministic flags / counters /
+    // slot ranges from cluster_assigned_slots.
+    #[test]
+    fn cluster_nodes_returns_self_line_when_cluster_enabled() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        let RespFrame::BulkString(Some(text)) =
+            dispatch_argv(&[b"CLUSTER".to_vec(), b"NODES".to_vec()], &mut store, 0)
+                .expect("cluster nodes empty")
+        else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let line = String::from_utf8(text).expect("nodes text utf8");
+        assert!(line.contains(" myself,master "), "got line: {line:?}");
+        assert!(line.contains(" 127.0.0.1:6379@16379 "), "got line: {line:?}");
+        assert!(line.contains(" 0 0 0 connected"), "got line: {line:?}");
+        assert!(line.starts_with(&store.server_run_id), "got line: {line:?}");
+        assert!(line.ends_with('\n'), "trailing newline expected, got {line:?}");
+
+        // Add a contiguous slot range and verify it gets emitted as start-end.
+        for slot in 0..=2u16 {
+            store.cluster_assigned_slots.insert(slot);
+        }
+        // Add an isolated slot to confirm singleton formatting.
+        store.cluster_assigned_slots.insert(100);
+        let RespFrame::BulkString(Some(text)) =
+            dispatch_argv(&[b"CLUSTER".to_vec(), b"NODES".to_vec()], &mut store, 0)
+                .expect("cluster nodes populated")
+        else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let line = String::from_utf8(text).expect("nodes text utf8");
+        assert!(line.contains(" 0-2 "), "expected `0-2` range, got {line:?}");
+        assert!(
+            line.contains(" 100\n") || line.contains(" 100"),
+            "expected singleton slot 100, got {line:?}"
         );
     }
 
