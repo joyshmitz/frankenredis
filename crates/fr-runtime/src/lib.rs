@@ -21445,6 +21445,56 @@ mod tests {
     }
 
     #[test]
+    fn acl_dryrun_validates_command_existence_and_arity_before_acl_gate() {
+        // Pin upstream acl.c::aclCommand DRYRUN ordering: command-
+        // existence and table-arity checks fire BEFORE the ACL
+        // permission gate (frankenredis-vbeo). Also pin that
+        // CLEARSELECTORS is accepted as a no-op (fr's ACL doesn't
+        // model selector blocks; matching upstream's accept semantics
+        // avoids breaking redis-cli ACL flows).
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"SETUSER", b"alice", b"on", b">pw", b"+@all", b"~*"]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Unknown command surfaces "Command 'BADCMD' not found", not
+        // the user's permission denial.
+        let unknown = rt.execute_frame(
+            command(&[b"ACL", b"DRYRUN", b"alice", b"BADCMD", b"k"]),
+            1,
+        );
+        assert_eq!(
+            unknown,
+            RespFrame::Error("ERR Command 'BADCMD' not found".to_string())
+        );
+
+        // Wrong arity (GET with no key) surfaces table-level wrong-
+        // arity error, not OK and not the permission denial.
+        let bad_arity = rt.execute_frame(
+            command(&[b"ACL", b"DRYRUN", b"alice", b"GET"]),
+            2,
+        );
+        assert_eq!(
+            bad_arity,
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'get' command".to_string()
+            )
+        );
+
+        // CLEARSELECTORS accepted as no-op.
+        let clear = rt.execute_frame(
+            command(&[b"ACL", b"SETUSER", b"alice", b"clearselectors"]),
+            3,
+        );
+        assert_eq!(clear, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
     fn acl_dryrun_evaluates_target_user_not_current_session() {
         let mut rt = Runtime::default_strict();
 
