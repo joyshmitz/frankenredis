@@ -28606,6 +28606,84 @@ mod tests {
     }
 
     #[test]
+    fn xinfo_stream_lookup_ordering_and_arg_validation_match_upstream() {
+        // Pin three XINFO STREAM divergences vs vendored 7.2.4
+        // (frankenredis-y8m7):
+        //   1. Missing key + bogus tail -> NoSuchKey (lookup runs
+        //      before arg validation; t_stream.c::xinfoCommand).
+        //   2. Existing key + malformed FULL tail -> upstream's
+        //      addReplySubcommandSyntaxError envelope, NOT the
+        //      table-level wrong-arity wording.
+        //   3. FULL COUNT -1 -> default 10, no error (upstream
+        //      silently clamps negatives to default).
+        let mut store = Store::new();
+
+        let missing = dispatch_argv(
+            &[
+                b"XINFO".to_vec(),
+                b"STREAM".to_vec(),
+                b"nokey".to_vec(),
+                b"FULL".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xinfo missing");
+        assert_eq!(missing, CommandError::NoSuchKey);
+
+        // Seed a stream so existing-key paths exercise the validator.
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let bad_tail = dispatch_argv(
+            &[
+                b"XINFO".to_vec(),
+                b"STREAM".to_vec(),
+                b"s".to_vec(),
+                b"FULL".to_vec(),
+                b"NOPE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xinfo bad tail");
+        assert_eq!(
+            bad_tail,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP."
+                    .to_string()
+            )
+        );
+
+        // FULL COUNT -1 must succeed (silently default 10).
+        let neg_count = dispatch_argv(
+            &[
+                b"XINFO".to_vec(),
+                b"STREAM".to_vec(),
+                b"s".to_vec(),
+                b"FULL".to_vec(),
+                b"COUNT".to_vec(),
+                b"-1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xinfo neg count");
+        assert!(matches!(neg_count, RespFrame::Array(Some(_))));
+    }
+
+    #[test]
     fn xinfo_stream_reports_bounds_and_metadata_shape() {
         let mut store = Store::new();
         dispatch_argv(
