@@ -10969,6 +10969,12 @@ impl Runtime {
                 let master_link_status = if *state == "connected" { "up" } else { "down" };
                 let master_last_io_seconds_ago = if *state == "connected" { 0 } else { -1 };
                 let master_sync_in_progress = i64::from(*state == "sync");
+                // Upstream server.c::genRedisInfoString:6060-6066 emits
+                // slave_read_only and replica_announced alongside
+                // slave_priority when server.masterhost is set. fr does
+                // not yet track per-instance replica-read-only /
+                // replica-announced state so we surface upstream's "yes"
+                // defaults here. (frankenredis-e6iqd)
                 let _ = write!(
                     info,
                     "master_host:{host}\r\n\
@@ -10978,7 +10984,9 @@ master_last_io_seconds_ago:{master_last_io_seconds_ago}\r\n\
 master_sync_in_progress:{master_sync_in_progress}\r\n\
 slave_read_repl_offset:{primary_offset}\r\n\
 slave_repl_offset:{primary_offset}\r\n\
-slave_priority:{}\r\n",
+slave_priority:{}\r\n\
+slave_read_only:1\r\n\
+replica_announced:1\r\n",
                     self.server.replica_priority
                 );
             }
@@ -17050,6 +17058,11 @@ mod tests {
         assert!(info.contains("master_sync_in_progress:0\r\n"), "{info}");
         assert!(info.contains("slave_read_repl_offset:0\r\n"), "{info}");
         assert!(info.contains("slave_repl_offset:0\r\n"), "{info}");
+        // (frankenredis-e6iqd) Upstream emits slave_read_only and
+        // replica_announced alongside slave_priority in the replica
+        // branch — fr surfaces upstream's "yes" defaults (=1).
+        assert!(info.contains("slave_read_only:1\r\n"), "{info}");
+        assert!(info.contains("replica_announced:1\r\n"), "{info}");
 
         rt.set_replica_connection_state("sync");
         let sync_info = rt.execute_frame(command(&[b"INFO", b"replication"]), 2);
