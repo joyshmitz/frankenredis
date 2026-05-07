@@ -29608,6 +29608,159 @@ mod tests {
     }
 
     #[test]
+    fn xclaim_error_wordings_match_upstream() {
+        // Pin upstream xclaimCommand wordings caught by differential
+        // probe vs vendored 7.2.4 (frankenredis-rsls):
+        //   - min-idle-time non-numeric -> "Invalid min-idle-time argument for XCLAIM"
+        //   - min-idle-time negative    -> silently clamped to 0 (returns Array)
+        //   - IDLE/TIME/RETRYCOUNT bad  -> "Invalid <NAME> option argument for XCLAIM"
+        //   - IDLE without value (last token) -> "Unrecognized XCLAIM option 'IDLE'"
+        //   - Unknown option token            -> "Unrecognized XCLAIM option '<token>'"
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        // min-idle-time non-numeric.
+        let bad_min = dispatch_argv(
+            &[
+                b"XCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"abc".to_vec(),
+                b"1-0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xclaim bad min-idle");
+        assert_eq!(
+            bad_min,
+            CommandError::Custom("ERR Invalid min-idle-time argument for XCLAIM".to_string())
+        );
+
+        // min-idle-time negative -> clamps to 0, returns Array (no error).
+        let neg_min = dispatch_argv(
+            &[
+                b"XCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"-100".to_vec(),
+                b"1-0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xclaim neg min-idle");
+        assert!(matches!(neg_min, RespFrame::Array(Some(_))));
+
+        // IDLE non-numeric.
+        let bad_idle = dispatch_argv(
+            &[
+                b"XCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"0".to_vec(),
+                b"1-0".to_vec(),
+                b"IDLE".to_vec(),
+                b"abc".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xclaim bad IDLE");
+        assert_eq!(
+            bad_idle,
+            CommandError::Custom("ERR Invalid IDLE option argument for XCLAIM".to_string())
+        );
+
+        // RETRYCOUNT negative.
+        let neg_rc = dispatch_argv(
+            &[
+                b"XCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"0".to_vec(),
+                b"1-0".to_vec(),
+                b"RETRYCOUNT".to_vec(),
+                b"-1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xclaim neg RETRYCOUNT");
+        assert_eq!(
+            neg_rc,
+            CommandError::Custom("ERR Invalid RETRYCOUNT option argument for XCLAIM".to_string())
+        );
+
+        // IDLE as last token (missing value).
+        let idle_no_val = dispatch_argv(
+            &[
+                b"XCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"0".to_vec(),
+                b"1-0".to_vec(),
+                b"IDLE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xclaim IDLE no value");
+        assert_eq!(
+            idle_no_val,
+            CommandError::Custom("ERR Unrecognized XCLAIM option 'IDLE'".to_string())
+        );
+
+        // Unknown option token after IDs.
+        let unknown = dispatch_argv(
+            &[
+                b"XCLAIM".to_vec(),
+                b"s".to_vec(),
+                b"g".to_vec(),
+                b"c".to_vec(),
+                b"0".to_vec(),
+                b"1-0".to_vec(),
+                b"NOPE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xclaim unknown token");
+        assert_eq!(
+            unknown,
+            CommandError::Custom("ERR Unrecognized XCLAIM option 'NOPE'".to_string())
+        );
+    }
+
+    #[test]
     fn xgroup_create_entriesread_mkstream_combinations_match_upstream() {
         // Pin upstream xgroupCommand CREATE option-token parser
         // (frankenredis-wpch). MKSTREAM and ENTRIESREAD are
