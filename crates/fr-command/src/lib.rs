@@ -17507,6 +17507,75 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         Ok(RespFrame::Error(
             "ERR maxmemory-clients is disabled.".to_string(),
         ))
+    } else if sub.eq_ignore_ascii_case("HTSTATS") {
+        // Upstream debug.c::debugCommand:889-916 returns a Verbatim block
+        // with [Dictionary HT] + [Expires HT] dict stats. fr stores
+        // entries via Rust HashMap so we can't surface upstream's
+        // bucket-distribution numbers; emit a synthetic minimal block
+        // that's syntactically valid for tooling. (frankenredis-72pfi)
+        if argv.len() < 3 || argv.len() > 4 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'HTSTATS'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        let dbid = parse_i64_arg(&argv[2])?;
+        if dbid < 0 || dbid >= store.database_count as i64 {
+            return Ok(RespFrame::Error("ERR Out of range database".to_string()));
+        }
+        // Optional `full` flag — accept-and-ignore.
+        let _full = argv.len() == 4
+            && std::str::from_utf8(&argv[3])
+                .ok()
+                .is_some_and(|s| s.eq_ignore_ascii_case("full"));
+        let entries = store.dbsize_in_db(dbid as usize);
+        Ok(RespFrame::BulkString(Some(
+            format!(
+                "[Dictionary HT]\n\
+                 Hash table 0 stats (main hash table):\n\
+                  table size: {entries}\n\
+                  number of elements: {entries}\n\
+                 [Expires HT]\n\
+                 No stats available for empty dictionaries\n"
+            )
+            .into_bytes(),
+        )))
+    } else if sub.eq_ignore_ascii_case("HTSTATS-KEY") {
+        // Upstream debug.c::debugCommand:917-949 looks up the key,
+        // accepts only ht / skiplist encodings (i.e. hash + sortedset),
+        // and emits a Verbatim block with dict stats. fr's encoding
+        // helper returns 'hashtable' / 'hashtable_ex' / 'skiplist' for
+        // those families; everything else triggers the "not represented
+        // using an hash table" error. (frankenredis-72pfi)
+        if argv.len() < 3 || argv.len() > 4 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'HTSTATS-KEY'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        let key = &argv[2];
+        let Some(encoding) = store.object_encoding(key, now_ms) else {
+            return Ok(RespFrame::Error("ERR no such key".to_string()));
+        };
+        if !matches!(encoding, "hashtable" | "hashtable_ex" | "skiplist") {
+            return Ok(RespFrame::Error(
+                "ERR The value stored at the specified key is not \
+                 represented using an hash table"
+                    .to_string(),
+            ));
+        }
+        // Optional `full` flag — accept-and-ignore.
+        let _full = argv.len() == 4
+            && std::str::from_utf8(&argv[3])
+                .ok()
+                .is_some_and(|s| s.eq_ignore_ascii_case("full"));
+        Ok(RespFrame::BulkString(Some(
+            "Hash table 0 stats (main hash table):\n No stats available\n"
+                .to_string()
+                .into_bytes(),
+        )))
     } else if sub.eq_ignore_ascii_case("REPLICATE") {
         // Upstream debug.c::debugCommand:867-870 calls
         // replicationFeedSlaves(...) to propagate the trailing args to
@@ -35788,6 +35857,131 @@ mod tests {
         assert!(info.contains("serializedlength:"), "{info}");
         assert!(info.contains("lru:"), "{info}");
         assert!(info.contains("lru_seconds_idle:"), "{info}");
+    }
+
+    #[test]
+    fn debug_htstats_and_htstats_key_match_upstream_wire_shapes() {
+        // Upstream debug.c::debugCommand:
+        //   HTSTATS <dbid> [full]    at 889-916 → BulkString or "Out of range database"
+        //   HTSTATS-KEY <key> [full] at 917-949 → BulkString | no such key |
+        //                                          "not represented using an hash table"
+        // (frankenredis-72pfi)
+        let mut store = Store::new();
+
+        // HTSTATS with valid dbid → BulkString containing both sections.
+        let stats = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"HTSTATS".to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("htstats db 0");
+        let RespFrame::BulkString(Some(bytes)) = stats else {
+            panic!("expected BulkString, got {stats:?}");
+        };
+        let body = std::str::from_utf8(&bytes).unwrap();
+        assert!(body.contains("[Dictionary HT]"), "{body}");
+        assert!(body.contains("[Expires HT]"), "{body}");
+
+        // HTSTATS with `full` flag accepted-and-ignored.
+        let stats_full = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"HTSTATS".to_vec(),
+                b"0".to_vec(),
+                b"full".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("htstats full");
+        assert!(matches!(stats_full, RespFrame::BulkString(Some(_))));
+
+        // HTSTATS with out-of-range dbid → upstream error.
+        let oor = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"HTSTATS".to_vec(), b"99999".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("htstats out-of-range returns Error frame");
+        assert_eq!(oor, RespFrame::Error("ERR Out of range database".to_string()));
+
+        // Wrong-arity → canonical unknown-subcommand error.
+        let bad_arity = dispatch_argv(&[b"DEBUG".to_vec(), b"HTSTATS".to_vec()], &mut store, 0)
+            .expect_err("htstats needs dbid");
+        assert_eq!(
+            bad_arity,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'HTSTATS'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
+
+        // HTSTATS-KEY: missing key → "no such key".
+        let miss = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"HTSTATS-KEY".to_vec(),
+                b"absent".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("htstats-key missing");
+        assert_eq!(miss, RespFrame::Error("ERR no such key".to_string()));
+
+        // HTSTATS-KEY against a string key → not-represented error.
+        dispatch_argv(
+            &[b"SET".to_vec(), b"strkey".to_vec(), b"v".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed string");
+        let str_reject = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"HTSTATS-KEY".to_vec(),
+                b"strkey".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("htstats-key string");
+        assert_eq!(
+            str_reject,
+            RespFrame::Error(
+                "ERR The value stored at the specified key is not represented using an hash table"
+                    .to_string()
+            )
+        );
+
+        // HTSTATS-KEY against a sortedset → BulkString with synthetic stats.
+        // ZADD with enough elements to force skiplist encoding (default
+        // zset-max-listpack-entries is 128).
+        for i in 0..200 {
+            dispatch_argv(
+                &[
+                    b"ZADD".to_vec(),
+                    b"sortset".to_vec(),
+                    format!("{i}").into_bytes(),
+                    format!("m{i}").into_bytes(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect("seed zset");
+        }
+        let zset_ok = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"HTSTATS-KEY".to_vec(),
+                b"sortset".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("htstats-key zset");
+        assert!(matches!(zset_ok, RespFrame::BulkString(Some(_))));
     }
 
     #[test]
