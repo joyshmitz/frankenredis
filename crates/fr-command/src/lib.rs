@@ -8159,15 +8159,48 @@ fn cluster_cmd(
             hello_simple("    Print this help."),
         ])));
     }
-    if sub.eq_ignore_ascii_case("INFO")
-        || sub.eq_ignore_ascii_case("NODES")
-    {
+    if sub.eq_ignore_ascii_case("INFO") {
         if argv.len() != 2 {
             return Err(cluster_wrong_subcommand_arity(sub));
         }
-        // INFO/NODES still stubbed when cluster_enabled is true —
-        // synthesizing the multi-line state strings is a follow-up.
-        // (frankenredis-u5he7)
+        if !store.cluster_enabled {
+            return Err(cluster_disabled_error());
+        }
+        // Mirror upstream cluster.c::genClusterInfoString:5806-5881.
+        // fr models a single self node with no peers, no failure
+        // tracking, and no epoch state — populate the deterministic
+        // fields and emit zeros for the rest. cluster_state is "ok"
+        // only when the 16384 slots are fully covered (matches
+        // upstream's cluster.c verifyClusterConfigWithData semantics
+        // where partial coverage flips the state to "fail").
+        // (frankenredis-39rkv)
+        let slots_assigned = store.cluster_assigned_slots.len();
+        let cluster_state = if slots_assigned >= 16384 { "ok" } else { "fail" };
+        let cluster_size = if slots_assigned > 0 { 1 } else { 0 };
+        let info = format!(
+            "cluster_state:{cluster_state}\r\n\
+             cluster_slots_assigned:{slots_assigned}\r\n\
+             cluster_slots_ok:{slots_assigned}\r\n\
+             cluster_slots_pfail:0\r\n\
+             cluster_slots_fail:0\r\n\
+             cluster_known_nodes:1\r\n\
+             cluster_size:{cluster_size}\r\n\
+             cluster_current_epoch:0\r\n\
+             cluster_my_epoch:0\r\n\
+             cluster_stats_messages_sent:0\r\n\
+             cluster_stats_messages_received:0\r\n\
+             total_cluster_links_buffer_limit_exceeded:0\r\n",
+        );
+        return Ok(RespFrame::BulkString(Some(info.into_bytes())));
+    }
+    if sub.eq_ignore_ascii_case("NODES") {
+        if argv.len() != 2 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        // NODES still stubbed when cluster_enabled is true —
+        // synthesizing the per-node line format (id, ip:port@bus,
+        // flags, master, pings, pongs, epoch, link, slots) is a
+        // follow-up. (frankenredis-u5he7)
         return Err(cluster_disabled_error());
     }
     if sub.eq_ignore_ascii_case("SLOTS") {
@@ -40096,6 +40129,49 @@ mod tests {
                 "CLUSTER <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
             ))
         );
+    }
+
+    // (frankenredis-39rkv) Upstream cluster.c::genClusterInfoString
+    // emits the cluster_state line plus deterministic slot / node
+    // counters. fr emits the same fields with values derived from
+    // its single-node stub state.
+    #[test]
+    fn cluster_info_returns_synthesized_text_when_cluster_enabled() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        // No slots assigned → state=fail, size=0.
+        let RespFrame::BulkString(Some(text)) =
+            dispatch_argv(&[b"CLUSTER".to_vec(), b"INFO".to_vec()], &mut store, 0)
+                .expect("cluster info empty")
+        else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let body = String::from_utf8(text).expect("info text utf8");
+        assert!(
+            body.contains("cluster_state:fail\r\n"),
+            "no slots → state=fail, got {body:?}"
+        );
+        assert!(body.contains("cluster_slots_assigned:0\r\n"));
+        assert!(body.contains("cluster_size:0\r\n"));
+        assert!(body.contains("cluster_known_nodes:1\r\n"));
+        assert!(body.contains("cluster_current_epoch:0\r\n"));
+        assert!(body.contains("total_cluster_links_buffer_limit_exceeded:0\r\n"));
+
+        // Assign all 16384 slots → state=ok, size=1.
+        for slot in 0..16384u16 {
+            store.cluster_assigned_slots.insert(slot);
+        }
+        let RespFrame::BulkString(Some(text)) =
+            dispatch_argv(&[b"CLUSTER".to_vec(), b"INFO".to_vec()], &mut store, 0)
+                .expect("cluster info full")
+        else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let body = String::from_utf8(text).expect("info text utf8");
+        assert!(body.contains("cluster_state:ok\r\n"));
+        assert!(body.contains("cluster_slots_assigned:16384\r\n"));
+        assert!(body.contains("cluster_slots_ok:16384\r\n"));
+        assert!(body.contains("cluster_size:1\r\n"));
     }
 
     #[test]
