@@ -15490,20 +15490,20 @@ fn slowlog_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Command
                 subcommand: "GET".to_string(),
             });
         }
+        // Upstream slowlog.c:172-174 routes both parse failure and
+        // out-of-range through getRangeLongFromObjectOrReply with the
+        // 'count should be greater than or equal to -1' msg argument
+        // (object.c:895-936). Mirror that single canonical wording.
+        // (frankenredis-iglto)
+        let bad_count = || {
+            CommandError::Custom("ERR count should be greater than or equal to -1".to_string())
+        };
         let count = match argv.get(2) {
-            Some(count_arg) => {
-                let parsed = parse_i64_arg(count_arg)?;
-                if parsed < -1 {
-                    return Err(CommandError::Custom(
-                        "ERR count should be greater than or equal to -1".to_string(),
-                    ));
-                }
-                if parsed == -1 {
-                    store.slowlog_len()
-                } else {
-                    usize::try_from(parsed).map_err(|_| CommandError::InvalidInteger)?
-                }
-            }
+            Some(count_arg) => match parse_i64_arg(count_arg) {
+                Ok(-1) => store.slowlog_len(),
+                Ok(c) if c >= 0 => usize::try_from(c).map_err(|_| bad_count())?,
+                _ => return Err(bad_count()),
+            },
             None => 10,
         };
         let entries = store
@@ -39128,6 +39128,25 @@ mod tests {
             err,
             CommandError::Custom("ERR count should be greater than or equal to -1".to_string())
         );
+
+        // (frankenredis-iglto) Non-integer count must surface the same
+        // canonical wording — upstream's getRangeLongFromObjectOrReply
+        // uses the msg argument for both parse failure and out-of-range.
+        for bad in [b"abc".as_slice(), b"".as_slice(), b"1.5".as_slice()] {
+            let err = dispatch_argv(
+                &[b"SLOWLOG".to_vec(), b"GET".to_vec(), bad.to_vec()],
+                &mut store,
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                CommandError::Custom(
+                    "ERR count should be greater than or equal to -1".to_string()
+                ),
+                "input: {bad:?}"
+            );
+        }
 
         let err = dispatch_argv(
             &[
