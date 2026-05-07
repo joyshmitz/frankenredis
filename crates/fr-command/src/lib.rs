@@ -8493,6 +8493,17 @@ fn cluster_cmd(
         }
         return Err(CommandError::Custom(format!("ERR Unknown node {node_id}")));
     }
+    // Upstream cluster.c::clusterCommand starts with a cluster_enabled
+    // gate that fires before any subcommand dispatch, so ANY subcommand
+    // call (known or unknown) returns "This instance has cluster support
+    // disabled" first when cluster mode is off. The per-subcommand arms
+    // above already honour that, but the unknown-subcommand fallthrough
+    // would otherwise leak the "unknown subcommand" wording to clients
+    // running on a non-cluster instance — diverging from upstream's
+    // top-of-clusterCommand check. (frankenredis-53ati)
+    if !store.cluster_enabled {
+        return Err(cluster_disabled_error());
+    }
     Err(cluster_unknown_subcommand_error(sub))
 }
 
@@ -39259,7 +39270,13 @@ mod tests {
 
     #[test]
     fn cluster_unknown_subcommand_matches_redis_error() {
+        // Upstream cluster.c::clusterCommand emits the unknown-subcommand
+        // wording only when cluster mode is enabled; with cluster off
+        // the top-of-clusterCommand cluster_enabled gate fires first
+        // (see cluster_unknown_subcommand_with_cluster_disabled_*).
+        // (frankenredis-53ati)
         let mut store = Store::new();
+        store.cluster_enabled = true;
         let err =
             dispatch_argv(&[b"CLUSTER".to_vec(), b"NOPE".to_vec()], &mut store, 0).unwrap_err();
         assert_eq!(
@@ -39607,6 +39624,40 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, cluster_disabled_error());
+    }
+
+    // (frankenredis-53ati) Upstream cluster.c::clusterCommand starts
+    // with a cluster_enabled gate, so ANY subcommand (even unknown ones)
+    // returns "This instance has cluster support disabled" when cluster
+    // mode is off. fr's unknown-subcommand fallthrough was leaking the
+    // "unknown subcommand" wording instead.
+    #[test]
+    fn cluster_unknown_subcommand_with_cluster_disabled_reports_cluster_disabled() {
+        let mut store = Store::new();
+        // cluster_enabled defaults to false
+        let err = dispatch_argv(
+            &[b"CLUSTER".to_vec(), b"FOOBAR".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, cluster_disabled_error());
+    }
+
+    #[test]
+    fn cluster_unknown_subcommand_with_cluster_enabled_reports_unknown_subcommand() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        let err = dispatch_argv(
+            &[b"CLUSTER".to_vec(), b"FOOBAR".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom("ERR unknown subcommand 'FOOBAR'. Try CLUSTER HELP.".to_string())
+        );
     }
 
     #[test]
