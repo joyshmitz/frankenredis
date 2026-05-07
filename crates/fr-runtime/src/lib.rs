@@ -4512,7 +4512,17 @@ impl Runtime {
             _ => {}
         }
 
-        if self.session.requires_auth(&self.server.auth_state) {
+        // Upstream commands.def marks AUTH / HELLO / QUIT / RESET with
+        // CMD_NO_AUTH so server.c::processCommand:3911 bypasses the auth gate
+        // for them. AUTH and HELLO are already short-circuited at the early-
+        // return arms above (lib.rs:4486, :4499); QUIT and RESET reach this
+        // point and must skip the gate too. (frankenredis-mhxwl)
+        let cmd_no_auth = matches!(
+            special_command,
+            Some(RuntimeSpecialCommand::Quit) | Some(RuntimeSpecialCommand::Reset)
+        );
+
+        if !cmd_no_auth && self.session.requires_auth(&self.server.auth_state) {
             let reply = RespFrame::Error(NOAUTH_ERROR.to_string());
             self.apply_existing_client_reply_suppression_to_undispatched_reply();
             self.record_threat_event(ThreatEventInput {
@@ -14348,6 +14358,35 @@ mod tests {
 
         let after_auth = rt.execute_frame(command(&[b"GET", b"k"]), 3);
         assert_eq!(after_auth, RespFrame::BulkString(None));
+    }
+
+    #[test]
+    fn quit_and_reset_bypass_auth_gate_when_unauthenticated() {
+        // Upstream Redis 7.2 commands.def marks AUTH / HELLO / QUIT / RESET
+        // with CMD_NO_AUTH; server.c::processCommand:3911 bypasses the
+        // requires-auth check for them. fr-runtime previously bypassed only
+        // AUTH and HELLO via early-return arms, so unauthenticated callers
+        // saw "NOAUTH Authentication required." for QUIT and RESET despite
+        // upstream allowing them. (frankenredis-mhxwl)
+
+        // QUIT under requirepass with no AUTH succeeds.
+        let mut rt = Runtime::default_strict();
+        rt.add_user(b"alice".to_vec(), b"secret".to_vec());
+        let quit = rt.execute_frame(command(&[b"QUIT"]), 0);
+        assert_eq!(quit, RespFrame::SimpleString("OK".to_string()));
+
+        // RESET under requirepass with no AUTH succeeds with +RESET.
+        let mut rt = Runtime::default_strict();
+        rt.add_user(b"alice".to_vec(), b"secret".to_vec());
+        let reset = rt.execute_frame(command(&[b"RESET"]), 0);
+        assert_eq!(reset, RespFrame::SimpleString("RESET".to_string()));
+
+        // After RESET the auth gate still applies to ordinary commands.
+        let gated = rt.execute_frame(command(&[b"GET", b"k"]), 1);
+        assert_eq!(
+            gated,
+            RespFrame::Error("NOAUTH Authentication required.".to_string())
+        );
     }
 
     #[test]
