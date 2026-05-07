@@ -34144,6 +34144,31 @@ mod tests {
     }
 
     #[test]
+    fn memory_unknown_subcommand_uses_short_wording_and_preserves_casing() {
+        // Pin upstream server.c::commandCheckExistence wording for an
+        // unknown MEMORY subcommand (frankenredis-wlwb): the reply is
+        // the *short* form, "ERR unknown subcommand '<X>'. Try MEMORY
+        // HELP." — distinct from the longer addReplySubcommandSyntaxError
+        // wording. The user-typed subcommand casing must be preserved
+        // verbatim (not lowercased). Differential probe vs vendored
+        // redis 7.2.4 confirmed both wording and casing.
+        let mut store = Store::new();
+        let cases: &[(&[u8], &str)] = &[
+            (b"NoSuch", "ERR unknown subcommand 'NoSuch'. Try MEMORY HELP."),
+            (b"nosuch", "ERR unknown subcommand 'nosuch'. Try MEMORY HELP."),
+            (b"BOGUS", "ERR unknown subcommand 'BOGUS'. Try MEMORY HELP."),
+        ];
+        for (sub, expected) in cases {
+            let argv = vec![b"MEMORY".to_vec(), sub.to_vec()];
+            let frame = dispatch_argv(&argv, &mut store, 0).expect("memory unknown sub");
+            match frame {
+                RespFrame::Error(s) => assert_eq!(&s, *expected, "sub={sub:?}"),
+                other => panic!("expected Error frame, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn memory_stats_under_resp3_returns_map_shape() {
         // (frankenredis-udl3y) Upstream object.c::memoryCommand uses
         // addReplyMapLen, so the RESP3 wire shape is a Map of (key,
