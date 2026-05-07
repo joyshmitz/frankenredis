@@ -11519,6 +11519,49 @@ slave_priority:{}\r\n",
         } else if argv.len() < 3 {
             return CommandError::WrongArity("PSYNC").to_resp();
         }
+        // Upstream replication.c::syncCommand:941-963 handles
+        // `PSYNC <replid> <offset> FAILOVER` as a failover-promotion
+        // request. Order is: master rejects ("PSYNC FAILOVER can't be
+        // sent to a master."); replica with mismatching replid rejects
+        // ("PSYNC FAILOVER replid must match my replid."); replica with
+        // matching replid is promoted via replicationUnsetMaster. fr
+        // implements the two rejection arms here as a parity guard;
+        // the matching-replid promotion path is more involved (it
+        // needs to drain the replication backlog and transition role
+        // through the replica→master state machine) and is tracked as
+        // a follow-up. (frankenredis-ql4cc)
+        if !is_sync
+            && argv.len() > 3
+            && argv[3].eq_ignore_ascii_case(b"FAILOVER")
+        {
+            match &self.server.replication_runtime_state.role {
+                ReplicationRoleState::Master => {
+                    return RespFrame::Error(
+                        "ERR PSYNC FAILOVER can't be sent to a master.".to_string(),
+                    );
+                }
+                ReplicationRoleState::Replica { .. } => {
+                    let our_replid =
+                        self.server.replication_runtime_state.backlog.replid.as_str();
+                    let requested_replid = match std::str::from_utf8(&argv[1]) {
+                        Ok(s) => s,
+                        Err(_) => return CommandError::InvalidUtf8Argument.to_resp(),
+                    };
+                    if !requested_replid.eq_ignore_ascii_case(our_replid) {
+                        return RespFrame::Error(
+                            "ERR PSYNC FAILOVER replid must match my replid."
+                                .to_string(),
+                        );
+                    }
+                    // Matching-replid promotion is intentionally not
+                    // implemented in this tick. Fall through so the
+                    // request still reaches the existing PSYNC machinery
+                    // — which will trip the NOMASTERLINK guard if the
+                    // replica isn't connected to its master, mirroring
+                    // upstream's downstream checks.
+                }
+            }
+        }
         // Upstream replication.c::syncCommand:971-976 rejects PSYNC/SYNC
         // when fr is itself a replica and the master link isn't fully
         // connected — serving stale data as a sync source would break
@@ -17078,6 +17121,47 @@ mod tests {
             rt.execute_frame(command(&[b"PSYNC", b"?", b"-1", b"extra"]), 0),
             RespFrame::SimpleString(
                 "FULLRESYNC 0000000000000000000000000000000000000000 0".to_string()
+            )
+        );
+    }
+
+    // (frankenredis-ql4cc) Mirror upstream replication.c::syncCommand:941-963
+    // PSYNC FAILOVER handling: master rejects, replica with mismatched
+    // replid rejects.
+    #[test]
+    fn psync_failover_rejected_on_master_role() {
+        let mut rt = Runtime::default_strict();
+        let reply = rt.execute_frame(command(&[b"PSYNC", b"?", b"-1", b"FAILOVER"]), 0);
+        assert_eq!(
+            reply,
+            RespFrame::Error("ERR PSYNC FAILOVER can't be sent to a master.".to_string())
+        );
+        // Case-insensitive on the FAILOVER token.
+        let reply_lc = rt.execute_frame(command(&[b"PSYNC", b"?", b"-1", b"failover"]), 1);
+        assert_eq!(
+            reply_lc,
+            RespFrame::Error("ERR PSYNC FAILOVER can't be sent to a master.".to_string())
+        );
+    }
+
+    #[test]
+    fn psync_failover_rejected_when_replica_replid_mismatches() {
+        let mut rt = Runtime::default_strict();
+        // Enter Replica role. Initial state is "connect" so the
+        // NOMASTERLINK guard would normally fire — but the FAILOVER
+        // replid-match check runs first per upstream order.
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"6380"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        // Mismatched replid → dedicated error.
+        let mismatch =
+            rt.execute_frame(command(&[b"PSYNC", b"deadbeef", b"-1", b"FAILOVER"]), 1);
+        assert_eq!(
+            mismatch,
+            RespFrame::Error(
+                "ERR PSYNC FAILOVER replid must match my replid.".to_string()
             )
         );
     }
