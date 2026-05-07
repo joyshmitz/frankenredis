@@ -29852,6 +29852,105 @@ mod tests {
     }
 
     #[test]
+    fn scan_family_rejects_novalues_except_hscan_and_function_list_libraryname_wording() {
+        // Pin upstream parity for two scoped wording divergences
+        // (frankenredis-bvw2):
+        //
+        // (a) NOVALUES is a Redis 7.4 HSCAN-only option; SCAN/SSCAN/
+        //     ZSCAN must reject it as 'ERR syntax error'. Source-level
+        //     guard at parse_scan_args_with_novalues + per-call sites
+        //     passing accept_novalues=false. Differential probe vs
+        //     vendored 7.2.4 confirmed (with populated keys, since
+        //     missing-key short-circuits to empty-scan before parse).
+        // (b) FUNCTION LIST LIBRARYNAME with no argument must reply
+        //     'ERR library name argument was not given' (not the
+        //     generic syntax error).
+        let mut store = Store::new();
+
+        // Seed populated keys so SSCAN/ZSCAN reach parse_scan_args
+        // (missing keys legitimately return empty-scan).
+        dispatch_argv(
+            &[
+                b"SADD".to_vec(),
+                b"s".to_vec(),
+                b"a".to_vec(),
+                b"b".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("sadd seed");
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("zadd seed");
+        dispatch_argv(
+            &[
+                b"HSET".to_vec(),
+                b"h".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hset seed");
+
+        let novalues_reject_cases: &[&[&[u8]]] = &[
+            &[b"SCAN", b"0", b"NOVALUES"],
+            &[b"SSCAN", b"s", b"0", b"NOVALUES"],
+            &[b"ZSCAN", b"z", b"0", b"NOVALUES"],
+        ];
+        for argv_in in novalues_reject_cases {
+            let argv: Vec<Vec<u8>> = argv_in.iter().map(|b| b.to_vec()).collect();
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("scan novalues");
+            assert_eq!(
+                err,
+                CommandError::SyntaxError,
+                "argv={argv_in:?} should reject NOVALUES with syntax error"
+            );
+        }
+
+        // HSCAN keeps NOVALUES as a Redis 7.4 forward-compat feature
+        // (intentional divergence from 7.2.4 — separate parity decision).
+        let hscan_ok = dispatch_argv(
+            &[
+                b"HSCAN".to_vec(),
+                b"h".to_vec(),
+                b"0".to_vec(),
+                b"NOVALUES".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("hscan novalues forward-compat");
+        assert!(matches!(hscan_ok, RespFrame::Array(Some(_))));
+
+        // FUNCTION LIST LIBRARYNAME with no argument: dedicated wording.
+        let func_err = dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LIST".to_vec(),
+                b"LIBRARYNAME".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("function list libraryname missing arg");
+        assert_eq!(
+            func_err,
+            CommandError::Custom("ERR library name argument was not given".to_string())
+        );
+    }
+
+    #[test]
     fn parse_f64_arg_rejects_overflow_to_infinity_like_redis() {
         // Pin upstream util.c::string2d ERANGE rejection for
         // overflow-to-infinity (frankenredis-uxwm). Rust's parse::<f64>
