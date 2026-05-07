@@ -12760,7 +12760,15 @@ fn info(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, C
     // Cluster section
     if section_requested("cluster") {
         info.push_str("# Cluster\r\n");
-        info.push_str("cluster_enabled:0\r\n");
+        // Upstream server.c::genRedisInfoString reports cluster_enabled
+        // from server.cluster_enabled; fr previously hardcoded 0 so a
+        // cluster-mode instance still showed cluster_enabled:0.
+        // (frankenredis-5w0rd)
+        info.push_str(if store.cluster_enabled {
+            "cluster_enabled:1\r\n"
+        } else {
+            "cluster_enabled:0\r\n"
+        });
         info.push_str("\r\n");
     }
 
@@ -32877,6 +32885,33 @@ mod tests {
         assert!(info.contains("# Server\r\n"));
         assert!(info.contains("# Clients\r\n"));
         assert!(!info.contains("# Memory\r\n"));
+    }
+
+    // (frankenredis-5w0rd) Upstream server.c::genRedisInfoString emits
+    // cluster_enabled from server.cluster_enabled; fr previously
+    // hardcoded the value to 0 so a cluster-mode instance reported
+    // cluster_enabled:0 in its INFO cluster section.
+    #[test]
+    fn info_cluster_section_reflects_store_cluster_enabled() {
+        let mut store = Store::new();
+        // Default — cluster off → cluster_enabled:0.
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"cluster".to_vec()], &mut store, 0)
+            .expect("info cluster off");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8 info");
+        assert!(info.contains("cluster_enabled:0\r\n"), "got {info:?}");
+
+        // Flip the store flag — INFO must now report cluster_enabled:1.
+        store.cluster_enabled = true;
+        let out = dispatch_argv(&[b"INFO".to_vec(), b"cluster".to_vec()], &mut store, 0)
+            .expect("info cluster on");
+        let RespFrame::BulkString(Some(bytes)) = out else {
+            panic!("expected bulk string"); // ubs:ignore — AI triage
+        };
+        let info = String::from_utf8(bytes).expect("utf8 info");
+        assert!(info.contains("cluster_enabled:1\r\n"), "got {info:?}");
     }
 
     #[test]
