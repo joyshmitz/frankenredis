@@ -45072,6 +45072,62 @@ mod tests {
     }
 
     #[test]
+    fn function_flush_extra_args_and_restore_bad_payload_match_upstream() {
+        // Pins two upstream wordings caught by differential probe vs
+        // vendored 7.2.4 (frankenredis-ngn0):
+        //   - FUNCTION FLUSH SYNC EXTRA -> "unknown subcommand or
+        //     wrong number of arguments for 'FLUSH'. Try FUNCTION HELP."
+        //     (functions.c::functionsCommand falls through to the
+        //     subcommand-form addReplySubcommandSyntaxError envelope,
+        //     not the generic wrong-arity reply.)
+        //   - FUNCTION RESTORE <garbage> -> "DUMP payload version or
+        //     checksum are wrong" (cluster.c::verifyDumpPayload guard
+        //     reuses the DUMP payload validator wording.)
+        let mut store = Store::new();
+
+        let err = dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"FLUSH".to_vec(),
+                b"SYNC".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'FLUSH'. Try FUNCTION HELP."
+                    .to_string(),
+            )
+        );
+
+        let restore_bad = dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"RESTORE".to_vec(),
+                b"not-a-real-dump".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let err_msg = match restore_bad {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(
+            err_msg,
+            "ERR DUMP payload version or checksum are wrong".to_string(),
+        );
+    }
+
+    #[test]
     fn function_dump_restore_roundtrip_via_command_path() {
         let mut store = Store::new();
         let library = b"#!lua name=roundtriplib\nredis.register_function('roundtrip_echo', function(keys, args) return args[1] end)";
