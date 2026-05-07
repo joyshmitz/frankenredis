@@ -29920,6 +29920,46 @@ mod tests {
     }
 
     #[test]
+    fn eval_ro_evalsha_ro_wrong_arity_uses_ro_suffix() {
+        // Pin upstream commands.def: EVAL_RO and EVALSHA_RO are
+        // distinct commands with arity = -3, so their WrongArity
+        // replies render with the lowercase '_ro' suffix
+        // (frankenredis-7pwz). Verifying the writeable EVAL/EVALSHA
+        // forms still emit the bare names.
+        let mut store = Store::new();
+
+        let cases: &[(&[&[u8]], &str)] = &[
+            (&[b"EVAL"], "ERR wrong number of arguments for 'eval' command"),
+            (
+                &[b"EVAL_RO"],
+                "ERR wrong number of arguments for 'eval_ro' command",
+            ),
+            (
+                &[b"EVALSHA"],
+                "ERR wrong number of arguments for 'evalsha' command",
+            ),
+            (
+                &[b"EVALSHA_RO"],
+                "ERR wrong number of arguments for 'evalsha_ro' command",
+            ),
+        ];
+
+        for (argv_in, expected) in cases {
+            let argv: Vec<Vec<u8>> = argv_in.iter().map(|s| s.to_vec()).collect();
+            let result = dispatch_argv(&argv, &mut store, 0);
+            let got = match result {
+                Ok(RespFrame::Error(s)) => s,
+                Err(e) => match e.to_resp() {
+                    RespFrame::Error(s) => s,
+                    other => panic!("expected error frame, got {other:?}"),
+                },
+                other => panic!("expected error frame for {argv_in:?}, got {other:?}"),
+            };
+            assert_eq!(&got, *expected, "argv: {argv_in:?}");
+        }
+    }
+
+    #[test]
     fn xpending_arity_validation_matches_upstream() {
         // Pin upstream xpendingCommand arity validation
         // (frankenredis-nslr): argc ∈ {3, 6, 7, 8, 9} OK; argc=4 and
