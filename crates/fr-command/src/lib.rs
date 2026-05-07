@@ -47338,6 +47338,45 @@ mod tests {
     }
 
     #[test]
+    fn geodist_extra_args_match_upstream_syntax_error() {
+        // Pin upstream geo.c::geodistCommand: arity = -4 in
+        // commands.def, and the handler explicitly emits syntaxerr
+        // for argc > 5. Generic wrong-arity is the regression.
+        // (frankenredis-b6yj)
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"GEOADD".to_vec(),
+                b"g".to_vec(),
+                b"13".to_vec(),
+                b"38".to_vec(),
+                b"a".to_vec(),
+                b"14".to_vec(),
+                b"39".to_vec(),
+                b"b".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let extra = dispatch_argv(
+            &[
+                b"GEODIST".to_vec(),
+                b"g".to_vec(),
+                b"a".to_vec(),
+                b"b".to_vec(),
+                b"KM".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("geodist extra");
+        assert_eq!(extra, CommandError::SyntaxError);
+    }
+
+    #[test]
     fn geosearch_byradius_bybox_numeric_wording_matches_upstream() {
         // Pin upstream geo.c::extractDistanceOrReply ("need numeric
         // radius") and extractBoxOrReply ("need numeric width" /
