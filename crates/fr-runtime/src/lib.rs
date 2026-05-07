@@ -6092,7 +6092,17 @@ impl Runtime {
                 }
             }
         } else if self.session.requires_auth(&self.server.auth_state) {
-            return RespFrame::Error(NOAUTH_ERROR.to_string());
+            // Upstream networking.c::helloCommand:3586-3592 emits a
+            // HELLO-specific hint message instead of the generic NOAUTH
+            // "Authentication required." text — pointing callers at the
+            // inline AUTH form. (frankenredis-qvouv)
+            return RespFrame::Error(
+                "NOAUTH HELLO must be called with the client already \
+                 authenticated, otherwise the HELLO <proto> AUTH <user> <pass> \
+                 option can be used to authenticate the client and \
+                 select the RESP protocol version at the same time"
+                    .to_string(),
+            );
         }
 
         if let Some(client_name) = next_client_name {
@@ -14457,6 +14467,49 @@ mod tests {
             gated,
             RespFrame::Error("NOAUTH Authentication required.".to_string())
         );
+    }
+
+    #[test]
+    fn hello_without_auth_on_requirepass_server_returns_hello_specific_hint() {
+        // Upstream networking.c::helloCommand:3586-3592 emits a HELLO-
+        // specific NOAUTH hint pointing callers at the HELLO <proto>
+        // AUTH <user> <pass> form, rather than the generic
+        // "NOAUTH Authentication required." used by other commands.
+        // (frankenredis-qvouv)
+        let mut rt = Runtime::default_strict();
+        rt.add_user(b"alice".to_vec(), b"secret".to_vec());
+
+        // Bare HELLO 2 without AUTH must surface the hint.
+        let bare = rt.execute_frame(command(&[b"HELLO", b"2"]), 0);
+        assert_eq!(
+            bare,
+            RespFrame::Error(
+                "NOAUTH HELLO must be called with the client already \
+                 authenticated, otherwise the HELLO <proto> AUTH <user> <pass> \
+                 option can be used to authenticate the client and \
+                 select the RESP protocol version at the same time"
+                    .to_string()
+            ),
+            "bare HELLO without AUTH on requirepass server must hint inline AUTH form"
+        );
+
+        // HELLO 3 same.
+        let bare3 = rt.execute_frame(command(&[b"HELLO", b"3"]), 1);
+        assert!(
+            matches!(&bare3, RespFrame::Error(s) if s.starts_with("NOAUTH HELLO must")),
+            "HELLO 3 without AUTH must hint, got: {bare3:?}"
+        );
+
+        // HELLO 2 AUTH <user> <pass> still authenticates and switches
+        // protocol — confirms the fix didn't break the inline form.
+        let inline = rt.execute_frame(
+            command(&[b"HELLO", b"2", b"AUTH", b"alice", b"secret"]),
+            2,
+        );
+        let RespFrame::Array(_) = &inline else {
+            panic!("expected RESP2 Array from HELLO 2 AUTH, got {inline:?}");
+        };
+        assert!(rt.is_authenticated());
     }
 
     #[test]
