@@ -9148,8 +9148,12 @@ fn fcall_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             "fcall"
         }));
     }
+    // Upstream FCALL/FCALL_RO carry CMD_NOSCRIPT — mirror script.c
+    // ordering so scripted calls surface the noscript reply BEFORE
+    // any handler-level parsing. The previous code remapped the
+    // numkeys parse error via fcall_map_eval_arg_error, masking
+    // the canonical noscript wording. (frankenredis-7j2cw)
     if store.script_nesting_level >= 1 {
-        parse_eval_args(argv).map_err(fcall_map_eval_arg_error)?;
         return Err(script_noscript_command_error());
     }
     let func_name = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -16709,14 +16713,19 @@ fn eval_cmd(
             "EVAL"
         }));
     }
+    // Upstream commands.def declares EVAL with CMD_NOSCRIPT, so
+    // server.c::processCommand emits the noscript reply BEFORE the
+    // handler runs. Mirror that order so a scripted call with bad
+    // numkeys or a malformed shebang surfaces the noscript error
+    // rather than the parse / shebang error. (frankenredis-7j2cw)
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     let script = &argv[1];
     if let Err(msg) = script_shebang_invalid_error(script) {
         return Ok(RespFrame::Error(msg));
     }
     let (_numkeys, keys, args) = parse_eval_args(argv)?;
-    if store.script_nesting_level >= 1 {
-        return Err(script_noscript_command_error());
-    }
 
     // Cache the script (Redis caches on EVAL too)
     store.script_load(script);
@@ -16753,11 +16762,14 @@ fn evalsha_cmd(
             "EVALSHA"
         }));
     }
-    let sha1 = &argv[1];
-    let (_numkeys, keys, args) = parse_eval_args(argv)?;
+    // Upstream EVALSHA carries CMD_NOSCRIPT — mirror script.c
+    // ordering so scripted bad-numkeys calls surface the noscript
+    // reply, not InvalidInteger. (frankenredis-7j2cw)
     if store.script_nesting_level >= 1 {
         return Err(script_noscript_command_error());
     }
+    let sha1 = &argv[1];
+    let (_numkeys, keys, args) = parse_eval_args(argv)?;
 
     // Look up script by SHA1
     let script = match store.script_get(sha1) {
@@ -34860,7 +34872,14 @@ mod tests {
     }
 
     #[test]
-    fn nested_scripting_commands_return_noscript_after_validation() {
+    fn nested_scripting_commands_return_noscript_after_arity_check() {
+        // (frankenredis-7j2cw) Upstream commands.def marks
+        // EVAL/EVALSHA/FCALL/FCALL_RO with CMD_NOSCRIPT, and
+        // script.c::scriptCommand at legacy_redis_code/redis/src/
+        // script.c:524-532 evaluates arity FIRST and CMD_NOSCRIPT
+        // SECOND — both before the handler runs. So inside a
+        // script: arity wins over noscript, but noscript wins over
+        // every handler-level parse / shebang / lookup error.
         let mut store = Store::new();
         store.script_nesting_level = 1;
 
@@ -34883,18 +34902,15 @@ mod tests {
             assert_eq!(err, expected, "argv: {argv:?}");
         }
 
-        let integer_cases = [
+        // Every arity-correct scripted EVAL/EVALSHA/FCALL/FCALL_RO
+        // call — including bad numkeys — surfaces the noscript
+        // reply (was returning InvalidInteger / 'Bad number of keys
+        // provided' before frankenredis-7j2cw moved the guard up).
+        let noscript_cases = [
             vec![b"EVAL".to_vec(), b"return 1".to_vec(), b"abc".to_vec()],
             vec![b"EVALSHA".to_vec(), b"deadbeef".to_vec(), b"abc".to_vec()],
             vec![b"FCALL".to_vec(), b"func".to_vec(), b"abc".to_vec()],
             vec![b"FCALL_RO".to_vec(), b"func".to_vec(), b"abc".to_vec()],
-        ];
-        for argv in integer_cases {
-            let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
-            assert_eq!(err, CommandError::InvalidInteger, "argv: {argv:?}");
-        }
-
-        let noscript_cases = [
             vec![b"EVAL".to_vec(), b"return 1".to_vec(), b"0".to_vec()],
             vec![b"EVAL_RO".to_vec(), b"return 1".to_vec(), b"0".to_vec()],
             vec![b"EVALSHA".to_vec(), b"deadbeef".to_vec(), b"0".to_vec()],
