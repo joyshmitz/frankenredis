@@ -17119,18 +17119,29 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             });
         }
         Ok(RespFrame::Array(Some(vec![
-            hello_bulk("DEBUG <subcommand> [<arg> ...]. Subcommands are:"),
-            hello_bulk("OBJECT <key> - Return low-level info about <key>."),
-            hello_bulk("DIGEST - Return a hex digest of the entire database."),
-            hello_bulk("DIGEST-VALUE <key> [<key> ...] - Return hex digest of specific keys."),
-            hello_bulk("POPULATE <count> [<prefix>] [<size>] - Create <count> dummy keys."),
-            hello_bulk("SLEEP <seconds> - Sleep for <seconds>."),
-            hello_bulk("RELOAD - Save and reload the database."),
-            hello_bulk("SET-ACTIVE-EXPIRE 0|1 - Disable/enable active expiry."),
-            hello_bulk("PANIC - Abort the server process immediately."),
-            hello_bulk("SEGFAULT - Abort the server process immediately."),
-            hello_bulk("OOM - Abort via the allocation failure handler."),
-            hello_bulk("HELP - Return this help."),
+            hello_simple("DEBUG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("OBJECT <key>"),
+            hello_simple("    Return low-level info about <key>."),
+            hello_simple("DIGEST"),
+            hello_simple("    Return a hex digest of the entire database."),
+            hello_simple("DIGEST-VALUE <key> [<key> ...]"),
+            hello_simple("    Return hex digest of specific keys."),
+            hello_simple("POPULATE <count> [<prefix>] [<size>]"),
+            hello_simple("    Create <count> dummy keys."),
+            hello_simple("SLEEP <seconds>"),
+            hello_simple("    Sleep for <seconds>."),
+            hello_simple("RELOAD"),
+            hello_simple("    Save and reload the database."),
+            hello_simple("SET-ACTIVE-EXPIRE 0|1"),
+            hello_simple("    Disable/enable active expiry."),
+            hello_simple("PANIC"),
+            hello_simple("    Abort the server process immediately."),
+            hello_simple("SEGFAULT"),
+            hello_simple("    Abort the server process immediately."),
+            hello_simple("OOM"),
+            hello_simple("    Abort via the allocation failure handler."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])))
     } else if sub.eq_ignore_ascii_case("PANIC") || sub.eq_ignore_ascii_case("SEGFAULT") {
         std::process::abort();
@@ -35045,28 +35056,22 @@ mod tests {
         let RespFrame::Array(Some(items)) = out else {
             panic!("expected array"); // ubs:ignore — AI triage
         };
-        assert!(
-            items.contains(&RespFrame::BulkString(Some(
-                b"DIGEST - Return a hex digest of the entire database.".to_vec(),
-            ))),
+        assert_eq!(
+            items.first(),
+            Some(&RespFrame::SimpleString(
+                "DEBUG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string(),
+            )),
             "{items:?}"
         );
-        assert!(
-            items.contains(&RespFrame::BulkString(Some(
-                b"PANIC - Abort the server process immediately.".to_vec(),
-            ))),
-            "{items:?}"
-        );
-        assert!(
-            items.contains(&RespFrame::BulkString(Some(
-                b"SEGFAULT - Abort the server process immediately.".to_vec(),
-            ))),
-            "{items:?}"
-        );
-        assert!(
-            items.contains(&RespFrame::BulkString(Some(
-                b"OOM - Abort via the allocation failure handler.".to_vec(),
-            ))),
+        for sub in ["DIGEST", "PANIC", "SEGFAULT", "OOM"] {
+            assert!(
+                items.contains(&RespFrame::SimpleString(sub.to_string())),
+                "missing {sub}: {items:?}"
+            );
+        }
+        assert_eq!(
+            items.last(),
+            Some(&RespFrame::SimpleString("    Print this help.".to_string())),
             "{items:?}"
         );
     }
