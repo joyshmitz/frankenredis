@@ -4932,6 +4932,15 @@ fn parse_geo_search_flags(
         }
         i += 1;
     }
+    // Upstream geo.c::geoSearchGeneric rejects ANY without an
+    // accompanying COUNT argument with the dedicated wording.
+    // fr previously set any=true unconditionally and silently
+    // ignored the missing-COUNT case. (frankenredis-geoanyc)
+    if any && count.is_none() {
+        return Err(CommandError::Custom(
+            "ERR the ANY argument requires COUNT argument".to_string(),
+        ));
+    }
     Ok((withcoord, withdist, withhash, count, any, asc, to_meter))
 }
 
@@ -49480,6 +49489,89 @@ mod tests {
         )
         .expect_err("geodist extra");
         assert_eq!(extra, CommandError::SyntaxError);
+    }
+
+    #[test]
+    fn geosearch_any_without_count_is_rejected_like_upstream() {
+        // Pin upstream geo.c::geoSearchGeneric rejection of ANY without
+        // an accompanying COUNT argument: 'ERR the ANY argument requires
+        // COUNT argument'. fr previously parsed ANY=true silently and
+        // ignored the missing COUNT, executing as if ANY were absent.
+        // Differential probe vs vendored 7.2.4 confirmed for
+        // GEORADIUS / GEORADIUSBYMEMBER / GEOSEARCH (and their _RO /
+        // STORE / STOREDIST variants which share parse_geo_search_flags).
+        // (frankenredis-geoanyc)
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"GEOADD".to_vec(),
+                b"g".to_vec(),
+                b"13.5".to_vec(),
+                b"38.0".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let expected = CommandError::Custom(
+            "ERR the ANY argument requires COUNT argument".to_string(),
+        );
+        let cases: &[&[&[u8]]] = &[
+            &[
+                b"GEORADIUS", b"g", b"13.5", b"38.0", b"100", b"km", b"ANY",
+            ],
+            &[
+                b"GEORADIUSBYMEMBER", b"g", b"a", b"100", b"km", b"ANY",
+            ],
+            &[
+                b"GEOSEARCH",
+                b"g",
+                b"FROMMEMBER",
+                b"a",
+                b"BYRADIUS",
+                b"100",
+                b"km",
+                b"ANY",
+            ],
+            &[
+                b"GEOSEARCH",
+                b"g",
+                b"FROMLONLAT",
+                b"13.5",
+                b"38.0",
+                b"BYBOX",
+                b"100",
+                b"100",
+                b"km",
+                b"ANY",
+            ],
+        ];
+        for argv_in in cases {
+            let argv: Vec<Vec<u8>> = argv_in.iter().map(|s| s.to_vec()).collect();
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("ANY w/o COUNT");
+            assert_eq!(err, expected, "argv={argv_in:?}");
+        }
+
+        // Sanity: ANY *with* COUNT must still parse cleanly.
+        let ok = dispatch_argv(
+            &[
+                b"GEORADIUS".to_vec(),
+                b"g".to_vec(),
+                b"13.5".to_vec(),
+                b"38.0".to_vec(),
+                b"100".to_vec(),
+                b"km".to_vec(),
+                b"COUNT".to_vec(),
+                b"5".to_vec(),
+                b"ANY".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("ANY with COUNT");
+        assert!(matches!(ok, RespFrame::Array(Some(_))));
     }
 
     #[test]
