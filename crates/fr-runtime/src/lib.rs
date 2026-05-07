@@ -11304,6 +11304,26 @@ slave_priority:{}\r\n",
         if argv.len() != 3 {
             return CommandError::WrongArity(replicaof_command_name(argv)).to_resp();
         }
+        // Upstream replication.c::replicaofCommand:3140-3143 rejects in
+        // cluster mode FIRST, before any other validation, since
+        // replication topology is governed by CLUSTER MEET/REPLICATE in
+        // that mode. (frankenredis-cikty)
+        if self.server.store.cluster_enabled {
+            return RespFrame::Error("ERR REPLICAOF not allowed in cluster mode.".to_string());
+        }
+        // Upstream replication.c::replicaofCommand:3164-3170 rejects when
+        // the issuing client is itself a connected replica, because the
+        // command flushes all connected replicas — including the caller.
+        // fr's NO-ONE branch can't safely run on a replica session anyway,
+        // so we apply this check BEFORE the NO-ONE special case (upstream
+        // applies it only on the host/port path; collapsing here is safe
+        // since a replica calling NO-ONE would self-flush).
+        // (frankenredis-cikty)
+        if self.is_replica(self.session.client_id) {
+            return RespFrame::Error(
+                "ERR Command is not valid when client is a replica.".to_string(),
+            );
+        }
         let host = String::from_utf8_lossy(&argv[1]).into_owned();
         let port = String::from_utf8_lossy(&argv[2]).into_owned();
         if host.eq_ignore_ascii_case("NO") && port.eq_ignore_ascii_case("ONE") {
@@ -16847,6 +16867,65 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"+6379"]), 0),
             RespFrame::Error("ERR Invalid master port".to_string())
+        );
+    }
+
+    #[test]
+    fn replicaof_rejected_in_cluster_mode_and_when_client_is_replica() {
+        // Upstream replication.c::replicaofCommand:3140-3143 rejects in
+        // cluster mode FIRST, then later (lines 3164-3170) rejects when
+        // the issuing client is itself a connected replica. fr-runtime
+        // now mirrors both. (frankenredis-cikty)
+
+        // Cluster mode rejection.
+        let mut rt = Runtime::default_strict();
+        rt.server.store.cluster_enabled = true;
+        let cluster_reject = rt.execute_frame(
+            command(&[b"REPLICAOF", b"127.0.0.1", b"6380"]),
+            0,
+        );
+        assert_eq!(
+            cluster_reject,
+            RespFrame::Error("ERR REPLICAOF not allowed in cluster mode.".to_string())
+        );
+        // Same rejection for SLAVEOF alias and NO ONE.
+        let cluster_reject_slave = rt.execute_frame(
+            command(&[b"SLAVEOF", b"NO", b"ONE"]),
+            1,
+        );
+        assert_eq!(
+            cluster_reject_slave,
+            RespFrame::Error("ERR REPLICAOF not allowed in cluster mode.".to_string())
+        );
+
+        // Replica-session rejection (cluster_enabled=false).
+        let mut rt = Runtime::default_strict();
+        rt.session.client_id = 7;
+        rt.server
+            .replication_runtime_state
+            .ensure_replica(rt.session.client_id);
+        assert!(rt.is_replica(rt.session.client_id));
+        let replica_reject = rt.execute_frame(
+            command(&[b"REPLICAOF", b"127.0.0.1", b"6380"]),
+            0,
+        );
+        assert_eq!(
+            replica_reject,
+            RespFrame::Error(
+                "ERR Command is not valid when client is a replica.".to_string()
+            )
+        );
+        // Same error path covers REPLICAOF NO ONE since the gate fires
+        // before the NO-ONE special case.
+        let replica_reject_no_one = rt.execute_frame(
+            command(&[b"REPLICAOF", b"NO", b"ONE"]),
+            1,
+        );
+        assert_eq!(
+            replica_reject_no_one,
+            RespFrame::Error(
+                "ERR Command is not valid when client is a replica.".to_string()
+            )
         );
     }
 
