@@ -15550,18 +15550,31 @@ fn slowlog_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, Command
                 subcommand: "HELP".to_string(),
             });
         }
+        // (frankenredis-8bn79) Mirror upstream slowlog.c::slowlogCommand
+        // help[] array (lines 144-154) wrapped by the addReplyHelp
+        // envelope at networking.c::addReplyHelp (lines 1123-1141).
+        // Frames are SimpleString (addReplyStatus); the header includes
+        // '[opt] ' and the standard 'HELP' / '    Print this help.'
+        // footer is appended automatically upstream.
         Ok(RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(
-                b"SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"GET [<count>] - Return the slow log entries.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"LEN - Return the number of entries in the slow log.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(b"RESET - Reset the slow log.".to_vec())),
-            RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
+            hello_simple(
+                "SLOWLOG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+            ),
+            hello_simple("GET [<count>]"),
+            hello_simple(
+                "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
+            ),
+            hello_simple("    Entries are made of:"),
+            hello_simple(
+                "    id, timestamp, time in microseconds, arguments array, client IP and port,",
+            ),
+            hello_simple("    client name"),
+            hello_simple("LEN"),
+            hello_simple("    Return the length of the slowlog."),
+            hello_simple("RESET"),
+            hello_simple("    Reset the slowlog."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])))
     } else {
         Err(CommandError::UnknownSubcommand {

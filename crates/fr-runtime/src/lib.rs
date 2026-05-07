@@ -9690,18 +9690,31 @@ impl Runtime {
                 }
                 .to_resp();
             }
+            // (frankenredis-8bn79) Mirror upstream slowlog.c help[]
+            // wrapped by addReplyHelp envelope. Frames are SimpleString
+            // (addReplyStatus) — fr previously emitted BulkString with
+            // invented wording.
             RespFrame::Array(Some(vec![
-                RespFrame::BulkString(Some(
-                    b"SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
-                )),
-                RespFrame::BulkString(Some(
-                    b"GET [<count>] - Return the slow log entries.".to_vec(),
-                )),
-                RespFrame::BulkString(Some(
-                    b"LEN - Return the number of entries in the slow log.".to_vec(),
-                )),
-                RespFrame::BulkString(Some(b"RESET - Reset the slow log.".to_vec())),
-                RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
+                RespFrame::SimpleString(
+                    "SLOWLOG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string(),
+                ),
+                RespFrame::SimpleString("GET [<count>]".to_string()),
+                RespFrame::SimpleString(
+                    "    Return top <count> entries from the slowlog (default: 10, -1 mean all)."
+                        .to_string(),
+                ),
+                RespFrame::SimpleString("    Entries are made of:".to_string()),
+                RespFrame::SimpleString(
+                    "    id, timestamp, time in microseconds, arguments array, client IP and port,"
+                        .to_string(),
+                ),
+                RespFrame::SimpleString("    client name".to_string()),
+                RespFrame::SimpleString("LEN".to_string()),
+                RespFrame::SimpleString("    Return the length of the slowlog.".to_string()),
+                RespFrame::SimpleString("RESET".to_string()),
+                RespFrame::SimpleString("    Reset the slowlog.".to_string()),
+                RespFrame::SimpleString("HELP".to_string()),
+                RespFrame::SimpleString("    Print this help.".to_string()),
             ]))
         } else {
             CommandError::UnknownSubcommand {

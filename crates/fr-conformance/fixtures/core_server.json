@@ -1405,7 +1405,7 @@
       ],
       "expect": {
         "kind": "bulk",
-        "value": "Memory allocator stats not available"
+        "value": "Stats not supported for the current allocator"
       }
     },
     {
@@ -1865,24 +1865,52 @@
         "kind": "array",
         "value": [
           {
-            "kind": "bulk",
-            "value": "SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:"
+            "kind": "simple",
+            "value": "SLOWLOG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"
           },
           {
-            "kind": "bulk",
-            "value": "GET [<count>] - Return the slow log entries."
+            "kind": "simple",
+            "value": "GET [<count>]"
           },
           {
-            "kind": "bulk",
-            "value": "LEN - Return the number of entries in the slow log."
+            "kind": "simple",
+            "value": "    Return top <count> entries from the slowlog (default: 10, -1 mean all)."
           },
           {
-            "kind": "bulk",
-            "value": "RESET - Reset the slow log."
+            "kind": "simple",
+            "value": "    Entries are made of:"
           },
           {
-            "kind": "bulk",
-            "value": "HELP - Return subcommand help summary."
+            "kind": "simple",
+            "value": "    id, timestamp, time in microseconds, arguments array, client IP and port,"
+          },
+          {
+            "kind": "simple",
+            "value": "    client name"
+          },
+          {
+            "kind": "simple",
+            "value": "LEN"
+          },
+          {
+            "kind": "simple",
+            "value": "    Return the length of the slowlog."
+          },
+          {
+            "kind": "simple",
+            "value": "RESET"
+          },
+          {
+            "kind": "simple",
+            "value": "    Reset the slowlog."
+          },
+          {
+            "kind": "simple",
+            "value": "HELP"
+          },
+          {
+            "kind": "simple",
+            "value": "    Print this help."
           }
         ]
       }
@@ -2058,7 +2086,7 @@
       ],
       "expect": {
         "kind": "bulk",
-        "value": "Memory allocator stats not available"
+        "value": "Stats not supported for the current allocator"
       }
     },
     {
@@ -2621,24 +2649,52 @@
         "kind": "array",
         "value": [
           {
-            "kind": "bulk",
-            "value": "SLOWLOG <subcommand> [<arg> [value] ...]. Subcommands are:"
+            "kind": "simple",
+            "value": "SLOWLOG <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"
           },
           {
-            "kind": "bulk",
-            "value": "GET [<count>] - Return the slow log entries."
+            "kind": "simple",
+            "value": "GET [<count>]"
           },
           {
-            "kind": "bulk",
-            "value": "LEN - Return the number of entries in the slow log."
+            "kind": "simple",
+            "value": "    Return top <count> entries from the slowlog (default: 10, -1 mean all)."
           },
           {
-            "kind": "bulk",
-            "value": "RESET - Reset the slow log."
+            "kind": "simple",
+            "value": "    Entries are made of:"
           },
           {
-            "kind": "bulk",
-            "value": "HELP - Return subcommand help summary."
+            "kind": "simple",
+            "value": "    id, timestamp, time in microseconds, arguments array, client IP and port,"
+          },
+          {
+            "kind": "simple",
+            "value": "    client name"
+          },
+          {
+            "kind": "simple",
+            "value": "LEN"
+          },
+          {
+            "kind": "simple",
+            "value": "    Return the length of the slowlog."
+          },
+          {
+            "kind": "simple",
+            "value": "RESET"
+          },
+          {
+            "kind": "simple",
+            "value": "    Reset the slowlog."
+          },
+          {
+            "kind": "simple",
+            "value": "HELP"
+          },
+          {
+            "kind": "simple",
+            "value": "    Print this help."
           }
         ]
       }
