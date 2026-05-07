@@ -11240,13 +11240,19 @@ fn sintercard(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
     if argv.len() < 3 {
         return Err(CommandError::WrongArity("SINTERCARD"));
     }
-    let numkeys_val = parse_i64_arg(&argv[1])?;
-    if numkeys_val <= 0 {
-        return Ok(RespFrame::Error(
-            "ERR numkeys should be greater than 0".to_string(),
-        ));
-    }
-    let numkeys = usize::try_from(numkeys_val).map_err(|_| CommandError::InvalidInteger)?;
+    // Upstream t_set.c:1451-1453 routes both parse failure and
+    // out-of-range numkeys through getRangeLongFromObjectOrReply with
+    // the 'numkeys should be greater than 0' msg argument, so 'abc',
+    // '0', '-1', and the empty string all share one wording.
+    // (frankenredis-sw76v)
+    let bad_numkeys = || {
+        CommandError::Custom("ERR numkeys should be greater than 0".to_string())
+    };
+    let numkeys_val = match parse_i64_arg(&argv[1]) {
+        Ok(v) if v >= 1 => v,
+        _ => return Err(bad_numkeys()),
+    };
+    let numkeys = usize::try_from(numkeys_val).map_err(|_| bad_numkeys())?;
     let keys_end = 2_usize.saturating_add(numkeys);
     if keys_end > argv.len() {
         return Ok(RespFrame::Error(
@@ -31018,6 +31024,35 @@ mod tests {
         )
         .expect("sintercard limit");
         assert_eq!(out, RespFrame::Integer(1));
+    }
+
+    #[test]
+    fn sintercard_numkeys_validation_matches_redis_wording() {
+        // (frankenredis-sw76v) Upstream t_set.c::sinterCardCommand
+        // routes both parse failure and out-of-range numkeys through
+        // getRangeLongFromObjectOrReply with the canonical
+        // 'numkeys should be greater than 0' msg argument. fr was
+        // surfacing the generic InvalidInteger reply for non-numeric
+        // numkeys values.
+        let mut store = Store::new();
+        for bad in [b"abc".as_slice(), b"".as_slice(), b"0".as_slice(), b"-1".as_slice()] {
+            let err = dispatch_argv(
+                &[
+                    b"SINTERCARD".to_vec(),
+                    bad.to_vec(),
+                    b"s1".to_vec(),
+                    b"s2".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                CommandError::Custom("ERR numkeys should be greater than 0".to_string()),
+                "input: {bad:?}"
+            );
+        }
     }
 
     #[test]
