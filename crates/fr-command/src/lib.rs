@@ -1331,7 +1331,7 @@ pub fn dispatch_argv(
         Some(CommandId::Bgsave) => return bgsave_cmd(argv, store, now_ms),
         Some(CommandId::Bgrewriteaof) => return bgrewriteaof_cmd(argv, store),
         Some(CommandId::Lastsave) => return lastsave_cmd(argv, store),
-        Some(CommandId::Swapdb) => return swapdb_cmd(argv),
+        Some(CommandId::Swapdb) => return swapdb_cmd(argv, store),
         Some(CommandId::Blpop) => return blpop(argv, store, now_ms),
         Some(CommandId::Brpop) => return brpop(argv, store, now_ms),
         Some(CommandId::Blmove) => return blmove(argv, store, now_ms),
@@ -18014,17 +18014,33 @@ fn aggregate_scores_for_cmd(a: f64, b: f64, aggregate: &[u8]) -> f64 {
     }
 }
 
-fn swapdb_cmd(argv: &[Vec<u8>]) -> Result<RespFrame, CommandError> {
+fn swapdb_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError> {
+    // Mirrors fr-runtime::handle_swapdb_command. Upstream
+    // db.c::swapdbCommand uses bespoke wording:
+    //   - 'invalid first DB index'  for unparseable argv[1]
+    //   - 'invalid second DB index' for unparseable argv[2]
+    //   - 'DB index is out of range' for either index >= dbnum
+    // The earlier stub never invoked store.swap_databases, so Lua,
+    // AOF replay, and MULTI/EXEC paths could never swap — same
+    // dispatch_argv-vs-runtime drift family as MOVE/COPY/FLUSHDB/
+    // SELECT. (frankenredis-hpd1h)
     if argv.len() != 3 {
         return Err(CommandError::WrongArity("SWAPDB"));
     }
-    let db1 = parse_i64_arg(&argv[1])?;
-    let db2 = parse_i64_arg(&argv[2])?;
-    if db1 == 0 && db2 == 0 {
-        Ok(RespFrame::SimpleString("OK".to_string()))
-    } else {
-        Ok(RespFrame::Error("ERR invalid DB index".to_string()))
-    }
+    let dbc = store.database_count;
+    let parse_index = |arg: &[u8], invalid: &'static str| -> Result<usize, CommandError> {
+        let parsed = parse_i64_arg(arg).map_err(|_| CommandError::Custom(invalid.to_string()))?;
+        if !(0..dbc as i64).contains(&parsed) {
+            return Err(CommandError::Custom(
+                "ERR DB index is out of range".to_string(),
+            ));
+        }
+        Ok(parsed as usize)
+    };
+    let db1 = parse_index(&argv[1], "ERR invalid first DB index")?;
+    let db2 = parse_index(&argv[2], "ERR invalid second DB index")?;
+    store.swap_databases(db1, db2);
+    Ok(RespFrame::SimpleString("OK".to_string()))
 }
 
 fn blpop(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
@@ -32177,15 +32193,79 @@ mod tests {
     }
 
     #[test]
-    fn swapdb_invalid_db() {
+    fn swapdb_via_dispatch_swaps_keys_and_matches_redis_errors() {
+        // (frankenredis-hpd1h) dispatch_argv path now mirrors
+        // fr-runtime: actual swap, plus three canonical wordings.
+        // Note: fr-command's SET stores at the raw argv[1] — db
+        // namespacing is applied by fr-runtime via
+        // namespace_argv_for_selected_db before the argv reaches
+        // dispatch_argv. Seed db 1 directly via store.set with an
+        // encoded key so the swap path can be verified end-to-end.
         let mut store = Store::new();
+        store.set(
+            fr_store::encode_db_key(1, b"k"),
+            b"v".to_vec(),
+            None,
+            0,
+        );
         let out = dispatch_argv(
             &[b"SWAPDB".to_vec(), b"0".to_vec(), b"1".to_vec()],
             &mut store,
             0,
         )
         .expect("swapdb");
-        assert_eq!(out, RespFrame::Error("ERR invalid DB index".to_string()));
+        assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        // After the swap, the key should be in db 0 (unprefixed).
+        assert_eq!(
+            store.get(b"k", 0).expect("get post-swap"),
+            Some(b"v".to_vec())
+        );
+        // And the prefixed slot must be empty.
+        assert_eq!(
+            store
+                .get(&fr_store::encode_db_key(1, b"k"), 0)
+                .expect("get prefixed"),
+            None
+        );
+
+        // Parse failure on argv[1] surfaces the bespoke first-index wording.
+        for bad in [b"abc".as_slice(), b"".as_slice(), b"99999999999999999999".as_slice()] {
+            let err = dispatch_argv(
+                &[b"SWAPDB".to_vec(), bad.to_vec(), b"0".to_vec()],
+                &mut store,
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                CommandError::Custom("ERR invalid first DB index".to_string()),
+                "argv[1]: {bad:?}"
+            );
+        }
+
+        // Parse failure on argv[2] surfaces the second-index wording.
+        let err = dispatch_argv(
+            &[b"SWAPDB".to_vec(), b"0".to_vec(), b"abc".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom("ERR invalid second DB index".to_string())
+        );
+
+        // Numeric but >= dbnum → out-of-range wording (default dbnum=16).
+        let err = dispatch_argv(
+            &[b"SWAPDB".to_vec(), b"100".to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom("ERR DB index is out of range".to_string())
+        );
     }
 
     #[test]
