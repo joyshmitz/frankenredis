@@ -17251,6 +17251,50 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             return Err(CommandError::WrongArity("DEBUG"));
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("ERROR") {
+        // Upstream debug.c::debugCommand:871-877 builds a raw RESP error
+        // frame from the caller's string with newlines mapped to spaces so
+        // the protocol stays valid. (frankenredis-l2zqy)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'ERROR'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        let msg = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        let sanitized: String = msg
+            .chars()
+            .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+            .collect();
+        Ok(RespFrame::Error(sanitized))
+    } else if sub.eq_ignore_ascii_case("LOG") {
+        // Upstream debug.c::debugCommand:529-531 writes <message> to the
+        // server log at LL_WARNING and replies OK. fr-command doesn't
+        // carry log infra, so accept-and-OK matches the wire contract.
+        // (frankenredis-l2zqy)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'LOG'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        // Validate UTF-8 to mirror error handling for the rest of debug_cmd.
+        let _msg = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("LEAK") {
+        // Upstream debug.c::debugCommand:532-534 leaks an sdsdup of the
+        // argument and returns OK. We accept-and-OK without leaking.
+        // (frankenredis-l2zqy)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'LEAK'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("STRINGMATCH-LEN") {
         // Upstream debug.c spells this `STRINGMATCH-TEST` and runs
         // an in-process fuzz of stringmatchlen() before replying OK.
@@ -35473,6 +35517,70 @@ mod tests {
         assert!(info.contains("serializedlength:"), "{info}");
         assert!(info.contains("lru:"), "{info}");
         assert!(info.contains("lru_seconds_idle:"), "{info}");
+    }
+
+    #[test]
+    fn debug_error_log_leak_subcommands_match_upstream_wire_shapes() {
+        // Upstream debug.c::debugCommand wires:
+        //   ERROR <string> at 871-877 → raw RESP error with newlines mapped
+        //                               to spaces.
+        //   LOG <message>  at 529-531 → +OK (writes to server log at WARNING).
+        //   LEAK <string>  at 532-534 → +OK (sdsdup leak, no client signal).
+        // (frankenredis-l2zqy)
+        let mut store = Store::new();
+
+        let err = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"ERROR".to_vec(), b"foo bar".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("debug error");
+        assert_eq!(err, RespFrame::Error("foo bar".to_string()));
+
+        let err_with_nl = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"ERROR".to_vec(),
+                b"first\nsecond\rthird".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug error with newline");
+        assert_eq!(
+            err_with_nl,
+            RespFrame::Error("first second third".to_string()),
+            "newlines must map to spaces to keep RESP valid"
+        );
+
+        let log = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"LOG".to_vec(), b"hello".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("debug log");
+        assert_eq!(log, RespFrame::SimpleString("OK".to_string()));
+
+        let leak = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"LEAK".to_vec(), b"x".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("debug leak");
+        assert_eq!(leak, RespFrame::SimpleString("OK".to_string()));
+
+        // Wrong-arity surfaces upstream's "unknown subcommand or wrong number"
+        // text, matching the existing OBJECT / SET-ACTIVE-EXPIRE handling.
+        let bad = dispatch_argv(&[b"DEBUG".to_vec(), b"ERROR".to_vec()], &mut store, 0)
+            .expect_err("debug error needs arg");
+        assert_eq!(
+            bad,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'ERROR'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
     }
 
     #[test]
