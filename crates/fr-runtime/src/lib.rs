@@ -10579,6 +10579,14 @@ impl Runtime {
         if argv.len() != 3 {
             return Err(CommandError::WrongArity("MOVE"));
         }
+        // Upstream db.c::moveCommand:1299-1302 rejects MOVE
+        // unconditionally in cluster mode — cluster mode only uses
+        // DB 0 so cross-DB moves are nonsensical. (frankenredis-mdpbc)
+        if self.server.store.cluster_enabled {
+            return Err(CommandError::Custom(
+                "ERR MOVE is not allowed in cluster mode".to_string(),
+            ));
+        }
         let target_db = parse_db_index_arg(
             &argv[2],
             "ERR DB index is out of range",
@@ -10644,6 +10652,18 @@ impl Runtime {
                 continue;
             }
             return Err(CommandError::SyntaxError);
+        }
+        // Upstream db.c::copyCommand:1390-1393 rejects COPY when
+        // cluster_enabled is true AND (srcid != 0 || dbid != 0) with
+        // "Copying to another database is not allowed in cluster
+        // mode". A same-DB-0 COPY in cluster mode stays allowed.
+        // (frankenredis-mdpbc)
+        if self.server.store.cluster_enabled
+            && (self.session.selected_db != 0 || destination_db != 0)
+        {
+            return Err(CommandError::Custom(
+                "ERR Copying to another database is not allowed in cluster mode".to_string(),
+            ));
         }
         let destination = encode_db_key(destination_db, &argv[2]);
         // Upstream rejects same-source-same-destination-same-db before
@@ -14387,6 +14407,50 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"SELECT", b"01"]), 1),
             RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+    }
+
+    // (frankenredis-mdpbc) Upstream db.c::moveCommand:1299-1302
+    // rejects MOVE unconditionally in cluster mode; COPY rejects
+    // when src or dst is a non-zero DB.
+    #[test]
+    fn move_in_cluster_mode_is_unconditionally_rejected() {
+        let mut rt = Runtime::default_strict();
+        rt.server.store.cluster_enabled = true;
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"k", b"v"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        // Even MOVE to the same db gets rejected (upstream is unconditional).
+        assert_eq!(
+            rt.execute_frame(command(&[b"MOVE", b"k", b"0"]), 1),
+            RespFrame::Error("ERR MOVE is not allowed in cluster mode".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"MOVE", b"k", b"1"]), 2),
+            RespFrame::Error("ERR MOVE is not allowed in cluster mode".to_string())
+        );
+    }
+
+    #[test]
+    fn copy_in_cluster_mode_rejects_only_when_db_is_nonzero() {
+        let mut rt = Runtime::default_strict();
+        rt.server.store.cluster_enabled = true;
+        assert_eq!(
+            rt.execute_frame(command(&[b"SET", b"k", b"v"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        // Same-DB-0 COPY stays allowed.
+        assert_eq!(
+            rt.execute_frame(command(&[b"COPY", b"k", b"k2"]), 1),
+            RespFrame::Integer(1)
+        );
+        // Cross-DB COPY is rejected.
+        assert_eq!(
+            rt.execute_frame(command(&[b"COPY", b"k", b"k3", b"DB", b"1"]), 2),
+            RespFrame::Error(
+                "ERR Copying to another database is not allowed in cluster mode".to_string()
+            )
         );
     }
 

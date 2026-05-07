@@ -17854,6 +17854,13 @@ fn move_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
     if argv.len() != 3 {
         return Err(CommandError::WrongArity("MOVE"));
     }
+    // Upstream db.c::moveCommand:1299-1302 rejects MOVE
+    // unconditionally in cluster mode. (frankenredis-mdpbc)
+    if store.cluster_enabled {
+        return Err(CommandError::Custom(
+            "ERR MOVE is not allowed in cluster mode".to_string(),
+        ));
+    }
     let target_db = parse_i64_arg(&argv[2])?;
     let dbc = store.database_count;
     if !(0..dbc as i64).contains(&target_db) {
@@ -19413,6 +19420,15 @@ fn copy_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
             continue;
         }
         return Err(CommandError::SyntaxError);
+    }
+
+    // Upstream db.c::copyCommand:1390-1393 rejects COPY when
+    // cluster_enabled is true AND (srcid != 0 || dbid != 0). A
+    // same-DB-0 COPY in cluster mode stays allowed. (frankenredis-mdpbc)
+    if store.cluster_enabled && (source_db != 0 || destination_db != 0) {
+        return Err(CommandError::Custom(
+            "ERR Copying to another database is not allowed in cluster mode".to_string(),
+        ));
     }
 
     // Upstream rejects same-source-same-destination-same-db with a
@@ -21279,6 +21295,61 @@ mod tests {
     }
 
     #[test]
+    // (frankenredis-mdpbc) Upstream db.c::moveCommand:1299-1302 rejects
+    // MOVE unconditionally in cluster mode; copyCommand:1390-1393
+    // rejects COPY when (srcid != 0 || dbid != 0). dispatch_argv route
+    // (Lua / AOF replay / MULTI EXEC) needs the same guard.
+    #[test]
+    fn move_via_dispatch_rejected_in_cluster_mode() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        store.set(fr_store::encode_db_key(0, b"k"), b"v".to_vec(), None, 0);
+        let err = dispatch_argv(
+            &[b"MOVE".to_vec(), b"k".to_vec(), b"1".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom("ERR MOVE is not allowed in cluster mode".to_string())
+        );
+    }
+
+    #[test]
+    fn copy_via_dispatch_rejected_in_cluster_mode_for_nonzero_db() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        store.set(fr_store::encode_db_key(0, b"k"), b"v".to_vec(), None, 0);
+        // Cross-DB COPY rejected.
+        let err = dispatch_argv(
+            &[
+                b"COPY".to_vec(),
+                b"k".to_vec(),
+                b"k2".to_vec(),
+                b"DB".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom(
+                "ERR Copying to another database is not allowed in cluster mode".to_string()
+            )
+        );
+        // Same-DB-0 COPY stays allowed.
+        let ok = dispatch_argv(
+            &[b"COPY".to_vec(), b"k".to_vec(), b"k2".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(ok, RespFrame::Integer(1));
+    }
+
     // (frankenredis-8qgk7) Upstream db.c::selectCommand:762-765 rejects
     // SELECT N (N != 0) when cluster_enabled is true. Lua / AOF replay
     // / MULTI EXEC route SELECT through dispatch_argv → fr-command's
