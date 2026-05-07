@@ -25778,6 +25778,86 @@ mod tests {
     }
 
     #[test]
+    fn cluster_addslotsrange_set_config_epoch_check_ordering_matches_upstream() {
+        // Pin upstream cluster.c::clusterCommand check ordering
+        // (frankenredis-ujdy):
+        //   1. CLUSTER ADDSLOTSRANGE 1 2 3 (argc=5): commands.def
+        //      arity = -4 passes; multiple-of-2 pair check happens
+        //      AFTER cluster_enabled gate, so standalone mode replies
+        //      "cluster support disabled" — not WrongSubcommandArity.
+        //   2. CLUSTER SET-CONFIG-EPOCH (argc=2): commands.def arity
+        //      = 3 fails table-level, so reply is the wrong-arity
+        //      wording (preempts the cluster_enabled gate).
+        let mut store = Store::new();
+
+        let standalone_addslots = dispatch_argv(
+            &[
+                b"CLUSTER".to_vec(),
+                b"ADDSLOTSRANGE".to_vec(),
+                b"1".to_vec(),
+                b"2".to_vec(),
+                b"3".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let got = match standalone_addslots {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(
+            got,
+            "ERR This instance has cluster support disabled".to_string()
+        );
+
+        let missing_epoch = dispatch_argv(
+            &[b"CLUSTER".to_vec(), b"SET-CONFIG-EPOCH".to_vec()],
+            &mut store,
+            0,
+        );
+        let got = match missing_epoch {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(
+            got,
+            "ERR wrong number of arguments for 'cluster|set-config-epoch' command".to_string()
+        );
+
+        // Sanity: ADDSLOTSRANGE with too-few args also surfaces
+        // wrong-arity (still preempts the cluster_enabled gate).
+        let too_few = dispatch_argv(
+            &[
+                b"CLUSTER".to_vec(),
+                b"ADDSLOTSRANGE".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let got = match too_few {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(
+            got,
+            "ERR wrong number of arguments for 'cluster|addslotsrange' command".to_string()
+        );
+    }
+
+    #[test]
     fn xrange_xrevrange_extra_trailing_args_match_upstream_syntax_error() {
         // Pin upstream t_stream.c::xrangeGenericCommand wording for
         // trailing-junk and malformed-COUNT contexts (frankenredis-x6p9):
