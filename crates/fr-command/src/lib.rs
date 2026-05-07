@@ -2639,6 +2639,14 @@ fn expire_like(
     if argv.len() < 3 {
         return Err(CommandError::WrongArity(command_name));
     }
+    // (frankenredis-6uyqo) Upstream expire.c::expireGenericCommand
+    // calls parseExtendedExpireArgumentsOrReply BEFORE parsing the
+    // 'when' integer, so unknown/conflicting NX/XX/GT/LT options
+    // surface their dedicated error before any integer-parse error
+    // on argv[2]. fr was inverting this, which made
+    // `EXPIRE k NOTANINT BADOPT` reply 'value is not an integer or
+    // out of range' instead of 'Unsupported option BADOPT'.
+    let options = parse_expire_options(&argv[3..])?;
     let raw_time = parse_i64_arg(&argv[2])?;
     // Mirror upstream expire.c::expireGenericCommand which rejects
     // values whose ms-conversion (and basetime addition for relative
@@ -2671,7 +2679,6 @@ fn expire_like(
     if when_ms_signed.is_none() {
         return Err(invalid_expire());
     }
-    let options = parse_expire_options(&argv[3..])?;
     let when_ms = deadline_from_expire_kind(kind, raw_time, now_ms);
     let applied = apply_expiry_with_options(store, &argv[1], when_ms, now_ms, options);
     Ok(RespFrame::Integer(if applied { 1 } else { 0 }))
@@ -20909,6 +20916,98 @@ mod tests {
             super::CommandError::Custom(
                 "ERR NX and XX, GT or LT options at the same time are not compatible".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn expire_option_errors_beat_invalid_integer() {
+        // (frankenredis-6uyqo) Upstream expire.c::expireGenericCommand
+        // calls parseExtendedExpireArgumentsOrReply BEFORE parsing
+        // argv[2] as the time. fr was inverting this — a malformed
+        // time-arg surfaced 'value is not an integer or out of range'
+        // even when the trailing flags would have produced a more
+        // specific error. Pin upstream's precedence on three flavors:
+        // unsupported option, NX+XX conflict, GT+LT conflict.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("set");
+
+        // Unsupported option beats integer parse.
+        let err = dispatch_argv(
+            &[
+                b"EXPIRE".to_vec(),
+                b"k".to_vec(),
+                b"NOTANINT".to_vec(),
+                b"BADOPT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("unsupported option should fire first");
+        assert_eq!(
+            err,
+            super::CommandError::Custom("ERR Unsupported option BADOPT".to_string())
+        );
+
+        // NX+XX conflict beats integer parse.
+        let err = dispatch_argv(
+            &[
+                b"EXPIRE".to_vec(),
+                b"k".to_vec(),
+                b"NOTANINT".to_vec(),
+                b"NX".to_vec(),
+                b"XX".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("NX+XX should fire first");
+        assert_eq!(
+            err,
+            super::CommandError::Custom(
+                "ERR NX and XX, GT or LT options at the same time are not compatible".to_string()
+            )
+        );
+
+        // GT+LT conflict beats integer overflow on AT-form too.
+        let err = dispatch_argv(
+            &[
+                b"EXPIREAT".to_vec(),
+                b"k".to_vec(),
+                b"99999999999999999999".to_vec(),
+                b"GT".to_vec(),
+                b"LT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("GT+LT should fire first");
+        assert_eq!(
+            err,
+            super::CommandError::Custom(
+                "ERR GT and LT options at the same time are not compatible".to_string()
+            )
+        );
+
+        // Sanity: with a valid integer + bad option, error is still about the option.
+        let err = dispatch_argv(
+            &[
+                b"PEXPIRE".to_vec(),
+                b"k".to_vec(),
+                b"5000".to_vec(),
+                b"BADOPT".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("bad option should still fire");
+        assert_eq!(
+            err,
+            super::CommandError::Custom("ERR Unsupported option BADOPT".to_string())
         );
     }
 
