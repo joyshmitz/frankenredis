@@ -17295,6 +17295,57 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             ));
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("PAUSE-CRON") {
+        // Upstream debug.c::debugCommand:997-1000 toggles server.pause_cron
+        // via atoi(). fr-command has no periodic cron, so accept-and-OK
+        // matches the wire contract. (frankenredis-r2l7c)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'PAUSE-CRON'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("SET-DISABLE-DENY-SCRIPTS") {
+        // Upstream debug.c::debugCommand:958-961 toggles
+        // server.script_disable_deny_script via atoi(). fr-command has no
+        // deny-scripts gate to disable, so accept-and-OK is correct.
+        // (frankenredis-r2l7c)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'SET-DISABLE-DENY-SCRIPTS'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("AOF-FLUSH-SLEEP") {
+        // Upstream debug.c::debugCommand:862-866 sets server.aof_flush_sleep
+        // via atoi(). fr-command's AOF path has no flush-sleep injection
+        // point, so accept-and-OK matches the wire contract.
+        // (frankenredis-r2l7c)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'AOF-FLUSH-SLEEP'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("SET-SKIP-CHECKSUM-VALIDATION") {
+        // Upstream debug.c::debugCommand:857-861 sets
+        // server.skip_checksum_validation via atoi(). fr-command's RESTORE
+        // path validates checksums unconditionally, so accept-and-OK
+        // matches the wire contract. (frankenredis-r2l7c)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'SET-SKIP-CHECKSUM-VALIDATION'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("STRINGMATCH-LEN") {
         // Upstream debug.c spells this `STRINGMATCH-TEST` and runs
         // an in-process fuzz of stringmatchlen() before replying OK.
@@ -35517,6 +35568,52 @@ mod tests {
         assert!(info.contains("serializedlength:"), "{info}");
         assert!(info.contains("lru:"), "{info}");
         assert!(info.contains("lru_seconds_idle:"), "{info}");
+    }
+
+    #[test]
+    fn debug_pause_cron_set_disable_deny_scripts_aof_flush_sleep_skip_checksum_accept_and_ok() {
+        // Upstream debug.c::debugCommand:
+        //   PAUSE-CRON <0|1>                     at 997-1000  → +OK
+        //   SET-DISABLE-DENY-SCRIPTS <0|1>        at 958-961   → +OK
+        //   AOF-FLUSH-SLEEP <microsec>            at 862-866   → +OK
+        //   SET-SKIP-CHECKSUM-VALIDATION <0|1>    at 857-861   → +OK
+        // All four parse with atoi() and store on a server flag. fr-command
+        // has no equivalent server-loop hooks, so accept-and-OK matches the
+        // wire contract. (frankenredis-r2l7c)
+        let mut store = Store::new();
+
+        for (sub, arg) in [
+            (b"PAUSE-CRON".as_slice(), b"1".as_slice()),
+            (b"SET-DISABLE-DENY-SCRIPTS", b"1"),
+            (b"AOF-FLUSH-SLEEP", b"1000"),
+            (b"SET-SKIP-CHECKSUM-VALIDATION", b"0"),
+        ] {
+            let out = dispatch_argv(
+                &[b"DEBUG".to_vec(), sub.to_vec(), arg.to_vec()],
+                &mut store,
+                0,
+            )
+            .unwrap_or_else(|_| panic!("debug {} ok", std::str::from_utf8(sub).unwrap()));
+            assert_eq!(
+                out,
+                RespFrame::SimpleString("OK".to_string()),
+                "DEBUG {} expected +OK",
+                std::str::from_utf8(sub).unwrap()
+            );
+
+            // Wrong arity surfaces upstream's "unknown subcommand or wrong
+            // number" text.
+            let bad = dispatch_argv(&[b"DEBUG".to_vec(), sub.to_vec()], &mut store, 0)
+                .expect_err("missing arg");
+            assert_eq!(
+                bad,
+                CommandError::Custom(format!(
+                    "ERR unknown subcommand or wrong number of arguments \
+                     for '{}'. Try DEBUG HELP.",
+                    std::str::from_utf8(sub).unwrap()
+                ))
+            );
+        }
     }
 
     #[test]
