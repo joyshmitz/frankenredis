@@ -16865,8 +16865,11 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             && !mode.eq_ignore_ascii_case("SYNC")
             && !mode.eq_ignore_ascii_case("NO")
         {
+            // (frankenredis-lfi21) Match upstream eval.c line 645
+            // wording verbatim. fr was emitting an invented
+            // 'YES, SYNC or NO' grammar; upstream uses slashes.
             return Err(CommandError::Custom(
-                "ERR Use SCRIPT DEBUG YES, SYNC or NO".to_string(),
+                "ERR Use SCRIPT DEBUG YES/SYNC/NO".to_string(),
             ));
         }
         if store.script_nesting_level >= 1 {
@@ -34810,7 +34813,7 @@ mod tests {
         .expect_err("invalid script debug mode");
         assert_eq!(
             invalid_debug,
-            CommandError::Custom("ERR Use SCRIPT DEBUG YES, SYNC or NO".to_string())
+            CommandError::Custom("ERR Use SCRIPT DEBUG YES/SYNC/NO".to_string())
         );
 
         let noscript_cases = [

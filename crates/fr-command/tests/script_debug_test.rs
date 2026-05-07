@@ -25,7 +25,7 @@ fn test_script_debug() {
     );
     assert_eq!(
         out.unwrap_err(),
-        CommandError::Custom("ERR Use SCRIPT DEBUG YES, SYNC or NO".to_string())
+        CommandError::Custom("ERR Use SCRIPT DEBUG YES/SYNC/NO".to_string())
     );
 
     // Valid modes
