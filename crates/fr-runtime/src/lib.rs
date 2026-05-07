@@ -10382,6 +10382,14 @@ impl Runtime {
         if argv.len() != 3 {
             return CommandError::WrongArity("SWAPDB").to_resp();
         }
+        // Upstream db.c::swapdbCommand:1614-1618 rejects SWAPDB
+        // unconditionally in cluster mode — cluster mode only uses
+        // DB 0. The check fires before db-index parsing, so the
+        // cluster reply wins over "invalid first DB index" wording.
+        // (frankenredis-l157c)
+        if self.server.store.cluster_enabled {
+            return RespFrame::Error("ERR SWAPDB is not allowed in cluster mode".to_string());
+        }
         // Upstream db.c::swapdbCommand uses bespoke wording:
         //   - 'invalid first DB index'  for unparseable argv[1]
         //   - 'invalid second DB index' for unparseable argv[2]
@@ -14407,6 +14415,25 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"SELECT", b"01"]), 1),
             RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+    }
+
+    // (frankenredis-l157c) Upstream db.c::swapdbCommand:1614-1618
+    // rejects SWAPDB unconditionally in cluster mode.
+    #[test]
+    fn swapdb_in_cluster_mode_is_unconditionally_rejected() {
+        let mut rt = Runtime::default_strict();
+        rt.server.store.cluster_enabled = true;
+        // Even valid db indices get rejected.
+        assert_eq!(
+            rt.execute_frame(command(&[b"SWAPDB", b"0", b"1"]), 0),
+            RespFrame::Error("ERR SWAPDB is not allowed in cluster mode".to_string())
+        );
+        // The cluster check fires before db-index parsing — invalid
+        // indices still surface the cluster-mode reply.
+        assert_eq!(
+            rt.execute_frame(command(&[b"SWAPDB", b"notanint", b"x"]), 1),
+            RespFrame::Error("ERR SWAPDB is not allowed in cluster mode".to_string())
         );
     }
 

@@ -18570,6 +18570,14 @@ fn swapdb_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     if argv.len() != 3 {
         return Err(CommandError::WrongArity("SWAPDB"));
     }
+    // Upstream db.c::swapdbCommand:1614-1618 rejects SWAPDB
+    // unconditionally in cluster mode — cluster mode only uses DB 0.
+    // The check fires before db-index parsing. (frankenredis-l157c)
+    if store.cluster_enabled {
+        return Err(CommandError::Custom(
+            "ERR SWAPDB is not allowed in cluster mode".to_string(),
+        ));
+    }
     let dbc = store.database_count;
     let parse_index = |arg: &[u8], invalid: &'static str| -> Result<usize, CommandError> {
         let parsed = parse_i64_arg(arg).map_err(|_| CommandError::Custom(invalid.to_string()))?;
@@ -21295,6 +21303,36 @@ mod tests {
     }
 
     #[test]
+    // (frankenredis-l157c) Upstream db.c::swapdbCommand:1614-1618
+    // rejects SWAPDB unconditionally in cluster mode. dispatch_argv
+    // route (Lua / AOF replay / MULTI EXEC) needs the same guard.
+    #[test]
+    fn swapdb_via_dispatch_rejected_in_cluster_mode() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        let err = dispatch_argv(
+            &[b"SWAPDB".to_vec(), b"0".to_vec(), b"1".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::Custom("ERR SWAPDB is not allowed in cluster mode".to_string())
+        );
+        // Cluster check fires before db-index parsing.
+        let err_invalid = dispatch_argv(
+            &[b"SWAPDB".to_vec(), b"notanint".to_vec(), b"x".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err_invalid,
+            CommandError::Custom("ERR SWAPDB is not allowed in cluster mode".to_string())
+        );
+    }
+
     // (frankenredis-mdpbc) Upstream db.c::moveCommand:1299-1302 rejects
     // MOVE unconditionally in cluster mode; copyCommand:1390-1393
     // rejects COPY when (srcid != 0 || dbid != 0). dispatch_argv route
