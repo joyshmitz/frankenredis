@@ -11138,15 +11138,12 @@ slave_priority:{}\r\n",
                     .to_string(),
             );
         }
-        if matches!(
-            self.server.replication_runtime_state.role,
-            ReplicationRoleState::Replica { .. }
-        ) {
-            return RespFrame::Error(
-                "ERR FAILOVER is not valid when server is a replica.".to_string(),
-            );
-        }
 
+        // Upstream replication.c::failoverCommand:4071-4080 handles ABORT
+        // unconditionally between the cluster check and arg parsing — so a
+        // replica session calling 'FAILOVER ABORT' to clean up a stale
+        // request still gets the canonical 'No failover in progress.'
+        // wording rather than the replica-error text. (frankenredis-0bxcy)
         if argv.len() == 2 {
             let arg = match std::str::from_utf8(&argv[1]) {
                 Ok(arg) => arg,
@@ -11155,6 +11152,17 @@ slave_priority:{}\r\n",
             if arg.eq_ignore_ascii_case("ABORT") {
                 return RespFrame::Error("ERR No failover in progress.".to_string());
             }
+        }
+
+        // Replica-role rejection runs AFTER ABORT (matching upstream's
+        // ordering at line 4119) and before option parsing.
+        if matches!(
+            self.server.replication_runtime_state.role,
+            ReplicationRoleState::Replica { .. }
+        ) {
+            return RespFrame::Error(
+                "ERR FAILOVER is not valid when server is a replica.".to_string(),
+            );
         }
 
         let mut target_host: Option<String> = None;
@@ -16418,6 +16426,34 @@ mod tests {
         );
         assert_eq!(
             rt.execute_frame(command(&[b"FAILOVER"]), 1),
+            RespFrame::Error("ERR FAILOVER is not valid when server is a replica.".to_string())
+        );
+    }
+
+    #[test]
+    fn failover_abort_on_replica_returns_no_failover_in_progress_not_replica_error() {
+        // Upstream replication.c::failoverCommand:4071-4080 runs the ABORT
+        // special case BEFORE the masterhost check (which sits at
+        // line 4119). So 'FAILOVER ABORT' on a replica with no active
+        // failover returns 'No failover in progress.' — not the
+        // 'FAILOVER is not valid when server is a replica.' wording that
+        // applies to non-ABORT FAILOVER calls. (frankenredis-0bxcy)
+        let mut rt = Runtime::default_strict();
+        assert_eq!(
+            rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"6380"]), 0),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        let abort = rt.execute_frame(command(&[b"FAILOVER", b"ABORT"]), 1);
+        assert_eq!(
+            abort,
+            RespFrame::Error("ERR No failover in progress.".to_string()),
+            "FAILOVER ABORT on replica must surface the no-failover wording, not the replica error"
+        );
+
+        // Sanity: non-ABORT FAILOVER still returns the replica error.
+        let bare = rt.execute_frame(command(&[b"FAILOVER"]), 2);
+        assert_eq!(
+            bare,
             RespFrame::Error("ERR FAILOVER is not valid when server is a replica.".to_string())
         );
     }
