@@ -25778,6 +25778,61 @@ mod tests {
     }
 
     #[test]
+    fn xrange_xrevrange_extra_trailing_args_match_upstream_syntax_error() {
+        // Pin upstream t_stream.c::xrangeGenericCommand wording for
+        // trailing-junk and malformed-COUNT contexts (frankenredis-x6p9):
+        // 5-arg form (one extra after start/end) and 6-arg form with a
+        // non-COUNT keyword both surface "syntax error", not the
+        // table-level wrong-arity reply.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xadd");
+
+        for cmd in [b"XRANGE".as_slice(), b"XREVRANGE".as_slice()] {
+            // 5 args: one trailing junk after start/end.
+            let err = dispatch_argv(
+                &[
+                    cmd.to_vec(),
+                    b"s".to_vec(),
+                    b"-".to_vec(),
+                    b"+".to_vec(),
+                    b"EXTRA".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect_err("error");
+            assert_eq!(err, CommandError::SyntaxError, "{cmd:?} 5-arg");
+
+            // 6 args, non-COUNT keyword.
+            let err = dispatch_argv(
+                &[
+                    cmd.to_vec(),
+                    b"s".to_vec(),
+                    b"-".to_vec(),
+                    b"+".to_vec(),
+                    b"NOPE".to_vec(),
+                    b"3".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect_err("error");
+            assert_eq!(err, CommandError::SyntaxError, "{cmd:?} non-COUNT");
+        }
+    }
+
+    #[test]
     fn xrange_bound_validation_and_empty_cases() {
         let mut store = Store::new();
         dispatch_argv(
