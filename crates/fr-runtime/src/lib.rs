@@ -9647,6 +9647,16 @@ impl Runtime {
         if argv.len() != 1 {
             return CommandError::WrongArity("RESET").to_resp();
         }
+        // Upstream networking.c::resetCommand:2965-2974 rejects RESET when
+        // the client is a true replica (CLIENT_SLAVE without CLIENT_MONITOR)
+        // or a master/module connection. fr has no master/module state, so
+        // we only need to guard against replicas. MONITOR clients are
+        // explicitly exempt: upstream strips CLIENT_MONITOR|CLIENT_SLAVE
+        // from the flag mask before testing, and fr's monitor_clients set
+        // is separate from the replicas map. (frankenredis-cpsf9)
+        if self.is_replica(self.session.client_id) {
+            return RespFrame::Error("ERR can only reset normal client connections".to_string());
+        }
         // Clear pub/sub subscriptions from the global registry before resetting.
         self.pubsub_cleanup_client(self.session.client_id);
         // Mirror upstream networking.c::clearClientConnectionState:1507-1513:
@@ -15295,6 +15305,40 @@ mod tests {
             rt.drain_monitor_output().is_empty(),
             "RESET-cleared client should no longer receive MONITOR feeds"
         );
+    }
+
+    #[test]
+    fn reset_rejects_replica_connections_with_canonical_error() {
+        // Upstream networking.c::resetCommand:2965-2974 rejects RESET when
+        // the client is a true replica (CLIENT_SLAVE without CLIENT_MONITOR).
+        // fr-runtime now mirrors that check via is_replica().
+        // (frankenredis-cpsf9)
+        let mut rt = Runtime::default_strict();
+        rt.session.client_id = 555;
+
+        // Mark the session as a replica via the same primitive
+        // ReplicationRuntimeState::ensure_replica that the PSYNC handshake
+        // uses. This is the authoritative way fr models a connected replica.
+        rt.server
+            .replication_runtime_state
+            .ensure_replica(rt.session.client_id);
+        assert!(rt.is_replica(rt.session.client_id));
+
+        let rejected = rt.execute_frame(command(&[b"RESET"]), 1);
+        assert_eq!(
+            rejected,
+            RespFrame::Error("ERR can only reset normal client connections".to_string()),
+            "RESET on a replica connection must surface upstream's canonical error"
+        );
+
+        // Once the connection is no longer a replica, RESET succeeds again.
+        rt.server
+            .replication_runtime_state
+            .replicas
+            .remove(&rt.session.client_id);
+        assert!(!rt.is_replica(rt.session.client_id));
+        let ok = rt.execute_frame(command(&[b"RESET"]), 2);
+        assert_eq!(ok, RespFrame::SimpleString("RESET".to_string()));
     }
 
     #[test]
