@@ -14677,14 +14677,16 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         }
         let attr = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         let val = std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        // Upstream networking.c::clientSetinfoCommand emits the user-
+        // provided attr verbatim via addReplyErrorFormat("%s cannot
+        // contain spaces, newlines or special characters.", attr) —
+        // case is preserved. (frankenredis-e2xii) Match by formatting
+        // with {attr} the same way the Unrecognized-option branch does.
         if attr.eq_ignore_ascii_case("LIB-NAME") {
             if val.bytes().any(|b| b <= b' ') {
-                // Upstream: "LIB-NAME cannot contain spaces,
-                // newlines or special characters." (br-frankenredis-w579)
-                return Err(CommandError::Custom(
-                    "ERR LIB-NAME cannot contain spaces, newlines or special characters."
-                        .to_string(),
-                ));
+                return Err(CommandError::Custom(format!(
+                    "ERR {attr} cannot contain spaces, newlines or special characters."
+                )));
             }
             store.dispatch_client_ctx.client_lib_name = if val.is_empty() {
                 None
@@ -14693,10 +14695,9 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             };
         } else if attr.eq_ignore_ascii_case("LIB-VER") {
             if val.bytes().any(|b| b <= b' ') {
-                return Err(CommandError::Custom(
-                    "ERR LIB-VER cannot contain spaces, newlines or special characters."
-                        .to_string(),
-                ));
+                return Err(CommandError::Custom(format!(
+                    "ERR {attr} cannot contain spaces, newlines or special characters."
+                )));
             }
             store.dispatch_client_ctx.client_lib_ver = if val.is_empty() {
                 None
@@ -42738,6 +42739,37 @@ mod tests {
                 "ERR LIB-NAME cannot contain spaces, newlines or special characters.".to_string()
             )
         );
+
+        // (frankenredis-e2xii) The validation error must echo the
+        // user-provided attr verbatim — upstream uses addReplyErrorFormat
+        // with the raw argv[2] string, preserving case.
+        for (attr_input, expected) in [
+            (
+                "lib-name",
+                "ERR lib-name cannot contain spaces, newlines or special characters.",
+            ),
+            (
+                "Lib-Ver",
+                "ERR Lib-Ver cannot contain spaces, newlines or special characters.",
+            ),
+        ] {
+            let err = dispatch_argv(
+                &[
+                    b"CLIENT".to_vec(),
+                    b"SETINFO".to_vec(),
+                    attr_input.as_bytes().to_vec(),
+                    b"has space".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                CommandError::Custom(expected.to_string()),
+                "input attr: {attr_input}"
+            );
+        }
     }
 
     #[test]
