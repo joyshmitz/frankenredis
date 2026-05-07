@@ -40529,6 +40529,71 @@ mod tests {
     }
 
     #[test]
+    fn xsetid_rejects_last_id_smaller_than_stream_top() {
+        // Pin upstream xsetidCommand top-id invariant (frankenredis-fu7b):
+        // last-id < current top entry id surfaces "ERR The ID specified
+        // in XSETID is smaller than the target stream top item". The
+        // prior silent-accept allowed XADD '*' to generate IDs that
+        // collide with existing entries.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"st".to_vec(),
+                b"100-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let smaller = dispatch_argv(
+            &[
+                b"XSETID".to_vec(),
+                b"st".to_vec(),
+                b"50-0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xsetid smaller");
+        assert_eq!(
+            smaller,
+            RespFrame::Error(
+                "ERR The ID specified in XSETID is smaller than the target stream top item"
+                    .to_string()
+            )
+        );
+
+        // Sanity: equal-or-greater succeeds.
+        let equal = dispatch_argv(
+            &[
+                b"XSETID".to_vec(),
+                b"st".to_vec(),
+                b"100-0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(equal, RespFrame::SimpleString("OK".to_string()));
+
+        let greater = dispatch_argv(
+            &[
+                b"XSETID".to_vec(),
+                b"st".to_vec(),
+                b"200-0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        assert_eq!(greater, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
     fn xsetid_accepts_bare_integer_id() {
         let mut store = Store::new();
         dispatch_argv(
