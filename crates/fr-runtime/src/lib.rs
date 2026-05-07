@@ -10734,10 +10734,11 @@ impl Runtime {
 
         // Upstream INFO emits sections in this fixed order:
         //   Server, Clients, Memory, Persistence, Stats, Replication,
-        //   CPU, Commandstats, Latencystats, Errorstats, Cluster, Keyspace.
-        // fr-command owns the {server, clients, memory, stats, cpu,
-        // modules, errorstats, cluster} subset; fr-runtime owns the
-        // {persistence, replication, latencystats, keyspace} subset.
+        //   CPU, Modules, Commandstats, Errorstats, Latencystats,
+        //   Cluster, Keyspace. fr-command owns the {server, clients,
+        //   memory, stats, cpu, modules, errorstats, cluster} subset;
+        //   fr-runtime owns the {persistence, replication, commandstats,
+        //   latencystats, keyspace} subset.
         // To match the upstream interleave we delegate to fr-command
         // in pieces, slotting the runtime sections in between.
         // (br-frankenredis-infoorder)
@@ -10789,6 +10790,19 @@ impl Runtime {
         if want("modules") {
             dispatch_command_section(self, "modules", &mut info)?;
         }
+        // Upstream INFO emits Commandstats only when explicitly
+        // requested or as part of `all`/`everything`. The bare
+        // `INFO`/`default` form skips it, mirroring genInfoSectionDict's
+        // default_sections list (server.c:5416-5418). (frankenredis-ot3y)
+        let is_commandstats = is_explicit_all
+            || sections
+                .iter()
+                .any(|section| section.eq_ignore_ascii_case("commandstats"));
+        if is_commandstats
+            && let RespFrame::BulkString(Some(bytes)) = self.handle_info_commandstats_section()
+        {
+            info.extend_from_slice(&bytes);
+        }
         if want("errorstats") {
             dispatch_command_section(self, "errorstats", &mut info)?;
         }
@@ -10839,6 +10853,26 @@ impl Runtime {
                 let _ = write!(info, "p{p}={val:.2}");
             }
             info.push_str("\r\n");
+        }
+        info.push_str("\r\n");
+        RespFrame::BulkString(Some(info.into_bytes()))
+    }
+
+    fn handle_info_commandstats_section(&mut self) -> RespFrame {
+        // Mirrors upstream server.c::genRedisInfoStringCommandStats
+        // (5329-5353). fr only tracks per-command call counts in
+        // CommandHistogramTracker, so usec/usec_per_call/rejected_calls/
+        // failed_calls are emitted as 0 stubs to preserve field
+        // parseability. (frankenredis-ot3y)
+        let mut info = String::from("# Commandstats\r\n");
+        let histograms = self.server.store.all_command_histograms();
+        for (cmd, hist) in histograms {
+            let _ = write!(
+                info,
+                "cmdstat_{}:calls={},usec=0,usec_per_call=0.00,rejected_calls=0,failed_calls=0\r\n",
+                cmd.to_ascii_lowercase(),
+                hist.calls
+            );
         }
         info.push_str("\r\n");
         RespFrame::BulkString(Some(info.into_bytes()))
@@ -13241,6 +13275,64 @@ mod tests {
             !after_reset.contains("latency_percentiles_usec_GET:"),
             "{after_reset}"
         );
+    }
+
+    #[test]
+    fn info_commandstats_emits_per_command_call_counts() {
+        // Pin upstream INFO commandstats parity (server.c::genRedisInfoStringCommandStats:5329-5353).
+        // fr only tracks calls; usec/rejected_calls/failed_calls are 0 stubs. (frankenredis-ot3y)
+        let mut rt = Runtime::default_strict();
+
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"CONFIG", b"SET", b"latency-tracking", b"yes"]),
+                0,
+            ),
+            RespFrame::SimpleString("OK".to_string())
+        );
+
+        for _ in 0..3 {
+            rt.execute_frame(command(&[b"GET", b"missing"]), 1);
+        }
+        rt.execute_frame(command(&[b"SET", b"k", b"v"]), 1);
+
+        let info = rt.execute_frame(command(&[b"INFO", b"commandstats"]), 2);
+        let RespFrame::BulkString(Some(bytes)) = info else {
+            panic!("expected bulk info response");
+        };
+        let body = String::from_utf8(bytes).expect("utf8 info");
+
+        assert!(body.starts_with("# Commandstats\r\n"), "{body}");
+        assert!(
+            body.contains(
+                "cmdstat_get:calls=3,usec=0,usec_per_call=0.00,rejected_calls=0,failed_calls=0\r\n"
+            ),
+            "{body}"
+        );
+        assert!(
+            body.contains(
+                "cmdstat_set:calls=1,usec=0,usec_per_call=0.00,rejected_calls=0,failed_calls=0\r\n"
+            ),
+            "{body}"
+        );
+
+        // Section omitted from default INFO; only present when requested or via all/everything.
+        let default_info = rt.execute_frame(command(&[b"INFO"]), 3);
+        let RespFrame::BulkString(Some(bytes)) = default_info else {
+            panic!("expected bulk info response");
+        };
+        let default_body = String::from_utf8(bytes).expect("utf8 info");
+        assert!(
+            !default_body.contains("# Commandstats"),
+            "default INFO should not include commandstats: {default_body}"
+        );
+
+        let all_info = rt.execute_frame(command(&[b"INFO", b"all"]), 4);
+        let RespFrame::BulkString(Some(bytes)) = all_info else {
+            panic!("expected bulk info response");
+        };
+        let all_body = String::from_utf8(bytes).expect("utf8 info");
+        assert!(all_body.contains("# Commandstats"), "{all_body}");
     }
 
     #[test]
