@@ -37316,6 +37316,142 @@ mod tests {
     }
 
     #[test]
+    fn lua_redis_log_setresp_acl_check_cmd_validation_matches_upstream() {
+        // Pin upstream script_lua.c wordings for three more Lua
+        // redis.* builtins (frankenredis-zdkm):
+        //   - redis.log: requires (level, msg, ...) with numeric level
+        //   - redis.setresp: requires exactly one argument, value 2 or 3
+        //   - redis.acl_check_cmd: requires string command name; unknown
+        //     command surfaces "Invalid command passed to
+        //     redis.acl_check_cmd()"; valid known command returns true
+        let mut store = Store::new();
+
+        // redis.log too few args.
+        let log_few = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"redis.log(redis.LOG_WARNING)".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = log_few else {
+            panic!("expected error, got {log_few:?}");
+        };
+        assert!(
+            msg.contains("redis.log() requires two arguments or more"),
+            "{msg}"
+        );
+
+        // redis.log non-numeric level.
+        let log_bad_level = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"redis.log('not-a-number','msg')".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = log_bad_level else {
+            panic!("expected error, got {log_bad_level:?}");
+        };
+        assert!(
+            msg.contains("First argument must be a number (log level)"),
+            "{msg}"
+        );
+
+        // redis.setresp wrong arity.
+        let setresp_bad = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"redis.setresp()".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = setresp_bad else {
+            panic!("expected error, got {setresp_bad:?}");
+        };
+        assert!(
+            msg.contains("redis.setresp() requires one argument"),
+            "{msg}"
+        );
+
+        // redis.setresp invalid version.
+        let setresp_bad_v = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"redis.setresp(5)".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = setresp_bad_v else {
+            panic!("expected error, got {setresp_bad_v:?}");
+        };
+        assert!(msg.contains("RESP version must be 2 or 3"), "{msg}");
+
+        // redis.acl_check_cmd no args.
+        let acl_no_args = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"redis.acl_check_cmd()".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = acl_no_args else {
+            panic!("expected error, got {acl_no_args:?}");
+        };
+        assert!(
+            msg.contains("Please specify at least one argument for this redis lib call"),
+            "{msg}"
+        );
+
+        // redis.acl_check_cmd unknown command.
+        let acl_unknown = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"redis.acl_check_cmd('NOPE')".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = acl_unknown else {
+            panic!("expected error, got {acl_unknown:?}");
+        };
+        assert!(
+            msg.contains("Invalid command passed to redis.acl_check_cmd()"),
+            "{msg}"
+        );
+
+        // redis.acl_check_cmd known command -> returns true (Lua → Integer 1).
+        let acl_ok = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"if redis.acl_check_cmd('GET') then return 1 else return 0 end".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        assert_eq!(acl_ok, RespFrame::Integer(1));
+    }
+
+    #[test]
     fn lua_redis_builtins_invalid_arg_shapes_match_upstream() {
         // Pin upstream script_lua.c wordings for fr's Lua redis.*
         // builtin error paths (frankenredis-wo58):
