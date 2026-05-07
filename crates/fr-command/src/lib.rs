@@ -47265,6 +47265,75 @@ mod tests {
     }
 
     #[test]
+    fn srandmember_zrandmember_extra_args_match_upstream_syntax_error() {
+        // Upstream commands.def declares both SRANDMEMBER and
+        // ZRANDMEMBER with arity = -2; extra trailing args after the
+        // [count [WITHSCORES/WITHVALUES]] tail land in the handler's
+        // syntaxerr branch, not the table-level wrong-arity reply.
+        // (frankenredis-8abz)
+        let mut store = Store::new();
+        dispatch_argv(
+            &[b"SADD".to_vec(), b"s".to_vec(), b"a".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        dispatch_argv(
+            &[
+                b"ZADD".to_vec(),
+                b"z".to_vec(),
+                b"1".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let extra_srand = dispatch_argv(
+            &[
+                b"SRANDMEMBER".to_vec(),
+                b"s".to_vec(),
+                b"1".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("srandmember extra");
+        assert_eq!(extra_srand, CommandError::SyntaxError);
+
+        let extra_zrand = dispatch_argv(
+            &[
+                b"ZRANDMEMBER".to_vec(),
+                b"z".to_vec(),
+                b"5".to_vec(),
+                b"WITHSCORES".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("zrandmember extra");
+        assert_eq!(extra_zrand, CommandError::SyntaxError);
+
+        // ZRANDMEMBER with 4-arg variant where the 4th token is not
+        // WITHSCORES is also a syntax error.
+        let bad_kw = dispatch_argv(
+            &[
+                b"ZRANDMEMBER".to_vec(),
+                b"z".to_vec(),
+                b"5".to_vec(),
+                b"NOPE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("zrandmember bad kw");
+        assert_eq!(bad_kw, CommandError::SyntaxError);
+    }
+
+    #[test]
     fn lpop_rpop_lpos_bad_count_wording_matches_upstream() {
         // Pin upstream t_list.c::popGenericCommand + lposCommand
         // wordings caught by ad-hoc differential probe vs vendored
