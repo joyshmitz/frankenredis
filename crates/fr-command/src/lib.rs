@@ -8650,16 +8650,54 @@ fn cluster_cmd(
         // CLUSTER SETSLOT <slot> NODE <node-id>
         // CLUSTER SETSLOT <slot> MIGRATING <node-id>
         // CLUSTER SETSLOT <slot> IMPORTING <node-id>
-        // Real slot-migration machinery not yet implemented; mirror
-        // upstream's "cluster support disabled" reply when cluster
-        // mode is off. (br-frankenredis-nzaw)
+        // Mirror upstream cluster.c::clusterCommand:6073-6132 arg
+        // validation. fr does not yet model peer nodes / migration
+        // state, so any node-id other than self is unknown and the
+        // STABLE / NODE paths accept-and-OK. (br-frankenredis-nzaw,
+        // frankenredis-t1s3f)
         if argv.len() != 4 && argv.len() != 5 {
             return Err(cluster_wrong_subcommand_arity(sub));
         }
         if !store.cluster_enabled {
             return Err(cluster_disabled_error());
         }
-        return Err(cluster_disabled_error());
+        let slot = parse_i64_arg(&argv[2])?;
+        if !(0..=16383).contains(&slot) {
+            return Err(CommandError::Custom("ERR Invalid slot".to_string()));
+        }
+        let action =
+            std::str::from_utf8(&argv[3]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        if action.eq_ignore_ascii_case("STABLE") {
+            if argv.len() != 4 {
+                return Err(cluster_wrong_subcommand_arity(sub));
+            }
+            // STABLE clears any migration state — no-op in fr's stub.
+            return Ok(RespFrame::SimpleString("OK".to_string()));
+        }
+        if action.eq_ignore_ascii_case("MIGRATING")
+            || action.eq_ignore_ascii_case("IMPORTING")
+            || action.eq_ignore_ascii_case("NODE")
+        {
+            if argv.len() != 5 {
+                return Err(cluster_wrong_subcommand_arity(sub));
+            }
+            let node_id =
+                std::str::from_utf8(&argv[4]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+            // fr models a single self node; any other id is unknown.
+            // Upstream's NODE branch emits "Unknown node <id>", while
+            // MIGRATING / IMPORTING emit "I don't know about node <id>".
+            if node_id != store.server_run_id {
+                let msg = if action.eq_ignore_ascii_case("NODE") {
+                    format!("ERR Unknown node {node_id}")
+                } else {
+                    format!("ERR I don't know about node {node_id}")
+                };
+                return Err(CommandError::Custom(msg));
+            }
+            // Self node — accept the no-op (fr has no migration state).
+            return Ok(RespFrame::SimpleString("OK".to_string()));
+        }
+        return Err(CommandError::SyntaxError);
     }
     if sub.eq_ignore_ascii_case("COUNT-FAILURE-REPORTS") {
         // Upstream cluster.c::clusterCommand: when cluster mode is on,
@@ -40234,6 +40272,125 @@ mod tests {
         .expect("client no-evict off");
         assert!(!store.dispatch_client_ctx.client_no_evict);
         assert!(store.dispatch_client_ctx.client_no_touch);
+    }
+
+    // (frankenredis-t1s3f) Upstream cluster.c::clusterCommand:6073-6132
+    // dispatches CLUSTER SETSLOT into MIGRATING/IMPORTING/STABLE/NODE
+    // subforms with specific arg shapes. fr validates the slot range
+    // and routes the four subforms to OK / Unknown-node errors.
+    #[test]
+    fn cluster_setslot_validates_slot_range_and_subform_when_cluster_enabled() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        // Slot out of range → "ERR Invalid slot".
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SETSLOT".to_vec(),
+                    b"99999".to_vec(),
+                    b"STABLE".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::Custom("ERR Invalid slot".to_string())
+        );
+        // STABLE accepts argc=4 → OK.
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SETSLOT".to_vec(),
+                    b"100".to_vec(),
+                    b"STABLE".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap(),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        // STABLE with extra arg → wrong arity.
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SETSLOT".to_vec(),
+                    b"100".to_vec(),
+                    b"STABLE".to_vec(),
+                    b"extra".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            cluster_wrong_subcommand_arity("SETSLOT")
+        );
+        // NODE with unknown peer → "Unknown node ...".
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SETSLOT".to_vec(),
+                    b"100".to_vec(),
+                    b"NODE".to_vec(),
+                    b"deadbeef".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::Custom("ERR Unknown node deadbeef".to_string())
+        );
+        // MIGRATING with unknown peer → "I don't know about node ...".
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SETSLOT".to_vec(),
+                    b"100".to_vec(),
+                    b"MIGRATING".to_vec(),
+                    b"someid".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::Custom("ERR I don't know about node someid".to_string())
+        );
+        // NODE pointing at self id → OK no-op.
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SETSLOT".to_vec(),
+                    b"100".to_vec(),
+                    b"NODE".to_vec(),
+                    store.server_run_id.as_bytes().to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap(),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        // Bogus action → syntax error.
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"SETSLOT".to_vec(),
+                    b"100".to_vec(),
+                    b"WHATEVER".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::SyntaxError
+        );
     }
 
     // (frankenredis-bdokn) Upstream cluster.c::clusterGenNodeDescription
