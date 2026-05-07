@@ -14939,11 +14939,24 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             return Err(script_noscript_command_error());
         }
         let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-        if !mode.eq_ignore_ascii_case("ON") && !mode.eq_ignore_ascii_case("OFF") {
+        let on = if mode.eq_ignore_ascii_case("ON") {
+            true
+        } else if mode.eq_ignore_ascii_case("OFF") {
+            false
+        } else {
             // Upstream networking.c::clientSubcommand emits the
             // generic syntax-error reply (no "argument must be
             // on/off" hint). (br-frankenredis-w579)
             return Err(CommandError::SyntaxError);
+        };
+        // Persist the new state through the dispatch client context
+        // so Lua / AOF replay / MULTI EXEC propagate the flag back to
+        // the per-session state via the runtime sync-back.
+        // (frankenredis-qteu5)
+        if sub.eq_ignore_ascii_case("NO-EVICT") {
+            store.dispatch_client_ctx.client_no_evict = on;
+        } else {
+            store.dispatch_client_ctx.client_no_touch = on;
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("SETINFO") {
@@ -40165,6 +40178,62 @@ mod tests {
                 "CLUSTER <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
             ))
         );
+    }
+
+    // (frankenredis-qteu5) CLIENT NO-EVICT / NO-TOUCH must write the
+    // per-session flag through DispatchClientContext so Lua / AOF
+    // replay / MULTI EXEC paths propagate the state to fr-runtime via
+    // the existing sync-back. Previously the dispatch_argv arms
+    // returned OK without touching any state.
+    #[test]
+    fn client_no_evict_no_touch_via_dispatch_persist_through_dispatch_client_ctx() {
+        let mut store = Store::new();
+        // Default state — both flags off.
+        assert!(!store.dispatch_client_ctx.client_no_evict);
+        assert!(!store.dispatch_client_ctx.client_no_touch);
+
+        // NO-EVICT ON flips just the evict flag.
+        let ok = dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"NO-EVICT".to_vec(),
+                b"ON".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("client no-evict on");
+        assert_eq!(ok, RespFrame::SimpleString("OK".to_string()));
+        assert!(store.dispatch_client_ctx.client_no_evict);
+        assert!(!store.dispatch_client_ctx.client_no_touch);
+
+        // NO-TOUCH ON flips the touch flag without disturbing evict.
+        dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"NO-TOUCH".to_vec(),
+                b"ON".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("client no-touch on");
+        assert!(store.dispatch_client_ctx.client_no_evict);
+        assert!(store.dispatch_client_ctx.client_no_touch);
+
+        // OFF flips back.
+        dispatch_argv(
+            &[
+                b"CLIENT".to_vec(),
+                b"NO-EVICT".to_vec(),
+                b"OFF".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("client no-evict off");
+        assert!(!store.dispatch_client_ctx.client_no_evict);
+        assert!(store.dispatch_client_ctx.client_no_touch);
     }
 
     // (frankenredis-bdokn) Upstream cluster.c::clusterGenNodeDescription

@@ -1108,6 +1108,12 @@ pub struct DispatchClientContext {
     pub is_pubsub: bool,
     pub client_tracking: ClientTrackingState,
     pub client_reply: ClientReplyState,
+    /// Mirrors the per-session CLIENT NO-EVICT flag so dispatch_argv
+    /// callers (Lua / AOF replay / MULTI EXEC) can update session
+    /// state through the runtime sync-back. (frankenredis-qteu5)
+    pub client_no_evict: bool,
+    /// Mirrors the per-session CLIENT NO-TOUCH flag, same pattern.
+    pub client_no_touch: bool,
     pub acl_permissions: Option<DispatchAclPermissions>,
 }
 
@@ -1133,6 +1139,8 @@ impl Default for DispatchClientContext {
             is_pubsub: false,
             client_tracking: ClientTrackingState::default(),
             client_reply: ClientReplyState::default(),
+            client_no_evict: false,
+            client_no_touch: false,
             acl_permissions: None,
         }
     }

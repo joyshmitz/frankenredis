@@ -5604,6 +5604,8 @@ impl Runtime {
             is_pubsub,
             client_tracking: session.client_tracking.clone(),
             client_reply: session.client_reply.clone(),
+            client_no_evict: session.client_no_evict,
+            client_no_touch: session.client_no_touch,
             acl_permissions: self
                 .server
                 .auth_state
@@ -5782,6 +5784,8 @@ impl Runtime {
             .client_tracking
             .clone();
         self.session.client_reply = self.server.store.dispatch_client_ctx.client_reply.clone();
+        self.session.client_no_evict = self.server.store.dispatch_client_ctx.client_no_evict;
+        self.session.client_no_touch = self.server.store.dispatch_client_ctx.client_no_touch;
     }
 
     fn dispatch_with_client_context(
