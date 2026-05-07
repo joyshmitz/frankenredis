@@ -21576,6 +21576,39 @@ mod tests {
     }
 
     #[test]
+    fn config_set_arity_and_odd_tail_match_upstream_wordings() {
+        // Pin upstream commands.def CONFIG SET arity = -4 + handler
+        // pair-walker (frankenredis-vj6b):
+        //   - argv.len() < 4 -> WrongSubcommandArity ('wrong number of
+        //     arguments for config|set command')
+        //   - argv.len() odd -> SyntaxError
+        let mut rt = Runtime::default_strict();
+
+        // Too few args: CONFIG SET maxmemory.
+        let too_few = rt.execute_frame(command(&[b"CONFIG", b"SET", b"maxmemory"]), 0);
+        assert_eq!(
+            too_few,
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'config|set' command".to_string()
+            )
+        );
+
+        // Odd tail: CONFIG SET maxmemory 100mb extra (argc=5).
+        let odd_tail = rt.execute_frame(
+            command(&[b"CONFIG", b"SET", b"maxmemory", b"100mb", b"extra"]),
+            1,
+        );
+        assert_eq!(odd_tail, RespFrame::Error("ERR syntax error".to_string()));
+
+        // Sanity: even-paired tail still parses successfully.
+        let ok = rt.execute_frame(
+            command(&[b"CONFIG", b"SET", b"maxmemory", b"100mb"]),
+            2,
+        );
+        assert_eq!(ok, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
     fn debug_without_subcommand_replies_wrong_arity_before_security_gate() {
         // Pin upstream server.c::processCommand ordering: the table-
         // level commandCheckArity runs BEFORE the CMD_PROTECTED gate,
