@@ -8069,15 +8069,133 @@ fn cluster_cmd(
         return Err(CommandError::WrongArity("CLUSTER"));
     }
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
-    if sub.eq_ignore_ascii_case("HELP")
-        || sub.eq_ignore_ascii_case("INFO")
-        || sub.eq_ignore_ascii_case("SLOTS")
+    if sub.eq_ignore_ascii_case("HELP") {
+        if argv.len() != 2 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        if !store.cluster_enabled {
+            return Err(cluster_disabled_error());
+        }
+        // Mirror upstream cluster.c::clusterCommand:5890-5949 line-for-line
+        // (frankenredis-u5he7).
+        return Ok(RespFrame::Array(Some(vec![
+            hello_simple("CLUSTER <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("ADDSLOTS <slot> [<slot> ...]"),
+            hello_simple("    Assign slots to current node."),
+            hello_simple("ADDSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]"),
+            hello_simple(
+                "    Assign slots which are between <start-slot> and <end-slot> to current node.",
+            ),
+            hello_simple("BUMPEPOCH"),
+            hello_simple("    Advance the cluster config epoch."),
+            hello_simple("COUNT-FAILURE-REPORTS <node-id>"),
+            hello_simple("    Return number of failure reports for <node-id>."),
+            hello_simple("COUNTKEYSINSLOT <slot>"),
+            hello_simple("    Return the number of keys in <slot>."),
+            hello_simple("DELSLOTS <slot> [<slot> ...]"),
+            hello_simple("    Delete slots information from current node."),
+            hello_simple("DELSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]"),
+            hello_simple(
+                "    Delete slots information which are between <start-slot> and <end-slot> from current node.",
+            ),
+            hello_simple("FAILOVER [FORCE|TAKEOVER]"),
+            hello_simple("    Promote current replica node to being a master."),
+            hello_simple("FORGET <node-id>"),
+            hello_simple("    Remove a node from the cluster."),
+            hello_simple("GETKEYSINSLOT <slot> <count>"),
+            hello_simple("    Return key names stored by current node in a slot."),
+            hello_simple("FLUSHSLOTS"),
+            hello_simple("    Delete current node own slots information."),
+            hello_simple("INFO"),
+            hello_simple("    Return information about the cluster."),
+            hello_simple("KEYSLOT <key>"),
+            hello_simple("    Return the hash slot for <key>."),
+            hello_simple("MEET <ip> <port> [<bus-port>]"),
+            hello_simple("    Connect nodes into a working cluster."),
+            hello_simple("MYID"),
+            hello_simple("    Return the node id."),
+            hello_simple("MYSHARDID"),
+            hello_simple("    Return the node's shard id."),
+            hello_simple("NODES"),
+            hello_simple(
+                "    Return cluster configuration seen by node. Output format:",
+            ),
+            hello_simple(
+                "    <id> <ip:port@bus-port[,hostname]> <flags> <master> <pings> <pongs> <epoch> <link> <slot> ...",
+            ),
+            hello_simple("REPLICATE <node-id>"),
+            hello_simple("    Configure current node as replica to <node-id>."),
+            hello_simple("RESET [HARD|SOFT]"),
+            hello_simple("    Reset current node (default: soft)."),
+            hello_simple("SET-CONFIG-EPOCH <epoch>"),
+            hello_simple("    Set config epoch of current node."),
+            hello_simple(
+                "SETSLOT <slot> (IMPORTING <node-id>|MIGRATING <node-id>|STABLE|NODE <node-id>)",
+            ),
+            hello_simple("    Set slot state."),
+            hello_simple("REPLICAS <node-id>"),
+            hello_simple("    Return <node-id> replicas."),
+            hello_simple("SAVECONFIG"),
+            hello_simple("    Force saving cluster configuration on disk."),
+            hello_simple("SLOTS"),
+            hello_simple(
+                "    Return information about slots range mappings. Each range is made of:",
+            ),
+            hello_simple(
+                "    start, end, master and replicas IP addresses, ports and ids",
+            ),
+            hello_simple("SHARDS"),
+            hello_simple(
+                "    Return information about slot range mappings and the nodes associated with them.",
+            ),
+            hello_simple("LINKS"),
+            hello_simple(
+                "    Return information about all network links between this node and its peers.",
+            ),
+            hello_simple(
+                "    Output format is an array where each array element is a map containing attributes of a link",
+            ),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
+        ])));
+    }
+    if sub.eq_ignore_ascii_case("INFO")
         || sub.eq_ignore_ascii_case("NODES")
     {
         if argv.len() != 2 {
             return Err(cluster_wrong_subcommand_arity(sub));
         }
+        // INFO/NODES still stubbed when cluster_enabled is true —
+        // synthesizing the multi-line state strings is a follow-up.
+        // (frankenredis-u5he7)
         return Err(cluster_disabled_error());
+    }
+    if sub.eq_ignore_ascii_case("SLOTS") {
+        if argv.len() != 2 {
+            return Err(cluster_wrong_subcommand_arity(sub));
+        }
+        if !store.cluster_enabled {
+            return Err(cluster_disabled_error());
+        }
+        // Upstream cluster.c::clusterReplyShards-style entries: each
+        // assigned slot range becomes [start, end, [primary_ip,
+        // primary_port, primary_id]]. fr models a single self node
+        // with no peer replicas. (frankenredis-u5he7)
+        let slot_pairs = cluster_slot_range_frames(&store.cluster_assigned_slots);
+        let mut entries = Vec::new();
+        let mut i = 0;
+        while i + 1 < slot_pairs.len() {
+            let start = slot_pairs[i].clone();
+            let end = slot_pairs[i + 1].clone();
+            let primary = RespFrame::Array(Some(vec![
+                RespFrame::BulkString(Some(b"".to_vec())),
+                RespFrame::Integer(i64::from(store.server_port)),
+                RespFrame::BulkString(Some(store.server_run_id.as_bytes().to_vec())),
+            ]));
+            entries.push(RespFrame::Array(Some(vec![start, end, primary])));
+            i += 2;
+        }
+        return Ok(RespFrame::Array(Some(entries)));
     }
     if sub.eq_ignore_ascii_case("LINKS") {
         if argv.len() != 2 {
@@ -39949,6 +40067,67 @@ mod tests {
             let err = dispatch_argv(argv, &mut store, 0).unwrap_err();
             assert_eq!(err, cluster_wrong_subcommand_arity(sub), "argv={argv:?}");
         }
+    }
+
+    // (frankenredis-u5he7) Upstream cluster.c::clusterCommand emits
+    // the HELP / SLOTS replies when cluster_enabled is true. Pin
+    // both happy paths and the cluster-disabled rejection.
+    #[test]
+    fn cluster_help_returns_help_array_when_cluster_enabled() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"HELP".to_vec()], &mut store, 0)
+            .expect("cluster help");
+        let RespFrame::Array(Some(items)) = out else {
+            panic!("expected array reply for CLUSTER HELP"); // ubs:ignore — AI triage
+        };
+        assert!(
+            items.iter().any(|f| matches!(f, RespFrame::SimpleString(s) if s == "HELP")),
+            "HELP entry must appear in CLUSTER HELP output, got {items:?}"
+        );
+        assert!(
+            items.iter().any(|f| matches!(f, RespFrame::SimpleString(s) if s == "INFO")),
+            "INFO entry must appear in CLUSTER HELP output, got {items:?}"
+        );
+        // First entry is the standard subcommand envelope.
+        assert_eq!(
+            items.first(),
+            Some(&RespFrame::SimpleString(
+                "CLUSTER <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn cluster_slots_returns_assigned_ranges_when_cluster_enabled() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        // No slots assigned → empty array.
+        let out = dispatch_argv(&[b"CLUSTER".to_vec(), b"SLOTS".to_vec()], &mut store, 0)
+            .expect("cluster slots empty");
+        assert_eq!(out, RespFrame::Array(Some(vec![])));
+        // After ADDSLOTS 0 1 2 → one merged range entry.
+        dispatch_argv(
+            &[
+                b"CLUSTER".to_vec(),
+                b"ADDSLOTS".to_vec(),
+                b"0".to_vec(),
+                b"1".to_vec(),
+                b"2".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("addslots");
+        let RespFrame::Array(Some(ranges)) = dispatch_argv(
+            &[b"CLUSTER".to_vec(), b"SLOTS".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("cluster slots populated") else {
+            panic!("expected array"); // ubs:ignore — AI triage
+        };
+        assert_eq!(ranges.len(), 1, "0..2 merges into one range, got {ranges:?}");
     }
 
     #[test]
