@@ -8287,21 +8287,27 @@ fn cluster_cmd(
         ));
     }
     if sub.eq_ignore_ascii_case("FAILOVER") {
-        // CLUSTER FAILOVER [FORCE | TAKEOVER]+ — upstream accepts
-        // either or both flags in any order. The cluster-enabled
-        // gate fires BEFORE any subcommand-level arity / option
-        // parsing, so excess args still yield 'cluster support
-        // disabled' in standalone mode. (br-frankenredis-clusterord)
+        // CLUSTER FAILOVER [FORCE|TAKEOVER] — upstream
+        // cluster.c::clusterCommand gates this branch on
+        // `argc == 2 || argc == 3`, so a 4-arg form like
+        // "CLUSTER FAILOVER FORCE TAKEOVER" skips the branch and
+        // falls through to the generic unknown-subcommand error.
+        // FORCE and TAKEOVER are mutually exclusive — only one
+        // may appear. The cluster-enabled gate fires BEFORE any
+        // subcommand-level validation, so standalone instances
+        // still get 'cluster support disabled' regardless of
+        // arg shape. (br-frankenredis-clusterord, frankenredis-7mqn0)
         if !store.cluster_enabled {
             return Err(cluster_disabled_error());
         }
-        if argv.len() > 4 {
-            return Err(cluster_wrong_subcommand_arity(sub));
+        if argv.len() > 3 {
+            return Err(cluster_subcommand_syntax_error(sub));
         }
-        for flag in &argv[2..] {
+        if argv.len() == 3 {
             let flag_str =
-                std::str::from_utf8(flag).map_err(|_| CommandError::InvalidUtf8Argument)?;
-            if !flag_str.eq_ignore_ascii_case("FORCE") && !flag_str.eq_ignore_ascii_case("TAKEOVER")
+                std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+            if !flag_str.eq_ignore_ascii_case("FORCE")
+                && !flag_str.eq_ignore_ascii_case("TAKEOVER")
             {
                 return Err(CommandError::SyntaxError);
             }
@@ -39941,6 +39947,46 @@ mod tests {
             )
             .unwrap_err(),
             CommandError::SyntaxError
+        );
+        // FAILOVER with two flags (e.g. FORCE TAKEOVER) → upstream falls
+        // through to the unknown-subcommand error since
+        // `argc == 2 || argc == 3` is the gate. (frankenredis-7mqn0)
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"FAILOVER".to_vec(),
+                    b"FORCE".to_vec(),
+                    b"TAKEOVER".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'FAILOVER'. \
+                 Try CLUSTER HELP."
+                    .to_string()
+            )
+        );
+        // FAILOVER with duplicate flags also falls through.
+        assert_eq!(
+            dispatch_argv(
+                &[
+                    b"CLUSTER".to_vec(),
+                    b"FAILOVER".to_vec(),
+                    b"FORCE".to_vec(),
+                    b"FORCE".to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_err(),
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'FAILOVER'. \
+                 Try CLUSTER HELP."
+                    .to_string()
+            )
         );
 
         // ADDSLOTS / DELSLOTS update the single-node slot assignment surface.
