@@ -21602,6 +21602,44 @@ mod tests {
     }
 
     #[test]
+    fn acl_setuser_rejects_unknown_category_modifier() {
+        // Pin upstream acl.c::ACLSetUser rejection of +@<unknown> /
+        // -@<unknown> with "Unknown command or category name in ACL"
+        // (frankenredis-acn5). +@all and known categories must still
+        // succeed; only the bad-category contexts surface the error.
+        let mut rt = Runtime::default_strict();
+
+        let reply = rt.execute_frame(
+            command(&[b"ACL", b"SETUSER", b"alice", b"on", b">pw", b"+@badcat"]),
+            0,
+        );
+        assert_eq!(
+            reply,
+            RespFrame::Error(
+                "ERR Error in ACL SETUSER modifier '+@badcat': Unknown command or category name in ACL".to_string()
+            )
+        );
+
+        let reply = rt.execute_frame(
+            command(&[b"ACL", b"SETUSER", b"alice", b"on", b">pw", b"-@bogus"]),
+            1,
+        );
+        assert_eq!(
+            reply,
+            RespFrame::Error(
+                "ERR Error in ACL SETUSER modifier '-@bogus': Unknown command or category name in ACL".to_string()
+            )
+        );
+
+        // Sanity: real category +@read still succeeds.
+        let reply = rt.execute_frame(
+            command(&[b"ACL", b"SETUSER", b"alice", b"on", b">pw", b"+@read"]),
+            2,
+        );
+        assert_eq!(reply, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
     fn acl_per_subcommand_rejects_unknown_selector() {
         let mut rt = Runtime::default_strict();
 
