@@ -16193,6 +16193,40 @@ mod tests {
     }
 
     #[test]
+    fn client_list_id_filter_accepts_nonpositive_silently_only_errors_on_nonnumeric() {
+        // Pin upstream networking.c::clientCommand CLIENT LIST ID
+        // semantics (frankenredis-ohf5):
+        //   - non-numeric ID -> "Invalid client ID" error
+        //   - numeric ID (0 / negative) -> empty filter, no error,
+        //     since lookupClientByID returns NULL.
+        let mut rt = Runtime::default_strict();
+
+        let zero = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"ID", b"0"]), 0);
+        assert_eq!(zero, RespFrame::BulkString(Some(b"".to_vec())));
+
+        let negative = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"ID", b"-1"]), 1);
+        assert_eq!(negative, RespFrame::BulkString(Some(b"".to_vec())));
+
+        let bogus = rt.execute_frame(command(&[b"CLIENT", b"LIST", b"ID", b"abc"]), 2);
+        assert_eq!(
+            bogus,
+            RespFrame::Error("ERR Invalid client ID".to_string())
+        );
+
+        // Mixed numeric + non-numeric: short-circuits on the bogus
+        // token (matches upstream's getLongLongFromObjectOrReply
+        // failure). Order in argv determines which token errors.
+        let mixed = rt.execute_frame(
+            command(&[b"CLIENT", b"LIST", b"ID", b"0", b"abc"]),
+            3,
+        );
+        assert_eq!(
+            mixed,
+            RespFrame::Error("ERR Invalid client ID".to_string())
+        );
+    }
+
+    #[test]
     fn client_list_field_order_matches_upstream_redis_72() {
         // Pins the exact field order emitted by client_info_line_for_session.
         // Upstream networking.c::catClientInfoString format string at
