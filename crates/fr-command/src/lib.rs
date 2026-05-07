@@ -18437,8 +18437,18 @@ fn restore_cmd(
 }
 
 fn sort_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
+    sort_generic(argv, store, now_ms, /* readonly */ false, "SORT")
+}
+
+fn sort_generic(
+    argv: &[Vec<u8>],
+    store: &mut Store,
+    now_ms: u64,
+    readonly: bool,
+    cmd_name: &'static str,
+) -> Result<RespFrame, CommandError> {
     if argv.len() < 2 {
-        return Err(CommandError::WrongArity("SORT"));
+        return Err(CommandError::WrongArity(cmd_name));
     }
     let key = &argv[1];
 
@@ -18480,7 +18490,12 @@ fn sort_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
             desc = true;
         } else if arg.eq_ignore_ascii_case("ALPHA") {
             alpha = true;
-        } else if arg.eq_ignore_ascii_case("STORE") {
+        } else if !readonly && arg.eq_ignore_ascii_case("STORE") {
+            // (frankenredis-lryev) Mirror upstream sort.c line 228:
+            // STORE is gated on `readonly == 0`. Under SORT_RO the
+            // STORE arm is unreachable, so a literal 'STORE' token
+            // can land in a GET/BY pattern slot without being
+            // misclassified as a flag.
             if i + 1 >= argv.len() {
                 return Ok(RespFrame::Error("ERR syntax error".to_string()));
             }
@@ -18656,18 +18671,13 @@ fn sort_ro_cmd(
     store: &mut Store,
     now_ms: u64,
 ) -> Result<RespFrame, CommandError> {
-    if argv.len() < 2 {
-        return Err(CommandError::WrongArity("SORT_RO"));
-    }
-    // SORT_RO rejects the STORE option
-    for arg in &argv[2..] {
-        if let Ok(s) = std::str::from_utf8(arg)
-            && s.eq_ignore_ascii_case("STORE")
-        {
-            return Ok(RespFrame::Error("ERR syntax error".to_string()));
-        }
-    }
-    sort_cmd(argv, store, now_ms)
+    // (frankenredis-lryev) Delegate to sort_generic with readonly=true.
+    // Upstream sort.c::sortCommandGeneric flips the readonly flag on
+    // line 189, and the STORE arm at line 228 is gated by that flag —
+    // so SORT_RO simply doesn't recognise STORE as a flag, which means
+    // a literal 'STORE' token can validly land in a GET/BY pattern
+    // slot. The previous pre-scan rejected those valid uses.
+    sort_generic(argv, store, now_ms, /* readonly */ true, "SORT_RO")
 }
 
 /// Look up a sort key using a BY pattern for the SORT command.
@@ -41644,6 +41654,85 @@ mod tests {
             }
             other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
         }
+    }
+
+    #[test]
+    fn sort_ro_accepts_store_token_in_get_pattern_slot() {
+        // (frankenredis-lryev) Upstream sort.c::sortCommandGeneric
+        // gates STORE on `readonly == 0` — so under SORT_RO the token
+        // 'STORE' is not recognised as a flag, and can validly appear
+        // as a GET pattern. fr was pre-scanning all of argv[2..] for
+        // 'STORE' and over-rejecting these valid uses.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"RPUSH".to_vec(),
+                b"mylist".to_vec(),
+                b"3".to_vec(),
+                b"1".to_vec(),
+                b"2".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        // SORT_RO mylist GET STORE — STORE is the GET pattern, not a flag.
+        // GET pattern without '*' returns nil for every element.
+        let out = dispatch_argv(
+            &[
+                b"SORT_RO".to_vec(),
+                b"mylist".to_vec(),
+                b"GET".to_vec(),
+                b"STORE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("SORT_RO mylist GET STORE must not error");
+        match out {
+            RespFrame::Array(Some(arr)) => {
+                assert_eq!(arr.len(), 3);
+            }
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
+        }
+
+        // SORT_RO mylist BY STORE — BY constant pattern (no '*') means
+        // dontsort=true; result is original order without lookup.
+        let out = dispatch_argv(
+            &[
+                b"SORT_RO".to_vec(),
+                b"mylist".to_vec(),
+                b"BY".to_vec(),
+                b"STORE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("SORT_RO mylist BY STORE must not error");
+        match out {
+            RespFrame::Array(Some(arr)) => {
+                assert_eq!(arr.len(), 3);
+            }
+            other => panic!("expected array, got {other:?}"), // ubs:ignore — AI triage
+        }
+
+        // SORT_RO mylist STORE dest — STORE used as a flag must still
+        // be rejected (SyntaxError) since the readonly path doesn't
+        // recognise it.
+        let err = dispatch_argv(
+            &[
+                b"SORT_RO".to_vec(),
+                b"mylist".to_vec(),
+                b"STORE".to_vec(),
+                b"dest".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("SORT_RO with STORE flag must surface as Error frame")
+        ;
+        assert_eq!(err, RespFrame::Error("ERR syntax error".to_string()));
     }
 
     #[test]
