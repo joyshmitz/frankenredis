@@ -29739,6 +29739,65 @@ mod tests {
     }
 
     #[test]
+    fn hincrbyfloat_non_numeric_field_uses_hash_specific_wording() {
+        // Pin upstream t_hash.c::hincrbyfloatCommand wording: when
+        // the existing field's value can't be parsed as a float,
+        // surface "hash value is not a float" (paralleling HINCRBY's
+        // "hash value is not an integer"), not the generic
+        // "value is not a valid float". (frankenredis-tdh9)
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"HSET".to_vec(),
+                b"h".to_vec(),
+                b"f".to_vec(),
+                b"abc".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let bad_field = dispatch_argv(
+            &[
+                b"HINCRBYFLOAT".to_vec(),
+                b"h".to_vec(),
+                b"f".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("hincrbyfloat bad field");
+        assert_eq!(
+            bad_field,
+            CommandError::Custom("ERR hash value is not a float".to_string())
+        );
+
+        // Sanity: HINCRBY (integer variant) keeps "hash value is not
+        // an integer" wording.
+        let bad_int = dispatch_argv(
+            &[
+                b"HINCRBY".to_vec(),
+                b"h".to_vec(),
+                b"f".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let got = match bad_int {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(got, "ERR hash value is not an integer".to_string());
+    }
+
+    #[test]
     fn zincrby_zadd_incr_nan_error_wording_matches_upstream() {
         // Pin upstream t_zset.c NaN-result wording for ZINCRBY and
         // ZADD INCR (frankenredis-r76j): "resulting score is not a
