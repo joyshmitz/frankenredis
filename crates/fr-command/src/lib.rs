@@ -5870,6 +5870,19 @@ fn xtrim(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, 
     let is_maxlen = eq_ascii_command(&argv[2], b"MAXLEN");
     let is_minid = eq_ascii_command(&argv[2], b"MINID");
     if !is_maxlen && !is_minid {
+        // (frankenredis-d5y9h) Upstream
+        // streamParseAddOrTrimArgsOrReply (t_stream.c lines 968-1000)
+        // recognises LIMIT iteratively and, after the loop, emits a
+        // specific error when LIMIT was set but no trimming strategy
+        // was selected. fr's restrictive 'argv[2] must be MAXLEN or
+        // MINID' check otherwise falls through to a generic
+        // SyntaxError that hides the clearer LIMIT-specific message.
+        if eq_ascii_command(&argv[2], b"LIMIT") {
+            return Ok(RespFrame::Error(
+                "ERR syntax error, LIMIT cannot be used without specifying a trimming strategy"
+                    .to_string(),
+            ));
+        }
         return Err(CommandError::SyntaxError);
     }
 
@@ -25663,6 +25676,29 @@ mod tests {
         )
         .expect_err("xtrim arity");
         assert!(matches!(arity, CommandError::WrongArity("XTRIM")));
+
+        // (frankenredis-d5y9h) XTRIM key LIMIT N — LIMIT alone without
+        // MAXLEN/MINID. Upstream streamParseAddOrTrimArgsOrReply
+        // (t_stream.c lines 998-1000) emits the specific error wording.
+        // fr previously fell through to a generic 'syntax error'.
+        let limit_no_strategy = dispatch_argv(
+            &[
+                b"XTRIM".to_vec(),
+                b"stream".to_vec(),
+                b"LIMIT".to_vec(),
+                b"5".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xtrim LIMIT without strategy must surface as Error frame");
+        assert_eq!(
+            limit_no_strategy,
+            RespFrame::Error(
+                "ERR syntax error, LIMIT cannot be used without specifying a trimming strategy"
+                    .to_string()
+            )
+        );
 
         store.set(b"k".to_vec(), b"v".to_vec(), None, 0);
         let wrongtype = dispatch_argv(
