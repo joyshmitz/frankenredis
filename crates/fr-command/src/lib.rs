@@ -37720,6 +37720,69 @@ mod tests {
     }
 
     #[test]
+    fn eval_rejects_unknown_shebang_engine_flags_and_options_like_redis() {
+        // Pin upstream eval.c::evalExtractShebangFlags rejection
+        // (frankenredis-52sr) for malformed `#!...\n` shebang lines.
+        // Wordings byte-matched against vendored redis 7.2.4 via
+        // differential probe:
+        //   #!python\nreturn 1            -> "Unexpected engine in script shebang: #!python"
+        //   #!lua flags=no-such-flag\n... -> "Unexpected flag in script shebang: no-such-flag"
+        //   #!lua bogustoken\n...         -> "Unknown lua shebang option: bogustoken"
+        //   #!lua name=foo flags=...\n... -> "Unknown lua shebang option: name=foo"
+        //                                     (name= is reserved for FUNCTION LOAD)
+        let mut store = Store::new();
+        let cases: &[(&[u8], &str)] = &[
+            (
+                b"#!python\nreturn 1",
+                "ERR Unexpected engine in script shebang: #!python",
+            ),
+            (
+                b"#!lua flags=no-such-flag\nreturn 1",
+                "ERR Unexpected flag in script shebang: no-such-flag",
+            ),
+            (
+                b"#!lua bogustoken\nreturn 1",
+                "ERR Unknown lua shebang option: bogustoken",
+            ),
+            (
+                b"#!lua name=foo flags=allow-oom\nreturn 1",
+                "ERR Unknown lua shebang option: name=foo",
+            ),
+        ];
+        for (script, expected) in cases {
+            let out = dispatch_argv(
+                &[b"EVAL".to_vec(), script.to_vec(), b"0".to_vec()],
+                &mut store,
+                0,
+            )
+            .expect("eval bad shebang");
+            assert_eq!(
+                out,
+                RespFrame::Error(expected.to_string()),
+                "script={:?}",
+                String::from_utf8_lossy(script)
+            );
+        }
+        // EVAL_RO must take the same validation path.
+        let out_ro = dispatch_argv(
+            &[
+                b"EVAL_RO".to_vec(),
+                b"#!python\nreturn 1".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval_ro bad shebang");
+        assert_eq!(
+            out_ro,
+            RespFrame::Error(
+                "ERR Unexpected engine in script shebang: #!python".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn eval_rejects_shebang_only_script_with_no_newline_like_redis() {
         // Pin upstream eval.c::evalExtractShebangFlags rejection
         // (frankenredis-gv2u): when the script body starts with `#!`
