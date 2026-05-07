@@ -29798,6 +29798,60 @@ mod tests {
     }
 
     #[test]
+    fn zinter_zunion_zdiff_family_numkeys_zero_uses_per_command_wording() {
+        // Pin upstream t_zset.c per-command "at least 1 input key is
+        // needed for '<cmd>' command" wording for numkeys=0 across
+        // the six aggregate commands (frankenredis-2x9t). Generic
+        // InvalidInteger (ZINTER/ZUNION/ZDIFF/ZDIFFSTORE) and shared
+        // wording (ZUNIONSTORE/ZINTERSTORE) are the regression.
+        let mut store = Store::new();
+
+        // Each argv satisfies the upstream commands.def arity (-3 for
+        // ZINTER/ZUNION/ZDIFF, -4 for the *STORE variants) so the
+        // numkeys=0 path is reached rather than the generic wrong-arity.
+        let cases: &[(&[&[u8]], &str)] = &[
+            (
+                &[b"ZINTER", b"0", b"k"],
+                "ERR at least 1 input key is needed for 'zinter' command",
+            ),
+            (
+                &[b"ZUNION", b"0", b"k"],
+                "ERR at least 1 input key is needed for 'zunion' command",
+            ),
+            (
+                &[b"ZDIFF", b"0", b"k"],
+                "ERR at least 1 input key is needed for 'zdiff' command",
+            ),
+            (
+                &[b"ZDIFFSTORE", b"dst", b"0", b"k"],
+                "ERR at least 1 input key is needed for 'zdiffstore' command",
+            ),
+            (
+                &[b"ZUNIONSTORE", b"dst", b"0", b"k"],
+                "ERR at least 1 input key is needed for 'zunionstore' command",
+            ),
+            (
+                &[b"ZINTERSTORE", b"dst", b"0", b"k"],
+                "ERR at least 1 input key is needed for 'zinterstore' command",
+            ),
+        ];
+
+        for (argv_in, expected) in cases {
+            let argv: Vec<Vec<u8>> = argv_in.iter().map(|s| s.to_vec()).collect();
+            let result = dispatch_argv(&argv, &mut store, 0);
+            let got = match result {
+                Ok(RespFrame::Error(s)) => s,
+                Err(e) => match e.to_resp() {
+                    RespFrame::Error(s) => s,
+                    other => panic!("expected error frame, got {other:?}"),
+                },
+                other => panic!("expected error frame for {argv_in:?}, got {other:?}"),
+            };
+            assert_eq!(&got, *expected, "argv: {argv_in:?}");
+        }
+    }
+
+    #[test]
     fn zincrby_zadd_incr_nan_error_wording_matches_upstream() {
         // Pin upstream t_zset.c NaN-result wording for ZINCRBY and
         // ZADD INCR (frankenredis-r76j): "resulting score is not a
