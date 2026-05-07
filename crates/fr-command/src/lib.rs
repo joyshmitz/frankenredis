@@ -30664,6 +30664,85 @@ mod tests {
     }
 
     #[test]
+    fn getbit_setbit_reject_offsets_above_4gib() {
+        // Pin upstream bitops.c::getBitOffsetFromArgument bound:
+        // bit offsets must satisfy (offset >> 3) < proto_max_bulk_len
+        // (default 512 MiB), i.e. bits must be < 2^32 (4 GiB).
+        // Both GETBIT and SETBIT reject above-bound and negative
+        // offsets with the same wording. (frankenredis-qd8i)
+        let mut store = Store::new();
+
+        for cmd in [b"GETBIT".as_slice(), b"SETBIT".as_slice()] {
+            // Above 4 GiB bits.
+            let mut argv: Vec<Vec<u8>> = vec![
+                cmd.to_vec(),
+                b"k".to_vec(),
+                b"4294967296".to_vec(),
+            ];
+            if cmd == b"SETBIT" {
+                argv.push(b"1".to_vec());
+            }
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("offset too high");
+            assert_eq!(
+                err,
+                CommandError::Custom(
+                    "ERR bit offset is not an integer or out of range".to_string()
+                ),
+                "{cmd:?}"
+            );
+
+            // Far above (99 billion).
+            let mut argv: Vec<Vec<u8>> = vec![
+                cmd.to_vec(),
+                b"k".to_vec(),
+                b"99999999999".to_vec(),
+            ];
+            if cmd == b"SETBIT" {
+                argv.push(b"1".to_vec());
+            }
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("offset huge");
+            assert_eq!(
+                err,
+                CommandError::Custom(
+                    "ERR bit offset is not an integer or out of range".to_string()
+                ),
+                "{cmd:?}"
+            );
+
+            // Negative.
+            let mut argv: Vec<Vec<u8>> = vec![
+                cmd.to_vec(),
+                b"k".to_vec(),
+                b"-1".to_vec(),
+            ];
+            if cmd == b"SETBIT" {
+                argv.push(b"1".to_vec());
+            }
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("negative");
+            assert_eq!(
+                err,
+                CommandError::Custom(
+                    "ERR bit offset is not an integer or out of range".to_string()
+                ),
+                "{cmd:?}"
+            );
+        }
+
+        // Sanity: just below the bound parses successfully.
+        let just_below = dispatch_argv(
+            &[
+                b"GETBIT".to_vec(),
+                b"nokey".to_vec(),
+                b"4294967295".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("just-below-bound");
+        assert_eq!(just_below, RespFrame::Integer(0));
+    }
+
+    #[test]
     fn bitpos_missing_key_short_circuits_before_arg_parse() {
         // Pin upstream t_string.c::bitposCommand ordering: missing
         // key returns (bit ? -1 : 0) regardless of any trailing
