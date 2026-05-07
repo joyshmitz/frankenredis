@@ -17445,8 +17445,27 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("RELOAD") {
-        if argv.len() != 2 {
-            return Err(CommandError::WrongArity("DEBUG"));
+        // Upstream debug.c::debugCommand accepts the optional
+        // [NOSAVE] [NOFLUSH] [MERGE] keyword args after DEBUG RELOAD
+        // (each may be repeated; upstream parses them in any order via
+        // a per-arg loop). Unknown tokens surface the dedicated
+        // wording. fr-command honours request_debug_reload() for the
+        // persistence side and accepts the keywords for arity parity
+        // — the flag-driven side effects (NOSAVE skips snapshot,
+        // NOFLUSH preserves keys, MERGE merges loaded keys) are not
+        // modelled by the MVP runtime. (frankenredis-ehnk)
+        for arg in &argv[2..] {
+            let token =
+                std::str::from_utf8(arg).map_err(|_| CommandError::InvalidUtf8Argument)?;
+            if !token.eq_ignore_ascii_case("MERGE")
+                && !token.eq_ignore_ascii_case("NOFLUSH")
+                && !token.eq_ignore_ascii_case("NOSAVE")
+            {
+                return Ok(RespFrame::Error(
+                    "ERR DEBUG RELOAD only supports the MERGE, NOFLUSH and NOSAVE options."
+                        .to_string(),
+                ));
+            }
         }
         store.request_debug_reload();
         Ok(RespFrame::SimpleString("OK".to_string()))
@@ -38730,6 +38749,68 @@ mod tests {
             .expect("debug reload");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
         assert!(store.take_debug_reload_requested());
+    }
+
+    #[test]
+    fn debug_reload_accepts_merge_noflush_nosave_options_and_rejects_unknown() {
+        // Pin upstream debug.c::debugCommand DEBUG RELOAD option parsing
+        // (frankenredis-ehnk): MERGE, NOFLUSH, NOSAVE keywords (any
+        // case, any order, repeats allowed) reply OK; any other token
+        // surfaces the dedicated wording, NOT the generic wrong-arity
+        // reply. fr previously rejected even the legitimate keywords
+        // with WrongArity. Differential probe vs vendored 7.2.4
+        // (--enable-debug-command local) byte-matched both sides.
+        for argv_in in [
+            vec![b"DEBUG".to_vec(), b"RELOAD".to_vec()],
+            vec![b"DEBUG".to_vec(), b"RELOAD".to_vec(), b"NOSAVE".to_vec()],
+            vec![b"DEBUG".to_vec(), b"RELOAD".to_vec(), b"NOFLUSH".to_vec()],
+            vec![b"DEBUG".to_vec(), b"RELOAD".to_vec(), b"MERGE".to_vec()],
+            vec![b"DEBUG".to_vec(), b"RELOAD".to_vec(), b"merge".to_vec()],
+            vec![
+                b"DEBUG".to_vec(),
+                b"RELOAD".to_vec(),
+                b"NOSAVE".to_vec(),
+                b"NOFLUSH".to_vec(),
+                b"MERGE".to_vec(),
+            ],
+        ] {
+            let mut store = Store::new();
+            let out = dispatch_argv(&argv_in, &mut store, 0)
+                .unwrap_or_else(|e| panic!("debug reload accepted form {argv_in:?} failed: {e:?}"));
+            assert_eq!(
+                out,
+                RespFrame::SimpleString("OK".to_string()),
+                "argv={argv_in:?}"
+            );
+            assert!(
+                store.take_debug_reload_requested(),
+                "reload flag should be set for argv={argv_in:?}"
+            );
+        }
+
+        // Unknown option: dedicated wording, not generic wrong-arity.
+        let mut store = Store::new();
+        let bad = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"RELOAD".to_vec(),
+                b"BANANA".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug reload bad option");
+        assert_eq!(
+            bad,
+            RespFrame::Error(
+                "ERR DEBUG RELOAD only supports the MERGE, NOFLUSH and NOSAVE options."
+                    .to_string()
+            )
+        );
+        assert!(
+            !store.take_debug_reload_requested(),
+            "reload flag must NOT be set when an unknown option is rejected"
+        );
     }
 
     #[test]
