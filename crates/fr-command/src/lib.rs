@@ -37720,6 +37720,54 @@ mod tests {
     }
 
     #[test]
+    fn eval_rejects_shebang_only_script_with_no_newline_like_redis() {
+        // Pin upstream eval.c::evalExtractShebangFlags rejection
+        // (frankenredis-gv2u): when the script body starts with `#!`
+        // but has no terminating newline, EVAL replies "ERR Invalid
+        // script shebang" before any engine/flags validation. fr
+        // previously executed the shebang line as the entire body and
+        // returned nil. Differential probe vs vendored redis 7.2.4
+        // confirmed the wording for all three cases below.
+        let mut store = Store::new();
+        let cases: &[&[u8]] = &[
+            b"#!lua flags=no-writes",
+            b"#!python",
+            b"#!lua extra",
+            b"#!",
+            b"#!lua",
+        ];
+        for script in cases {
+            let out = dispatch_argv(
+                &[b"EVAL".to_vec(), script.to_vec(), b"0".to_vec()],
+                &mut store,
+                0,
+            )
+            .expect("eval shebang no-newline");
+            assert_eq!(
+                out,
+                RespFrame::Error("ERR Invalid script shebang".to_string()),
+                "script={:?}",
+                String::from_utf8_lossy(script)
+            );
+        }
+        // EVAL_RO must follow the same path.
+        let out_ro = dispatch_argv(
+            &[
+                b"EVAL_RO".to_vec(),
+                b"#!lua flags=no-writes".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval_ro shebang no-newline");
+        assert_eq!(
+            out_ro,
+            RespFrame::Error("ERR Invalid script shebang".to_string())
+        );
+    }
+
+    #[test]
     fn evalsha_ro_rejects_write_and_may_replicate_commands_like_redis() {
         let mut store = Store::new();
 
