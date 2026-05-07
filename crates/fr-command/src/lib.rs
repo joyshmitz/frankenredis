@@ -35667,6 +35667,81 @@ mod tests {
     }
 
     #[test]
+    fn eval_unknown_command_and_compile_errors_match_upstream() {
+        // Pin upstream script_lua.c::scriptVerifyCommandArity +
+        // luaCallFunction wording. Captured via differential probe vs
+        // vendored 7.2.4 (frankenredis-fo1s):
+        //   - redis.call('NOPE') -> "ERR Unknown Redis command called
+        //     from script script: <sha1>, on @user_script:1."
+        //   - redis.pcall('NOPE').err -> "ERR Unknown Redis command
+        //     called from script" (no SHA1 suffix; pcall packages err)
+        //   - EVAL '@@@' -> "ERR Error compiling script (new function):
+        //     user_script:1: <lua-message>" (compile-time)
+        let mut store = Store::new();
+
+        // redis.call wraps in luaCallFunction's runtime envelope.
+        let call_script = b"return redis.call('NOPE')";
+        let out = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                call_script.to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = out else {
+            panic!("expected error, got {out:?}");
+        };
+        assert!(
+            msg.starts_with("ERR Unknown Redis command called from script"),
+            "{msg}"
+        );
+        assert!(msg.contains("script: "), "missing sha1 envelope: {msg}");
+        assert!(msg.ends_with(", on @user_script:1."), "{msg}");
+
+        // redis.pcall packages the error string into a Lua table whose
+        // .err field is returned as an Error frame by the lua-to-resp
+        // layer, without the runtime envelope.
+        let pcall_script = b"return redis.pcall('NOPE')";
+        let out = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                pcall_script.to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        assert_eq!(
+            out,
+            RespFrame::Error("ERR Unknown Redis command called from script".to_string())
+        );
+
+        // Compile error path runs ahead of any luaCallFunction envelope.
+        let out = dispatch_argv(
+            &[b"EVAL".to_vec(), b"@@@".to_vec(), b"0".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = out else {
+            panic!("expected error, got {out:?}");
+        };
+        assert!(
+            msg.starts_with("ERR Error compiling script (new function): user_script:1: "),
+            "{msg}"
+        );
+        // Compile errors must NOT carry the runtime envelope.
+        assert!(
+            !msg.contains(", on @user_script:1."),
+            "compile error must not append runtime sha1 envelope: {msg}"
+        );
+    }
+
+    #[test]
     fn eval_redis_error_reply_prepends_err_code_when_missing() {
         // Mirror upstream script_lua.c::luaRedisErrorReplyCommand +
         // luaPushErrorBuff: redis.error_reply("err") gets a default
