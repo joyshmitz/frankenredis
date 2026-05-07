@@ -16609,7 +16609,14 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     }
     if sub.eq_ignore_ascii_case("HELP") {
         if argv.len() != 2 {
-            return Err(CommandError::SyntaxError);
+            // Upstream commands.def declares pubsub|help as exact
+            // arity = 2, so extra args surface the table-level
+            // wrong-arity envelope mirroring fr-runtime
+            // (lib.rs::handle_pubsub_command:10175). (frankenredis-vvsx)
+            return Err(CommandError::WrongSubcommandArity {
+                command: "PUBSUB",
+                subcommand: "HELP".to_string(),
+            });
         }
         return Ok(RespFrame::Array(Some(vec![
             RespFrame::SimpleString(
@@ -16646,7 +16653,13 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
     }
     if sub.eq_ignore_ascii_case("CHANNELS") {
         if argv.len() != 2 && argv.len() != 3 {
-            return Err(CommandError::SyntaxError);
+            // Upstream networking.c::pubsubCommand emits the
+            // subcommand-form addReplySubcommandSyntaxError envelope
+            // for arity mismatches, matching what fr-runtime does on
+            // the live path. (frankenredis-vvsx)
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.".to_string(),
+            ));
         }
         let channels = store.pubsub_channels();
         // Optionally filter by glob pattern
@@ -16673,12 +16686,22 @@ fn pubsub_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::Array(Some(result)))
     } else if sub.eq_ignore_ascii_case("NUMPAT") {
         if argv.len() != 2 {
-            return Err(CommandError::SyntaxError);
+            // Upstream commands.def declares PUBSUB NUMPAT as exact
+            // arity = 2; mismatches surface the table-level wrong-arity
+            // wording, not the generic syntax error. (frankenredis-vvsx)
+            return Err(CommandError::WrongSubcommandArity {
+                command: "PUBSUB",
+                subcommand: "NUMPAT".to_string(),
+            });
         }
         Ok(RespFrame::Integer(store.pubsub_numpat() as i64))
     } else if sub.eq_ignore_ascii_case("SHARDCHANNELS") {
         if argv.len() != 2 && argv.len() != 3 {
-            return Err(CommandError::SyntaxError);
+            // (frankenredis-vvsx) Match upstream
+            // addReplySubcommandSyntaxError envelope.
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'SHARDCHANNELS'. Try PUBSUB HELP.".to_string(),
+            ));
         }
         let mut channels: Vec<Vec<u8>> = store.subscribed_shard_channels.iter().cloned().collect();
         if argv.len() > 2 {
@@ -33772,6 +33795,69 @@ mod tests {
     }
 
     #[test]
+    fn pubsub_channels_numpat_shardchannels_arity_match_upstream() {
+        // Pin upstream networking.c::pubsubCommand wording for arity
+        // mismatches: CHANNELS / SHARDCHANNELS surface the
+        // addReplySubcommandSyntaxError envelope; NUMPAT carries the
+        // commands.def table-level wrong-arity reply. Generic
+        // SyntaxError is the regression. (frankenredis-vvsx)
+        let mut store = Store::new();
+
+        let err = dispatch_argv(
+            &[
+                b"PUBSUB".to_vec(),
+                b"CHANNELS".to_vec(),
+                b"a".to_vec(),
+                b"b".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.".to_string()
+            )
+        );
+
+        let err = dispatch_argv(
+            &[
+                b"PUBSUB".to_vec(),
+                b"NUMPAT".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'pubsub|numpat' command".to_string()
+            )
+        );
+
+        let err = dispatch_argv(
+            &[
+                b"PUBSUB".to_vec(),
+                b"SHARDCHANNELS".to_vec(),
+                b"a".to_vec(),
+                b"b".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_resp(),
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'SHARDCHANNELS'. Try PUBSUB HELP.".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn psubscribe_pattern() {
         let mut store = Store::new();
         let out = dispatch_argv(&[b"PSUBSCRIBE".to_vec(), b"news.*".to_vec()], &mut store, 0)
@@ -34150,9 +34236,13 @@ mod tests {
             0,
         )
         .expect_err("pubsub help extra should fail");
+        // (frankenredis-vvsx) Upstream emits the subcommand-arity
+        // envelope, not the generic syntax-error fallthrough.
         assert_eq!(
             err.to_resp(),
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'pubsub|help' command".to_string()
+            )
         );
 
         let err = dispatch_argv(
@@ -34168,7 +34258,9 @@ mod tests {
         .expect_err("pubsub channels extra should fail");
         assert_eq!(
             err.to_resp(),
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error(
+                "ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.".to_string()
+            )
         );
 
         let err = dispatch_argv(
@@ -34179,7 +34271,9 @@ mod tests {
         .expect_err("pubsub numpat extra should fail");
         assert_eq!(
             err.to_resp(),
-            RespFrame::Error("ERR syntax error".to_string())
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'pubsub|numpat' command".to_string()
+            )
         );
 
         let err = dispatch_argv(&[b"PUBSUB".to_vec(), b"BOGUS".to_vec()], &mut store, 0)
