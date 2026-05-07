@@ -29608,6 +29608,146 @@ mod tests {
     }
 
     #[test]
+    fn xgroup_setid_entriesread_form_and_shape_validation_match_upstream() {
+        // Pin XGROUP SETID arity=-5 + handler shape validation
+        // (frankenredis-019w):
+        //   - argc=5  ok
+        //   - argc=7 with ENTRIESREAD <int> ok
+        //   - argc=7 with ENTRIESREAD <bad-int> -> InvalidInteger
+        //   - argc=7 with non-ENTRIESREAD token -> subcommand-syntax-error
+        //   - argc=6 -> subcommand-syntax-error
+        //   - argc=8 -> subcommand-syntax-error
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s".to_vec(),
+                b"g1".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        // Valid argc=7 ENTRIESREAD form.
+        let ok = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"SETID".to_vec(),
+                b"s".to_vec(),
+                b"g1".to_vec(),
+                b"0".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+                b"5".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xgroup setid entriesread");
+        assert_eq!(ok, RespFrame::SimpleString("OK".to_string()));
+
+        // ENTRIESREAD <bad-int> -> InvalidInteger reply.
+        let bad_int = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"SETID".to_vec(),
+                b"s".to_vec(),
+                b"g1".to_vec(),
+                b"0".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+                b"abc".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xgroup setid entriesread bad");
+        assert_eq!(bad_int, CommandError::InvalidInteger);
+
+        // argc=7 with non-ENTRIESREAD token -> subcommand-syntax envelope.
+        let bad_kw = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"SETID".to_vec(),
+                b"s".to_vec(),
+                b"g1".to_vec(),
+                b"0".to_vec(),
+                b"NOPE".to_vec(),
+                b"5".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xgroup setid bad kw");
+        assert_eq!(
+            bad_kw,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP."
+                    .to_string()
+            )
+        );
+
+        // argc=6 -> subcommand-syntax envelope.
+        let argc6 = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"SETID".to_vec(),
+                b"s".to_vec(),
+                b"g1".to_vec(),
+                b"0".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xgroup setid argc6");
+        assert_eq!(
+            argc6,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP."
+                    .to_string()
+            )
+        );
+
+        // argc=8 -> subcommand-syntax envelope.
+        let argc8 = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"SETID".to_vec(),
+                b"s".to_vec(),
+                b"g1".to_vec(),
+                b"0".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+                b"5".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xgroup setid argc8");
+        assert_eq!(
+            argc8,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
     fn xgroup_setid_missing_and_wrongtype_paths() {
         let mut store = Store::new();
 
