@@ -16508,6 +16508,12 @@ mod tests {
             rt.execute_frame(command(&[b"SLOWLOG", b"GET", b"-2"]), 1),
             RespFrame::Error("ERR count should be greater than or equal to -1".to_string())
         );
+        // Unparseable count surfaces the same wording as <-1 in
+        // upstream slowlog.c::slowlogCommand. (frankenredis-zcfq)
+        assert_eq!(
+            rt.execute_frame(command(&[b"SLOWLOG", b"GET", b"BAD"]), 11),
+            RespFrame::Error("ERR count should be greater than or equal to -1".to_string())
+        );
         // (br-frankenredis-slgary)
         assert_eq!(
             rt.execute_frame(command(&[b"SLOWLOG", b"GET", b"1", b"extra"]), 2),
