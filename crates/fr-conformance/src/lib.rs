@@ -166,10 +166,19 @@ pub enum ExpectedFrame {
     Bulk { value: Option<String> },
     BulkContainsAll { value: Vec<String> },
     BulkNotContainsAll { value: Vec<String> },
+    /// Match a SimpleString whose payload contains every needle in `value`.
+    /// Mirror of BulkContainsAll for status-format replies — needed after
+    /// frankenredis-gmqk1 switched DEBUG OBJECT to emit SimpleString
+    /// matching upstream addReplyStatusFormat. (frankenredis-i5icx)
+    SimpleContainsAll { value: Vec<String> },
     Array { value: Vec<ExpectedFrame> },
     NullArray,
     AnyInteger,
     AnyBulk,
+    /// Match any RespFrame::SimpleString. Companion to AnyBulk for
+    /// commands whose reply shape is the addReplyStatus family.
+    /// (frankenredis-i5icx)
+    AnySimple,
     AnyArray,
 }
 
@@ -3040,12 +3049,16 @@ fn expected_to_frame(expected: &ExpectedFrame) -> RespFrame {
         ExpectedFrame::BulkNotContainsAll { value } => {
             RespFrame::BulkString(Some(value.join(" ").into_bytes()))
         }
+        ExpectedFrame::SimpleContainsAll { value } => {
+            RespFrame::SimpleString(value.join(" "))
+        }
         ExpectedFrame::Array { value } => {
             RespFrame::Array(Some(value.iter().map(expected_to_frame).collect()))
         }
         ExpectedFrame::NullArray => RespFrame::Array(None),
         ExpectedFrame::AnyInteger => RespFrame::Integer(0),
         ExpectedFrame::AnyBulk => RespFrame::BulkString(Some(Vec::new())),
+        ExpectedFrame::AnySimple => RespFrame::SimpleString(String::new()),
         ExpectedFrame::AnyArray => RespFrame::Array(Some(Vec::new())),
     }
 }
@@ -3054,6 +3067,7 @@ fn frame_matches_expected(actual: &RespFrame, expected: &ExpectedFrame) -> bool 
     match expected {
         ExpectedFrame::AnyInteger => matches!(actual, RespFrame::Integer(_)),
         ExpectedFrame::AnyBulk => matches!(actual, RespFrame::BulkString(Some(_))),
+        ExpectedFrame::AnySimple => matches!(actual, RespFrame::SimpleString(_)),
         ExpectedFrame::AnyArray => {
             matches!(
                 actual,
@@ -3072,6 +3086,10 @@ fn frame_matches_expected(actual: &RespFrame, expected: &ExpectedFrame) -> bool 
                 let text = String::from_utf8_lossy(bytes);
                 value.iter().all(|needle| !text.contains(needle))
             }
+            _ => false,
+        },
+        ExpectedFrame::SimpleContainsAll { value } => match actual {
+            RespFrame::SimpleString(text) => value.iter().all(|needle| text.contains(needle)),
             _ => false,
         },
         ExpectedFrame::Array { value } => match actual {
@@ -7897,6 +7915,37 @@ mod tests {
         ));
         assert!(!frame_matches_expected(
             &RespFrame::BulkString(Some(b"zero alpha omega".to_vec())),
+            &expected
+        ));
+    }
+
+    #[test]
+    fn expected_frame_simple_contains_all_matches_simple_payload_substrings() {
+        // (frankenredis-i5icx) Mirror of bulk_contains_all for status-
+        // format replies (RespFrame::SimpleString), needed after
+        // frankenredis-gmqk1 switched DEBUG OBJECT to addReplyStatusFormat.
+        let raw = r#"{
+            "kind": "simple_contains_all",
+            "value": ["encoding:embstr", "serializedlength:"]
+        }"#;
+        let expected: ExpectedFrame = serde_json::from_str(raw)
+            .expect("simple-contains-all expected-frame JSON should parse");
+        assert!(frame_matches_expected(
+            &RespFrame::SimpleString(
+                "Value at:0x0 refcount:1 encoding:embstr serializedlength:5 lru:0".to_string()
+            ),
+            &expected
+        ));
+        // BulkString must not satisfy the simple-string matcher.
+        assert!(!frame_matches_expected(
+            &RespFrame::BulkString(Some(
+                b"encoding:embstr serializedlength:5".to_vec()
+            )),
+            &expected
+        ));
+        // Missing needle must fail.
+        assert!(!frame_matches_expected(
+            &RespFrame::SimpleString("encoding:embstr only".to_string()),
             &expected
         ));
     }

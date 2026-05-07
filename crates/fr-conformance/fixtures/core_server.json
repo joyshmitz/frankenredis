@@ -2305,7 +2305,7 @@
         "debug_object_key"
       ],
       "expect": {
-        "kind": "bulk_contains_all",
+        "kind": "simple_contains_all",
         "value": [
           "encoding:embstr",
           "serializedlength:",
