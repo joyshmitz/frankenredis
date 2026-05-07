@@ -35667,6 +35667,74 @@ mod tests {
     }
 
     #[test]
+    fn eval_redis_call_runtime_errors_carry_sha1_envelope() {
+        // Pin the general luaCallFunction runtime envelope ("<msg>
+        // script: <sha1>, on @user_script:1.") for redis.call paths
+        // that bubble non-unknown-command errors. Frankenredis-fdys
+        // covers the general case; frankenredis-fo1s pins the
+        // unknown-command branch specifically. Probe vs vendored
+        // 7.2.4: WRONGTYPE from a list-op on a string key gets the
+        // envelope appended on the redis.call (raise) path; pcall
+        // strips the envelope and packages the error into a table.
+        let mut store = Store::new();
+
+        // Seed a string key so LPUSH triggers WRONGTYPE.
+        dispatch_argv(
+            &[
+                b"SET".to_vec(),
+                b"sk".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let call_script = b"return redis.call('LPUSH', 'sk', 'a')";
+        let out = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                call_script.to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = out else {
+            panic!("expected error, got {out:?}");
+        };
+        // Upstream luaPushErrorBuff preserves WRONGTYPE as the code
+        // and luaCallFunction appends the envelope without re-prefixing.
+        assert!(msg.starts_with("WRONGTYPE "), "{msg}");
+        assert!(
+            msg.contains(" script: ") && msg.ends_with(", on @user_script:1."),
+            "missing sha1 envelope: {msg}"
+        );
+
+        // pcall variant must NOT carry the envelope (table.err is bare).
+        let pcall_script = b"return redis.pcall('LPUSH', 'sk', 'a')";
+        let out = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                pcall_script.to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = out else {
+            panic!("expected error, got {out:?}");
+        };
+        assert!(msg.starts_with("WRONGTYPE "), "{msg}");
+        assert!(
+            !msg.contains(" script: "),
+            "pcall must not carry envelope: {msg}"
+        );
+    }
+
+    #[test]
     fn eval_unknown_command_and_compile_errors_match_upstream() {
         // Pin upstream script_lua.c::scriptVerifyCommandArity +
         // luaCallFunction wording. Captured via differential probe vs
