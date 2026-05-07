@@ -6347,11 +6347,20 @@ impl Runtime {
             }
             .to_resp();
         }
-        let mut deleted = 0i64;
+        // Upstream acl.c::aclCommand DELUSER (lines 2789-2810) runs two
+        // loops: first it scans argv for "default" and rejects the whole
+        // call if it appears anywhere; only then does it perform the
+        // deletions. fr previously fused the two into a single loop, so
+        // `ACL DELUSER alice default bob` would delete alice before
+        // returning the default-rejection error — an atomicity gap.
+        // (frankenredis-thydt)
         for username in &argv[2..] {
             if username.as_slice() == DEFAULT_AUTH_USER {
                 return RespFrame::Error("ERR The 'default' user cannot be removed".to_string());
             }
+        }
+        let mut deleted = 0i64;
+        for username in &argv[2..] {
             if self.server.auth_state.del_user(username) {
                 self.queue_acl_deleted_user_disconnects(username);
                 deleted += 1;
@@ -23162,6 +23171,52 @@ mod tests {
         let mut expected = vec![alice_one.client_id, alice_two.client_id];
         expected.sort_unstable();
         assert_eq!(kills, expected);
+    }
+
+    // (frankenredis-thydt) Upstream acl.c::aclCommand DELUSER pre-validates
+    // the entire arg list for "default" before deleting any user, so a
+    // mid-list "default" rejects atomically without partial deletions.
+    #[test]
+    fn acl_deluser_atomically_rejects_when_default_appears_anywhere_in_argv() {
+        let mut rt = Runtime::default_strict();
+        for user in [b"alice".as_slice(), b"bob".as_slice()] {
+            assert_eq!(
+                rt.execute_frame(
+                    command(&[b"ACL", b"SETUSER", user, b"on", b">pass", b"+@all", b"~*"]),
+                    0,
+                ),
+                RespFrame::SimpleString("OK".to_string())
+            );
+        }
+        // alice precedes default in the arg list. Upstream rejects the
+        // whole call without deleting alice.
+        assert_eq!(
+            rt.execute_frame(
+                command(&[b"ACL", b"DELUSER", b"alice", b"default", b"bob"]),
+                1,
+            ),
+            RespFrame::Error("ERR The 'default' user cannot be removed".to_string())
+        );
+        // Both alice and bob must still exist.
+        let RespFrame::Array(Some(users)) = rt.execute_frame(command(&[b"ACL", b"USERS"]), 2)
+        else {
+            panic!("ACL USERS must return an array");
+        };
+        let user_names: Vec<Vec<u8>> = users
+            .into_iter()
+            .filter_map(|f| match f {
+                RespFrame::BulkString(Some(b)) => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            user_names.iter().any(|u| u == b"alice"),
+            "alice must not be deleted, got users={user_names:?}",
+        );
+        assert!(
+            user_names.iter().any(|u| u == b"bob"),
+            "bob must not be deleted, got users={user_names:?}",
+        );
     }
 
     #[test]
