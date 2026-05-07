@@ -11985,6 +11985,14 @@ fn select(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandError
     let Ok(db_index) = usize::try_from(db) else {
         return Ok(RespFrame::Error("ERR DB index is out of range".to_string()));
     };
+    // Upstream db.c::selectCommand:762-765 rejects SELECT N (N != 0)
+    // when cluster_enabled is true — cluster mode only uses DB 0.
+    // (frankenredis-8qgk7)
+    if store.cluster_enabled && db_index != 0 {
+        return Ok(RespFrame::Error(
+            "ERR SELECT is not allowed in cluster mode".to_string(),
+        ));
+    }
     if db_index < store.database_count {
         store.dispatch_client_ctx.db_index = db_index;
         Ok(RespFrame::SimpleString("OK".to_string()))
@@ -21268,6 +21276,25 @@ mod tests {
             out,
             RespFrame::Error("ERR source and destination objects are the same".to_string())
         );
+    }
+
+    #[test]
+    // (frankenredis-8qgk7) Upstream db.c::selectCommand:762-765 rejects
+    // SELECT N (N != 0) when cluster_enabled is true. Lua / AOF replay
+    // / MULTI EXEC route SELECT through dispatch_argv → fr-command's
+    // select(); pin the same guard there.
+    #[test]
+    fn select_via_dispatch_rejects_nonzero_db_in_cluster_mode() {
+        let mut store = Store::new();
+        store.cluster_enabled = true;
+        let err = dispatch_argv(&[b"SELECT".to_vec(), b"3".to_vec()], &mut store, 0).unwrap();
+        assert_eq!(
+            err,
+            RespFrame::Error("ERR SELECT is not allowed in cluster mode".to_string())
+        );
+        // SELECT 0 stays valid in cluster mode.
+        let ok = dispatch_argv(&[b"SELECT".to_vec(), b"0".to_vec()], &mut store, 0).unwrap();
+        assert_eq!(ok, RespFrame::SimpleString("OK".to_string()));
     }
 
     #[test]

@@ -10368,6 +10368,12 @@ impl Runtime {
             Ok(db) => db,
             Err(reply) => return reply,
         };
+        // Upstream db.c::selectCommand:762-765 rejects SELECT N
+        // (N != 0) when cluster_enabled is true — cluster mode only
+        // uses DB 0. (frankenredis-8qgk7)
+        if self.server.store.cluster_enabled && db != 0 {
+            return RespFrame::Error("ERR SELECT is not allowed in cluster mode".to_string());
+        }
         self.session.selected_db = db;
         RespFrame::SimpleString("OK".to_string())
     }
@@ -14381,6 +14387,28 @@ mod tests {
         assert_eq!(
             rt.execute_frame(command(&[b"SELECT", b"01"]), 1),
             RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+    }
+
+    // (frankenredis-8qgk7) Upstream db.c::selectCommand:762-765 rejects
+    // SELECT N (N != 0) when cluster_enabled is true — cluster mode
+    // only uses DB 0. SELECT 0 stays valid in cluster mode.
+    #[test]
+    fn select_in_cluster_mode_rejects_nonzero_db_index() {
+        let mut rt = Runtime::default_strict();
+        rt.server.store.cluster_enabled = true;
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"1"]), 0),
+            RespFrame::Error("ERR SELECT is not allowed in cluster mode".to_string())
+        );
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"5"]), 1),
+            RespFrame::Error("ERR SELECT is not allowed in cluster mode".to_string())
+        );
+        // SELECT 0 remains valid.
+        assert_eq!(
+            rt.execute_frame(command(&[b"SELECT", b"0"]), 2),
+            RespFrame::SimpleString("OK".to_string())
         );
     }
 
