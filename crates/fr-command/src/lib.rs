@@ -31560,6 +31560,50 @@ mod tests {
     }
 
     #[test]
+    fn bitfield_offsets_above_4gib_rejected_with_invalid_offset_wording() {
+        // Pin upstream bitops.c::getBitOffsetFromArgument cap for
+        // BITFIELD GET/SET/INCRBY: bit-offsets must satisfy
+        // (offset >> 3) < proto_max_bulk_len (default 512 MiB),
+        // so bits < 2^32. Above the cap, upstream emits "ERR bit
+        // offset is not an integer or out of range". The #N hash
+        // form computes N*bits first then applies the same cap.
+        // (frankenredis-2b51) Mirrors qd8i for GETBIT/SETBIT.
+        let mut store = Store::new();
+        store.set(b"k".to_vec(), b"v".to_vec(), None, 0);
+
+        let assert_offset_err = |argv_in: &[&[u8]]| {
+            let argv: Vec<Vec<u8>> = argv_in.iter().map(|s| s.to_vec()).collect();
+            let result = dispatch_argv(&argv, &mut Store::new(), 0);
+            let got = match result {
+                Ok(RespFrame::Error(s)) => s,
+                Err(e) => match e.to_resp() {
+                    RespFrame::Error(s) => s,
+                    other => panic!("expected error frame, got {other:?}"),
+                },
+                other => panic!("expected error for {argv_in:?}, got {other:?}"),
+            };
+            assert_eq!(
+                got,
+                "ERR bit offset is not an integer or out of range".to_string(),
+                "argv: {argv_in:?}"
+            );
+        };
+
+        // GET above-cap absolute.
+        assert_offset_err(&[b"BITFIELD", b"k", b"GET", b"u8", b"4294967296"]);
+        // GET huge absolute.
+        assert_offset_err(&[b"BITFIELD", b"k", b"GET", b"u8", b"99999999999"]);
+        // SET above-cap absolute.
+        assert_offset_err(&[b"BITFIELD", b"k", b"SET", b"u8", b"4294967296", b"1"]);
+        // INCRBY above-cap absolute.
+        assert_offset_err(&[b"BITFIELD", b"k", b"INCRBY", b"u8", b"4294967296", b"1"]);
+        // #N hash form: u8 #536870912 = 8*536870912 = 4 GiB exactly,
+        // which is the exclusive cap → reject.
+        assert_offset_err(&[b"BITFIELD", b"k", b"GET", b"u8", b"#536870912"]);
+        let _ = store;
+    }
+
+    #[test]
     fn getbit_setbit_reject_offsets_above_4gib() {
         // Pin upstream bitops.c::getBitOffsetFromArgument bound:
         // bit offsets must satisfy (offset >> 3) < proto_max_bulk_len
