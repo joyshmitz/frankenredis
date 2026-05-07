@@ -7830,13 +7830,20 @@ fn waitaof_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErro
     if store.script_nesting_level >= 1 {
         return Err(script_noscript_command_error());
     }
-    if required_local > 0 {
+    // (frankenredis-0axo9) Upstream replication.c::waitaofCommand
+    // gates this error on `numlocal && !server.aof_enabled` — fr was
+    // unconditionally rejecting numlocal=1 regardless of the actual
+    // AOF state, so a user who turned AOF on still got the
+    // 'appendonly is disabled' error.
+    if required_local > 0 && !store.aof_enabled {
         return Ok(RespFrame::Error(
             "ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled."
                 .to_string(),
         ));
     }
-    // In standalone mode with appendonly disabled: local=0, replicas=0.
+    // Standalone stub: no real fsync/replica ack tracking yet (see
+    // project_wait_commands_stub). Return [0, 0] for both numlocal=0
+    // and the AOF-enabled numlocal=1 path.
     Ok(RespFrame::Array(Some(vec![
         RespFrame::Integer(0),
         RespFrame::Integer(0),
@@ -37348,6 +37355,33 @@ mod tests {
         assert_eq!(
             unmet_replicas,
             RespFrame::Array(Some(vec![RespFrame::Integer(0), RespFrame::Integer(0),]))
+        );
+    }
+
+    #[test]
+    fn waitaof_with_numlocal_one_succeeds_when_aof_enabled() {
+        // (frankenredis-0axo9) Upstream replication.c::waitaofCommand
+        // line 3579 gates the 'appendonly is disabled' error on
+        // `numlocal && !server.aof_enabled`. fr was rejecting
+        // numlocal=1 unconditionally, so this test pins the new
+        // gating: with AOF enabled, WAITAOF 1 0 0 should fall through
+        // to the standalone [0, 0] short-circuit.
+        let mut store = Store::new();
+        store.set_aof_enabled(true);
+        let out = dispatch_argv(
+            &[
+                b"WAITAOF".to_vec(),
+                b"1".to_vec(),
+                b"0".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("WAITAOF 1 0 0 with AOF enabled must not error");
+        assert_eq!(
+            out,
+            RespFrame::Array(Some(vec![RespFrame::Integer(0), RespFrame::Integer(0)]))
         );
     }
 
