@@ -29608,6 +29608,136 @@ mod tests {
     }
 
     #[test]
+    fn xgroup_create_entriesread_mkstream_combinations_match_upstream() {
+        // Pin upstream xgroupCommand CREATE option-token parser
+        // (frankenredis-wpch). MKSTREAM and ENTRIESREAD are
+        // independent tokens that may appear in any order. Bad
+        // tokens / missing args route through the
+        // addReplySubcommandSyntaxError envelope; bogus integers
+        // surface InvalidInteger.
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"s".to_vec(),
+                b"1-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let envelope =
+            "ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.";
+
+        // Valid ENTRIESREAD form.
+        let ok = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s".to_vec(),
+                b"g1".to_vec(),
+                b"0".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+                b"5".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xgroup create entriesread");
+        assert_eq!(ok, RespFrame::SimpleString("OK".to_string()));
+
+        // Bad integer for ENTRIESREAD value.
+        let bad_int = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s".to_vec(),
+                b"g2".to_vec(),
+                b"0".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+                b"abc".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("entriesread bad int");
+        assert_eq!(bad_int, CommandError::InvalidInteger);
+
+        // ENTRIESREAD missing arg -> subcommand-syntax envelope.
+        let missing_arg = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s".to_vec(),
+                b"g3".to_vec(),
+                b"0".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("entriesread missing arg");
+        assert_eq!(missing_arg, CommandError::Custom(envelope.to_string()));
+
+        // Trailing junk after ENTRIESREAD <int> -> envelope.
+        let trailing_extra = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s".to_vec(),
+                b"g4".to_vec(),
+                b"0".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+                b"5".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("entriesread trailing extra");
+        assert_eq!(trailing_extra, CommandError::Custom(envelope.to_string()));
+
+        // Unknown option token -> envelope.
+        let bad_token = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s".to_vec(),
+                b"g5".to_vec(),
+                b"0".to_vec(),
+                b"NOPE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xgroup create bad token");
+        assert_eq!(bad_token, CommandError::Custom(envelope.to_string()));
+
+        // MKSTREAM + ENTRIESREAD combined (upstream allows in any
+        // order). Use a fresh stream to avoid BUSYGROUP from earlier
+        // group on s.
+        let combined = dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"s2".to_vec(),
+                b"g6".to_vec(),
+                b"0".to_vec(),
+                b"MKSTREAM".to_vec(),
+                b"ENTRIESREAD".to_vec(),
+                b"10".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xgroup create mkstream+entriesread");
+        assert_eq!(combined, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
     fn xgroup_setid_entriesread_form_and_shape_validation_match_upstream() {
         // Pin XGROUP SETID arity=-5 + handler shape validation
         // (frankenredis-019w):
