@@ -7817,6 +7817,14 @@ fn waitaof_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErro
     if argv.len() != 4 {
         return Err(CommandError::WrongArity("WAITAOF"));
     }
+    // Upstream commands.def declares WAITAOF with CMD_NOSCRIPT, so
+    // server.c::processCommand emits the noscript reply BEFORE the
+    // handler ever runs. Mirror that order here so a scripted call
+    // with bad args surfaces the noscript error rather than the
+    // parse error. (frankenredis-d021m)
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     let required_local = match parse_i64_arg(&argv[1]) {
         Ok(value @ 0..=1) => value,
         Ok(_) => {
@@ -7839,9 +7847,6 @@ fn waitaof_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErro
     })?;
     if timeout_ms < 0 {
         return Err(CommandError::Custom("ERR timeout is negative".to_string()));
-    }
-    if store.script_nesting_level >= 1 {
-        return Err(script_noscript_command_error());
     }
     // (frankenredis-0axo9) Upstream replication.c::waitaofCommand
     // gates this error on `numlocal && !server.aof_enabled` — fr was
@@ -8531,21 +8536,24 @@ fn replicaof_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandEr
     if argv.len() < 3 {
         return Err(CommandError::WrongArity(replicaof_command_name(argv)));
     }
+    // Upstream commands.def declares REPLICAOF/SLAVEOF with
+    // CMD_NOSCRIPT. server.c::processCommand emits the noscript
+    // reply BEFORE the handler runs, so a scripted call must
+    // surface that error rather than the 'Invalid master port'
+    // parse error we previously emitted for non-numeric ports.
+    // (frankenredis-d021m)
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     let host = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     let port = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if host.eq_ignore_ascii_case("NO") && port.eq_ignore_ascii_case("ONE") {
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
-        }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else {
         let parsed = parse_i64_arg(&argv[2])
             .map_err(|_| CommandError::Custom("ERR Invalid master port".to_string()))?;
         u16::try_from(parsed)
             .map_err(|_| CommandError::Custom("ERR Invalid master port".to_string()))?;
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
-        }
         // Accept but don't actually replicate - standalone mode
         Ok(RespFrame::SimpleString("OK".to_string()))
     }
@@ -10729,6 +10737,14 @@ fn migrate_cmd(
 }
 
 fn failover_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
+    // Upstream commands.def declares FAILOVER with CMD_NOSCRIPT, so
+    // server.c::processCommand emits the noscript reply BEFORE the
+    // handler ever runs. Mirror that order so a scripted call with
+    // unknown options surfaces the noscript error rather than the
+    // syntax error. (frankenredis-d021m)
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     // Parse FAILOVER arguments using Redis's option grammar:
     // [TO host port] [FORCE] [TIMEOUT ms], with each option accepted at most once.
     let mut abort = false;
@@ -10775,9 +10791,6 @@ fn failover_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErr
         }
     }
 
-    if store.script_nesting_level >= 1 {
-        return Err(script_noscript_command_error());
-    }
     if abort {
         return Err(CommandError::Custom(
             "ERR No failover in progress.".to_string(),
@@ -37602,6 +37615,49 @@ mod tests {
     }
 
     #[test]
+    fn waitaof_and_failover_noscript_guard_precedes_argument_parsing() {
+        // (frankenredis-d021m) Upstream commands.def declares both
+        // WAITAOF and FAILOVER with CMD_NOSCRIPT, so processCommand
+        // emits the noscript reply before any argument parsing runs.
+        // Inside a Lua script, scripted bad-arg calls must surface
+        // the noscript error rather than the parse / syntax error.
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+
+        // WAITAOF with a non-integer numlocal still surfaces the
+        // noscript reply because the guard fires before parse_i64_arg.
+        let waitaof_scripted = dispatch_argv(
+            &[
+                b"WAITAOF".to_vec(),
+                b"abc".to_vec(),
+                b"0".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            waitaof_scripted,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
+        );
+
+        // FAILOVER with an unknown option should also short-circuit
+        // to the noscript reply (was returning SyntaxError because
+        // the option-parser ran first).
+        let failover_scripted = dispatch_argv(
+            &[b"FAILOVER".to_vec(), b"NOSUCH".to_vec()],
+            &mut store,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            failover_scripted,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
+        );
+    }
+
+    #[test]
     fn waitaof_standalone_reports_no_local_ack_without_appendonly() {
         let mut store = Store::new();
         let zero_replicas = dispatch_argv(
@@ -37735,7 +37791,13 @@ mod tests {
     }
 
     #[test]
-    fn waitaof_rejected_from_scripts_after_integer_validation() {
+    fn waitaof_rejected_from_scripts_after_arity_check() {
+        // (frankenredis-d021m) Upstream script.c::scriptCommand at
+        // legacy_redis_code/redis/src/script.c:524-532 evaluates the
+        // arity check FIRST and the CMD_NOSCRIPT flag SECOND, both
+        // before the handler ever runs. Mirror that ordering: arity
+        // wins over noscript, but noscript wins over every parse /
+        // range / timeout error the handler would otherwise emit.
         let mut store = Store::new();
         store.script_nesting_level = 1;
 
@@ -37747,82 +37809,47 @@ mod tests {
         .expect_err("wrong arity should win");
         assert_eq!(wrong_arity, CommandError::WrongArity("WAITAOF"));
 
-        let invalid_local = dispatch_argv(
-            &[
+        // For every arity-correct scripted call — including bad
+        // numlocal / numreplicas / timeout values — noscript wins.
+        for argv in [
+            vec![
                 b"WAITAOF".to_vec(),
                 b"nope".to_vec(),
                 b"0".to_vec(),
                 b"0".to_vec(),
             ],
-            &mut store,
-            0,
-        )
-        .expect_err("invalid local should still be integer error");
-        assert_eq!(invalid_local, CommandError::InvalidInteger);
-
-        let invalid_replica = dispatch_argv(
-            &[
+            vec![
                 b"WAITAOF".to_vec(),
                 b"0".to_vec(),
                 b"nope".to_vec(),
                 b"0".to_vec(),
             ],
-            &mut store,
-            0,
-        )
-        .expect_err("invalid replica should still be range error");
-        assert_eq!(
-            invalid_replica,
-            CommandError::Custom("ERR value is out of range, must be positive".to_string())
-        );
-
-        let invalid_timeout = dispatch_argv(
-            &[
+            vec![
                 b"WAITAOF".to_vec(),
                 b"0".to_vec(),
                 b"0".to_vec(),
                 b"-1".to_vec(),
             ],
-            &mut store,
-            0,
-        )
-        .expect_err("invalid timeout should still win");
-        assert_eq!(
-            invalid_timeout,
-            CommandError::Custom("ERR timeout is negative".to_string())
-        );
-
-        let valid = dispatch_argv(
-            &[
+            vec![
                 b"WAITAOF".to_vec(),
                 b"0".to_vec(),
                 b"0".to_vec(),
                 b"0".to_vec(),
             ],
-            &mut store,
-            0,
-        )
-        .expect_err("valid waitaof from script should noscript");
-        assert_eq!(
-            valid,
-            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
-        );
-
-        let valid_local = dispatch_argv(
-            &[
+            vec![
                 b"WAITAOF".to_vec(),
                 b"1".to_vec(),
                 b"0".to_vec(),
                 b"0".to_vec(),
             ],
-            &mut store,
-            0,
-        )
-        .expect_err("noscript should win before disabled appendonly reply");
-        assert_eq!(
-            valid_local,
-            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
-        );
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("noscript should win");
+            assert_eq!(
+                err,
+                CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
+                "argv: {argv:?}"
+            );
+        }
     }
 
     // ── CLUSTER tests ───────────────────────────────────────────────
@@ -45302,7 +45329,14 @@ mod tests {
     }
 
     #[test]
-    fn replication_admin_commands_reject_scripts_after_validation() {
+    fn replication_admin_commands_reject_scripts_after_arity_check() {
+        // (frankenredis-d021m) Upstream script.c::scriptCommand at
+        // legacy_redis_code/redis/src/script.c:524-532 evaluates the
+        // arity check FIRST and the CMD_NOSCRIPT flag SECOND, both
+        // before the handler runs. PSYNC, REPLICAOF, and FAILOVER
+        // all carry CMD_NOSCRIPT, so any arity-correct scripted
+        // call surfaces the noscript reply rather than the handler's
+        // own parse / syntax / timeout error.
         let mut store = Store::new();
         store.script_nesting_level = 1;
 
@@ -45325,7 +45359,9 @@ mod tests {
             dispatch_argv(&[b"REPLICAOF".to_vec()], &mut store, 0).expect_err("replicaof arity");
         assert_eq!(replicaof_arity, CommandError::WrongArity("REPLICAOF"));
 
-        let replicaof_invalid = dispatch_argv(
+        // Arity-correct REPLICAOF with a malformed port now hits the
+        // noscript guard before reaching parse_i64_arg.
+        let replicaof_bad_port = dispatch_argv(
             &[
                 b"REPLICAOF".to_vec(),
                 b"127.0.0.1".to_vec(),
@@ -45334,10 +45370,10 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("replicaof invalid port");
+        .expect_err("replicaof bad port should noscript");
         assert_eq!(
-            replicaof_invalid,
-            CommandError::Custom("ERR Invalid master port".to_string())
+            replicaof_bad_port,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
         );
 
         let replicaof = dispatch_argv(
@@ -45351,31 +45387,21 @@ mod tests {
             CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
         );
 
-        let failover_syntax = dispatch_argv(
-            &[b"FAILOVER".to_vec(), b"ABORT".to_vec(), b"ABORT".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect_err("failover syntax");
-        assert_eq!(failover_syntax, CommandError::SyntaxError);
-
-        let failover_timeout = dispatch_argv(
-            &[b"FAILOVER".to_vec(), b"TIMEOUT".to_vec(), b"0".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect_err("failover timeout");
-        assert_eq!(
-            failover_timeout,
-            CommandError::Custom("ERR FAILOVER timeout must be greater than 0".to_string())
-        );
-
-        let failover = dispatch_argv(&[b"FAILOVER".to_vec(), b"ABORT".to_vec()], &mut store, 0)
-            .expect_err("failover noscript");
-        assert_eq!(
-            failover,
-            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
-        );
+        // FAILOVER variants — all arity-correct (-1 = variadic min 1)
+        // so all surface the noscript reply, not the handler's syntax
+        // / timeout-must-be-positive errors.
+        for argv in [
+            vec![b"FAILOVER".to_vec(), b"ABORT".to_vec(), b"ABORT".to_vec()],
+            vec![b"FAILOVER".to_vec(), b"TIMEOUT".to_vec(), b"0".to_vec()],
+            vec![b"FAILOVER".to_vec(), b"ABORT".to_vec()],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("failover noscript");
+            assert_eq!(
+                err,
+                CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
+                "argv: {argv:?}"
+            );
+        }
     }
 
     fn read_test_frame(stream: &mut TcpStream, read_buf: &mut Vec<u8>) -> RespFrame {
