@@ -14762,6 +14762,14 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         if argv.len() < 3 {
             return Err(client_wrong_subcommand_arity(sub));
         }
+        // Upstream commands.def line 1546 marks CLIENT KILL with
+        // CMD_NOSCRIPT. script.c::scriptCommand evaluates the flag
+        // before the handler runs, so a scripted bad-arg call must
+        // surface the noscript reply rather than the option-parser
+        // error. (frankenredis-ym2iw)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
 
         let legacy_addr = if argv.len() == 3 {
             Some(std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?)
@@ -14840,9 +14848,6 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 }
             }
         }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
-        }
 
         let matches_current_client = !skipme
             && filter_id.is_none_or(|id| store.dispatch_client_ctx.client_id == id)
@@ -14881,6 +14886,12 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                     .to_string(),
             ));
         }
+        // Upstream commands.def line 1550 marks CLIENT PAUSE with
+        // CMD_NOSCRIPT — fire the noscript guard before the
+        // handler-level timeout/mode validation. (frankenredis-ym2iw)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         let timeout = parse_i64_arg(&argv[2])
             .map_err(|_| CommandError::Custom(CLIENT_PAUSE_TIMEOUT_INVALID.to_string()))?;
         // Upstream networking.c::pauseCommand rejects negative
@@ -14895,9 +14906,6 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 return Err(CommandError::Custom(CLIENT_PAUSE_MODE_INVALID.to_string()));
             }
         }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
-        }
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("UNPAUSE") {
         if argv.len() != 2 {
@@ -14909,10 +14917,18 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("TRACKING") {
         // CLIENT TRACKING ON|OFF [REDIRECT id] [PREFIX prefix ...] [BCAST] [OPTIN] [OPTOUT] [NOLOOP]
-        let requested = parse_client_tracking_state(argv)?;
+        // Upstream commands.def line 1554 marks CLIENT TRACKING with
+        // CMD_NOSCRIPT (arity = -3). Mirror script.c's arity-then-
+        // noscript ordering so a scripted bad-mode or option-matrix
+        // call surfaces the noscript reply rather than SyntaxError /
+        // 'TRACKING PREFIX requires BCAST'. (frankenredis-ym2iw)
+        if argv.len() < 3 {
+            return Err(client_wrong_subcommand_arity(sub));
+        }
         if store.script_nesting_level >= 1 {
             return Err(script_noscript_command_error());
         }
+        let requested = parse_client_tracking_state(argv)?;
         let current = store.dispatch_client_ctx.client_tracking.clone();
         store.dispatch_client_ctx.client_tracking =
             apply_client_tracking_update(&current, requested)?;
@@ -14953,6 +14969,14 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
         if argv.len() != 3 && argv.len() != 4 {
             return Err(client_wrong_subcommand_arity(sub));
         }
+        // Upstream commands.def line 1556 marks CLIENT UNBLOCK with
+        // CMD_NOSCRIPT — fire the noscript guard before integer /
+        // mode validation so scripted bad-arg calls surface the
+        // canonical 'not allowed from script' reply.
+        // (frankenredis-ym2iw)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         // Upstream networking.c::clientCommand UNBLOCK accepts any
         // parseable integer (including 0 and negatives) and simply
         // returns 0 when no client matches; only non-numeric IDs
@@ -14967,9 +14991,6 @@ fn client_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                     CLIENT_UNBLOCK_REASON_INVALID.to_string(),
                 ));
             }
-        }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
         }
         Ok(RespFrame::Integer(0))
     } else if sub.eq_ignore_ascii_case("HELP") {
@@ -38996,41 +39017,19 @@ mod tests {
     }
 
     #[test]
-    fn client_kill_pause_and_unpause_reject_scripts_after_validation() {
+    fn client_kill_pause_and_unpause_reject_scripts_after_arity_check() {
+        // (frankenredis-ym2iw) Upstream commands.def lines 1546-1557
+        // mark CLIENT KILL/PAUSE/UNPAUSE with CMD_NOSCRIPT.
+        // script.c::scriptCommand evaluates the subcommand-specific
+        // arity FIRST and CMD_NOSCRIPT SECOND, both before the
+        // handler runs. So inside a script: arity wins over noscript,
+        // but noscript wins over every handler-level option/mode error.
         let mut store = Store::new();
         store.script_nesting_level = 1;
         store.dispatch_client_ctx.peer_addr = "10.0.0.9:7777".to_string();
 
-        let kill_shape = dispatch_argv(
-            &[
-                b"CLIENT".to_vec(),
-                b"KILL".to_vec(),
-                b"SKIPME".to_vec(),
-                b"maybe".to_vec(),
-            ],
-            &mut store,
-            0,
-        )
-        .unwrap_err();
-        // (br-frankenredis-lkoh)
-        assert_eq!(kill_shape, CommandError::SyntaxError);
-
-        let pause_shape = dispatch_argv(
-            &[
-                b"CLIENT".to_vec(),
-                b"PAUSE".to_vec(),
-                b"1000".to_vec(),
-                b"WAT".to_vec(),
-            ],
-            &mut store,
-            0,
-        )
-        .unwrap_err();
-        assert_eq!(
-            pause_shape,
-            CommandError::Custom(CLIENT_PAUSE_MODE_INVALID.to_string())
-        );
-
+        // UNPAUSE has arity 2 exact — argc=3 fails the table-level
+        // arity check before noscript fires.
         let unpause_shape = dispatch_argv(
             &[b"CLIENT".to_vec(), b"UNPAUSE".to_vec(), b"NOW".to_vec()],
             &mut store,
@@ -39039,6 +39038,9 @@ mod tests {
         .unwrap_err();
         assert_eq!(unpause_shape, client_wrong_subcommand_arity("UNPAUSE"));
 
+        // Every arity-correct scripted CLIENT KILL/PAUSE/UNPAUSE call
+        // — including bad SKIPME, invalid PAUSE mode — surfaces the
+        // noscript reply.
         for argv in [
             vec![
                 b"CLIENT".to_vec(),
@@ -39050,6 +39052,12 @@ mod tests {
                 b"KILL".to_vec(),
                 b"SKIPME".to_vec(),
                 b"no".to_vec(),
+            ],
+            vec![
+                b"CLIENT".to_vec(),
+                b"KILL".to_vec(),
+                b"SKIPME".to_vec(),
+                b"maybe".to_vec(),
             ],
             vec![b"CLIENT".to_vec(), b"PAUSE".to_vec(), b"1000".to_vec()],
             vec![
@@ -39064,10 +39072,20 @@ mod tests {
                 b"1000".to_vec(),
                 b"ALL".to_vec(),
             ],
+            vec![
+                b"CLIENT".to_vec(),
+                b"PAUSE".to_vec(),
+                b"1000".to_vec(),
+                b"WAT".to_vec(),
+            ],
             vec![b"CLIENT".to_vec(), b"UNPAUSE".to_vec()],
         ] {
             let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
-            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+            assert_eq!(
+                err,
+                CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
+                "argv: {argv:?}"
+            );
         }
     }
 
@@ -42248,7 +42266,10 @@ mod tests {
     }
 
     #[test]
-    fn client_tracking_rejected_from_scripts_after_validation() {
+    fn client_tracking_rejected_from_scripts_after_arity_check() {
+        // (frankenredis-ym2iw) Upstream commands.def line 1554 marks
+        // CLIENT TRACKING with CMD_NOSCRIPT. Arity wins over noscript;
+        // noscript wins over mode/option-matrix validation.
         let mut store = Store::new();
         store.script_nesting_level = 1;
         let before = store.dispatch_client_ctx.client_tracking.clone();
@@ -42257,37 +42278,27 @@ mod tests {
             .expect_err("client tracking arity");
         assert_eq!(arity, client_wrong_subcommand_arity("TRACKING"));
 
-        let syntax = dispatch_argv(
-            &[b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"MAYBE".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect_err("client tracking syntax");
-        assert_eq!(syntax, CommandError::SyntaxError);
-
-        let matrix = dispatch_argv(
-            &[
+        // Every arity-correct scripted call — valid mode, invalid
+        // mode, and option-matrix violations — surfaces the noscript
+        // reply.
+        for argv in [
+            vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()],
+            vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"OFF".to_vec()],
+            vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"MAYBE".to_vec()],
+            vec![
                 b"CLIENT".to_vec(),
                 b"TRACKING".to_vec(),
                 b"ON".to_vec(),
                 b"PREFIX".to_vec(),
                 b"foo".to_vec(),
             ],
-            &mut store,
-            0,
-        )
-        .expect_err("client tracking option matrix");
-        assert_eq!(
-            matrix,
-            CommandError::Custom(CLIENT_TRACKING_PREFIX_REQUIRES_BCAST.to_string())
-        );
-
-        for argv in [
-            vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"ON".to_vec()],
-            vec![b"CLIENT".to_vec(), b"TRACKING".to_vec(), b"OFF".to_vec()],
         ] {
             let err = dispatch_argv(&argv, &mut store, 0).expect_err("client tracking noscript");
-            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+            assert_eq!(
+                err,
+                CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
+                "argv: {argv:?}"
+            );
             assert_eq!(store.dispatch_client_ctx.client_tracking, before);
         }
     }
@@ -43108,7 +43119,10 @@ mod tests {
     }
 
     #[test]
-    fn client_unblock_rejected_from_scripts_after_validation() {
+    fn client_unblock_rejected_from_scripts_after_arity_check() {
+        // (frankenredis-ym2iw) Upstream commands.def line 1556 marks
+        // CLIENT UNBLOCK with CMD_NOSCRIPT (arity = -3). Arity wins
+        // over noscript; noscript wins over integer / mode validation.
         let mut store = Store::new();
         store.script_nesting_level = 1;
 
@@ -43116,47 +43130,13 @@ mod tests {
             .expect_err("client unblock arity");
         assert_eq!(arity, client_wrong_subcommand_arity("UNBLOCK"));
 
-        // (br-frankenredis-cliunblockid) — UNBLOCK 0 / negatives are
-        // valid integers; arity + integer validation runs before
-        // the script-noscript guard, so they reach the noscript
-        // path inside scripts. Non-numeric IDs surface
-        // InvalidInteger first since validation precedes the guard.
-        let id_zero_in_script = dispatch_argv(
-            &[b"CLIENT".to_vec(), b"UNBLOCK".to_vec(), b"0".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect_err("client unblock id=0 in script gets script-noscript");
-        assert_eq!(
-            id_zero_in_script,
-            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
-        );
-        let invalid_id = dispatch_argv(
-            &[b"CLIENT".to_vec(), b"UNBLOCK".to_vec(), b"abc".to_vec()],
-            &mut store,
-            0,
-        )
-        .expect_err("client unblock invalid id");
-        assert_eq!(invalid_id, CommandError::InvalidInteger);
-
-        let invalid_mode = dispatch_argv(
-            &[
-                b"CLIENT".to_vec(),
-                b"UNBLOCK".to_vec(),
-                b"42".to_vec(),
-                b"WAT".to_vec(),
-            ],
-            &mut store,
-            0,
-        )
-        .expect_err("client unblock invalid mode");
-        assert_eq!(
-            invalid_mode,
-            CommandError::Custom(CLIENT_UNBLOCK_REASON_INVALID.to_string())
-        );
-
+        // Every arity-correct scripted call — including non-numeric
+        // ids and invalid modes — surfaces the noscript reply rather
+        // than InvalidInteger / CLIENT_UNBLOCK_REASON_INVALID.
         for argv in [
+            vec![b"CLIENT".to_vec(), b"UNBLOCK".to_vec(), b"0".to_vec()],
             vec![b"CLIENT".to_vec(), b"UNBLOCK".to_vec(), b"42".to_vec()],
+            vec![b"CLIENT".to_vec(), b"UNBLOCK".to_vec(), b"abc".to_vec()],
             vec![
                 b"CLIENT".to_vec(),
                 b"UNBLOCK".to_vec(),
@@ -43169,9 +43149,19 @@ mod tests {
                 b"42".to_vec(),
                 b"ERROR".to_vec(),
             ],
+            vec![
+                b"CLIENT".to_vec(),
+                b"UNBLOCK".to_vec(),
+                b"42".to_vec(),
+                b"WAT".to_vec(),
+            ],
         ] {
             let err = dispatch_argv(&argv, &mut store, 0).expect_err("client unblock noscript");
-            assert_eq!(err, CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()));
+            assert_eq!(
+                err,
+                CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
+                "argv: {argv:?}"
+            );
         }
     }
 
