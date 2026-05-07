@@ -4705,6 +4705,17 @@ impl Runtime {
                         cmd_name
                     ));
                 }
+                // Upstream server.c::processCommand:3920-3923 rejects any
+                // CMD_NO_MULTI command inside MULTI via rejectCommandFormat,
+                // which calls flagTransaction → CLIENT_DIRTY_EXEC. Covers
+                // SAVE / SHUTDOWN / PSYNC / SYNC. (frankenredis-exv69)
+                if fr_command::is_no_multi_command(cmd_bytes) {
+                    self.session.transaction_state.exec_abort = true;
+                    self.apply_existing_client_reply_suppression_to_undispatched_reply();
+                    return RespFrame::Error(
+                        "ERR Command not allowed inside a transaction".to_string(),
+                    );
+                }
                 self.session.transaction_state.command_queue.push(argv);
                 self.apply_existing_client_reply_suppression_to_undispatched_reply();
                 return RespFrame::SimpleString("QUEUED".to_string());
@@ -17650,6 +17661,37 @@ mod tests {
             matches!(&exec, RespFrame::Error(e) if e.contains("EXECABORT")),
             "EXEC after arity error should return EXECABORT, got: {exec:?}"
         );
+    }
+
+    #[test]
+    fn multi_rejects_no_multi_commands_with_dirty_exec() {
+        // Upstream Redis 7.2 server.c::processCommand:3920-3923 rejects any
+        // CMD_NO_MULTI command (SAVE, SHUTDOWN, PSYNC, SYNC per commands.def)
+        // inside MULTI via rejectCommandFormat → flagTransaction →
+        // CLIENT_DIRTY_EXEC. Previously fr-runtime's queueing path matched
+        // none of these and silently QUEUED them; the eventual EXEC would
+        // then run them despite upstream rejecting at queue time.
+        // (frankenredis-exv69)
+        for cmd in [b"SAVE".as_slice(), b"SHUTDOWN", b"SYNC"] {
+            let mut rt = Runtime::default_strict();
+            assert_eq!(
+                rt.execute_frame(command(&[b"MULTI"]), 0),
+                RespFrame::SimpleString("OK".to_string())
+            );
+            let reply = rt.execute_frame(command(&[cmd]), 1);
+            assert_eq!(
+                reply,
+                RespFrame::Error("ERR Command not allowed inside a transaction".to_string()),
+                "MULTI + {} should reject inside transaction",
+                std::str::from_utf8(cmd).unwrap()
+            );
+            let exec = rt.execute_frame(command(&[b"EXEC"]), 2);
+            assert!(
+                matches!(&exec, RespFrame::Error(e) if e.contains("EXECABORT")),
+                "EXEC after CMD_NO_MULTI rejection should return EXECABORT for {}, got: {exec:?}",
+                std::str::from_utf8(cmd).unwrap()
+            );
+        }
     }
 
     #[test]

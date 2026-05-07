@@ -1545,6 +1545,18 @@ pub fn is_write_command(cmd: &[u8]) -> bool {
     )
 }
 
+/// Returns true for commands that carry CMD_NO_MULTI in upstream Redis 7.2.4
+/// commands.def (SAVE, SHUTDOWN, PSYNC, SYNC). Mirrors the check in
+/// server.c::processCommand:3920-3923 — these commands must be rejected
+/// inside MULTI with "Command not allowed inside a transaction" and the
+/// transaction must be flagged for EXECABORT (CLIENT_DIRTY_EXEC).
+pub fn is_no_multi_command(cmd: &[u8]) -> bool {
+    cmd.eq_ignore_ascii_case(b"SAVE")
+        || cmd.eq_ignore_ascii_case(b"SHUTDOWN")
+        || cmd.eq_ignore_ascii_case(b"PSYNC")
+        || cmd.eq_ignore_ascii_case(b"SYNC")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandId {
     Ping,
