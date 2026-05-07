@@ -46942,6 +46942,67 @@ mod tests {
     }
 
     #[test]
+    fn lpop_rpop_lpos_bad_count_wording_matches_upstream() {
+        // Pin upstream t_list.c::popGenericCommand + lposCommand
+        // wordings caught by ad-hoc differential probe vs vendored
+        // 7.2.4 (frankenredis-stzv):
+        //   - LPOP/RPOP <key> BAD     -> "value is out of range, must be positive"
+        //   - LPOP/RPOP <key> -1      -> same wording
+        //   - LPOS <key> a MAXLEN BAD -> "MAXLEN can't be negative"
+        //   - LPOS <key> a MAXLEN -1  -> same wording
+        let mut store = Store::new();
+
+        for cmd in [b"LPOP".as_slice(), b"RPOP".as_slice()] {
+            let err = dispatch_argv(
+                &[cmd.to_vec(), b"l".to_vec(), b"BAD".to_vec()],
+                &mut store,
+                0,
+            )
+            .expect_err("error");
+            assert_eq!(
+                err,
+                CommandError::Custom(
+                    "ERR value is out of range, must be positive".to_string()
+                ),
+                "{cmd:?}"
+            );
+            let err = dispatch_argv(
+                &[cmd.to_vec(), b"l".to_vec(), b"-1".to_vec()],
+                &mut store,
+                0,
+            )
+            .expect_err("error");
+            assert_eq!(
+                err,
+                CommandError::Custom(
+                    "ERR value is out of range, must be positive".to_string()
+                ),
+                "{cmd:?}"
+            );
+        }
+
+        for bad in [b"BAD".as_slice(), b"-1".as_slice()] {
+            let err = dispatch_argv(
+                &[
+                    b"LPOS".to_vec(),
+                    b"l".to_vec(),
+                    b"a".to_vec(),
+                    b"MAXLEN".to_vec(),
+                    bad.to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect_err("error");
+            assert_eq!(
+                err,
+                CommandError::Custom("ERR MAXLEN can't be negative".to_string()),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
     fn lpop_rpop_count_zero_on_missing_returns_null_array() {
         let mut store = Store::new();
         for cmd in [b"LPOP".as_slice(), b"RPOP".as_slice()] {
