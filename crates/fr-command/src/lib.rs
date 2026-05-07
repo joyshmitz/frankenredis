@@ -47218,6 +47218,30 @@ mod tests {
                 "{bad:?}"
             );
         }
+
+        // (frankenredis-29ct) LPOS COUNT mirrors MAXLEN — both
+        // unparseable and negative inputs share upstream's
+        // "COUNT can't be negative" wording (lposCommand uses
+        // getPositiveLongFromObjectOrReply with that error string).
+        for bad in [b"BAD".as_slice(), b"-1".as_slice()] {
+            let err = dispatch_argv(
+                &[
+                    b"LPOS".to_vec(),
+                    b"l".to_vec(),
+                    b"a".to_vec(),
+                    b"COUNT".to_vec(),
+                    bad.to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .expect_err("error");
+            assert_eq!(
+                err,
+                CommandError::Custom("ERR COUNT can't be negative".to_string()),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]
