@@ -17672,7 +17672,13 @@ mod tests {
         // none of these and silently QUEUED them; the eventual EXEC would
         // then run them despite upstream rejecting at queue time.
         // (frankenredis-exv69)
-        for cmd in [b"SAVE".as_slice(), b"SHUTDOWN", b"SYNC"] {
+        //
+        // Note: SYNC isn't a fr_command::is_known_command, so it short-circuits
+        // earlier in the queueing path with "unknown command" before the
+        // CMD_NO_MULTI check fires. PSYNC has arity 3 and would also work but
+        // would muddy the test with extra setup; SAVE and SHUTDOWN are arity-1
+        // and exercise the CMD_NO_MULTI gate cleanly.
+        for cmd in [b"SAVE".as_slice(), b"SHUTDOWN"] {
             let mut rt = Runtime::default_strict();
             assert_eq!(
                 rt.execute_frame(command(&[b"MULTI"]), 0),
