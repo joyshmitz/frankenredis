@@ -15844,28 +15844,36 @@ fn memory_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
                 subcommand: "HELP".to_string(),
             });
         }
+        // (frankenredis-x25yz) Mirror upstream object.c::memoryCommand
+        // help[] array (lines 1519-1531) wrapped by addReplyHelp
+        // envelope. Frames are SimpleString (addReplyStatus); the body
+        // is multi-line per subcommand, and the standard footer is
+        // appended automatically upstream.
         Ok(RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(
-                b"MEMORY <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"DOCTOR - Return memory problems reports.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"MALLOC-STATS - Return internal statistics report from the memory allocator."
-                    .to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"PURGE - Ask the allocator to release memory.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"STATS - Return information about the memory usage of the server.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"USAGE <key> [SAMPLES <count>] - Return memory in bytes used by <key> and its value."
-                    .to_vec(),
-            )),
-            RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
+            hello_simple(
+                "MEMORY <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+            ),
+            hello_simple("DOCTOR"),
+            hello_simple("    Return memory problems reports."),
+            hello_simple("MALLOC-STATS"),
+            hello_simple(
+                "    Return internal statistics report from the memory allocator.",
+            ),
+            hello_simple("PURGE"),
+            hello_simple(
+                "    Attempt to purge dirty pages for reclamation by the allocator.",
+            ),
+            hello_simple("STATS"),
+            hello_simple("    Return information about the memory usage of the server."),
+            hello_simple("USAGE <key> [SAMPLES <count>]"),
+            hello_simple(
+                "    Return memory in bytes used by <key> and its value. Nested values are",
+            ),
+            hello_simple(
+                "    sampled up to <count> times (default: 5, 0 means sample all).",
+            ),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])))
     } else {
         let sub_str =

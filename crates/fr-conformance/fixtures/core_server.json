@@ -2047,32 +2047,60 @@
         "kind": "array",
         "value": [
           {
-            "kind": "bulk",
-            "value": "MEMORY <subcommand> [<arg> [value] ...]. Subcommands are:"
+            "kind": "simple",
+            "value": "MEMORY <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"
           },
           {
-            "kind": "bulk",
-            "value": "DOCTOR - Return memory problems reports."
+            "kind": "simple",
+            "value": "DOCTOR"
           },
           {
-            "kind": "bulk",
-            "value": "MALLOC-STATS - Return internal statistics report from the memory allocator."
+            "kind": "simple",
+            "value": "    Return memory problems reports."
           },
           {
-            "kind": "bulk",
-            "value": "PURGE - Ask the allocator to release memory."
+            "kind": "simple",
+            "value": "MALLOC-STATS"
           },
           {
-            "kind": "bulk",
-            "value": "STATS - Return information about the memory usage of the server."
+            "kind": "simple",
+            "value": "    Return internal statistics report from the memory allocator."
           },
           {
-            "kind": "bulk",
-            "value": "USAGE <key> [SAMPLES <count>] - Return memory in bytes used by <key> and its value."
+            "kind": "simple",
+            "value": "PURGE"
           },
           {
-            "kind": "bulk",
-            "value": "HELP - Return subcommand help summary."
+            "kind": "simple",
+            "value": "    Attempt to purge dirty pages for reclamation by the allocator."
+          },
+          {
+            "kind": "simple",
+            "value": "STATS"
+          },
+          {
+            "kind": "simple",
+            "value": "    Return information about the memory usage of the server."
+          },
+          {
+            "kind": "simple",
+            "value": "USAGE <key> [SAMPLES <count>]"
+          },
+          {
+            "kind": "simple",
+            "value": "    Return memory in bytes used by <key> and its value. Nested values are"
+          },
+          {
+            "kind": "simple",
+            "value": "    sampled up to <count> times (default: 5, 0 means sample all)."
+          },
+          {
+            "kind": "simple",
+            "value": "HELP"
+          },
+          {
+            "kind": "simple",
+            "value": "    Print this help."
           }
         ]
       }
@@ -2734,32 +2762,60 @@
         "kind": "array",
         "value": [
           {
-            "kind": "bulk",
-            "value": "MEMORY <subcommand> [<arg> [value] ...]. Subcommands are:"
+            "kind": "simple",
+            "value": "MEMORY <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"
           },
           {
-            "kind": "bulk",
-            "value": "DOCTOR - Return memory problems reports."
+            "kind": "simple",
+            "value": "DOCTOR"
           },
           {
-            "kind": "bulk",
-            "value": "MALLOC-STATS - Return internal statistics report from the memory allocator."
+            "kind": "simple",
+            "value": "    Return memory problems reports."
           },
           {
-            "kind": "bulk",
-            "value": "PURGE - Ask the allocator to release memory."
+            "kind": "simple",
+            "value": "MALLOC-STATS"
           },
           {
-            "kind": "bulk",
-            "value": "STATS - Return information about the memory usage of the server."
+            "kind": "simple",
+            "value": "    Return internal statistics report from the memory allocator."
           },
           {
-            "kind": "bulk",
-            "value": "USAGE <key> [SAMPLES <count>] - Return memory in bytes used by <key> and its value."
+            "kind": "simple",
+            "value": "PURGE"
           },
           {
-            "kind": "bulk",
-            "value": "HELP - Return subcommand help summary."
+            "kind": "simple",
+            "value": "    Attempt to purge dirty pages for reclamation by the allocator."
+          },
+          {
+            "kind": "simple",
+            "value": "STATS"
+          },
+          {
+            "kind": "simple",
+            "value": "    Return information about the memory usage of the server."
+          },
+          {
+            "kind": "simple",
+            "value": "USAGE <key> [SAMPLES <count>]"
+          },
+          {
+            "kind": "simple",
+            "value": "    Return memory in bytes used by <key> and its value. Nested values are"
+          },
+          {
+            "kind": "simple",
+            "value": "    sampled up to <count> times (default: 5, 0 means sample all)."
+          },
+          {
+            "kind": "simple",
+            "value": "HELP"
+          },
+          {
+            "kind": "simple",
+            "value": "    Print this help."
           }
         ]
       }
