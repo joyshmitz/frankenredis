@@ -45691,6 +45691,69 @@ mod tests {
     }
 
     #[test]
+    fn script_flush_function_dump_function_list_extra_arg_wordings_match_upstream() {
+        // Pin three small extra-arg wordings caught by differential
+        // probe vs vendored 7.2.4 (frankenredis-hpag):
+        //   - SCRIPT FLUSH ASYNC SYNC (argc>3) → "SCRIPT FLUSH only
+        //     support SYNC|ASYNC option" (eval.c::scriptCommand)
+        //   - FUNCTION DUMP <extra> → table-level WrongSubcommandArity
+        //     ("wrong number of arguments for 'function|dump' command")
+        //   - FUNCTION LIST <unknown_token> → "Unknown argument <token>"
+        //     (functions.c::functionListCommand)
+        let mut store = Store::new();
+
+        let script_flush_extra = dispatch_argv(
+            &[
+                b"SCRIPT".to_vec(),
+                b"FLUSH".to_vec(),
+                b"ASYNC".to_vec(),
+                b"SYNC".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("script flush extra");
+        assert_eq!(
+            script_flush_extra,
+            CommandError::Custom(
+                "ERR SCRIPT FLUSH only support SYNC|ASYNC option".to_string()
+            )
+        );
+
+        let function_dump_extra = dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"DUMP".to_vec(),
+                b"extra".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("function dump extra");
+        assert_eq!(
+            function_dump_extra.to_resp(),
+            RespFrame::Error(
+                "ERR wrong number of arguments for 'function|dump' command".to_string()
+            )
+        );
+
+        let function_list_bad = dispatch_argv(
+            &[
+                b"FUNCTION".to_vec(),
+                b"LIST".to_vec(),
+                b"NOPE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("function list bad");
+        assert_eq!(
+            function_list_bad,
+            CommandError::Custom("ERR Unknown argument NOPE".to_string())
+        );
+    }
+
+    #[test]
     fn function_flush_extra_args_and_restore_bad_payload_match_upstream() {
         // Pins two upstream wordings caught by differential probe vs
         // vendored 7.2.4 (frankenredis-ngn0):
