@@ -15969,6 +15969,9 @@ fn save_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFram
 }
 
 fn bgsave_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFrame, CommandError> {
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     if argv.len() > 2 {
         return Err(CommandError::SyntaxError);
     }
@@ -15978,9 +15981,6 @@ fn bgsave_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFr
         if !option.eq_ignore_ascii_case("SCHEDULE") {
             return Err(CommandError::SyntaxError);
         }
-    }
-    if store.script_nesting_level >= 1 {
-        return Err(script_noscript_command_error());
     }
     store.record_save(now_ms, true);
     store.record_bgsave_status(true);
@@ -17345,6 +17345,9 @@ fn role_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandErr
 }
 
 fn shutdown_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandError> {
+    if store.script_nesting_level >= 1 {
+        return Err(script_noscript_command_error());
+    }
     let mut flags = 0u8;
     let mut abort = false;
     for arg in &argv[1..] {
@@ -17365,9 +17368,6 @@ fn shutdown_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErr
     }
     if (flags & 0b0001 != 0 && flags & 0b0010 != 0) || (abort && flags != 0) {
         return Err(CommandError::SyntaxError);
-    }
-    if store.script_nesting_level >= 1 {
-        return Err(script_noscript_command_error());
     }
     if abort {
         return Ok(RespFrame::Error("ERR No shutdown in progress.".to_string()));
@@ -32120,15 +32120,21 @@ mod tests {
     }
 
     #[test]
-    fn bgsave_rejected_from_scripts_after_syntax_validation() {
+    fn bgsave_rejected_from_scripts_after_arity_check() {
+        // Upstream Redis 7.2 server.c::processCommand evaluates CMD_NOSCRIPT
+        // (commands.def:10772 for BGSAVE) BEFORE running the per-command proc,
+        // so handler-level option validation in rdb.c::bgsaveCommand only
+        // executes once the script-context check has already let the command
+        // through. fr-command must mirror that ordering: a scripted call with
+        // bad args returns NOSCRIPT, not SyntaxError. (frankenredis-avxsq)
         let mut store = Store::new();
         store.script_nesting_level = 1;
 
         let invalid = dispatch_argv(&[b"BGSAVE".to_vec(), b"NOW".to_vec()], &mut store, 0)
-            .expect_err("invalid option should still be syntax");
+            .expect_err("invalid option should still be NOSCRIPT under script");
         assert_eq!(
-            invalid.to_resp(),
-            RespFrame::Error("ERR syntax error".to_string())
+            invalid,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
         );
 
         let too_many = dispatch_argv(
@@ -32136,10 +32142,10 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("too many args should still be syntax");
+        .expect_err("too many args should still be NOSCRIPT under script");
         assert_eq!(
-            too_many.to_resp(),
-            RespFrame::Error("ERR syntax error".to_string())
+            too_many,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
         );
 
         let bare =
@@ -35499,7 +35505,14 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_rejected_from_scripts_after_option_validation() {
+    fn shutdown_rejected_from_scripts_after_arity_check() {
+        // Upstream Redis 7.2 server.c::processCommand evaluates CMD_NOSCRIPT
+        // (commands.def:10793 for SHUTDOWN) BEFORE running shutdownCommand,
+        // so the option-parsing loop and flag-conflict check in
+        // shutdownCommand only execute once the script-context check has
+        // let the command through. fr-command must mirror that ordering: a
+        // scripted call with conflicting flags returns NOSCRIPT, not
+        // SyntaxError. (frankenredis-avxsq)
         let mut store = Store::new();
         store.script_nesting_level = 1;
 
@@ -35508,10 +35521,10 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("abort mixed with flags should still be syntax");
+        .expect_err("abort mixed with flags should still be NOSCRIPT under script");
         assert_eq!(
-            err.to_resp(),
-            RespFrame::Error("ERR syntax error".to_string())
+            err,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
         );
 
         let err = dispatch_argv(
@@ -35519,10 +35532,10 @@ mod tests {
             &mut store,
             0,
         )
-        .expect_err("save and nosave together should still be syntax");
+        .expect_err("save and nosave together should still be NOSCRIPT under script");
         assert_eq!(
-            err.to_resp(),
-            RespFrame::Error("ERR syntax error".to_string())
+            err,
+            CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string())
         );
 
         let bare =
