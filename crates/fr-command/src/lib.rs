@@ -47160,6 +47160,111 @@ mod tests {
     }
 
     #[test]
+    fn geosearch_byradius_bybox_numeric_wording_matches_upstream() {
+        // Pin upstream geo.c::extractDistanceOrReply ("need numeric
+        // radius") and extractBoxOrReply ("need numeric width" /
+        // "need numeric height"), plus the negative-value branches
+        // "radius cannot be negative" / "height or width cannot be
+        // negative" (upstream's ordering puts height first).
+        // (frankenredis-vfdt)
+        let mut store = Store::new();
+
+        // Seed a geo set so GEOSEARCH reaches the radius/box parsers.
+        dispatch_argv(
+            &[
+                b"GEOADD".to_vec(),
+                b"g".to_vec(),
+                b"13.361389".to_vec(),
+                b"38.115556".to_vec(),
+                b"a".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        let cases: &[(&[&[u8]], &str)] = &[
+            (
+                &[
+                    b"GEOSEARCH",
+                    b"g",
+                    b"FROMMEMBER",
+                    b"a",
+                    b"BYRADIUS",
+                    b"abc",
+                    b"m",
+                ],
+                "ERR need numeric radius",
+            ),
+            (
+                &[
+                    b"GEOSEARCH",
+                    b"g",
+                    b"FROMMEMBER",
+                    b"a",
+                    b"BYRADIUS",
+                    b"-1",
+                    b"m",
+                ],
+                "ERR radius cannot be negative",
+            ),
+            (
+                &[
+                    b"GEOSEARCH",
+                    b"g",
+                    b"FROMMEMBER",
+                    b"a",
+                    b"BYBOX",
+                    b"abc",
+                    b"1",
+                    b"m",
+                ],
+                "ERR need numeric width",
+            ),
+            (
+                &[
+                    b"GEOSEARCH",
+                    b"g",
+                    b"FROMMEMBER",
+                    b"a",
+                    b"BYBOX",
+                    b"1",
+                    b"abc",
+                    b"m",
+                ],
+                "ERR need numeric height",
+            ),
+            (
+                &[
+                    b"GEOSEARCH",
+                    b"g",
+                    b"FROMMEMBER",
+                    b"a",
+                    b"BYBOX",
+                    b"-1",
+                    b"-1",
+                    b"m",
+                ],
+                "ERR height or width cannot be negative",
+            ),
+        ];
+
+        for (argv_in, expected) in cases {
+            let argv: Vec<Vec<u8>> = argv_in.iter().map(|s| s.to_vec()).collect();
+            let out = dispatch_argv(&argv, &mut store, 0);
+            let got = match out {
+                Ok(RespFrame::Error(s)) => s,
+                Err(e) => match e.to_resp() {
+                    RespFrame::Error(s) => s,
+                    other => panic!("expected error, got {other:?}"),
+                },
+                other => panic!("expected error frame for {argv_in:?}, got {other:?}"),
+            };
+            assert_eq!(&got, *expected, "argv: {argv_in:?}");
+        }
+    }
+
+    #[test]
     fn lpop_rpop_lpos_bad_count_wording_matches_upstream() {
         // Pin upstream t_list.c::popGenericCommand + lposCommand
         // wordings caught by ad-hoc differential probe vs vendored
