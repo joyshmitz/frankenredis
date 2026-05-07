@@ -37316,6 +37316,107 @@ mod tests {
     }
 
     #[test]
+    fn lua_redis_builtins_invalid_arg_shapes_match_upstream() {
+        // Pin upstream script_lua.c wordings for fr's Lua redis.*
+        // builtin error paths (frankenredis-wo58):
+        //   - redis.error_reply / redis.status_reply with a non-string
+        //     return the {err='ERR wrong number or type of arguments'}
+        //     table as a *value* (no script: <sha> envelope)
+        //   - redis.call() with no args emits
+        //     "Please specify at least one argument for this redis lib call"
+        //   - redis.sha1hex() with no args emits "wrong number of arguments"
+        let mut store = Store::new();
+
+        // error_reply non-string -> table-form error frame, no envelope.
+        let bad_err_reply = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"return redis.error_reply(123)".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        assert_eq!(
+            bad_err_reply,
+            RespFrame::Error("ERR wrong number or type of arguments".to_string())
+        );
+
+        // status_reply non-string -> same wording.
+        let bad_status_reply = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"return redis.status_reply(123)".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        assert_eq!(
+            bad_status_reply,
+            RespFrame::Error("ERR wrong number or type of arguments".to_string())
+        );
+
+        // redis.call() with no args -> "Please specify at least one
+        // argument…" wrapped in the script: <sha> envelope (since
+        // call uses raise-error path).
+        let bad_call = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"return redis.call()".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = bad_call else {
+            panic!("expected error, got {bad_call:?}");
+        };
+        assert!(
+            msg.starts_with("ERR Please specify at least one argument for this redis lib call"),
+            "{msg}"
+        );
+
+        // redis.sha1hex() with no args -> "wrong number of arguments"
+        // wrapped in the script envelope.
+        let bad_sha1hex = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"return redis.sha1hex()".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        let RespFrame::Error(msg) = bad_sha1hex else {
+            panic!("expected error, got {bad_sha1hex:?}");
+        };
+        assert!(msg.contains("wrong number of arguments"), "{msg}");
+
+        // Sanity: redis.sha1hex("foo") still returns sha1 of "foo".
+        let ok_sha1hex = dispatch_argv(
+            &[
+                b"EVAL".to_vec(),
+                b"return redis.sha1hex('foo')".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("eval");
+        assert_eq!(
+            ok_sha1hex,
+            RespFrame::BulkString(Some(
+                b"0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33".to_vec()
+            ))
+        );
+    }
+
+    #[test]
     fn eval_redis_error_reply_prepends_err_code_when_missing() {
         // Mirror upstream script_lua.c::luaRedisErrorReplyCommand +
         // luaPushErrorBuff: redis.error_reply("err") gets a default
