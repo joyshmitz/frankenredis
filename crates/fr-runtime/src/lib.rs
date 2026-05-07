@@ -10979,6 +10979,18 @@ slave_priority:{}\r\n",
             }
             _ => {}
         }
+        // Upstream replication.c::waitCommand:3534-3537 rejects WAIT on
+        // replica instances. The matching check exists below for WAITAOF
+        // but was missing here. (frankenredis-kwvqi)
+        if matches!(
+            self.server.replication_runtime_state.role,
+            ReplicationRoleState::Replica { .. }
+        ) {
+            return RespFrame::Error(
+                "ERR WAIT cannot be used with replica instances. Please also note that since Redis 4.0 if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated."
+                    .to_string(),
+            );
+        }
 
         // Refresh replica ACK snapshots to get current state
         self.server.refresh_replica_ack_snapshots();
@@ -14986,6 +14998,36 @@ mod tests {
 
         let still_two = rt.execute_frame(command(&[b"WAIT", b"3", b"0"]), 2);
         assert_eq!(still_two, RespFrame::Integer(2));
+    }
+
+    #[test]
+    fn wait_rejects_replica_instances_with_canonical_error() {
+        // Upstream replication.c::waitCommand:3534-3537 rejects WAIT on
+        // replica instances with the canonical hint message. fr-runtime
+        // had the matching check for WAITAOF but was missing it for WAIT.
+        // (frankenredis-kwvqi)
+        let mut rt = Runtime::default_strict();
+        // Switch to replica role via REPLICAOF host port — the public path
+        // that updates replication_runtime_state.role to Replica.
+        let ok = rt.execute_frame(command(&[b"REPLICAOF", b"127.0.0.1", b"6379"]), 0);
+        assert_eq!(ok, RespFrame::SimpleString("OK".to_string()));
+
+        let rejected = rt.execute_frame(command(&[b"WAIT", b"0", b"100"]), 1);
+        assert_eq!(
+            rejected,
+            RespFrame::Error(
+                "ERR WAIT cannot be used with replica instances. Please also note that since Redis 4.0 if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated."
+                    .to_string()
+            )
+        );
+
+        // Master mode keeps working — sanity check that the gate isn't
+        // over-restrictive. Same hint message is also emitted for WAITAOF
+        // on a replica (lib.rs:11027-11034) so the symmetry is now
+        // complete.
+        let mut rt = Runtime::default_strict();
+        let zero = rt.execute_frame(command(&[b"WAIT", b"0", b"0"]), 0);
+        assert_eq!(zero, RespFrame::Integer(0));
     }
 
     #[test]
