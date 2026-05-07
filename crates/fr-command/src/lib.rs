@@ -17354,6 +17354,37 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             ));
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("SDSLEN") {
+        // Upstream debug.c::debugCommand:655-679 returns:
+        //   ERR no such key                       if missing
+        //   ERR Not an sds encoded string.        if int-encoded or non-string
+        //   +SimpleString with 6 sds-state fields otherwise
+        // fr stores keys/values as Vec<u8> rather than upstream's sds, so
+        // the avail/zmalloc fields surface as the buffer length (no
+        // separate over-allocation concept). Tooling that parses the
+        // format gets a syntactically valid reply. (frankenredis-byt3l)
+        if argv.len() != 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'SDSLEN'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        let key = &argv[2];
+        let Some(encoding) = store.object_encoding(key, now_ms) else {
+            return Ok(RespFrame::Error("ERR no such key".to_string()));
+        };
+        if !matches!(encoding, "embstr" | "raw") {
+            return Ok(RespFrame::Error(
+                "ERR Not an sds encoded string.".to_string(),
+            ));
+        }
+        let key_len = key.len();
+        let val_len = store.strlen(key, now_ms).unwrap_or(0);
+        Ok(RespFrame::SimpleString(format!(
+            "key_sds_len:{key_len}, key_sds_avail:0, key_zmalloc: {key_len}, \
+             val_sds_len:{val_len}, val_sds_avail:0, val_zmalloc: {val_len}"
+        )))
     } else if sub.eq_ignore_ascii_case("REPLICATE") {
         // Upstream debug.c::debugCommand:867-870 calls
         // replicationFeedSlaves(...) to propagate the trailing args to
@@ -35635,6 +35666,121 @@ mod tests {
         assert!(info.contains("serializedlength:"), "{info}");
         assert!(info.contains("lru:"), "{info}");
         assert!(info.contains("lru_seconds_idle:"), "{info}");
+    }
+
+    #[test]
+    fn debug_sdslen_returns_upstream_three_branch_shape() {
+        // Upstream debug.c::debugCommand:655-679 has three replies:
+        //   ERR no such key                       if missing
+        //   ERR Not an sds encoded string.        if int-encoded or non-string
+        //   +SimpleString with 6 sds-state fields otherwise
+        // (frankenredis-byt3l)
+        let mut store = Store::new();
+
+        // Missing key
+        let missing = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"SDSLEN".to_vec(),
+                b"absent".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug sdslen missing");
+        assert_eq!(missing, RespFrame::Error("ERR no such key".to_string()));
+
+        // Int-encoded canonical i64 string
+        dispatch_argv(
+            &[b"SET".to_vec(), b"int_key".to_vec(), b"42".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed int");
+        let int_reply = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"SDSLEN".to_vec(),
+                b"int_key".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug sdslen int");
+        assert_eq!(
+            int_reply,
+            RespFrame::Error("ERR Not an sds encoded string.".to_string())
+        );
+
+        // Non-string (list)
+        dispatch_argv(
+            &[b"RPUSH".to_vec(), b"list_key".to_vec(), b"x".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("seed list");
+        let list_reply = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"SDSLEN".to_vec(),
+                b"list_key".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug sdslen list");
+        assert_eq!(
+            list_reply,
+            RespFrame::Error("ERR Not an sds encoded string.".to_string())
+        );
+
+        // Sds-encoded string (embstr / raw): formatted SimpleString.
+        dispatch_argv(
+            &[
+                b"SET".to_vec(),
+                b"sds_key".to_vec(),
+                b"hello world".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("seed sds");
+        let sds_reply = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"SDSLEN".to_vec(),
+                b"sds_key".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug sdslen sds");
+        let RespFrame::SimpleString(info) = sds_reply else {
+            panic!("expected SimpleString from DEBUG SDSLEN, got {sds_reply:?}");
+        };
+        // Key 'sds_key' is 7 bytes; value 'hello world' is 11.
+        assert!(
+            info.contains("key_sds_len:7"),
+            "missing or wrong key_sds_len in {info}"
+        );
+        assert!(
+            info.contains("val_sds_len:11"),
+            "missing or wrong val_sds_len in {info}"
+        );
+        assert!(info.contains("key_sds_avail:0"));
+        assert!(info.contains("val_sds_avail:0"));
+
+        // Wrong arity → canonical "unknown subcommand or wrong number" error.
+        let bad = dispatch_argv(&[b"DEBUG".to_vec(), b"SDSLEN".to_vec()], &mut store, 0)
+            .expect_err("missing key arg");
+        assert_eq!(
+            bad,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'SDSLEN'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
     }
 
     #[test]
