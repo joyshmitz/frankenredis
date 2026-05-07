@@ -29887,6 +29887,39 @@ mod tests {
     }
 
     #[test]
+    fn bitfield_invalid_type_matches_upstream_short_wording() {
+        // Pin upstream bitops.c::getBitfieldTypeFromArgument wording:
+        // "Invalid bitfield type. Use something like i16 u8. Note
+        // that u64 is not supported but i64 is." (frankenredis-8gki)
+        let mut store = Store::new();
+        store.set(b"k".to_vec(), b"v".to_vec(), None, 0);
+
+        let bad_type = dispatch_argv(
+            &[
+                b"BITFIELD".to_vec(),
+                b"k".to_vec(),
+                b"GET".to_vec(),
+                b"u130".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        );
+        let got = match bad_type {
+            Ok(RespFrame::Error(s)) => s,
+            Err(e) => match e.to_resp() {
+                RespFrame::Error(s) => s,
+                other => panic!("expected error frame, got {other:?}"),
+            },
+            other => panic!("expected error, got {other:?}"),
+        };
+        assert_eq!(
+            got,
+            "ERR Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.".to_string()
+        );
+    }
+
+    #[test]
     fn xpending_arity_validation_matches_upstream() {
         // Pin upstream xpendingCommand arity validation
         // (frankenredis-nslr): argc ∈ {3, 6, 7, 8, 9} OK; argc=4 and

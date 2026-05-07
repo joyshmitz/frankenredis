@@ -21485,6 +21485,49 @@ mod tests {
     }
 
     #[test]
+    fn acl_genpass_bits_parses_then_range_checks_match_upstream() {
+        // Pin upstream acl.c::aclCommand GENPASS validation order
+        // (frankenredis-8gki): the bits arg parses via
+        // getLongFromObjectOrReply (NULL msg → "value is not an
+        // integer or out of range"), THEN the (bits<=0 || bits>4096)
+        // range-check fires the verbose 'must be the number of bits...'
+        // wording. Collapsing both into the verbose form is the
+        // regression.
+        let mut rt = Runtime::default_strict();
+
+        let bad_int = rt.execute_frame(command(&[b"ACL", b"GENPASS", b"abc"]), 0);
+        assert_eq!(
+            bad_int,
+            RespFrame::Error("ERR value is not an integer or out of range".to_string())
+        );
+
+        let too_big = rt.execute_frame(command(&[b"ACL", b"GENPASS", b"99999"]), 1);
+        assert_eq!(
+            too_big,
+            RespFrame::Error(
+                "ERR ACL GENPASS argument must be the number of bits for the output password, a positive number up to 4096"
+                    .to_string()
+            )
+        );
+
+        let zero = rt.execute_frame(command(&[b"ACL", b"GENPASS", b"0"]), 2);
+        assert_eq!(
+            zero,
+            RespFrame::Error(
+                "ERR ACL GENPASS argument must be the number of bits for the output password, a positive number up to 4096"
+                    .to_string()
+            )
+        );
+
+        // Sanity: valid bits succeeds with hex string.
+        let ok = rt.execute_frame(command(&[b"ACL", b"GENPASS", b"32"]), 3);
+        let RespFrame::BulkString(Some(bytes)) = ok else {
+            panic!("expected bulk string, got {ok:?}");
+        };
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
     fn acl_log_and_cat_extra_args_match_upstream_subcommand_syntax_error() {
         // Pin upstream acl.c::aclCommand fallthrough envelope for the
         // arity = -2 ACL subcommands LOG and CAT. extra args surface
