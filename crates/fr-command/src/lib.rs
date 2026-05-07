@@ -17237,7 +17237,15 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             hello_simple("HELP"),
             hello_simple("    Print this help."),
         ])))
-    } else if sub.eq_ignore_ascii_case("PANIC") || sub.eq_ignore_ascii_case("SEGFAULT") {
+    } else if sub.eq_ignore_ascii_case("PANIC")
+        || sub.eq_ignore_ascii_case("SEGFAULT")
+        || sub.eq_ignore_ascii_case("ASSERT")
+    {
+        // Upstream debug.c::debugCommand:527-528 calls
+        // serverAssertWithInfo(c, c->argv[0], 1==2) which aborts. ASSERT
+        // joins PANIC/SEGFAULT here; the difference between them is
+        // upstream-specific signal/log behavior that fr's tests cannot
+        // assert anyway. (frankenredis-53n6u)
         std::process::abort();
     } else if sub.eq_ignore_ascii_case("OOM") {
         std::alloc::handle_alloc_error(std::alloc::Layout::new::<u8>());
@@ -17346,6 +17354,65 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
             ));
         }
         Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("REPLICATE") {
+        // Upstream debug.c::debugCommand:867-870 calls
+        // replicationFeedSlaves(...) to propagate the trailing args to
+        // attached replicas, then replies +OK. argv.len() must be >= 3
+        // (DEBUG REPLICATE <string> [<string> ...]). fr-command has no
+        // replica-feed hook from dispatch_argv, so accept-and-OK matches
+        // the wire contract. (frankenredis-53n6u)
+        if argv.len() < 3 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'REPLICATE'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        Ok(RespFrame::SimpleString("OK".to_string()))
+    } else if sub.eq_ignore_ascii_case("REPLYBUFFER") {
+        // Upstream debug.c::debugCommand:1001-1017 enforces argc==4 and
+        // recognizes two sub2 keywords:
+        //   PEAK-RESET-TIME <NEVER|RESET|<time>> → sets
+        //     server.reply_buffer_peak_reset_time
+        //   RESIZING <0|1>                       → toggles
+        //     server.reply_buffer_resizing_enabled
+        // Other sub2 values fall through to addReplySubcommandSyntaxError
+        // which produces the canonical 'Unknown subcommand or wrong
+        // number of arguments' error. fr-command has no reply-buffer
+        // mechanism, so accept-and-OK on syntactically-valid inputs.
+        // (frankenredis-53n6u)
+        if argv.len() != 4 {
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'REPLYBUFFER'. Try DEBUG HELP."
+                    .to_string(),
+            ));
+        }
+        let sub2 = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
+        if sub2.eq_ignore_ascii_case("PEAK-RESET-TIME") {
+            // Validate the value: NEVER / RESET / a parseable integer.
+            let val = std::str::from_utf8(&argv[3])
+                .map_err(|_| CommandError::InvalidUtf8Argument)?;
+            if !val.eq_ignore_ascii_case("NEVER")
+                && !val.eq_ignore_ascii_case("RESET")
+                && val.parse::<i64>().is_err()
+            {
+                return Err(CommandError::Custom(
+                    "ERR value is not an integer or out of range".to_string(),
+                ));
+            }
+            Ok(RespFrame::SimpleString("OK".to_string()))
+        } else if sub2.eq_ignore_ascii_case("RESIZING") {
+            // atoi-permissive: any input is accepted, treated as 0 if
+            // unparseable. Mirrors upstream's atoi(c->argv[3]->ptr).
+            Ok(RespFrame::SimpleString("OK".to_string()))
+        } else {
+            Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'REPLYBUFFER'. Try DEBUG HELP."
+                    .to_string(),
+            ))
+        }
     } else if sub.eq_ignore_ascii_case("STRINGMATCH-LEN") {
         // Upstream debug.c spells this `STRINGMATCH-TEST` and runs
         // an in-process fuzz of stringmatchlen() before replying OK.
@@ -35568,6 +35635,121 @@ mod tests {
         assert!(info.contains("serializedlength:"), "{info}");
         assert!(info.contains("lru:"), "{info}");
         assert!(info.contains("lru_seconds_idle:"), "{info}");
+    }
+
+    #[test]
+    fn debug_replicate_and_replybuffer_subcommands_match_upstream_wire_shapes() {
+        // Upstream debug.c::debugCommand:
+        //   REPLICATE <string> [<string> ...]                        at 867-870 → +OK
+        //   REPLYBUFFER PEAK-RESET-TIME <NEVER|RESET|<time>>          at 1001-1010 → +OK
+        //   REPLYBUFFER RESIZING <0|1>                                at 1011-1012 → +OK
+        //   REPLYBUFFER <unknown>                                     → unknown-subcommand error
+        // fr-command has no replica-feed hook nor reply-buffer mechanism,
+        // so accept-and-OK on syntactically-valid inputs matches the wire
+        // contract. (frankenredis-53n6u)
+        let mut store = Store::new();
+
+        let one = dispatch_argv(
+            &[b"DEBUG".to_vec(), b"REPLICATE".to_vec(), b"PING".to_vec()],
+            &mut store,
+            0,
+        )
+        .expect("debug replicate ping");
+        assert_eq!(one, RespFrame::SimpleString("OK".to_string()));
+
+        let many = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"REPLICATE".to_vec(),
+                b"SET".to_vec(),
+                b"k".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug replicate variadic");
+        assert_eq!(many, RespFrame::SimpleString("OK".to_string()));
+
+        let bad = dispatch_argv(&[b"DEBUG".to_vec(), b"REPLICATE".to_vec()], &mut store, 0)
+            .expect_err("replicate needs string");
+        assert_eq!(
+            bad,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'REPLICATE'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
+
+        for value in [b"NEVER".as_slice(), b"RESET", b"1500", b"-1", b"never"] {
+            let out = dispatch_argv(
+                &[
+                    b"DEBUG".to_vec(),
+                    b"REPLYBUFFER".to_vec(),
+                    b"PEAK-RESET-TIME".to_vec(),
+                    value.to_vec(),
+                ],
+                &mut store,
+                0,
+            )
+            .unwrap_or_else(|_| {
+                panic!(
+                    "REPLYBUFFER PEAK-RESET-TIME {} should be ok",
+                    std::str::from_utf8(value).unwrap()
+                )
+            });
+            assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+        }
+
+        let resizing = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"REPLYBUFFER".to_vec(),
+                b"RESIZING".to_vec(),
+                b"1".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("debug replybuffer resizing");
+        assert_eq!(resizing, RespFrame::SimpleString("OK".to_string()));
+
+        let unknown_sub2 = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"REPLYBUFFER".to_vec(),
+                b"FOO".to_vec(),
+                b"BAR".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("unknown sub2");
+        assert_eq!(
+            unknown_sub2,
+            CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'REPLYBUFFER'. Try DEBUG HELP."
+                    .to_string()
+            )
+        );
+
+        let bad_peak_value = dispatch_argv(
+            &[
+                b"DEBUG".to_vec(),
+                b"REPLYBUFFER".to_vec(),
+                b"PEAK-RESET-TIME".to_vec(),
+                b"notanumber".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("peak-reset-time bad value");
+        assert_eq!(
+            bad_peak_value,
+            CommandError::Custom("ERR value is not an integer or out of range".to_string())
+        );
     }
 
     #[test]
