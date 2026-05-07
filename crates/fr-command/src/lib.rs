@@ -17401,7 +17401,16 @@ fn debug_cmd(argv: &[Vec<u8>], store: &mut Store, now_ms: u64) -> Result<RespFra
     let sub = std::str::from_utf8(&argv[1]).map_err(|_| CommandError::InvalidUtf8Argument)?;
     if sub.eq_ignore_ascii_case("SLEEP") {
         if argv.len() != 3 {
-            return Err(CommandError::WrongArity("DEBUG"));
+            // Upstream debug.c::debugCommand routes SLEEP wrong-arity
+            // through addReplySubcommandSyntaxError, not the generic
+            // table-level wrong-arity reply. Mirrors the pattern
+            // already used by SET-ACTIVE-EXPIRE / OBJECT / RELOAD-as-
+            // unknown-option below. (frankenredis-dbgs)
+            return Err(CommandError::Custom(
+                "ERR unknown subcommand or wrong number of arguments \
+                 for 'SLEEP'. Try DEBUG HELP."
+                    .to_string(),
+            ));
         }
         let secs: f64 = std::str::from_utf8(&argv[2])
             .ok()
@@ -38463,6 +38472,35 @@ mod tests {
         )
         .expect("debug sleep");
         assert_eq!(out, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn debug_sleep_wrong_arity_uses_subcommand_syntax_error_envelope() {
+        // Pin upstream debug.c::debugCommand SLEEP wrong-arity wording
+        // (frankenredis-dbgs): no-arg or extra-args route through
+        // addReplySubcommandSyntaxError -> "ERR unknown subcommand or
+        // wrong number of arguments for 'SLEEP'. Try DEBUG HELP." —
+        // not the table-level WrongArity('DEBUG') reply fr previously
+        // emitted. Differential probe vs vendored 7.2.4 (with
+        // --enable-debug-command local) captured the wording.
+        let expected = CommandError::Custom(
+            "ERR unknown subcommand or wrong number of arguments \
+             for 'SLEEP'. Try DEBUG HELP."
+                .to_string(),
+        );
+        for argv_in in [
+            vec![b"DEBUG".to_vec(), b"SLEEP".to_vec()],
+            vec![
+                b"DEBUG".to_vec(),
+                b"SLEEP".to_vec(),
+                b"1".to_vec(),
+                b"extra".to_vec(),
+            ],
+        ] {
+            let mut store = Store::new();
+            let err = dispatch_argv(&argv_in, &mut store, 0).expect_err("sleep wrong arity");
+            assert_eq!(err, expected, "argv={argv_in:?}");
+        }
     }
 
     #[test]
