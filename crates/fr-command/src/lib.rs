@@ -8759,6 +8759,14 @@ fn function_cmd(
         }
     } else if sub.eq_ignore_ascii_case("LIST") {
         // FUNCTION LIST [LIBRARYNAME pattern] [WITHCODE]
+        // Upstream FUNCTION LIST carries CMD_NOSCRIPT — fire the
+        // noscript guard before the option-parsing loop so a
+        // scripted bad-arg call surfaces the noscript reply
+        // rather than 'Unknown argument <token>' or 'library name
+        // argument was not given'. (frankenredis-yrm7e)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         let mut pattern = None;
         let mut with_code = false;
         let mut i = 2;
@@ -8788,9 +8796,6 @@ fn function_cmd(
                 return Err(CommandError::Custom(format!("ERR Unknown argument {arg}")));
             }
             i += 1;
-        }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
         }
         // (frankenredis-1dfox) Upstream functions.c::functionListCommand
         // emits per-library + per-function as Maps under RESP3
@@ -9012,6 +9017,11 @@ fn function_cmd(
                 "ERR unknown subcommand or wrong number of arguments for 'FLUSH'. Try FUNCTION HELP.".to_string(),
             ));
         }
+        // Upstream FUNCTION FLUSH carries CMD_NOSCRIPT — fire the
+        // noscript guard before mode validation. (frankenredis-yrm7e)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         if argv.len() == 3 {
             let mode =
                 std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -9020,9 +9030,6 @@ fn function_cmd(
                     "ERR FUNCTION FLUSH only supports SYNC|ASYNC option".to_string(),
                 ));
             }
-        }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
         }
         store.function_flush();
         Ok(RespFrame::SimpleString("OK".to_string()))
@@ -16931,6 +16938,14 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 "ERR SCRIPT FLUSH only support SYNC|ASYNC option".to_string(),
             ));
         }
+        // Upstream SCRIPT FLUSH carries CMD_NOSCRIPT — script.c
+        // evaluates that flag before the handler-level mode check,
+        // so a scripted call with an invalid mode must surface the
+        // noscript reply rather than 'only support SYNC|ASYNC'.
+        // (frankenredis-yrm7e)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
+        }
         if argv.len() == 3 {
             let mode =
                 std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
@@ -16940,9 +16955,6 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 ));
             }
         }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
-        }
         store.script_flush();
         Ok(RespFrame::SimpleString("OK".to_string()))
     } else if sub.eq_ignore_ascii_case("DEBUG") {
@@ -16951,6 +16963,11 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
                 command: "SCRIPT",
                 subcommand: "DEBUG".to_string(),
             });
+        }
+        // Upstream SCRIPT DEBUG carries CMD_NOSCRIPT — mirror the
+        // arity-then-noscript-then-mode order. (frankenredis-yrm7e)
+        if store.script_nesting_level >= 1 {
+            return Err(script_noscript_command_error());
         }
         let mode = std::str::from_utf8(&argv[2]).map_err(|_| CommandError::InvalidUtf8Argument)?;
         if !mode.eq_ignore_ascii_case("YES")
@@ -16963,9 +16980,6 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             return Err(CommandError::Custom(
                 "ERR Use SCRIPT DEBUG YES/SYNC/NO".to_string(),
             ));
-        }
-        if store.script_nesting_level >= 1 {
-            return Err(script_noscript_command_error());
         }
         // FrankenRedis does not currently implement a step-by-step Lua debugger.
         // We accept the command for parity, but debugging mode won't actually trigger.
@@ -34920,6 +34934,31 @@ mod tests {
         ];
         for argv in noscript_cases {
             let err = dispatch_argv(&argv, &mut store, 0).unwrap_err();
+            assert_eq!(
+                err,
+                CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
+                "argv: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn script_and_function_subcommands_run_noscript_guard_before_option_parsing() {
+        // (frankenredis-yrm7e) Upstream commands.def lines 5318-5322
+        // mark SCRIPT FLUSH/DEBUG with CMD_NOSCRIPT, lines 5138-5146
+        // mark FUNCTION LIST/FLUSH with CMD_NOSCRIPT. script.c
+        // evaluates the flag before any handler-level mode / option
+        // validation, so a scripted call with bad args must surface
+        // the noscript reply rather than the mode/syntax error.
+        let mut store = Store::new();
+        store.script_nesting_level = 1;
+        for argv in [
+            vec![b"SCRIPT".to_vec(), b"FLUSH".to_vec(), b"NOSUCH".to_vec()],
+            vec![b"SCRIPT".to_vec(), b"DEBUG".to_vec(), b"MAYBE".to_vec()],
+            vec![b"FUNCTION".to_vec(), b"LIST".to_vec(), b"NOSUCH".to_vec()],
+            vec![b"FUNCTION".to_vec(), b"FLUSH".to_vec(), b"NOSUCH".to_vec()],
+        ] {
+            let err = dispatch_argv(&argv, &mut store, 0).expect_err("noscript should win");
             assert_eq!(
                 err,
                 CommandError::Custom(SCRIPT_NOSCRIPT_ERROR.to_string()),
