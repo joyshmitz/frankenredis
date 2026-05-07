@@ -9649,6 +9649,13 @@ impl Runtime {
         }
         // Clear pub/sub subscriptions from the global registry before resetting.
         self.pubsub_cleanup_client(self.session.client_id);
+        // Mirror upstream networking.c::clearClientConnectionState:1507-1513:
+        // a MONITOR client must be removed from server.monitors so the
+        // command-broadcast loop stops feeding the (now reset) connection.
+        // Without this, a `MONITOR; RESET` sequence leaves the session in
+        // monitor_clients and the broadcast at lib.rs:5337 keeps streaming
+        // every dispatched command. (frankenredis-se9t5)
+        self.server.monitor_clients.remove(&self.session.client_id);
         self.session.reset_connection_state(&self.server.auth_state);
         // Redis returns +RESET\r\n (a simple string "RESET")
         RespFrame::SimpleString("RESET".to_string())
@@ -15250,6 +15257,43 @@ mod tests {
                 42,
                 b"+0.002000 [0 127.0.0.1:0] \"SET\" \"alpha\" \"1\"\r\n".to_vec(),
             )]
+        );
+    }
+
+    #[test]
+    fn reset_unregisters_monitor_client_so_subsequent_commands_dont_stream() {
+        // Upstream networking.c::clearClientConnectionState:1507-1513
+        // explicitly removes a MONITOR client from server.monitors so the
+        // broadcast loop stops feeding it. Previously fr-runtime's RESET
+        // skipped this, leaving the session registered. (frankenredis-se9t5)
+        let mut rt = Runtime::default_strict();
+        rt.session.client_id = 99;
+
+        assert_eq!(
+            rt.execute_frame(command(&[b"MONITOR"]), 1),
+            RespFrame::SimpleString("OK".to_string())
+        );
+        assert!(rt.server.monitor_clients.contains(&99));
+
+        // RESET must drop us from the monitor set in addition to clearing
+        // session state.
+        assert_eq!(
+            rt.execute_frame(command(&[b"RESET"]), 2),
+            RespFrame::SimpleString("RESET".to_string())
+        );
+        assert!(
+            !rt.server.monitor_clients.contains(&99),
+            "RESET should unregister the client from monitor_clients"
+        );
+
+        // Drain any monitor frames produced before/during reset, then
+        // confirm subsequent commands no longer feed the (formerly
+        // monitor) session.
+        let _ = rt.drain_monitor_output();
+        let _ = rt.execute_frame(command(&[b"SET", b"alpha", b"1"]), 3);
+        assert!(
+            rt.drain_monitor_output().is_empty(),
+            "RESET-cleared client should no longer receive MONITOR feeds"
         );
     }
 
