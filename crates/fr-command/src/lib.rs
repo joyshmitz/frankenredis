@@ -49991,6 +49991,150 @@ mod tests {
     }
 
     #[test]
+    fn xinfo_stream_non_full_resp3_emits_map_and_groups_consumers_per_element_maps() {
+        // Pin upstream RESP3 Map shapes (frankenredis-f6z6) for the
+        // remaining XINFO subcommands beyond the FULL form already
+        // covered by xinfo_stream_full_resp3_emits_map:
+        //   XINFO STREAM <key>            -> outer Map (addReplyMapLen)
+        //   XINFO GROUPS <key>            -> Array of per-group Map
+        //   XINFO CONSUMERS <key> <group> -> Array of per-consumer Map
+        // RESP2 callers must continue to receive flat alternating-k/v
+        // arrays for each element. Helpers stream_group_info_to_frame
+        // and stream_consumer_info_to_frame switch on resp_protocol.
+        let mut store = Store::new();
+        store.dispatch_client_ctx.resp_protocol_version = 3;
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"xs".to_vec(),
+                b"*".to_vec(),
+                b"k".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            10,
+        )
+        .expect("xadd");
+        dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"xs".to_vec(),
+                b"g1".to_vec(),
+                b"$".to_vec(),
+            ],
+            &mut store,
+            20,
+        )
+        .expect("xgroup create");
+        dispatch_argv(
+            &[
+                b"XREADGROUP".to_vec(),
+                b"GROUP".to_vec(),
+                b"g1".to_vec(),
+                b"c1".to_vec(),
+                b"COUNT".to_vec(),
+                b"1".to_vec(),
+                b"STREAMS".to_vec(),
+                b"xs".to_vec(),
+                b">".to_vec(),
+            ],
+            &mut store,
+            30,
+        )
+        .ok();
+
+        // (1) XINFO STREAM xs (non-FULL) → outer Map under RESP3.
+        let stream_out =
+            dispatch_argv(&[b"XINFO".to_vec(), b"STREAM".to_vec(), b"xs".to_vec()], &mut store, 40)
+                .expect("xinfo stream");
+        let RespFrame::Map(Some(stream_pairs)) = stream_out else {
+            panic!("XINFO STREAM under RESP3 must be Map, got {stream_out:?}");
+        };
+        let keys: Vec<&[u8]> = stream_pairs
+            .iter()
+            .filter_map(|(k, _)| match k {
+                RespFrame::BulkString(Some(b)) => Some(b.as_slice()),
+                _ => None,
+            })
+            .collect();
+        for required in [b"length".as_slice(), b"groups", b"first-entry", b"last-entry"] {
+            assert!(
+                keys.contains(&required),
+                "XINFO STREAM Map missing key {:?}; keys={keys:?}",
+                std::str::from_utf8(required).unwrap_or("")
+            );
+        }
+
+        // (2) XINFO GROUPS xs → outer Array of per-group Maps under RESP3.
+        let groups_out =
+            dispatch_argv(&[b"XINFO".to_vec(), b"GROUPS".to_vec(), b"xs".to_vec()], &mut store, 40)
+                .expect("xinfo groups");
+        let RespFrame::Array(Some(groups)) = groups_out else {
+            panic!("XINFO GROUPS outer must be Array, got {groups_out:?}");
+        };
+        assert_eq!(groups.len(), 1);
+        let RespFrame::Map(Some(group_pairs)) = &groups[0] else {
+            panic!("each XINFO GROUPS row must be Map under RESP3, got {:?}", groups[0]);
+        };
+        assert!(
+            group_pairs.iter().any(
+                |(k, _)| matches!(k, RespFrame::BulkString(Some(b)) if b == b"name")
+            ),
+            "expected `name` key in group Map"
+        );
+
+        // (3) XINFO CONSUMERS xs g1 → outer Array of per-consumer Maps under RESP3.
+        let consumers_out = dispatch_argv(
+            &[
+                b"XINFO".to_vec(),
+                b"CONSUMERS".to_vec(),
+                b"xs".to_vec(),
+                b"g1".to_vec(),
+            ],
+            &mut store,
+            40,
+        )
+        .expect("xinfo consumers");
+        let RespFrame::Array(Some(consumers)) = consumers_out else {
+            panic!("XINFO CONSUMERS outer must be Array, got {consumers_out:?}");
+        };
+        assert!(!consumers.is_empty(), "expected ≥1 consumer for g1");
+        let RespFrame::Map(Some(consumer_pairs)) = &consumers[0] else {
+            panic!(
+                "each XINFO CONSUMERS row must be Map under RESP3, got {:?}",
+                consumers[0]
+            );
+        };
+        assert!(
+            consumer_pairs.iter().any(
+                |(k, _)| matches!(k, RespFrame::BulkString(Some(b)) if b == b"name")
+            ),
+            "expected `name` key in consumer Map"
+        );
+
+        // RESP2 regression guard: same calls under RESP2 stay flat
+        // alternating-k/v arrays (Array, not Map).
+        store.dispatch_client_ctx.resp_protocol_version = 2;
+        for argv_in in [
+            vec![b"XINFO".to_vec(), b"STREAM".to_vec(), b"xs".to_vec()],
+            vec![b"XINFO".to_vec(), b"GROUPS".to_vec(), b"xs".to_vec()],
+            vec![
+                b"XINFO".to_vec(),
+                b"CONSUMERS".to_vec(),
+                b"xs".to_vec(),
+                b"g1".to_vec(),
+            ],
+        ] {
+            let out = dispatch_argv(&argv_in, &mut store, 50).expect("xinfo resp2");
+            assert!(
+                matches!(out, RespFrame::Array(Some(_))),
+                "RESP2 XINFO must remain Array, got {out:?} for {argv_in:?}"
+            );
+        }
+    }
+
+    #[test]
     fn xinfo_stream_full_resp3_emits_map() {
         // (br-frankenredis-f6z6) Upstream xinfoFullCommand uses
         // addReplyMapLen for the FULL form's outer envelope. Match in
