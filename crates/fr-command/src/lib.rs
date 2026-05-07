@@ -29739,6 +29739,89 @@ mod tests {
     }
 
     #[test]
+    fn xpending_arity_validation_matches_upstream() {
+        // Pin upstream xpendingCommand arity validation
+        // (frankenredis-nslr): argc ∈ {3, 6, 7, 8, 9} OK; argc=4 and
+        // other shapes are SyntaxError, NOT WrongArity. Trailing args
+        // past consumer position are silently ignored (argc=8 no-IDLE
+        // works as `... count consumer EXTRA` -> empty array).
+        let mut store = Store::new();
+        dispatch_argv(
+            &[
+                b"XADD".to_vec(),
+                b"st".to_vec(),
+                b"1-0".to_vec(),
+                b"f".to_vec(),
+                b"v".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+        dispatch_argv(
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                b"st".to_vec(),
+                b"g".to_vec(),
+                b"0".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .unwrap();
+
+        // argc=4 must surface SyntaxError, not WrongArity.
+        let argc4 = dispatch_argv(
+            &[
+                b"XPENDING".to_vec(),
+                b"st".to_vec(),
+                b"g".to_vec(),
+                b"IDLE".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xpending argc4");
+        assert_eq!(argc4, CommandError::SyntaxError);
+
+        // argc=8 (no IDLE) with a trailing junk consumer slot -> upstream
+        // silently ignores; replies empty array (no IDs match in this
+        // empty-pending fixture).
+        let argc8 = dispatch_argv(
+            &[
+                b"XPENDING".to_vec(),
+                b"st".to_vec(),
+                b"g".to_vec(),
+                b"-".to_vec(),
+                b"+".to_vec(),
+                b"10".to_vec(),
+                b"c1".to_vec(),
+                b"EXTRA".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect("xpending argc8");
+        assert!(matches!(argc8, RespFrame::Array(Some(_))));
+
+        // argc=5 (other illegal shape) is also SyntaxError.
+        let argc5 = dispatch_argv(
+            &[
+                b"XPENDING".to_vec(),
+                b"st".to_vec(),
+                b"g".to_vec(),
+                b"-".to_vec(),
+                b"+".to_vec(),
+            ],
+            &mut store,
+            0,
+        )
+        .expect_err("xpending argc5");
+        assert_eq!(argc5, CommandError::SyntaxError);
+    }
+
+    #[test]
     fn xclaim_error_wordings_match_upstream() {
         // Pin upstream xclaimCommand wordings caught by differential
         // probe vs vendored 7.2.4 (frankenredis-rsls):
