@@ -16950,22 +16950,27 @@ fn script_cmd(argv: &[Vec<u8>], store: &mut Store) -> Result<RespFrame, CommandE
             });
         }
         Ok(RespFrame::Array(Some(vec![
-            RespFrame::BulkString(Some(
-                b"SCRIPT <subcommand> [<arg> [value] ...]. Subcommands are:".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"EXISTS <sha1> [<sha1> ...] - Check existence of scripts by SHA1.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"FLUSH [ASYNC|SYNC] - Remove all scripts from the cache.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"KILL - Kill the currently executing script.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(
-                b"LOAD <script> - Load a script into the cache.".to_vec(),
-            )),
-            RespFrame::BulkString(Some(b"HELP - Return subcommand help summary.".to_vec())),
+            hello_simple("SCRIPT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
+            hello_simple("DEBUG (YES|SYNC|NO)"),
+            hello_simple("    Set the debug mode for subsequent scripts executed."),
+            hello_simple("EXISTS <sha1> [<sha1> ...]"),
+            hello_simple(
+                "    Return information about the existence of the scripts in the script cache.",
+            ),
+            hello_simple("FLUSH [ASYNC|SYNC]"),
+            hello_simple("    Flush the Lua scripts cache. Very dangerous on replicas."),
+            hello_simple(
+                "    When called without the optional mode argument, the behavior is determined by the",
+            ),
+            hello_simple("    lazyfree-lazy-user-flush configuration directive. Valid modes are:"),
+            hello_simple("    * ASYNC: Asynchronously flush the scripts cache."),
+            hello_simple("    * SYNC: Synchronously flush the scripts cache."),
+            hello_simple("KILL"),
+            hello_simple("    Kill the currently executing Lua script."),
+            hello_simple("LOAD <script>"),
+            hello_simple("    Load a script into the scripts cache without executing it."),
+            hello_simple("HELP"),
+            hello_simple("    Print this help."),
         ])))
     } else {
         Err(CommandError::UnknownSubcommand {
