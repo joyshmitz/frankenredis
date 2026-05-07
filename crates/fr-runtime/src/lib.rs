@@ -3894,6 +3894,13 @@ impl Runtime {
         special_command: Option<RuntimeSpecialCommand>,
         argv: &[Vec<u8>],
     ) -> bool {
+        // Mirrors upstream server.c::processCommand:4067-4082 allow list:
+        // pingCommand, (s|p)subscribeCommand, (s|p)unsubscribeCommand,
+        // quitCommand, resetCommand. Note PUBSUB-the-command is NOT in
+        // upstream's allow list — RESP2 subscribers cannot query pubsub
+        // state without opening a separate connection. The RESP3 bypass
+        // (any command allowed) is enforced one level up in execute_frame
+        // by checking resp_protocol_version. (frankenredis-dddxp)
         matches!(
             special_command,
             Some(RuntimeSpecialCommand::Subscribe)
@@ -3904,7 +3911,6 @@ impl Runtime {
                 | Some(RuntimeSpecialCommand::Sunsubscribe)
                 | Some(RuntimeSpecialCommand::Quit)
                 | Some(RuntimeSpecialCommand::Reset)
-                | Some(RuntimeSpecialCommand::Pubsub)
         ) || argv
             .first()
             .is_some_and(|command| eq_ascii_token(command, b"PING"))
@@ -4610,7 +4616,14 @@ impl Runtime {
         let command_arity_ok = argv
             .first()
             .is_some_and(|command| fr_command::check_command_arity(command, argv.len()).is_ok());
-        if command_arity_ok
+        // Upstream server.c::processCommand:4067-4082 only enforces the
+        // pubsub-mode allow-list when c->resp == 2. RESP3 subscribers can
+        // freely interleave pubsub messages with any other command, since
+        // RESP3 supports out-of-band push frames so the protocol stays
+        // unambiguous. (frankenredis-dddxp)
+        let resp2 = self.session.resp_protocol_version != 3;
+        if resp2
+            && command_arity_ok
             && self.is_in_subscription_mode()
             && !Self::pubsub_command_allowed_in_subscription_mode(special_command, &argv)
         {
@@ -10079,9 +10092,11 @@ impl Runtime {
                 sub
             ));
         }
-        if self.is_in_subscription_mode() {
-            return Self::pubsub_context_error(&format!("pubsub|{}", sub.to_ascii_lowercase()));
-        }
+        // The pubsub-mode allow-list gate in execute_frame
+        // (lib.rs:4613-4622) is the single source of truth for blocking
+        // PUBSUB inside subscription mode under RESP2. RESP3 subscribers
+        // freely interleave pubsub state queries with subscriptions, so
+        // no per-handler reject is needed. (frankenredis-dddxp)
         if sub.eq_ignore_ascii_case("HELP") {
             if argv.len() != 2 {
                 // Upstream commands.def declares pubsub|help with arity = 2
@@ -13567,6 +13582,61 @@ mod tests {
             rt.execute_frame(command(&[b"PUBSUB", b"HELP"]), 4),
             RespFrame::Error(
                 "ERR Can't execute 'pubsub|help': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn resp3_subscribers_bypass_pubsub_mode_command_gate() {
+        // Upstream server.c::processCommand:4067 only enforces the
+        // pubsub-mode allow-list when c->resp == 2. RESP3 subscribers can
+        // freely interleave pubsub state queries with subscriptions.
+        // (frankenredis-dddxp)
+        let mut rt = Runtime::default_strict();
+
+        // Negotiate RESP3 first.
+        let hello = rt.execute_frame(command(&[b"HELLO", b"3"]), 0);
+        let RespFrame::Map(_) = &hello else {
+            panic!("expected RESP3 Map from HELLO 3, got {hello:?}");
+        };
+
+        // Subscribe to enter pubsub-mode under RESP3.
+        let sub = rt.execute_frame(command(&[b"SUBSCRIBE", b"alpha"]), 1);
+        // RESP3 wraps subscribe-confirm as a push frame.
+        let push = match sub {
+            RespFrame::Push(items) => items,
+            other => panic!("expected RESP3 push frame, got {other:?}"),
+        };
+        assert_eq!(push.len(), 3);
+        assert!(rt.is_in_subscription_mode());
+
+        // Under RESP3, PUBSUB / GET / PUBLISH must be allowed even with
+        // active subscriptions. Upstream's gate has the c->resp == 2
+        // qualifier; fr-runtime's gate now mirrors it.
+        let channels = rt.execute_frame(command(&[b"PUBSUB", b"CHANNELS"]), 2);
+        assert!(
+            matches!(&channels, RespFrame::Array(Some(items)) if !items.is_empty()),
+            "RESP3 SUBSCRIBE + PUBSUB CHANNELS should list 'alpha', got: {channels:?}"
+        );
+
+        let get = rt.execute_frame(command(&[b"GET", b"missing"]), 3);
+        assert_eq!(get, RespFrame::BulkString(None));
+
+        let publish = rt.execute_frame(command(&[b"PUBLISH", b"alpha", b"hi"]), 4);
+        assert!(
+            matches!(&publish, RespFrame::Integer(_)),
+            "RESP3 SUBSCRIBE + PUBLISH should return Integer (subscriber count), got: {publish:?}"
+        );
+
+        // Verify RESP2 default still rejects the same calls — sanity check
+        // that we didn't regress the existing allow-list semantics.
+        let mut rt2 = Runtime::default_strict();
+        let _ = rt2.execute_frame(command(&[b"SUBSCRIBE", b"alpha"]), 0);
+        let blocked = rt2.execute_frame(command(&[b"PUBSUB", b"CHANNELS"]), 1);
+        assert_eq!(
+            blocked,
+            RespFrame::Error(
+                "ERR Can't execute 'pubsub|channels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context".to_string()
             )
         );
     }
