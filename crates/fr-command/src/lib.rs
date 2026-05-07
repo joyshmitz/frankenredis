@@ -44957,6 +44957,31 @@ mod tests {
                 ],
                 CommandError::Custom(CLIENT_TRACKING_BCAST_OPT_CONFLICT.to_string()),
             ),
+            // (frankenredis-60k1) BCAST + OPTIN + OPTOUT all set:
+            // upstream networking.c::clientCommand checks the BCAST
+            // conflict before the OPTIN/OPTOUT mutual-exclusion, so
+            // user-visible error must be BCAST_OPT_CONFLICT.
+            (
+                vec![
+                    b"CLIENT".to_vec(),
+                    b"TRACKING".to_vec(),
+                    b"ON".to_vec(),
+                    b"BCAST".to_vec(),
+                    b"OPTIN".to_vec(),
+                    b"OPTOUT".to_vec(),
+                ],
+                CommandError::Custom(CLIENT_TRACKING_BCAST_OPT_CONFLICT.to_string()),
+            ),
+            (
+                vec![
+                    b"CLIENT".to_vec(),
+                    b"TRACKING".to_vec(),
+                    b"ON".to_vec(),
+                    b"BCAST".to_vec(),
+                    b"OPTOUT".to_vec(),
+                ],
+                CommandError::Custom(CLIENT_TRACKING_BCAST_OPT_CONFLICT.to_string()),
+            ),
             (
                 vec![
                     b"CLIENT".to_vec(),
