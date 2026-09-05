@@ -37344,7 +37344,14 @@ fn check_blocked_clients(ctx: CheckBlockedClientsContext<'_>) {
         // passed mid-command — upstream reads mstime() fresh at serve time. The
         // re-sample happens ONLY when a candidate exists, so the no-candidate fast
         // path keeps its zero-extra-clock-sample shape (zw36c).
-        let ts = if active_blocked.is_empty() {
+        //
+        // The fresh clock is a SERVE-time clock only. It decides should_check,
+        // timeout, blocked_timeout_response and try_fulfill_blocked; the pipelined
+        // frames a served client left behind are processed with the PASS clock,
+        // the same one every other command of this pass ran under — feeding the
+        // fresh clock into process_buffered_frames let CLIENT PAUSE deadlines
+        // recorded on the pass clock look expired and silently clear.
+        let serve_ts = if active_blocked.is_empty() {
             ts
         } else {
             now_unix_time().ms
@@ -37361,7 +37368,7 @@ fn check_blocked_clients(ctx: CheckBlockedClientsContext<'_>) {
                 continue;
             };
 
-            let mut should_check = ts >= blocked.deadline_ms
+            let mut should_check = serve_ts >= blocked.deadline_ms
                 || matches!(
                     &blocked.op,
                     BlockingOp::Waitaof { .. } | BlockingOp::Wait { .. }
@@ -37375,10 +37382,10 @@ fn check_blocked_clients(ctx: CheckBlockedClientsContext<'_>) {
             }
 
             // Check timeout first.
-            if ts >= blocked.deadline_ms {
+            if serve_ts >= blocked.deadline_ms {
                 let resp3 = conn.session.resp_protocol_version() == 3;
                 encode_client_reply(
-                    &blocked_timeout_response(&blocked.op, runtime, ts),
+                    &blocked_timeout_response(&blocked.op, runtime, serve_ts),
                     resp3,
                     &mut conn.write_buf,
                 );
@@ -37427,7 +37434,7 @@ fn check_blocked_clients(ctx: CheckBlockedClientsContext<'_>) {
             let session = std::mem::take(&mut conn.session);
             let prev = runtime.swap_session(session);
 
-            let result = try_fulfill_blocked(&blocked.op, runtime, ts);
+            let result = try_fulfill_blocked(&blocked.op, runtime, serve_ts);
 
             if let Some(response) = result {
                 // (frankenredis-pgplm) Session is swapped into `runtime` here, so
@@ -37915,7 +37922,7 @@ fn propagate_writes_to_replicas(
                 let feed_db = runtime.replication_stream_selected_db();
                 match conn.replica_fed_db {
                     Some(fed) if fed == feed_db => bytes,
-                    fed => {
+                    _fed => {
                         let db_str = feed_db.to_string();
                         let mut select_frame =
                             format!("*2\r\n$6\r\nSELECT\r\n${}\r\n{}\r\n", db_str.len(), db_str)
@@ -55310,9 +55317,18 @@ $1\r\n0\r\n$3\r\nGET\r\n$2\r\nu8\r\n$1\r\n8\r\n",
         let conn = clients.get(&token).unwrap();
         assert!(write_tokens.contains(&token));
 
-        let expected_bytes = encode_aof_stream(&[AofRecord {
-            argv: vec![b"SET".to_vec(), b"foo".to_vec(), b"bar".to_vec()],
-        }]);
+        // (frankenredis-xmix2) The per-replica feed prepends the stream db as a
+        // SELECT frame on a replica's first fed bytes — upstream
+        // replicationFeedSlaves tracks repldb PER replica and does exactly this —
+        // written outside the shared backlog and its offset accounting.
+        let expected_bytes = encode_aof_stream(&[
+            AofRecord {
+                argv: vec![b"SELECT".to_vec(), b"0".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"SET".to_vec(), b"foo".to_vec(), b"bar".to_vec()],
+            },
+        ]);
 
         assert_eq!(conn.write_buf, expected_bytes);
         assert_eq!(
@@ -55467,11 +55483,18 @@ $1\r\n0\r\n$3\r\nGET\r\n$2\r\nu8\r\n$1\r\n8\r\n",
             &mut sub_closing_tokens,
             None,
         );
-
         let sub_conn = sub_clients.get(&sub_token).unwrap();
-        let expected_bytes = encode_aof_stream(&[AofRecord {
-            argv: vec![b"SET".to_vec(), b"foo".to_vec(), b"bar".to_vec()],
-        }]);
+        // (frankenredis-xmix2) Same per-replica first-feed SELECT as the
+        // master_to_replica test above, one hop down the chain: the replica's own
+        // feed prepends ITS stream db for the sub-replica.
+        let expected_bytes = encode_aof_stream(&[
+            AofRecord {
+                argv: vec![b"SELECT".to_vec(), b"0".to_vec()],
+            },
+            AofRecord {
+                argv: vec![b"SET".to_vec(), b"foo".to_vec(), b"bar".to_vec()],
+            },
+        ]);
 
         assert_eq!(sub_conn.write_buf, expected_bytes);
     }
