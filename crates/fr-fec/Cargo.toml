@@ -1,0 +1,15 @@
+[package]
+name = "fr-fec"
+version = "0.1.0"
+edition = "2024"
+description = "RaptorQ-Everywhere durability sidecar: systematic FEC encode/scrub/decode for FrankenRedis evidence artifacts (spec §9/§19)."
+
+[dependencies]
+raptorq.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+sha2.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
