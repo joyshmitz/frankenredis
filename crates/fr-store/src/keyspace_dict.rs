@@ -578,25 +578,15 @@ impl<V> KeyDict<V> {
     /// Suspend or resume the shrink policy for the span of a BULK operation whose net
     /// key count is unchanged. (frankenredis-4f8vx)
     ///
-    /// Resuming does NOT retroactively shrink; call [`Self::shrink_if_sparse`] once
-    /// afterwards if the caller genuinely ended smaller than it started. Keeping those
-    /// two separate is deliberate: a caller that swaps N keys for N wants neither, and
-    /// one that net-removes wants exactly one shrink, not one per removed key.
+    /// Resuming does NOT retroactively shrink, deliberately: the one suspend site
+    /// (SWAPDB) takes N keys out and puts N back, so a table that was not sparse
+    /// before the swap is not sparse after it, and a caller that swaps N keys for N
+    /// wants neither the per-removal shrink nor a deferred one. A future caller that
+    /// genuinely ends smaller than it started can call [`Self::maybe_shrink`] once
+    /// after resuming.
     #[inline]
     pub fn set_shrink_suspended(&mut self, suspended: bool) {
         self.shrink_suspended = suspended;
-    }
-
-    /// Apply the shrink policy once, now. No-op while suspended.
-    // Unwired lever (frankenredis-d4fux): `expect`, not `allow`, so wiring it makes this
-    // attribute an error and it leaves with the debt instead of outliving it.
-    #[expect(
-        dead_code,
-        reason = "frankenredis-d4fux: unwired lever, wire or delete"
-    )]
-    #[inline]
-    pub fn shrink_if_sparse(&mut self) {
-        self.maybe_shrink();
     }
 
     /// Low 32 bits of the key's hash. See [`Node::hash`] for why 32 is exact for

@@ -5875,9 +5875,9 @@ impl ListValue {
     /// Build a RETAINED list straight from an all-PACKED record, without ever
     /// constructing its chunks.
     ///
-    /// (BlackThrush 2026-08-27) The form [`Self::retained_quicklist2`] should have had
-    /// from the start. That one takes a `ListValue` the eager builder produced and
-    /// throws its chunks away; this one never builds them. The derived totals still
+    /// (frankenredis-d4fux) Supersedes the first cut of this build path, which took a
+    /// `ListValue` the eager builder produced and threw its chunks away; this one
+    /// never builds them. The derived totals still
     /// come from `packed_node_totals`, the ONE implementation of the c92f6/qj6jn rule,
     /// so the two routes cannot disagree -- and the span CONVERSION
     /// (`decode_retained_listpack_spans`, a second span vector plus a rendered-integer
@@ -5929,32 +5929,6 @@ impl ListValue {
         })
     }
 
-    /// Install a list RETAINED in its on-disk form, carrying the derived totals the
-    /// eager builder already computed.
-    ///
-    /// CALLER CONTRACT: `derived` must be the `ListValue` that
-    /// [`Self::from_restored_quicklist2_nodes`] produced for THIS record, so the
-    /// totals are the one implementation's answer and not a second derivation
-    /// (`frankenredis-c92f6`). `raw` must be the record body those nodes were decoded
-    /// from.
-    // Unwired lever (frankenredis-d4fux): `expect`, not `allow`, so wiring it makes this
-    // attribute an error and it leaves with the debt instead of outliving it.
-    #[expect(
-        dead_code,
-        reason = "frankenredis-d4fux: unwired lever, wire or delete"
-    )]
-    #[must_use]
-    pub(crate) fn retained_quicklist2(derived: Self, raw: Vec<u8>) -> Self {
-        let len = derived.len();
-        Self {
-            repr_state: ListReprState::Pending(Box::new(PendingQuicklist2 {
-                raw: raw.into_boxed_slice(),
-                len,
-                decoded: std::cell::OnceCell::new(),
-            })),
-            ..derived
-        }
-    }
 }
 
 impl ListValue {
