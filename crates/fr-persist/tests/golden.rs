@@ -205,3 +205,41 @@ fn type21_round_trips_max_deleted_entry_id_fplrm() {
         );
     }
 }
+
+#[test]
+fn golden_manifests_raptorq_sidecars_scrub_clean() {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let golden_dir = manifest_dir.join("tests/golden");
+    let fuzz_manifest_dir = manifest_dir.join("../../fuzz/corpus/fuzz_aof_manifest_parser");
+
+    let mut checked = 0;
+    for entry in fs::read_dir(&golden_dir).expect("read golden dir") {
+        let entry = entry.expect("golden entry");
+        let path = entry.path();
+        if path.is_file() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with("manifest_") && name.ends_with(".golden") {
+                let gate_res = fr_fec::verify_sidecar_gate(&path, 1_788_700_000_000);
+                assert!(gate_res.is_ok(), "gate check for {}", path.display());
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, 8, "expected 8 golden manifest sidecars");
+
+    let mut fuzz_checked = 0;
+    for entry in fs::read_dir(&fuzz_manifest_dir).expect("read fuzz manifest dir") {
+        let entry = entry.expect("fuzz entry");
+        let path = entry.path();
+        if path.is_file() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.ends_with(".manifest") {
+                let gate_res = fr_fec::verify_sidecar_gate(&path, 1_788_700_000_000);
+                assert!(gate_res.is_ok(), "gate check for {}", path.display());
+                fuzz_checked += 1;
+            }
+        }
+    }
+    assert_eq!(fuzz_checked, 12, "expected 12 fuzz manifest sidecars");
+}
+
