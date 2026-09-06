@@ -41495,15 +41495,29 @@ impl Runtime {
                             self.capture_aof_record(&[op.to_vec(), logical]);
                         }
                     } else if special_command.is_none() && !handled_migrate {
-                        // (frankenredis-xmix2) The stream's selected-db context for
-                        // replicas is emitted PER REPLICA by the feed path
-                        // (replica_fed_db prepend in fr-server), mirroring upstream
-                        // replicationFeedSlaves' per-slave repldb SELECT. The shared
-                        // aof_selected_db here only TRACKS the writing session's db
-                        // so the feed prepends and the restore/replay paths know the
-                        // context; emitting a shared SELECT record here would
-                        // duplicate the per-replica frame on every fresh attach.
-                        self.server.aof_selected_db = self.session.selected_db;
+                        // (frankenredis-xmix2, restored 2026-09-05) Upstream
+                        // replicationFeedSlaves emits `SELECT <db>` PER REPLICA
+                        // whenever the writing client's db differs from that
+                        // replica's repldb; the per-replica frame is prepended by
+                        // the feed path (replica_fed_db in fr-server) and lives
+                        // OUTSIDE this buffer. But `aof_records` doubles as the
+                        // AOF pre-flush buffer, and upstream aof.c writes the
+                        // SELECT into the FILE at every db change — replay must
+                        // select the db BEFORE applying the record. Removing the
+                        // shared boundary record made a restart replay every
+                        // non-zero-db write into db 0 (multi-db AOF restart lost
+                        // db4 keys; verified 2026-09-05). A fresh raw-SYNC attach
+                        // is not double-SELECTed by this: the record appears only
+                        // on an actual db CHANGE, and the per-replica prepend
+                        // covers the first-feed case.
+                        let session_db = self.session.selected_db;
+                        if self.server.aof_selected_db != session_db {
+                            self.capture_aof_record(&[
+                                b"SELECT".to_vec(),
+                                session_db.to_string().into_bytes(),
+                            ]);
+                            self.server.aof_selected_db = session_db;
+                        }
                         if let Some(script_commands) =
                             self.take_script_propagation_commands_for_capture(argv)
                         {
