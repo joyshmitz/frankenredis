@@ -1,0 +1,45 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "baselines/frankenredis_v0.1.0_incr.json",
+  "artifact_type": "benchmark",
+  "source_hash": "sha256:d9b63ea7abd6e0d5db280bb9d052653aa1f86d954f20203e9fedac20298721d7",
+  "padding": 334,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    6,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 3,
+    "repair_symbols": 8,
+    "overhead_ratio": 2.6666666666666665,
+    "symbol_hashes": [
+      "sha256:09c0910c6b27cf3d18dceac92deb22111cc1b193eb9cba46079d788435af5588",
+      "sha256:7a6dc87ed58c31705f50f1888beb0c3b015def2031a191f33ce5f1f921c409ba",
+      "sha256:211b92ff898c97f3e6fd9e4ad72a5cc4f9ca1176b189ef7e27058fc3a7507607",
+      "sha256:49fda63e8fc3ad7897a92fac25d06ae6288bf6e5a4f689cd8d8a4b2d93d784d7",
+      "sha256:0293cc5b96cbdbc339f5dabead7604a9186b7501ab2f4eb4f1528709725b086a",
+      "sha256:b590f4c8c479d141dcb3d654f572a3e5826519d14e639a29960665780b11e685",
+      "sha256:17ea9f0ad9ca459ee187e19d2993de7a31e02ec717054c02615014112b0ceeab",
+      "sha256:11a15f1834e002c54f2c2b24cd6236ccf6c5d57aaa582a020cdccd167a0fec59",
+      "sha256:494ae847e5822cb286d28e21c85003eeed40613e2c049f36a6101651644895c8",
+      "sha256:5fb32f50cec718e530c071432065b15ccd252442bdf87838ea13b12a4bc99cb1",
+      "sha256:2d89d5ee17b0248f60dd411470a5e4aa32f75b4f26d4006068ab866b9cc6944e"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723511370,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}

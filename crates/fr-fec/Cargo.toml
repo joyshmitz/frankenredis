@@ -13,3 +13,7 @@ sha2.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[[bin]]
+name = "fr-fec"
+path = "src/bin/fr_fec.rs"

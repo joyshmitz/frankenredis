@@ -16,8 +16,8 @@
 //! of introducing a second digest family.
 #![forbid(unsafe_code)]
 
-use raptorq::EncodingPacket;
 use raptorq::Encoder;
+use raptorq::EncodingPacket;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
@@ -110,8 +110,7 @@ pub fn encode_artifact(
     if symbol_size == 0 {
         return Err("symbol_size must be >= 1".to_string());
     }
-    let padding =
-        (symbol_size as usize - data.len() % symbol_size as usize) % symbol_size as usize;
+    let padding = (symbol_size as usize - data.len() % symbol_size as usize) % symbol_size as usize;
     let mut padded = Vec::with_capacity(data.len() + padding);
     padded.extend_from_slice(data);
     padded.resize(data.len() + padding, 0);
@@ -166,20 +165,11 @@ pub fn encode_artifact(
 #[derive(Debug)]
 pub enum ScrubOutcome {
     Clean,
-    Recovered {
-        source: Vec<u8>,
-        proof: DecodeProof,
-    },
-    Failed {
-        reason: String,
-    },
+    Recovered { source: Vec<u8>, proof: DecodeProof },
+    Failed { reason: String },
 }
 
-pub fn scrub(
-    envelope: &FecEnvelope,
-    symbols: &[EncodingPacket],
-    now_unix_ms: u64,
-) -> ScrubOutcome {
+pub fn scrub(envelope: &FecEnvelope, symbols: &[EncodingPacket], now_unix_ms: u64) -> ScrubOutcome {
     let hashes: std::collections::HashSet<&String> =
         envelope.raptorq.symbol_hashes.iter().collect();
     let mut damaged = 0_usize;
@@ -192,8 +182,9 @@ pub fn scrub(
     let total = envelope.raptorq.k as usize + envelope.raptorq.repair_symbols as usize;
     let missing = total.saturating_sub(symbols.len());
 
-    let mut decoder =
-        raptorq::Decoder::new(raptorq::ObjectTransmissionInformation::deserialize(&envelope.oti));
+    let mut decoder = raptorq::Decoder::new(raptorq::ObjectTransmissionInformation::deserialize(
+        &envelope.oti,
+    ));
     let mut reconstructed: Option<Vec<u8>> = None;
     for packet in symbols {
         if reconstructed.is_some() {
@@ -241,8 +232,9 @@ pub fn decode_artifact(
     reason: &str,
     now_unix_ms: u64,
 ) -> Result<(Vec<u8>, DecodeProof), String> {
-    let mut decoder =
-        raptorq::Decoder::new(raptorq::ObjectTransmissionInformation::deserialize(&envelope.oti));
+    let mut decoder = raptorq::Decoder::new(raptorq::ObjectTransmissionInformation::deserialize(
+        &envelope.oti,
+    ));
     let mut reconstructed: Option<Vec<u8>> = None;
     for packet in symbols {
         if reconstructed.is_some() {
@@ -277,7 +269,7 @@ pub fn decode_artifact(
 
 /// Serialize an envelope to the canonical pretty JSON form.
 pub fn envelope_to_json(envelope: &FecEnvelope) -> String {
-    serde_json::to_string_pretty(envelope).expect("envelope serializes")
+    serde_json::to_string_pretty(envelope).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Parse a canonical envelope JSON.
@@ -294,4 +286,149 @@ pub fn serialize_symbol(packet: &EncodingPacket) -> Vec<u8> {
 /// Inverse of [`serialize_symbol`].
 pub fn deserialize_symbol(bytes: &[u8]) -> Result<EncodingPacket, String> {
     Ok(raptorq::EncodingPacket::deserialize(bytes))
+}
+
+/// Serialize a collection of encoding packets into a self-delimited byte stream.
+pub fn serialize_symbol_stream(packets: &[EncodingPacket]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let count = u32::try_from(packets.len()).unwrap_or(0);
+    out.extend_from_slice(&count.to_le_bytes());
+    for packet in packets {
+        let bytes = packet.serialize();
+        let len = u32::try_from(bytes.len()).unwrap_or(0);
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&bytes);
+    }
+    out
+}
+
+/// Deserialize a collection of encoding packets from a self-delimited byte stream.
+pub fn deserialize_symbol_stream(mut bytes: &[u8]) -> Result<Vec<EncodingPacket>, String> {
+    if bytes.len() < 4 {
+        return Err("truncated symbol stream: cannot read count header".to_string());
+    }
+    let count = u32::from_le_bytes(bytes[..4].try_into().map_err(|e| format!("{e}"))?) as usize;
+    bytes = &bytes[4..];
+    let mut packets = Vec::with_capacity(count);
+    for idx in 0..count {
+        if bytes.len() < 4 {
+            return Err(format!("truncated symbol stream at entry {idx}"));
+        }
+        let len = u32::from_le_bytes(bytes[..4].try_into().map_err(|e| format!("{e}"))?) as usize;
+        bytes = &bytes[4..];
+        if bytes.len() < len {
+            return Err(format!(
+                "truncated symbol data for entry {idx} (need {len}, have {})",
+                bytes.len()
+            ));
+        }
+        let packet_bytes = &bytes[..len];
+        bytes = &bytes[len..];
+        packets.push(deserialize_symbol(packet_bytes)?);
+    }
+    Ok(packets)
+}
+
+/// Sidecar file paths for an artifact.
+pub fn sidecar_paths(
+    artifact_path: impl AsRef<std::path::Path>,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let p = artifact_path.as_ref();
+    let envelope = std::path::PathBuf::from(format!("{}.envelope.json", p.display()));
+    let symbols = std::path::PathBuf::from(format!("{}.symbols", p.display()));
+    (envelope, symbols)
+}
+
+/// Write sidecar envelope and symbols files alongside an artifact.
+pub fn write_sidecar(
+    artifact_path: impl AsRef<std::path::Path>,
+    artifact_type: &str,
+    repair_symbols: usize,
+    symbol_size: u16,
+    now_unix_ms: u64,
+) -> Result<(FecEnvelope, std::path::PathBuf, std::path::PathBuf), String> {
+    let path = artifact_path.as_ref();
+    let data = std::fs::read(path).map_err(|err| format!("read {}: {err}", path.display()))?;
+    let encoded = encode_artifact(
+        path.to_str().unwrap_or("artifact"),
+        artifact_type,
+        &data,
+        repair_symbols,
+        symbol_size,
+        now_unix_ms,
+    )?;
+    let (envelope_path, symbols_path) = sidecar_paths(path);
+    if let Some(parent) = envelope_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let envelope_json = envelope_to_json(&encoded.envelope);
+    std::fs::write(&envelope_path, envelope_json)
+        .map_err(|err| format!("write {}: {err}", envelope_path.display()))?;
+    let symbols_bytes = serialize_symbol_stream(&encoded.symbols);
+    std::fs::write(&symbols_path, symbols_bytes)
+        .map_err(|err| format!("write {}: {err}", symbols_path.display()))?;
+    Ok((encoded.envelope, envelope_path, symbols_path))
+}
+
+/// Read sidecar envelope and symbols files for an artifact.
+pub fn read_sidecar(
+    artifact_path: impl AsRef<std::path::Path>,
+) -> Result<(FecEnvelope, Vec<EncodingPacket>), String> {
+    let path = artifact_path.as_ref();
+    let (envelope_path, symbols_path) = sidecar_paths(path);
+    let envelope_json = std::fs::read_to_string(&envelope_path)
+        .map_err(|err| format!("read envelope {}: {err}", envelope_path.display()))?;
+    let envelope = envelope_from_json(&envelope_json)?;
+    let symbols_bytes = std::fs::read(&symbols_path)
+        .map_err(|err| format!("read symbols {}: {err}", symbols_path.display()))?;
+    let symbols = deserialize_symbol_stream(&symbols_bytes)?;
+    Ok((envelope, symbols))
+}
+
+/// Scrub an artifact's sidecar, updating status and proofs on disk when recovered.
+pub fn scrub_sidecar(
+    artifact_path: impl AsRef<std::path::Path>,
+    now_unix_ms: u64,
+) -> Result<ScrubOutcome, String> {
+    let path = artifact_path.as_ref();
+    let (mut envelope, symbols) = read_sidecar(path)?;
+    let outcome = scrub(&envelope, &symbols, now_unix_ms);
+    match &outcome {
+        ScrubOutcome::Clean => {
+            envelope.scrub.last_ok_unix_ms = now_unix_ms;
+            envelope.scrub.status = "ok".to_string();
+            let (envelope_path, _) = sidecar_paths(path);
+            let json = envelope_to_json(&envelope);
+            std::fs::write(&envelope_path, json)
+                .map_err(|err| format!("update envelope {}: {err}", envelope_path.display()))?;
+        }
+        ScrubOutcome::Recovered { source, proof } => {
+            envelope.decode_proofs.push(proof.clone());
+            envelope.scrub.status = "recovered".to_string();
+            let (envelope_path, _) = sidecar_paths(path);
+            let json = envelope_to_json(&envelope);
+            std::fs::write(&envelope_path, json)
+                .map_err(|err| format!("update envelope {}: {err}", envelope_path.display()))?;
+            std::fs::write(path, source)
+                .map_err(|err| format!("write restored artifact {}: {err}", path.display()))?;
+        }
+        ScrubOutcome::Failed { .. } => {}
+    }
+    Ok(outcome)
+}
+
+/// Verify that an artifact's sidecar exists and passes the scrub gate.
+pub fn verify_sidecar_gate(
+    artifact_path: impl AsRef<std::path::Path>,
+    now_unix_ms: u64,
+) -> Result<(), String> {
+    let path = artifact_path.as_ref();
+    let outcome = scrub_sidecar(path, now_unix_ms)?;
+    match outcome {
+        ScrubOutcome::Clean | ScrubOutcome::Recovered { .. } => Ok(()),
+        ScrubOutcome::Failed { reason } => Err(format!(
+            "RaptorQ scrub gate failed for {}: {reason}",
+            path.display()
+        )),
+    }
 }

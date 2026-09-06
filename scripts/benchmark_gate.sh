@@ -142,6 +142,7 @@ mkdir -p "$raw_dir" "$candidate_dir" "$compare_dir" "$log_dir"
 
 fr_bin="$repo_root/target/release/frankenredis"
 bench_bin="$repo_root/target/release/fr-bench"
+fec_bin="$repo_root/target/release/fr-fec"
 repo_redis_cli="$repo_root/legacy_redis_code/redis/src/redis-cli"
 if [[ -x "$repo_redis_cli" ]]; then
   redis_cli="$repo_redis_cli"
@@ -176,7 +177,7 @@ build_release_binaries() {
     return
   fi
 
-  local cmd=(env CARGO_TARGET_DIR="$repo_root/target" cargo build --release -p fr-server -p fr-bench)
+  local cmd=(env CARGO_TARGET_DIR="$repo_root/target" cargo build --release -p fr-server -p fr-bench -p fr-fec)
   case "$build_runner" in
     auto)
       if command -v rch >/dev/null 2>&1; then
@@ -272,6 +273,8 @@ run_workload() {
 
   local baseline_path
   baseline_path="$(resolve_baseline_path "$workload_name")"
+  echo "benchmark gate: verifying RaptorQ sidecar for baseline: $baseline_path"
+  "$fec_bin" verify-gate "$baseline_path"
   local raw_path="$raw_dir/${workload_name}.json"
   local candidate_path="$candidate_dir/${workload_name}.json"
   local compare_json_path="$compare_dir/${workload_name}.json"
@@ -517,6 +520,7 @@ PY
 build_release_binaries
 require_executable "$fr_bin"
 require_executable "$bench_bin"
+require_executable "$fec_bin"
 require_executable "$redis_cli"
 
 start_frankenredis

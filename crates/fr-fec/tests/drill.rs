@@ -3,8 +3,8 @@
 //! asserted (generation manifest, scrub status, decode proof).
 
 use fr_fec::{
-    decode_artifact, deserialize_symbol, encode_artifact, envelope_from_json, envelope_to_json,
-    scrub, serialize_symbol, ScrubOutcome,
+    ScrubOutcome, decode_artifact, deserialize_symbol, encode_artifact, envelope_from_json,
+    envelope_to_json, scrub, serialize_symbol,
 };
 
 const NOW: u64 = 1_788_600_000_000;
@@ -45,7 +45,10 @@ fn generation_scrub_and_recovery_drill_round_trips() {
         .collect();
 
     // SCRUB on an intact artifact (§9 output 2): Clean, nothing to repair.
-    assert!(matches!(scrub(&encoded.envelope, &symbols, NOW), ScrubOutcome::Clean));
+    assert!(matches!(
+        scrub(&encoded.envelope, &symbols, NOW),
+        ScrubOutcome::Clean
+    ));
 
     // Damage: lose the first source symbol and corrupt one repair symbol.
     symbols.remove(0);
@@ -66,8 +69,8 @@ fn generation_scrub_and_recovery_drill_round_trips() {
     // including the envelope round-trip through canonical JSON.
     let envelope_json = envelope_to_json(&encoded.envelope);
     let envelope = envelope_from_json(&envelope_json).expect("envelope reparse");
-    let (source, proof) = decode_artifact(&envelope, &symbols, "forced-recovery drill", NOW + 2_000)
-        .expect("decode");
+    let (source, proof) =
+        decode_artifact(&envelope, &symbols, "forced-recovery drill", NOW + 2_000).expect("decode");
     assert_eq!(source, data);
     use sha2::{Digest, Sha256};
     assert_eq!(
@@ -77,11 +80,7 @@ fn generation_scrub_and_recovery_drill_round_trips() {
     assert_eq!(envelope.decode_proofs.len(), 0);
 
     // Undecodable: below k intact symbols the artifact is honestly failed.
-    let too_few: Vec<_> = symbols
-        .iter()
-        .take(k - 1)
-        .cloned()
-        .collect();
+    let too_few: Vec<_> = symbols.iter().take(k - 1).cloned().collect();
     assert!(
         decode_artifact(&envelope, &too_few, "lost", NOW).is_err(),
         "fewer than k intact symbols must not decode"

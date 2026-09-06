@@ -25,6 +25,7 @@ crates/*/.git.nested_backup/
 artifacts/
 baselines/*
 !baselines/*.json
+!baselines/*.symbols
 golden_outputs/
 golden_checksums.txt
 

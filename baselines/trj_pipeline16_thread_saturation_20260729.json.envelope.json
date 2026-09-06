@@ -1,0 +1,63 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "baselines/trj_pipeline16_thread_saturation_20260729.json",
+  "artifact_type": "benchmark",
+  "source_hash": "sha256:955f7f125a179f79a611bfe8351cac616131bfe9f23ddc7f82b30cd8d920f9bd",
+  "padding": 359,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    42,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 21,
+    "repair_symbols": 8,
+    "overhead_ratio": 0.380952380952381,
+    "symbol_hashes": [
+      "sha256:1c49a722f5f631289787164a91e7d8080ddb980dca53c7361f0e9b114d93faa3",
+      "sha256:b1a30e6eb0ff30abdcea125602418d76d286ab77ada75b303411b9d3efb27e6f",
+      "sha256:0c7c5de30ec1791d408ab32013b7355fa407bd9249d52e9ad21f89cf30655acd",
+      "sha256:05dc7339e01fc8ff0ff0a67ff1ba9cef0788587d19e03badf31f51d24779e44f",
+      "sha256:ef1b12b7476f36efacdcc59d98ec92f237e13d023dd546c28797f52f245efab3",
+      "sha256:4aec0e6be0ec7fa65709c5010a9cd4e64128af9cb864dc1c281a2094baa23a7b",
+      "sha256:a527b886e04eccfe3d7cedbb359e4902f14b39dd07c606df4cd74bc9cefd2f07",
+      "sha256:c8a92a1c655a6296c0fc52f3cfc3bb8e4c11c2a42ac0a50e0ceeb95fad3be62d",
+      "sha256:d60649f4ab5d57322c418b7cb414780ad46a7e372830597498f166c9fe30f533",
+      "sha256:66785bf6a0a4867ef6afee3385973f378b8d219141c59e4030bd1fa3f4db67cc",
+      "sha256:c36d1a7421badc5b540ec2fcf342229ab4e4e0b56b90130eb84115ad4d784707",
+      "sha256:8530e479184060990b9dc36894195254307e4610cd7538d61468b198023fac8a",
+      "sha256:d5281ce7966d1b61bb8beed2bfb728f455d12cc519c4962065d9ffab6af8aac4",
+      "sha256:ba18f7e20edaf6ca401af5acd65edf26b822fec89eb80a0d986876d2e7c9b5df",
+      "sha256:41bb9798b996044b0e1a95fb95e075b8de562304616ae1f24ea38abcddf15771",
+      "sha256:758eda1d3f0a2c605ceb98e0d9837e4d0f9abd99e04c73015699c3290cc3aff6",
+      "sha256:b755bfd8b33c68d5114a545ea7d92b6eba6cce62b7e4eb91acb1b93119ab6b4b",
+      "sha256:15158b166ca0d2cbaf50253c495d7d2d319cf0501ae229c35c5f2f96949a8b7b",
+      "sha256:8e9f9e0844e28f4f27c531fc42933eb7e0f9aae0771b2ddcd9d6b92d4fcf54b8",
+      "sha256:92fedef5396dda87ce1c320107c9813464b814f3ef5835fcd7ef8a2f4a8787c9",
+      "sha256:6317737a325124f36cfdba9251b3ade8d6788b96aa1852a307a9e764bf88fc41",
+      "sha256:da22262d7ab40d78db3e68f6782fe8d96fba895e338a6ba17cadc677677d8e97",
+      "sha256:18e7ea6bd246fb0037acfccf276552a6c9debc3f7b4914ef33e20873a3ccd77a",
+      "sha256:56981b57006a3e6073e03689cd0bea8a81da490836f7a945908491805adcf58b",
+      "sha256:1af529e32f69431af4e1e903e57ac73d777b4f61033fdad80b130bc5e61acabf",
+      "sha256:aad6678394fd68ad104367f70f6a684766324a848d89b5907c2cee959541e78b",
+      "sha256:93a995e49765841941fdaa2e3d448e3430b061fc83a7219404fe8ebe86c4ab8f",
+      "sha256:06b43001d65b394c49693916005b9970a44d9779bb1e86ae3c0922cf10e02ee6",
+      "sha256:05c9153d54f39ce7934bcbdd474e7c798ccf62dab15560f98b3d68445c64cf33"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723511370,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}

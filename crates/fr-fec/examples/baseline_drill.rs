@@ -6,8 +6,7 @@
 //! Run: `cargo run -p fr-fec --example baseline_drill -- <path> [out.json]`
 
 use fr_fec::{
-    decode_artifact, deserialize_symbol, encode_artifact, envelope_to_json, scrub,
-    serialize_symbol,
+    decode_artifact, deserialize_symbol, encode_artifact, envelope_to_json, scrub, serialize_symbol,
 };
 
 fn main() -> Result<(), String> {
@@ -76,8 +75,12 @@ fn main() -> Result<(), String> {
     }
 
     // Final integrity statement: decode and hash-verify.
-    let (source, proof) = decode_artifact(&encoded.envelope, &symbols, "drill decode", now + 2_000)?;
-    assert_eq!(source, data, "decoded source must equal the original artifact");
+    let (source, proof) =
+        decode_artifact(&encoded.envelope, &symbols, "drill decode", now + 2_000)?;
+    assert_eq!(
+        source, data,
+        "decoded source must equal the original artifact"
+    );
     println!(
         "decode: {} bytes verified against {}",
         source.len(),
