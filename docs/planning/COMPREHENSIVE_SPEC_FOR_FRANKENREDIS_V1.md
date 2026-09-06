@@ -288,21 +288,23 @@ Mitigations:
 
 ## 17. Performance Budgets and SLO Targets
 
-| Path | Workload Class | Budget |
-|---|---|---|
-| RESP parse hot path | mixed 128B-4KB frames | p95 <= 120 us |
-| command dispatch + store | mixed key workloads across parity-target command families | p95 <= 1.5 ms |
-| single-node throughput | mixed read/write command sets across parity target | >= 150k ops/s |
-| expiration sweep overhead | TTL-heavy workload | p95 regression <= +8% |
-| AOF append overhead | write-heavy workload | p95 regression <= +12% |
-| replication catch-up | primary/replica benchmark across parity target paths | lag p95 <= 250 ms |
-| memory footprint | mixed E2E workload | peak RSS regression <= +10% |
-| tail stability | all benchmark families | p99 regression <= +10% |
+| Path | Workload Class | Budget | Disposition (2026-09-05, owner-approved) |
+|---|---|---|---|
+| RESP parse hot path | mixed 128B-4KB frames | p95 <= 120 us | SUPERSEDED by the measured-vs-incumbent E2E latency doctrine (RELEASE_READINESS_SCORECARD): no parse-only harness exists and the user-visible form is E2E latency, which fr-bench measures |
+| command dispatch + store | mixed key workloads across parity-target command families | p95 <= 1.5 ms | SUPERSEDED by Gate G5's baseline-relative p95/p99 thresholds (`scripts/benchmark_gate.sh`) |
+| single-node throughput | mixed read/write command sets across parity target | >= 150k ops/s | BLOCKED by a named prerequisite: the benchmark client saturates at ~74-75k ops/s (README Performance), so the line is unmeasurable until a non-bottleneck client exists (adjacent beads: hgqyu, vibu6). Roadmap target, NOT a gate |
+| expiration sweep overhead | TTL-heavy workload | p95 regression <= +8% | BLOCKED by a named prerequisite: fr-bench has no TTL-heavy vs non-TTL A/B arm; enforce via G5 once the arm exists |
+| AOF append overhead | write-heavy workload | p95 regression <= +12% | BLOCKED by a named prerequisite: fr-bench has no AOF-enabled workload arm; enforce via G5 once the arm exists |
+| replication catch-up | primary/replica benchmark across parity target paths | lag p95 <= 250 ms | BLOCKED by a named prerequisite: nothing measures replication lag; a lag probe must exist before this line can gate |
+| memory footprint | mixed E2E workload | peak RSS regression <= +10% | ENFORCED: `benchmark_gate.sh` samples server VmHWM after the suite and fails past `FR_BENCH_RSS_REGRESSION_PCT` (default 10) vs `FR_BENCH_BASELINE_RSS_KB` (6bf6af98d) |
+| tail stability | all benchmark families | p99 regression <= +10% | ENFORCED: `FR_BENCH_P99_REGRESSION_PCT` (default 10) in `benchmark_gate.sh`, against checked-in baselines |
 
-Optimization acceptance rule:
-1. primary metric improves or remains within budget,
-2. no critical conformance drift,
-3. p99 and memory budgets remain within limits.
+Amendment note (2026-09-05, bead rc-spec-slo-budget-enforcement-d3c6y, owner sign-off recorded):
+the absolute budgets above predate the measured-vs-incumbent methodology and none of them was
+measured by anything. Per-line dispositions now name, for every line, either the enforcing gate
+(memory: RSS hook; tail + dispatch/store: G5 thresholds) or the named prerequisite that must land
+before the line becomes admissible. Gate C's executable form is the G5 benchmark gate plus the
+vs-incumbent scorecard — an unmeasured absolute number is not a release criterion.
 
 ## 18. CI Gate Topology (Release-Critical)
 
