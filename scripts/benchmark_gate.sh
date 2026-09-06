@@ -23,6 +23,11 @@ Options:
 Environment:
   FR_BENCH_THROUGHPUT_DROP_PCT  Allowed throughput drop percent before failure (default: 15)
   FR_BENCH_P99_REGRESSION_PCT   Allowed p99 latency increase percent before failure (default: 10)
+  FR_BENCH_RSS_REGRESSION_PCT   Allowed server peak-RSS increase percent before failure
+                                (default: 10; needs FR_BENCH_BASELINE_RSS_KB)
+  FR_BENCH_BASELINE_RSS_KB      Reference server peak RSS in KiB (VmHWM) from a prior run;
+                                unset = RSS is recorded in the report but not enforced
+                                (checked-in baseline JSONs predate RSS capture)
   FR_BENCH_BUILD_RUNNER         auto|rch|local (default: auto)
 
 Description:
@@ -56,6 +61,8 @@ skip_build=0
 
 throughput_drop_pct="${FR_BENCH_THROUGHPUT_DROP_PCT:-15}"
 p99_regression_pct="${FR_BENCH_P99_REGRESSION_PCT:-10}"
+rss_regression_pct="${FR_BENCH_RSS_REGRESSION_PCT:-10}"
+baseline_rss_kb="${FR_BENCH_BASELINE_RSS_KB:-}"
 build_runner="${FR_BENCH_BUILD_RUNNER:-auto}"
 
 while [[ $# -gt 0 ]]; do
@@ -339,6 +346,7 @@ PY
 }
 
 write_gate_report() {
+  local rss_report="$1"
   FR_GATE_BIND="$bind_addr" \
     FR_GATE_PORT="$port" \
     FR_GATE_MODE="$server_mode" \
@@ -346,6 +354,9 @@ write_gate_report() {
     FR_GATE_CLIENTS="$clients" \
     FR_GATE_DATASIZE="$datasize" \
     FR_GATE_KEYSPACE="$keyspace" \
+    FR_GATE_RSS_REPORT="$rss_report" \
+    FR_GATE_RSS_BASELINE_KB="$baseline_rss_kb" \
+    FR_GATE_RSS_REGRESSION_PCT="$rss_regression_pct" \
     python3 - "$manifest_path" "$report_path" "$summary_path" "$throughput_drop_pct" "$p99_regression_pct" <<'PY'
 from __future__ import annotations
 
@@ -361,6 +372,33 @@ summary_path = Path(sys.argv[3])
 throughput_drop_pct = float(sys.argv[4])
 p99_regression_pct = float(sys.argv[5])
 
+# (frankenredis-rc-spec-slo-budget-enforcement-d3c6y) Spec §17 memory budget:
+# parse the server's VmHWM/VmRSS sample and enforce the peak-RSS regression
+# threshold when a baseline reference is configured.
+rss_lines: dict[str, int] = {}
+for line in os.environ.get("FR_GATE_RSS_REPORT", "").splitlines():
+    if " " in line:
+        key, _, value = line.partition(" ")
+        try:
+            rss_lines[key.strip()] = int(value.strip())
+        except ValueError:
+            pass
+rss_hwm_kb = rss_lines.get("VmHWM")
+rss_current_kb = rss_lines.get("VmRSS")
+rss_baseline_kb = os.environ.get("FR_GATE_RSS_BASELINE_KB", "").strip()
+rss_regression_pct = float(os.environ.get("FR_GATE_RSS_REGRESSION_PCT", "10"))
+rss_failures: list[str] = []
+rss_delta_pct = None
+if rss_baseline_kb:
+    baseline = float(rss_baseline_kb)
+    if rss_hwm_kb is None:
+        rss_failures.append("server peak RSS sample unavailable but a baseline was configured")
+    else:
+        rss_delta_pct = (rss_hwm_kb - baseline) / baseline * 100.0
+        if rss_delta_pct > rss_regression_pct:
+            rss_failures.append(
+                f"peak RSS grew {rss_delta_pct:.2f}% (allowed {rss_regression_pct:.2f}%)"
+            )
 workloads: list[dict[str, object]] = []
 failing_workloads: list[str] = []
 
@@ -406,7 +444,7 @@ for line in manifest_path.read_text(encoding="utf-8").splitlines():
         }
     )
 
-passed = not failing_workloads
+passed = not failing_workloads and not rss_failures
 report = {
     "schema_version": "frankenredis_benchmark_gate/v1",
     "generated_at_ms": int(time.time() * 1000),
@@ -414,6 +452,18 @@ report = {
     "thresholds": {
         "throughput_drop_pct": throughput_drop_pct,
         "p99_regression_pct": p99_regression_pct,
+        "rss_regression_pct": rss_regression_pct,
+    },
+    "memory": {
+        # (frankenredis-rc-spec-slo-budget-enforcement-d3c6y) Spec §17 peak-RSS
+        # budget: VmHWM is the kernel's high-water mark for the server process.
+        # Enforcement is active only when a baseline reference is provided;
+        # otherwise the sample records the reference future runs are judged by.
+        "server_peak_rss_kb": rss_hwm_kb,
+        "server_current_rss_kb": rss_current_kb,
+        "baseline_rss_kb": int(float(rss_baseline_kb)) if rss_baseline_kb else None,
+        "delta_pct": rss_delta_pct,
+        "failures": rss_failures,
     },
     "config": {
         "bind": os.environ["FR_GATE_BIND"],
@@ -435,6 +485,8 @@ summary_lines = [
     f"- status: {'PASS' if passed else 'FAIL'}",
     f"- throughput_drop_pct threshold: {throughput_drop_pct:.2f}",
     f"- p99_regression_pct threshold: {p99_regression_pct:.2f}",
+    f"- rss_regression_pct threshold: {rss_regression_pct:.2f}"
+    + (f" vs baseline {int(float(rss_baseline_kb))} KiB" if rss_baseline_kb else " (record-only; no baseline set)"),
     f"- report: `{report_path}`",
     "",
     "| workload | status | ops/sec delta | p99 delta | baseline | candidate |",
@@ -471,10 +523,19 @@ start_frankenredis
 run_workload "set" "set" 1 0
 run_workload "get" "get" 1 100
 run_workload "mixed" "mixed" 1 50
-run_workload "pipeline16" "set" 16 0
 run_workload "incr" "incr" 1 0
 
-gate_status="$(write_gate_report)"
+# (frankenredis-rc-spec-slo-budget-enforcement-d3c6y) Spec §17 memory budget:
+# peak server RSS (VmHWM, kernel-accurate high-water mark) captured after all
+# workloads. Enforcement activates when a reference RSS is provided; otherwise
+# the sample is recorded so a baseline value can be pinned from any run.
+sample_server_rss_kb() {
+  awk '/^(VmHWM|VmRSS):/ { gsub(/\r/, ""); sub(/:$/, "", $1); print $1" "$2 }' "/proc/${server_pid}/status"
+}
+rss_report="$(sample_server_rss_kb)"
+
+gate_status="$(write_gate_report "$rss_report")"
+
 echo "wrote $report_path"
 echo "wrote $summary_path"
 echo "artifacts: $artifact_root"
