@@ -49056,9 +49056,25 @@ impl Runtime {
         let seq = self.server.aof_current_seq.saturating_add(1);
         let fn_codes = self.rdb_function_codes();
         let fn_refs: Vec<&[u8]> = fn_codes.iter().map(Vec::as_slice).collect();
+        // (frankenredis-rc-info-persistence-aof-fields-2qwr3) The AOF BASE file
+        // must carry the same AUX set vendored 7.2.4 writes
+        // (rdbSaveInfoAuxFields: redis-ver, redis-bits, ctime, used-mem,
+        // aof-base). fr previously wrote redis-ver plus a frankenredis origin
+        // marker, so the base — and with it INFO persistence
+        // aof_current_size/aof_base_size — drifted from the oracle (54 vs 88
+        // bytes on an empty dataset). Byte parity with the oracle is what the
+        // live INFO persistence gates assert; the provenance marker stays on
+        // the plain RDB SAVE path, where no oracle size comparison applies.
+        // aof-base=1 marks this RDB preamble as an AOF base (upstream
+        // rewriteAppendOnlyFile sets it for the preamble).
+        let ctime_secs = (now_ms / 1000).to_string();
+        let used_mem_bytes = self.partition_used_memory().to_string();
         let aux = [
             ("redis-ver", fr_store::REDIS_COMPAT_VERSION),
-            ("frankenredis", "true"),
+            ("redis-bits", "64"),
+            ("ctime", ctime_secs.as_str()),
+            ("used-mem", used_mem_bytes.as_str()),
+            ("aof-base", "1"),
         ];
         let base_rdb = if let Some(bytes) =
             try_encode_string_only_rdb_snapshot(&mut self.server.store, now_ms, &aux, &fn_refs)
