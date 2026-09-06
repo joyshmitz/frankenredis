@@ -14,8 +14,9 @@ use fr_command::{
     CLIENT_PAUSE_MODE_INVALID, CLIENT_PAUSE_TIMEOUT_INVALID, CommandError, MigrateKeySpec,
     apply_client_caching_mode, apply_client_reply_state, apply_client_tracking_update,
     build_unknown_args_preview, client_tracking_getredir_value, client_trackinginfo_frame,
-    command_acl_categories, commands_in_acl_category, dispatch_argv, execute_migrate,
-    frame_to_argv, parse_client_tracking_state, parse_f64_arg, parse_migrate_request,
+    command_acl_categories, commands_in_acl_category, command_table_row_is_visible,
+    dispatch_argv, execute_migrate, frame_to_argv, parse_client_tracking_state, parse_f64_arg,
+    parse_migrate_request,
 };
 use fr_config::{
     DecisionAction, DriftSeverity, HardenedDeviationCategory, Mode, RuntimePolicy, ThreatClass,
@@ -7113,6 +7114,11 @@ impl Runtime {
             _ => "no",
         };
         self.server.enable_debug_command = normalized.to_string();
+    }
+
+    /// (frankenredis-rc-hash-ttl-contract-lhgr6) See Store::set_forward_hash_field_ttl_enabled.
+    pub fn set_forward_hash_field_ttl_enabled(&mut self, enabled: bool) {
+        self.server.store.forward_hash_field_ttl_enabled = enabled;
     }
 
     /// Set the server listen port (for INFO server section).
@@ -41495,21 +41501,21 @@ impl Runtime {
                             self.capture_aof_record(&[op.to_vec(), logical]);
                         }
                     } else if special_command.is_none() && !handled_migrate {
-                        // (frankenredis-xmix2, restored 2026-09-05) Upstream
-                        // replicationFeedSlaves emits `SELECT <db>` PER REPLICA
-                        // whenever the writing client's db differs from that
-                        // replica's repldb; the per-replica frame is prepended by
-                        // the feed path (replica_fed_db in fr-server) and lives
-                        // OUTSIDE this buffer. But `aof_records` doubles as the
-                        // AOF pre-flush buffer, and upstream aof.c writes the
-                        // SELECT into the FILE at every db change — replay must
-                        // select the db BEFORE applying the record. Removing the
-                        // shared boundary record made a restart replay every
-                        // non-zero-db write into db 0 (multi-db AOF restart lost
-                        // db4 keys; verified 2026-09-05). A fresh raw-SYNC attach
-                        // is not double-SELECTed by this: the record appears only
-                        // on an actual db CHANGE, and the per-replica prepend
-                        // covers the first-feed case.
+                        // (frankenredis-xmix2) Upstream replicationFeedSlaves
+                        // emits `SELECT <db>` PER REPLICA whenever the writing
+                        // client's db differs from that replica's repldb; the
+                        // per-replica frame is prepended by the feed path
+                        // (replica_fed_db in fr-server) and lives OUTSIDE this
+                        // buffer. But `aof_records` doubles as the AOF
+                        // pre-flush buffer, and upstream aof.c writes the SELECT
+                        // into the FILE at every db change — replay selects the
+                        // db BEFORE applying the record. Without the shared
+                        // boundary record, a restart replays every non-zero-db
+                        // write into db 0 (verified: multi-db AOF restart lost
+                        // db4 keys, 2026-09-05). A fresh raw-SYNC attach is not
+                        // double-SELECTed by this: the record appears only on an
+                        // actual db CHANGE, and the per-replica prepend covers
+                        // the first-feed case.
                         let session_db = self.session.selected_db;
                         if self.server.aof_selected_db != session_db {
                             self.capture_aof_record(&[
@@ -44464,6 +44470,7 @@ impl Runtime {
                 let cmds = commands_in_acl_category(cat);
                 RespFrame::Array(Some(
                     cmds.iter()
+                        .filter(|&&c| command_table_row_is_visible(c, &self.server.store))
                         .map(|c| RespFrame::BulkString(Some(c.as_bytes().to_vec())))
                         .collect(),
                 ))

@@ -2456,6 +2456,21 @@ pub fn dispatch_argv(
     let Some(raw_cmd) = argv.first() else {
         return Err(CommandError::InvalidCommandFrame);
     };
+    // (frankenredis-rc-hash-ttl-contract-lhgr6) THE single gate for the
+    // boot-only 7.4 hash-field TTL family. With the opt-in off (the default,
+    // 7.2.4 parity), HEXPIRE/HTTL/HPERSIST do not exist: they answer
+    // unknown-command here — before ACL, before arity, before any executor —
+    // exactly like a name the classifier has no row for, and one source of
+    // truth covers clients, scripts, and every other dispatch entry path.
+    // Introspection parity is the separate visibility gate in
+    // `command_table_row_is_visible`.
+    if !store.forward_hash_field_ttl_enabled
+        && (raw_cmd.eq_ignore_ascii_case(b"HEXPIRE")
+            || raw_cmd.eq_ignore_ascii_case(b"HTTL")
+            || raw_cmd.eq_ignore_ascii_case(b"HPERSIST"))
+    {
+        return Err(unknown_command_error_from_argv(argv));
+    }
     // (frankenredis-noscriptcentral-asoup) CENTRAL noscript gate, from the flag.
     //
     // fr enforced CMD_NOSCRIPT per command, in ~80 hand-placed guards, and the ones it could
@@ -2889,7 +2904,18 @@ pub fn dispatch_argv(
         Some(CommandId::Pfselftest) => return pfselftest_cmd(argv, store),
         None => {}
     }
+    // The classifier had a row but the command is mode/boot-gated (SENTINEL
+    // outside --sentinel, the hash-field TTL family without the opt-in), or
+    // nothing matched: answer the canonical unknown-command error.
+    Err(unknown_command_error_from_argv(argv))
+}
 
+/// Build the canonical unknown-command error for `argv[0]`, shared by the
+/// classifier-miss fall-through above and the boot-flag gate for the 7.4
+/// hash-field TTL family at the top of this function.
+/// (frankenredis-rc-hash-ttl-contract-lhgr6)
+fn unknown_command_error_from_argv(argv: &[Vec<u8>]) -> CommandError {
+    let raw_cmd = argv.first().map(|v| v.as_slice()).unwrap_or(b"");
     // Upstream server.c formats the unknown-command name with `%s` on the raw
     // argv[0] bytes: it does NOT require valid UTF-8 (a non-UTF-8 name is still
     // just "unknown command", not a UTF-8 error) and it truncates at the first
@@ -2910,16 +2936,15 @@ pub fn dispatch_argv(
         if let Some(preview) = build_unknown_args_preview_bytes(argv) {
             body.extend_from_slice(&preview);
         }
-        return Err(CommandError::RawError(body));
+        return CommandError::RawError(body);
     }
     let cmd = String::from_utf8_lossy(name_bytes);
     let args_preview = build_unknown_args_preview(argv);
-    Err(CommandError::UnknownCommand {
+    CommandError::UnknownCommand {
         command: trim_and_cap_string(&cmd, 128),
         args_preview,
-    })
+    }
 }
-
 pub fn is_write_command(cmd: &[u8]) -> bool {
     let Some(id) = classify_command(cmd) else {
         return false;
@@ -3359,9 +3384,9 @@ fn classify_command(cmd: &[u8]) -> Option<CommandId> {
                 PK_HSET => Some(CommandId::Hset),
                 PK_HDEL => Some(CommandId::Hdel),
                 PK_HLEN => Some(CommandId::Hlen),
-                // (frankenredis-ukm9j) Registration gate; falls through to the
-                // catch-all `None`, i.e. unknown command, exactly as 7.2.4 answers.
-                PK_HTTL if FORWARD_HASH_FIELD_TTL_REGISTERED => Some(CommandId::Httl),
+                // (frankenredis-rc-hash-ttl-contract-lhgr6) Always classifies;
+                // the boot flag gates DISPATCH (see dispatch_argv), not the name.
+                PK_HTTL => Some(CommandId::Httl),
                 PK_LPOP => Some(CommandId::Lpop),
                 PK_RPOP => Some(CommandId::Rpop),
                 PK_LLEN => Some(CommandId::Llen),
@@ -3612,9 +3637,10 @@ fn classify_command(cmd: &[u8]) -> Option<CommandId> {
             const PK_MIGRATE: u64 = pack_cmd_u64(b"MIGRATE");
             const PK_PFDEBUG: u64 = pack_cmd_u64(b"PFDEBUG");
             match pack_cmd_u64(cmd) {
+                // (frankenredis-rc-hash-ttl-contract-lhgr6) Always classifies;
+                // the boot flag gates DISPATCH (see dispatch_argv), not the name.
                 PK_PEXPIRE => Some(CommandId::Pexpire),
-                // (frankenredis-ukm9j) Registration gate; see PK_HTTL.
-                PK_HEXPIRE if FORWARD_HASH_FIELD_TTL_REGISTERED => Some(CommandId::Hexpire),
+                PK_HEXPIRE => Some(CommandId::Hexpire),
                 PK_PERSIST => Some(CommandId::Persist),
                 PK_FLUSHDB => Some(CommandId::Flushdb),
                 PK_HGETALL => Some(CommandId::Hgetall),
@@ -3675,8 +3701,9 @@ fn classify_command(cmd: &[u8]) -> Option<CommandId> {
             const PK_SENTINEL: u64 = pack_cmd_u64(b"SENTINEL");
             match pack_cmd_u64(cmd) {
                 PK_EXPIREAT => Some(CommandId::Expireat),
-                // (frankenredis-ukm9j) Registration gate; see PK_HTTL.
-                PK_HPERSIST if FORWARD_HASH_FIELD_TTL_REGISTERED => Some(CommandId::Hpersist),
+                // (frankenredis-rc-hash-ttl-contract-lhgr6) Always classifies;
+                // the boot flag gates DISPATCH (see dispatch_argv), not the name.
+                PK_HPERSIST => Some(CommandId::Hpersist),
                 PK_RENAMENX => Some(CommandId::Renamenx),
                 PK_FLUSHALL => Some(CommandId::Flushall),
                 PK_SMEMBERS => Some(CommandId::Smembers),
@@ -19004,9 +19031,13 @@ const COMMAND_TABLE: &[(&str, i64, &str, i64, i64, i64)] = &[
     ("unlink", -2, "write fast", 1, -1, 1),
     ("touch", -2, "readonly fast", 1, -1, 1),
     ("hset", -4, "write denyoom fast", 1, 1, 1),
-    // (frankenredis-ukm9j) hexpire/httl/hpersist are 7.4 commands and 7.2.4
-    // answers "unknown command" for all three. Their rows live in
-    // FORWARD_HASH_FIELD_TTL_COMMAND_ROWS while the registration is off.
+    // (frankenredis-g1nuo / rc-hash-ttl-contract-lhgr6) The 7.4 hash-field TTL
+    // family lives in the table unconditionally; the boot-only opt-in gates
+    // DISPATCH and introspection visibility, not registration. Arity and flags
+    // are g1nuo's, established against real 7.4 behaviour.
+    ("hexpire", -6, "write denyoom fast", 1, 1, 1),
+    ("httl", -5, "readonly fast", 1, 1, 1),
+    ("hpersist", -5, "write fast", 1, 1, 1),
     ("hget", 3, "readonly fast", 1, 1, 1),
     ("hdel", -3, "write fast", 1, 1, 1),
     ("hexists", 3, "readonly fast", 1, 1, 1),
@@ -20229,79 +20260,36 @@ const ACL_CATEGORIES: &[&str] = &[
     "scripting",
 ];
 
-/// Whether HEXPIRE/HTTL/HPERSIST are REGISTERED on the wire surface.
-///
-/// (frankenredis-ukm9j) fr targets Redis 7.2.4, where all three are unknown
-/// commands. frankenredis-ja8yu decided that in 6c9faf09a and left
-/// `redis_7_4_hash_field_ttl_commands_return_unknown_command_per_7_2_4_parity`
-/// as the guard; frankenredis-g1nuo (2248c4de3) later re-registered the family
-/// while implementing it, which turned that guard red along with five parity
-/// gates — version ceiling, ACL categories in two gates, cluster admin surface,
-/// and command introspection. The arithmetic was clean: COMMAND COUNT read 244
-/// against the oracle's 241, a delta of exactly these three.
-///
-/// This switch moves the REGISTRATION only. Every executor, the
-/// `hash_field_expires` storage, RDB tag 100 / `HashWithTtls` / `listpack_ex`
-/// persistence and their tests are g1nuo's work and are untouched — the unit
-/// tests call those executors directly, not through dispatch, so they still
-/// exercise them. Flipping this to `true` re-advertises the family, and the
-/// three sites it governs (packed-name dispatch, `COMMAND_TABLE`, the ACL
-/// category rows) are the three surfaces the six gates observe, which is why
-/// they went red and green together.
-///
-/// If fr ever retargets 7.4, flip this AND move
-/// `FORWARD_HASH_FIELD_TTL_COMMAND_ROWS` back into `COMMAND_TABLE`;
-/// `forward_hash_field_ttl_registration_is_off_for_7_2_4_parity` pins both
-/// halves so the two cannot drift apart while the switch is off.
-///
-/// FLIPPING THIS RE-ACTIVATES A KNOWN LATENT DEFECT: `frankenredis-ah4gx`. A read
-/// that reaps an expired hash field is counted as a WRITE by the propagation and
-/// notification gate — `fr-runtime` compares `dirty` before and after a command
-/// and compensates only for whole-key lazy expiry (`lazy_expired_propagation` has
-/// a single push site, whole-key only), while `Store::drop_expired_hash_fields`
-/// bumps `dirty` without registering. So a plain `HGET` would propagate itself and
-/// fire a spurious keyspace event.
-///
-/// THIS SWITCH IS NOT THE ONLY ROUTE, AND THE DEFECT IS NOT DORMANT. An earlier
-/// version of this note said `hash_field_expires` has exactly one writer,
-/// `Store::hash_field_set_abs_expiry`, gated by this constant, and that "no
-/// RESTORE/RDB path applies field TTLs". The first half is right — including the
-/// `_with_event` wrapper, which has no production caller. The second half is
-/// wrong. `apply_rdb_entries_to_store` (fr-runtime, the `RdbValue::HashWithTtls`
-/// arm) writes `store.hash_field_expires` DIRECTLY, bypassing the setter, and has
-/// five production callers on the RDB load surfaces.
-///
-/// So the defect is reachable TODAY with this switch off: any RDB carrying a
-/// `HashWithTtls` entry seeds the map, and an ordinary `HGET` then reaps a field
-/// and trips the gate. Two live vectors — replicating from or loading an RDB
-/// produced by a Redis 7.4+ instance, and reloading an RDB written by an EARLIER
-/// fr build back when `HEXPIRE` was still dispatchable. Flipping this constant
-/// ADDS the client-triggerable route; it does not create the defect.
-///
-/// (The one-writer claim survived review because the write is a method chain split
-/// across three lines — `store` / `.hash_field_expires` / `.insert(...)` — so a
-/// single-line grep for `hash_field_expires.insert` finds only the setter. Grep the
-/// field name alone.)
-///
-/// Fix `ah4gx` BEFORE flipping this, and do not treat it as safe meanwhile.
-///
-/// The obvious repair — pushing the key into `lazy_expired_propagation` — is
-/// WRONG: a field reap has no whole-key `DEL` to propagate, so it would emit a
-/// spurious `DEL` for a key that still exists. The compensation wants a COUNT.
-const FORWARD_HASH_FIELD_TTL_REGISTERED: bool = false;
-
-/// The `COMMAND_TABLE` rows for the 7.4 hash-field TTL family, kept out of the
-/// table itself while [`FORWARD_HASH_FIELD_TTL_REGISTERED`] is false.
-///
-/// Held here rather than deleted so re-registering is a data move rather than
-/// an archaeology exercise: these are the arities and flags g1nuo established
-/// against real 7.4 behaviour (`-6` for HEXPIRE, `-5` for the two readers).
-#[allow(dead_code)]
-const FORWARD_HASH_FIELD_TTL_COMMAND_ROWS: &[(&str, i64, &str, i64, i64, i64)] = &[
-    ("hexpire", -6, "write denyoom fast", 1, 1, 1),
-    ("httl", -5, "readonly fast", 1, 1, 1),
-    ("hpersist", -5, "write fast", 1, 1, 1),
-];
+// (frankenredis-rc-hash-ttl-contract-lhgr6) The Redis 7.4 hash-field TTL family
+// (HEXPIRE/HTTL/HPERSIST) is REGISTERED in the classifier and `COMMAND_TABLE`
+// unconditionally, and gated at runtime by the boot-only opt-in
+// `--enable-hash-field-ttl` / `enable-hash-field-ttl` conf directive (default
+// `no`), carried as `Store::forward_hash_field_ttl_enabled`.
+//
+// With the opt-in OFF (the default), the family does not exist on the wire,
+// exactly as 7.2.4: `dispatch_argv` answers unknown-command before ACL or
+// arity, and `command_table_row_is_visible` keeps the three out of COMMAND
+// COUNT/LIST/INFO/DOCS and ACL CAT. With it ON, the rows below (arities and
+// flags g1nuo established against real 7.4 behaviour) dispatch through the
+// existing storage primitives. The flag is deliberately BOOT-ONLY: the
+// introspection surfaces read static tables, and a CONFIG SET-table flag would
+// make them flap mid-flight.
+//
+// FIELD-TTL CORRECTNESS NOTE (frankenredis-ah4gx): per-field TTLs are seedable
+// TODAY with the opt-in off — `apply_rdb_entries_to_store` writes
+// `hash_field_expires` DIRECTLY on every `RdbValue::HashWithTtls` RDB load (a
+// 7.4-produced file, or an RDB written by an early fr build), so a plain
+// `HGETALL` can reap an expired field regardless of this flag. The read-reap
+// behaviour is pinned by fr-runtime's
+// `hash_field_reap_on_a_read_does_not_propagate_the_read_or_notify`; enabling
+// the opt-in ADDS the client-triggerable route on top of an already-covered
+// surface, it does not create the exposure.
+//
+// (frankenredis-ukm9j) HISTORY: this family previously lived behind a
+// compile-time `const FORWARD_HASH_FIELD_TTL_REGISTERED: bool = false` with the
+// rows parked next to it; the 2026-09-05 owner decision (bead
+// rc-hash-ttl-contract-lhgr6) replaced the compile-time switch with the
+// runtime boot flag.
 
 /// Redis 7.4 hash-field TTL commands are newer than the vendored 7.2 command
 /// metadata used to generate `UPSTREAM_ACL_CATEGORY_ENTRIES`. Keep their ACL
@@ -20309,8 +20297,10 @@ const FORWARD_HASH_FIELD_TTL_COMMAND_ROWS: &[(&str, i64, &str, i64, i64, i64)] =
 /// and `-@write` guard these dispatched commands just like the rest of the
 /// hash family.
 ///
-/// Applied only when [`FORWARD_HASH_FIELD_TTL_REGISTERED`] is set: a command
-/// 7.2.4 does not have must not appear in an ACL category listing either.
+/// Always merged into the ACL category maps; when the boot opt-in is off, the
+/// ACL CAT and COMMAND LIST FILTERBY ACLCAT answers filter the three out via
+/// the visibility gate, so a command 7.2.4 does not have never appears in an
+/// ACL category listing either.
 const FORWARD_HASH_FIELD_TTL_ACL_ENTRIES: &[(&str, &[&str])] = &[
     ("hexpire", &["write", "hash", "fast"]),
     ("httl", &["read", "hash", "fast"]),
@@ -20504,18 +20494,19 @@ fn acl_category_maps() -> &'static AclCategoryMaps {
             }
             by_command.insert(name, categories.to_vec());
         }
-        // (frankenredis-ukm9j) Only when the family is actually registered:
-        // 7.2.4 has no HEXPIRE/HTTL/HPERSIST, so ACL CAT hash/read/write must
-        // not list them either. Two of the six red gates were exactly this.
-        if FORWARD_HASH_FIELD_TTL_REGISTERED {
-            for &(name, categories) in FORWARD_HASH_FIELD_TTL_ACL_ENTRIES {
-                for &cat in categories {
-                    if let Some(list) = by_category.get_mut(cat) {
-                        list.push(name);
-                    }
+        // (frankenredis-ukm9j) Always merged: the maps are the STATIC category
+        // source, while 7.2.4-parity for the boot-gated family comes from the
+        // ANSWER side — ACL CAT and COMMAND LIST FILTERBY ACLCAT filter the
+        // three out through command_table_row_is_visible when the opt-in is
+        // off. Filtering here cannot work: the maps are built once into a
+        // static, and a runtime flag must not be baked into them.
+        for &(name, categories) in FORWARD_HASH_FIELD_TTL_ACL_ENTRIES {
+            for &cat in categories {
+                if let Some(list) = by_category.get_mut(cat) {
+                    list.push(name);
                 }
-                by_command.insert(name, categories.to_vec());
             }
+            by_command.insert(name, categories.to_vec());
         }
         // (frankenredis-ywh2b) Snapshot the by_command map BEFORE applying
         // the static ACL overlay. by_command_info is the COMMAND INFO
@@ -21059,9 +21050,17 @@ fn dispatch_acl_permission_error_for_set(
 /// SENTINEL returns 'ERR unknown command' — but COMMAND LIST/COUNT/
 /// INFO/DOCS were still advertising the row, lying about its
 /// availability. Filter the row out so introspection matches dispatch.
-fn command_table_row_is_visible(name: &str, store: &Store) -> bool {
+pub fn command_table_row_is_visible(name: &str, store: &Store) -> bool {
     if name == "sentinel" {
         return store.sentinel_mode;
+    }
+    // (frankenredis-rc-hash-ttl-contract-lhgr6) The 7.4 hash-field TTL family
+    // is boot-gated: with the opt-in off, COMMAND COUNT/LIST/INFO/DOCS and ACL
+    // CAT must not advertise it, mirroring the dispatch gate at the top of
+    // dispatch_argv. pub so fr-runtime's ACL CAT answer shares this one source
+    // of truth.
+    if matches!(name, "hexpire" | "httl" | "hpersist") {
+        return store.forward_hash_field_ttl_enabled;
     }
     true
 }
@@ -21278,6 +21277,7 @@ fn command_cmd(argv: &[Vec<u8>], store: &Store) -> Result<RespFrame, CommandErro
                 let cmds = commands_in_acl_category(category);
                 let names: Vec<RespFrame> = cmds
                     .iter()
+                    .filter(|&&name| command_table_row_is_visible(name, store))
                     .map(|name| RespFrame::BulkString(Some(name.as_bytes().to_vec())))
                     .collect();
                 return Ok(RespFrame::Array(Some(names)));
@@ -32795,9 +32795,10 @@ mod tests {
         if eq_ascii_command(cmd, b"HSET") {
             return Some(CommandId::Hset);
         }
-        // (frankenredis-ukm9j) The reference mirrors the packed dispatch, gate
-        // included -- otherwise this reference would assert the drift back in.
-        if super::FORWARD_HASH_FIELD_TTL_REGISTERED && eq_ascii_command(cmd, b"HEXPIRE") {
+        // (frankenredis-ukm9j) The reference mirrors the packed dispatch. The
+        // boot flag gates DISPATCH (see dispatch_argv), never the name itself,
+        // so the reference classifies the family unconditionally too.
+        if eq_ascii_command(cmd, b"HEXPIRE") {
             return Some(CommandId::Hexpire);
         }
         if eq_ascii_command(cmd, b"HGET") {
@@ -32836,10 +32837,10 @@ mod tests {
         if eq_ascii_command(cmd, b"HSTRLEN") {
             return Some(CommandId::Hstrlen);
         }
-        if super::FORWARD_HASH_FIELD_TTL_REGISTERED && eq_ascii_command(cmd, b"HTTL") {
+        if eq_ascii_command(cmd, b"HTTL") {
             return Some(CommandId::Httl);
         }
-        if super::FORWARD_HASH_FIELD_TTL_REGISTERED && eq_ascii_command(cmd, b"HPERSIST") {
+        if eq_ascii_command(cmd, b"HPERSIST") {
             return Some(CommandId::Hpersist);
         }
         if eq_ascii_command(cmd, b"LPUSH") {
@@ -65742,41 +65743,33 @@ mod tests {
     /// only true if the data does not rot, and an `#[allow(dead_code)]` const
     /// is exactly the kind of thing that rots unwatched.
     #[test]
-    // (frankenredis-p98mw) `FORWARD_HASH_FIELD_TTL_REGISTERED` is `const false`, so clippy
-    // sees `assert!(true)` and fires `assertions_on_constants`. THE ASSERTION IS THE POINT:
-    // it is a tripwire that fails the moment someone flips the const, which is exactly when
-    // the three surfaces below stop being absent. Deleting it to satisfy the lint would
-    // remove the guard the lint is complaining about.
-    //
-    // Allowed locally rather than left red because this ONE pre-existing error fails
-    // `clippy -p fr-command --all-targets -- -D warnings` for the whole crate, and a
-    // permanently-red gate is one every author filters out by hand — which is how a NEW
-    // error hides behind an old one. I filtered it myself across six turns of this session
-    // before fixing it.
-    #[allow(clippy::assertions_on_constants)]
-    fn forward_hash_field_ttl_registration_is_off_for_7_2_4_parity() {
-        assert!(
-            !super::FORWARD_HASH_FIELD_TTL_REGISTERED,
-            "fr targets 7.2.4; flipping this needs ja8yu and ukm9j reopened first"
-        );
-
-        for name in ["hexpire", "httl", "hpersist"] {
-            assert!(
-                super::command_table_index(name.as_bytes()).is_none(),
-                "{name} must not be in COMMAND_TABLE: it is what made COMMAND COUNT read 244 against the oracle's 241"
+    // (frankenredis-rc-hash-ttl-contract-lhgr6) The compile-time switch became a
+    // boot-only runtime opt-in, so the pin flips shape: REGISTRATION is now
+    // unconditional (classifier + COMMAND_TABLE), while the DEFAULT posture —
+    // unknown-command dispatch, invisible introspection — is pinned against a
+    // default Store, and the enabled posture against the flag turned on. The
+    // pins must hold in BOTH postures or the family either leaks onto the
+    // 7.2.4 wire or stops existing when opted in.
+    fn forward_hash_field_ttl_boot_gated_registration_pins() {
+        // Registered unconditionally, with g1nuo's 7.4-derived arities intact.
+        for (name, arity) in [("hexpire", -6), ("httl", -5), ("hpersist", -5)] {
+            let idx = super::command_table_index(name.as_bytes())
+                .unwrap_or_else(|| panic!("{name} must be registered in COMMAND_TABLE"));
+            assert_eq!(
+                super::COMMAND_TABLE[idx].1, arity,
+                "{name} arity rotted"
             );
             assert!(
-                super::classify_command(name.as_bytes()).is_none(),
-                "{name} must not dispatch: 7.2.4 answers 'unknown command'"
+                super::classify_command(name.as_bytes()).is_some(),
+                "{name} must classify (the gate is at dispatch, not the name)"
             );
             assert!(
-                super::classify_command(name.to_ascii_uppercase().as_bytes()).is_none(),
-                "{name} must not dispatch in upper case either"
+                super::classify_command(name.to_ascii_uppercase().as_bytes()).is_some(),
+                "{name} must classify in upper case either way"
             );
         }
 
-        // The neighbours in the same table region must survive, or the removal
-        // took more than it should have.
+        // The neighbours in the same table region must survive.
         for kept in ["hset", "hget", "hstrlen", "hrandfield", "hscan"] {
             assert!(
                 super::command_table_index(kept.as_bytes()).is_some(),
@@ -65784,19 +65777,49 @@ mod tests {
             );
         }
 
-        let preserved: Vec<&str> = super::FORWARD_HASH_FIELD_TTL_COMMAND_ROWS
-            .iter()
-            .map(|&(name, ..)| name)
-            .collect();
-        assert_eq!(preserved, vec!["hexpire", "httl", "hpersist"]);
-        let arities: Vec<i64> = super::FORWARD_HASH_FIELD_TTL_COMMAND_ROWS
-            .iter()
-            .map(|&(_, arity, ..)| arity)
-            .collect();
+        let argv_for = |name: &str| -> Vec<Vec<u8>> {
+            frame_to_argv(&RespFrame::Array(Some(vec![RespFrame::BulkString(Some(
+                name.as_bytes().to_vec(),
+            ))])))
+            .expect("argv")
+        };
+
+        // OFF (default): unknown-command before ACL/arity, and invisible to
+        // COMMAND COUNT and the visibility gate ACL CAT shares.
+        let mut store = Store::new();
+        assert!(!store.forward_hash_field_ttl_enabled, "default must be off");
+        for name in ["hexpire", "httl", "hpersist"] {
+            let err = dispatch_argv(&argv_for(name), &mut store, 0)
+                .expect_err("must be unknown with the opt-in off");
+            match &err {
+                CommandError::UnknownCommand { command, .. } => {
+                    assert_eq!(command, name, "off-posture dispatch must answer unknown-command");
+                }
+                other => panic!("expected unknown-command error shape, got {other:?}"),
+            }
+            assert!(
+                !super::command_table_row_is_visible(name, &store),
+                "off-posture must not advertise the row to introspection"
+            );
+        }
+        let off_count = super::visible_command_count(&store);
+
+        // ON: dispatch passes the gate — the bare name no longer answers
+        // unknown-command (the executor's own arity check is what replies
+        // now) — and introspection advertises the family.
+        store.set_forward_hash_field_ttl_enabled(true);
+        for name in ["hexpire", "httl", "hpersist"] {
+            let out = dispatch_argv(&argv_for(name), &mut store, 0);
+            assert!(
+                !matches!(&out, Err(CommandError::UnknownCommand { .. })),
+                "{name} with the opt-in on must not answer unknown-command, got {out:?}"
+            );
+            assert!(super::command_table_row_is_visible(name, &store));
+        }
         assert_eq!(
-            arities,
-            vec![-6, -5, -5],
-            "preserved 7.4 arities have rotted"
+            super::visible_command_count(&store),
+            off_count + 3,
+            "turning the opt-in on must advertise exactly the three rows"
         );
     }
 
@@ -73599,30 +73622,44 @@ mod tests {
 
     #[test]
     fn acl_cat_categories_follow_vendored_redis_metadata() {
-        assert_eq!(commands_in_acl_category("slow").len(), 271);
-        assert_eq!(commands_in_acl_category("keyspace").len(), 34);
-        assert_eq!(commands_in_acl_category("admin").len(), 65);
-        assert_eq!(commands_in_acl_category("connection").len(), 38);
-        assert_eq!(commands_in_acl_category("dangerous").len(), 75);
-        // (frankenredis-ukm9j) 87, not 88: the extra entry was `httl`, a 7.4
-        // command the vendored 7.2 metadata this test claims to follow does not
-        // have. The count now matches the source it is named for.
-        assert_eq!(commands_in_acl_category("read").len(), 87);
+        // (rc-hash-ttl-contract-lhgr6) The static maps now ALWAYS carry the 7.4
+        // hash-field TTL trio, so every vendored-parity count and membership
+        // assertion below goes through the same visibility filter the ACL CAT
+        // answer uses — with a default Store (opt-in off) the answer must equal
+        // what the vendored 7.2.4 oracle lists.
+        let mut store = Store::new();
+        assert!(!store.forward_hash_field_ttl_enabled);
+        let visible =
+            |cmds: &'static [&'static str]| -> Vec<&'static str> {
+                cmds.iter()
+                    .filter(|&&c| super::command_table_row_is_visible(c, &store))
+                    .copied()
+                    .collect()
+            };
+        assert_eq!(visible(commands_in_acl_category("slow")).len(), 271);
+        assert_eq!(visible(commands_in_acl_category("keyspace")).len(), 34);
+        assert_eq!(visible(commands_in_acl_category("admin")).len(), 65);
+        assert_eq!(visible(commands_in_acl_category("connection")).len(), 38);
+        assert_eq!(visible(commands_in_acl_category("dangerous")).len(), 75);
+        // 87, not 88: the extra entry is `httl`, a 7.4 command the vendored 7.2
+        // metadata this test claims to follow does not have.
+        assert_eq!(visible(commands_in_acl_category("read")).len(), 87);
 
-        let connection = commands_in_acl_category("connection");
+
+        let connection = visible(commands_in_acl_category("connection"));
         assert!(connection.contains(&"command|docs"));
         assert!(connection.contains(&"client|info"));
 
-        let keyspace = commands_in_acl_category("keyspace");
+        let keyspace = visible(commands_in_acl_category("keyspace"));
         assert!(keyspace.contains(&"object|encoding"));
         assert!(keyspace.contains(&"restore-asking"));
 
-        let admin = commands_in_acl_category("admin");
+        let admin = visible(commands_in_acl_category("admin"));
         assert!(admin.contains(&"config|set"));
         assert!(admin.contains(&"slowlog|get"));
         assert!(!admin.contains(&"sentinel|master"));
 
-        let dangerous = commands_in_acl_category("dangerous");
+        let dangerous = visible(commands_in_acl_category("dangerous"));
         assert!(dangerous.contains(&"config|set"));
 
         // (frankenredis-ukm9j) INVERTED, and deliberately: this used to assert
@@ -73630,8 +73667,9 @@ mod tests {
         // 7.2.4 has no such commands, and the live oracle listed neither, so the
         // old assertion was pinning the drift that turned two ACL gates red.
         // The category itself must still be populated, or "absent" would pass
-        // vacuously on an empty list.
-        let hash = commands_in_acl_category("hash");
+        // vacuously on an empty list. The static map DOES carry the trio now
+        // (the boot opt-in turns them visible); the DEFAULT answer must not.
+        let hash = visible(commands_in_acl_category("hash"));
         assert!(
             hash.contains(&"hset"),
             "hash category should still be populated"
@@ -73644,13 +73682,24 @@ mod tests {
         }
         assert!(dangerous.contains(&"acl|setuser"));
 
-        let read = commands_in_acl_category("read");
+        let read = visible(commands_in_acl_category("read"));
         assert!(read.contains(&"get"));
         assert!(!read.contains(&"eval_ro"));
 
         assert!(command_acl_categories("acl").contains(&"admin"));
         assert!(command_acl_categories("acl").contains(&"dangerous"));
         assert!(!command_acl_categories("eval_ro").contains(&"read"));
+
+        // And with the opt-in ON, the trio becomes visible in the same answers.
+        store.set_forward_hash_field_ttl_enabled(true);
+        let hash_on: Vec<&'static str> = commands_in_acl_category("hash")
+            .iter()
+            .filter(|&&c| super::command_table_row_is_visible(c, &store))
+            .copied()
+            .collect();
+        for present in ["hexpire", "httl", "hpersist"] {
+            assert!(hash_on.contains(&present), "{present} must be advertised once opted in");
+        }
     }
 
     #[test]
@@ -86596,8 +86645,9 @@ mod tests {
         };
         assert_eq!(
             usize::try_from(n).unwrap(),
-            COMMAND_TABLE.len() - 1,
-            "standalone COMMAND COUNT must equal table-len minus the hidden sentinel row"
+            COMMAND_TABLE.len() - 4,
+            "standalone COMMAND COUNT must equal table-len minus the hidden sentinel row \
+             and the three boot-gated hash-field TTL rows (rc-hash-ttl-contract-lhgr6)"
         );
 
         // COMMAND LIST must NOT contain sentinel.
@@ -86654,8 +86704,9 @@ mod tests {
         };
         assert_eq!(
             usize::try_from(n).unwrap(),
-            COMMAND_TABLE.len(),
-            "sentinel-mode COMMAND COUNT must include the sentinel row"
+            COMMAND_TABLE.len() - 3,
+            "sentinel-mode COMMAND COUNT must include the sentinel row; the boot-gated \
+             hash-field TTL trio stays hidden (their opt-in is independent of sentinel mode)"
         );
     }
 
@@ -86921,8 +86972,9 @@ mod tests {
         };
         assert_eq!(
             usize::try_from(n).unwrap(),
-            COMMAND_TABLE.len() - 1,
-            "COMMAND COUNT in standalone must remain top-level only"
+            COMMAND_TABLE.len() - 4,
+            "COMMAND COUNT in standalone must remain top-level only, minus the hidden \
+             sentinel row and the three boot-gated hash-field TTL rows"
         );
 
         // COMMAND INFO 'client|kill' must return the per-sub metadata

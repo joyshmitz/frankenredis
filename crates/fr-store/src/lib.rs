@@ -7518,6 +7518,12 @@ pub struct Store {
     /// the core_module_sentinel conformance fixture.
     /// (br-frankenredis-pq3z)
     pub sentinel_mode: bool,
+    /// (frankenredis-rc-hash-ttl-contract-lhgr6) Boot-only opt-in that registers the
+    /// Redis 7.4 hash-field TTL family (HEXPIRE/HTTL/HPERSIST) on the wire. Default
+    /// off preserves 7.2.4 parity (the three answer unknown-command and are absent
+    /// from COMMAND/ACL introspection). Boot-only by design: the COMMAND/ACL
+    /// introspection surfaces are static tables and must not flap at runtime.
+    pub forward_hash_field_ttl_enabled: bool,
     /// Server hz (event loop frequency), synced from runtime.
     pub server_hz: u64,
     /// Replication backlog size, synced from runtime.
@@ -7838,6 +7844,7 @@ impl Default for Store {
             command_histograms: CommandHistogramTracker::default(),
             sentinel_state: fr_sentinel::SentinelState::new(),
             sentinel_mode: false,
+            forward_hash_field_ttl_enabled: false,
             server_hz: 10,
             server_repl_backlog_size: 1_048_576,
             server_maxclients: 10000,
@@ -8057,6 +8064,15 @@ impl Store {
         if self.sentinel_state.announce_port.is_none() {
             self.sentinel_state.announce_port = Some(port);
         }
+    }
+
+    /// (frankenredis-rc-hash-ttl-contract-lhgr6) Boot-only opt-in that registers the
+    /// Redis 7.4 hash-field TTL family (HEXPIRE/HTTL/HPERSIST) on the wire. Default
+    /// off preserves 7.2.4 parity (the three answer unknown-command and are absent
+    /// from COMMAND/ACL introspection). Boot-only by design: the COMMAND/ACL
+    /// introspection surfaces are static tables and must not flap at runtime.
+    pub fn set_forward_hash_field_ttl_enabled(&mut self, enabled: bool) {
+        self.forward_hash_field_ttl_enabled = enabled;
     }
 
     /// (frankenredis-pkdgs) Ingest a `__sentinel__:hello` payload received from a

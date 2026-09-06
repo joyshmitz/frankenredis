@@ -4284,6 +4284,7 @@ OPTIONS:\n\
   --masteruser <USERNAME>    Authenticate to the configured primary as this ACL user\n\
   --masterauth <PASSWORD>    Authenticate to the configured primary with this password\n\
   --enable-debug-command <VALUE>  Allow DEBUG commands: no | local | yes (default: no, matches upstream Redis 7.2)\n\
+  --enable-hash-field-ttl <VALUE>  Register Redis 7.4 HEXPIRE/HTTL/HPERSIST: no | yes (default: no, 7.2.4 parity)\n\
   --io-uring-output          Opt in to multishot receive + batched io_uring writes (requires io-uring-writes feature)\n\
   --experimental-sharded-set-get-workers <N>\n\
                              Run supported default-DB partition-local commands\n\
@@ -4311,6 +4312,7 @@ struct StartupConfig {
     appendfilename: Option<String>,
     aclfile: Option<String>,
     enable_debug_command: Option<String>,
+    enable_hash_field_ttl: Option<String>,
     /// (frankenredis-inuwt) `cluster-enabled` was parsed into the config map and
     /// then dropped on the floor: nothing ever reached `store.cluster_enabled`,
     /// so a server started with `cluster-enabled yes` silently came up in
@@ -4469,6 +4471,10 @@ fn startup_config_from_directives(
                 expect_config_arg_count(directive, 1)?;
                 config.enable_debug_command = Some(config_arg_string(directive, 0)?);
             }
+            b"enable-hash-field-ttl" => {
+                expect_config_arg_count(directive, 1)?;
+                config.enable_hash_field_ttl = Some(config_arg_string(directive, 0)?);
+            }
             // (frankenredis-4ib91) Anything this parser does not name is handed
             // to CONFIG SET at boot rather than silently discarded. Directives
             // CONFIG SET also refuses are reported there, so an unknown or
@@ -4588,6 +4594,7 @@ fn main() -> ExitCode {
     let mut cli_aof = false;
     let mut cli_rdb = false;
     let mut cli_enable_debug_command: Option<String> = None;
+    let mut cli_enable_hash_field_ttl: Option<String> = None;
     let mut sentinel_mode = false;
     // (frankenredis-4ib91) `--<directive> <value>` pairs this loop does not name,
     // applied via CONFIG SET once the runtime exists. CLI is collected separately
@@ -4719,6 +4726,14 @@ fn main() -> ExitCode {
                 }
                 cli_enable_debug_command = Some(args[i].clone());
             }
+            "--enable-hash-field-ttl" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("error: --enable-hash-field-ttl requires a value (no, yes)");
+                    return ExitCode::from(1);
+                }
+                cli_enable_hash_field_ttl = Some(args[i].clone());
+            }
             "--io-uring-output" => {
                 #[cfg(feature = "io-uring-writes")]
                 {
@@ -4846,6 +4861,7 @@ fn main() -> ExitCode {
     let mut requirepass = None;
     let mut aclfile_path = None;
     let mut config_enable_debug_command: Option<String> = None;
+    let mut config_enable_hash_field_ttl: Option<String> = None;
     let mut config_cluster_enabled = false;
     if let Some(path) = &config_path {
         let startup_config = match load_startup_config_file(path) {
@@ -4856,6 +4872,7 @@ fn main() -> ExitCode {
             }
         };
         config_enable_debug_command = startup_config.enable_debug_command.clone();
+        config_enable_hash_field_ttl = startup_config.enable_hash_field_ttl.clone();
         config_cluster_enabled = startup_config.cluster_enabled.unwrap_or(false);
         // (frankenredis-4ib91) Hoisted out of this block so it survives to the
         // CONFIG SET application below; `startup_config` itself is scoped here.
@@ -4961,6 +4978,22 @@ fn main() -> ExitCode {
         .or(config_enable_debug_command.as_deref())
     {
         runtime.set_enable_debug_command(value);
+    }
+    // (frankenredis-rc-hash-ttl-contract-lhgr6) CLI flag wins over config-file
+    // directive; both override the runtime's "no" default which preserves
+    // 7.2.4 parity. Boot-only: see Store::set_forward_hash_field_ttl_enabled.
+    if let Some(value) = cli_enable_hash_field_ttl
+        .as_deref()
+        .or(config_enable_hash_field_ttl.as_deref())
+    {
+        match value.to_ascii_lowercase().as_str() {
+            "yes" => runtime.set_forward_hash_field_ttl_enabled(true),
+            "no" => runtime.set_forward_hash_field_ttl_enabled(false),
+            other => {
+                eprintln!("error: --enable-hash-field-ttl must be yes or no, got '{other}'");
+                return ExitCode::from(1);
+            }
+        }
     }
     // (frankenredis-inuwt) Boot-only, exactly as upstream treats it: CONFIG SET
     // already refuses `cluster-enabled`, so this is the ONLY path that can turn
@@ -49074,6 +49107,7 @@ $1\r\n0\r\n$3\r\nget\r\n$3\r\ni16\r\n$2\r\n#1\r\n";
                 appendfilename: Some("startup.aof".to_string()),
                 aclfile: Some("/tmp/frankenredis-startup/users.acl".to_string()),
                 enable_debug_command: None,
+                enable_hash_field_ttl: None,
                 // Absent from this fixture, so it stays None and the server keeps
                 // upstream's non-cluster default. (frankenredis-inuwt)
                 cluster_enabled: None,
