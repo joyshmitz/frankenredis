@@ -1,0 +1,43 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "crates/fr-conformance/fixtures/smoke_case.json",
+  "artifact_type": "conformance",
+  "source_hash": "sha256:30d9d0b8f539e667cadfe9a92bd1b68ad3317599b380666d1323a3fe85681833",
+  "padding": 379,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    2,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 1,
+    "repair_symbols": 8,
+    "overhead_ratio": 8.0,
+    "symbol_hashes": [
+      "sha256:0bf7fee38e22e816dacb00526b74d370070456f830e94154fa82e870cf9fd926",
+      "sha256:7fedd56e0dced9fb7c71efb6ddf594f2653b47be5898826a804a994308ad21f0",
+      "sha256:986e9b9cefb49b8871383b8057fc2b795016ed5b5dcad0c78ee15b76bb021bc3",
+      "sha256:2acab9e59d28ab33862d3d0c4ce02de9c20b11bbd96265735badc16f7e7bb6bc",
+      "sha256:918dad5bba5bce9e9a26574c77a55731ee7360c1ff789711f669126e9d455ddd",
+      "sha256:d2c20466a9bfc4bc85f4649d7717cbccb6c7652dc5db7d5924aca55cb4498d70",
+      "sha256:cd546aab0291a19d1cf62cb2f1ab5e965e9ba4027488947235b2148d324e8712",
+      "sha256:dab6895f985e9dc3eba93f1677bb8496efb5a480c331f99e0884d10238447395",
+      "sha256:2e034065fd7efb933aac33444aec5ed0287eade9ffaf8f64f7403cc9e28aa856"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723568867,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}

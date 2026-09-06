@@ -1,0 +1,46 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "crates/fr-conformance/fixtures/log_contract_v1/FR-P2C-004.golden.jsonl",
+  "artifact_type": "conformance",
+  "source_hash": "sha256:8be56d763ea78c3dc97f5114efd22ac9a9d4abbd01fea82615e543f18894a5cf",
+  "padding": 206,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    8,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 4,
+    "repair_symbols": 8,
+    "overhead_ratio": 2.0,
+    "symbol_hashes": [
+      "sha256:1d529b76b663f38971ca43dad3b7a80b6fe73acb6524299a057a7b1c160d1936",
+      "sha256:041ebf5faaea9ac5485d3642647d5926d6492b914b9c8f5a4f1dd0f48cd138dc",
+      "sha256:d7ad4c98fce1ea584a8a57f993aeff6a4edbffcab710436ec2e93487cb3922ce",
+      "sha256:a8016d3bcb008703dc4d0f350dacce97df3e2890a884023167ff16d999d8f534",
+      "sha256:890d54c8ec442b5dbb452976c0ea30575b9ab64781f81e695c598477c381a83e",
+      "sha256:95287eb0bfffc33bf8a6decb64ab5f994d6b97df697144dd012ab47a8a829c36",
+      "sha256:e086e01a865700b31152ff7cd5a94225d7a7317051ceeb2183e2bfdf6fe89b89",
+      "sha256:9fadd1f7e10a03b571f81719d5f805df17939c35c50d0b79db29d72ad349eda1",
+      "sha256:b51f26b5540848a22e24f2d1f6ab5f83be340985e88d3d9aa1d849823595c214",
+      "sha256:1e746340bfe7da4a77267ab484f7b0d909101dd01e2513f960c503bceb649932",
+      "sha256:cba604bf45f33b3c8ec501e49b467f0bcee33abd72e98b578b56fe95fb250d91",
+      "sha256:55c1b0c34a00c8d60b3f6378a0f13d9f0c6f2217090984419657dc8a5bb55761"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723568867,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}

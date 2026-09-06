@@ -1,0 +1,58 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "crates/fr-conformance/fixtures/core_command_edges.json",
+  "artifact_type": "conformance",
+  "source_hash": "sha256:d79517f010bb4591000d12b556b691745852e33d441df6cbb2a4af52dfd62512",
+  "padding": 452,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    32,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 16,
+    "repair_symbols": 8,
+    "overhead_ratio": 0.5,
+    "symbol_hashes": [
+      "sha256:b5bb9e398fb5bf7a89b5acf55aa590150281c07988df65a3c7596eded55e9ee5",
+      "sha256:051d5517aa01cf4770e30a7594607b672a48e6085e6d34df2de6346bee44c5dd",
+      "sha256:0f5838c43fa75cf0fff6ba56e7e96d1d3d2e24cc3f405673d206a2779af20ded",
+      "sha256:5fee9866e15ad535b08f244c86dbc7c2fd4ff96f18fc329b480050f61aa5854b",
+      "sha256:e44e39b167ae04ff0d346d4b4757e0b59cf8c6d223cab70fa652bd4c932a55ff",
+      "sha256:f557c93b45e26528dbe0bda9c6a012ad18f8a2488cd5952f01dadd7640603241",
+      "sha256:15b4c15ab6eee64efd57692d7467daeb0e8346252cfbea11dce9010805e952d0",
+      "sha256:2db796913790efd335dc5f9164b7b206e2153dcb15fd7a7d6182fe694e071e12",
+      "sha256:72bde942c4d5eaf2ebf932a83e14eecb2b06f31b246ef92a62b5052db4cd4186",
+      "sha256:3da903d01c2299e347daf301435dd7fa4f2920b5f07dcfd908c75f7b589578ff",
+      "sha256:dda85cfd98d6cabb45fb0466e1653a4e96d8a620fd62c5bb01e7b2f33f05208b",
+      "sha256:227f0cc2b41a24455b29d7b2e7f93c6005ec30258fc691227d9fa0dc593edafe",
+      "sha256:5b1ebc26c9ef35cae921b28f337508d45caf593ef32cee2997240ffdde7ff9fe",
+      "sha256:2d417b3e256f8710b0ae43fa192a94681fe7effb0b2b80cb3f2172485a01ea5a",
+      "sha256:4b87de71d965720935b843e6321bc5ee0938b05b1c07a583e5c0b2008b6aea64",
+      "sha256:1a7c145f4d7191421a25d7bb5eccb5ad099fb6819d505ec2d46a4eaa29cd83fa",
+      "sha256:a1d06fcb7a66f6920d67946f4ed6a8fb6bf620e1210313b878c7ccff0e4802d0",
+      "sha256:554f45da601646468fc4080c053c241ddf257a6d2061e24c6a84d34ba17bb817",
+      "sha256:2663b23390f6e80d73ceb7cd8f7c052e1d26693c5b6ccee5107c85f4a0214cda",
+      "sha256:12d31cc71d56edfda13a91b968324ab4b29cc037881a11cd1f8d15dcbea66bfc",
+      "sha256:f9c753a7e56c4bd5a990a2c564d995c0d365f0ac7f2947acf10414eb6e0f9c28",
+      "sha256:34f7bf652bb42b82b6d66f5d4622a7c38d532785c8e2d3544bb66b0944a978c5",
+      "sha256:09475d4a2cb3d8a661123abab95ccf2174783272bbaf566dccd91f9274f48638",
+      "sha256:e666cad67461cb101c4f256542f765df2fccdff21e37bbd1137ef641c0e28aa1"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723568867,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}

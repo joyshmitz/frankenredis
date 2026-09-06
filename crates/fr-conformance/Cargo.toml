@@ -9,6 +9,7 @@ bench-reference = []
 
 [dependencies]
 fr-config = { version = "0.1.0", path = "../fr-config" }
+fr-fec = { version = "0.1.0", path = "../fr-fec" }
 fr-persist = { version = "0.1.0", path = "../fr-persist" }
 fr-protocol = { version = "0.1.0", path = "../fr-protocol" }
 fr-repl = { version = "0.1.0", path = "../fr-repl" }

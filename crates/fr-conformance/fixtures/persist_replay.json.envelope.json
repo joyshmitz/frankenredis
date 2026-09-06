@@ -1,0 +1,60 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "crates/fr-conformance/fixtures/persist_replay.json",
+  "artifact_type": "conformance",
+  "source_hash": "sha256:a1f4ae0521e45307d8bf5f79797cc7544a5d7e3ab15a30a33794666eebd92989",
+  "padding": 297,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    36,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 18,
+    "repair_symbols": 8,
+    "overhead_ratio": 0.4444444444444444,
+    "symbol_hashes": [
+      "sha256:0827e2fdafcf9f40730407df5b9d0e0389b6dc5e66937506bb17a58fb0fcc4d1",
+      "sha256:8a73cbedd4d12c86ad5ffa07569920d4364b1a0581af3a200d3e6f36b12e354b",
+      "sha256:f2e6e32c11191dc79402cdb2bfd5fbabe19dace08245c6035b8988a247019b4c",
+      "sha256:654b1aa5ac1a91d840599a922220984a4ecd9c255ca096048b7a687e54f6a9a3",
+      "sha256:a1bf9bb25cd3ff7784d387dd9bc950861434b168aaff2758180cd0acef85ed25",
+      "sha256:dbbb89141b928f1a1d0602663a35ede3a8fbc9be658e19b157a1a04fab41ee00",
+      "sha256:6d9c1758a08221797125e1ff82c664798549116a96396d4d15ca0f5a8d4b4c8e",
+      "sha256:82b8087417cd0c57c4293208e69dc6be3dffd060ef8f8abfd7f15fea4c337b48",
+      "sha256:0656f6b28aa472f33d7ebdf612ee77307663cad29e88c2091ce1fe26963c2dd4",
+      "sha256:ea03feeec3a9a1e2e945638c556f3e70b0ed98acadf7c5d47ad5ed4461527df7",
+      "sha256:a34c50944a26f43cff01ffed9c5155e63d1cab8632108a94c05629bdc206735d",
+      "sha256:4874ab23e72c2ffe00ae140791b2e3046446b27ef5f887ab47f41dab38dd51c4",
+      "sha256:2a2dd2cd7fc7ba903a3ee5f963461e1b2d6b04f1a39aa92c8317bffdc3d40330",
+      "sha256:e7befcb034256e8601c29bc4d11fd02d5fef977b768bf5d724526261af8eb676",
+      "sha256:4178d64764170cb779ee6ec37a92ff0d94c6563099045853ba96682236ec6a70",
+      "sha256:659699001e7e28db6adf312f332cf5e1546826d4cdf4c0bd1872e135a96c1b05",
+      "sha256:bd216c0721f08c94fbbc336a3e51bb8d27c08096a5d67a45418c118a75914afc",
+      "sha256:9d34842e456830364085e6362da3a838324976012457d54659ca7fe8455b2ffc",
+      "sha256:b2fc42a3208c534205a23959022b2e224663f5c7374e3e8ae23056b77c6145e6",
+      "sha256:7f0c468f157f00df312aa0571f3a25de6c7b6287331cf09eee2b1a1af23ada3e",
+      "sha256:556441e7393f1803dde1b70826ff35a41b5a250e42d788cf1b5502c9d4b17724",
+      "sha256:1da838565c25415613674ac7f46cd44a68b414b1b516b43a6706d7e401424359",
+      "sha256:9a7c67adac5e8ee000cceab48137eb134c30ec78bb3930dc876d422453617b30",
+      "sha256:e206dad5de4df6c32e63e5cebc7792262a583bc3408c74390af9d160d4217592",
+      "sha256:4ee2ec5deb9c87a3915135239ee772cc522f6ea09f6aad127bd9d0283b298c64",
+      "sha256:e609e65c4fb025ad88c290625829a545732992ad140f78fdfd20c3184d59778f"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723568867,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}

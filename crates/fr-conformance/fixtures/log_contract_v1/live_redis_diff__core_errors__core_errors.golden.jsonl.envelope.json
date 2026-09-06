@@ -1,0 +1,46 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "crates/fr-conformance/fixtures/log_contract_v1/live_redis_diff__core_errors__core_errors.golden.jsonl",
+  "artifact_type": "conformance",
+  "source_hash": "sha256:f42b9ee71206655dddae84b70663c40eab00d36137b8b141417f5677f13e2e2d",
+  "padding": 223,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    8,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 4,
+    "repair_symbols": 8,
+    "overhead_ratio": 2.0,
+    "symbol_hashes": [
+      "sha256:eff0af71b92155c077b84d51db099f29e1eb869848868bb960fa7ec1afa1e4e5",
+      "sha256:0f9fd88425ce203cab726a6c5f41bb285a3bd18b554fb447b299e478cc7ee2ef",
+      "sha256:78f3725427f02009d47ce91a94513e30da93429cd66ada3477fd59068ff04728",
+      "sha256:c5034b893e53f4ed3528aafaa556868365fb27b92a6e4f4f0d3113c0d41a156e",
+      "sha256:e82d9bf0a6ae261bbf968b7dfee195a6d282d893d2e576d911b0d0aebba5d2cf",
+      "sha256:1a771ff18f8f0075c6e3bb5e0fbf3adcf3c422f6c5af3a7dfcbaf2a8bbbfe6e9",
+      "sha256:88491071a85a0bdecd14cee6b2c890be359e3a5a38843fb40189186230b9b1fc",
+      "sha256:d39e3edb230041c1975bdc5683503b72389ffa73b6384b206d206b629d9972d0",
+      "sha256:745d9e6902b0c324e9814e91b4758b5ea45fc1ca9f9f0e2920362cfd7ad68a23",
+      "sha256:4a5ccb539ab54609bc264f3e5612680d8e155e72aaa797f4d67036698d6dd3f6",
+      "sha256:c98c6c4d44c6893986d19b46979d7d002fce68d01bf9f0dd663887d3a8b61aa5",
+      "sha256:ab92ad3c920f4ed03cdf801dcb32de8160c2efacde46b8defc36840ebbb6bbc2"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723568867,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}

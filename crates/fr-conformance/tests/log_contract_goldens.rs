@@ -63,3 +63,30 @@ fn golden_logs_exist_and_validate() {
         assert!(has_e2e, "expected an e2e-path event in {}", path.display());
     }
 }
+
+#[test]
+fn conformance_fixtures_and_goldens_raptorq_sidecars_scrub_clean() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixtures_root = repo_root.join("crates/fr-conformance/fixtures");
+    let log_root = fixtures_root.join("log_contract_v1");
+
+    for packet_id in PACKET_FAMILIES {
+        let golden_path = log_root.join(format!("{packet_id}.golden.jsonl"));
+        assert!(golden_path.exists());
+        let gate_res = fr_fec::verify_sidecar_gate(&golden_path, 1_788_700_000_000);
+        assert!(gate_res.is_ok(), "gate check for {}", golden_path.display());
+    }
+
+    let entries = fs::read_dir(&fixtures_root).expect("read fixtures dir");
+    for entry in entries {
+        let entry = entry.expect("fixture entry");
+        let path = entry.path();
+        if path.is_file() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.ends_with(".json") && !name.ends_with(".envelope.json") {
+                let gate_res = fr_fec::verify_sidecar_gate(&path, 1_788_700_000_000);
+                assert!(gate_res.is_ok(), "gate check for {}", path.display());
+            }
+        }
+    }
+}

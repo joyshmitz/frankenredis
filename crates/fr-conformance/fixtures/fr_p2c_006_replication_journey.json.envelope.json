@@ -1,0 +1,52 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "crates/fr-conformance/fixtures/fr_p2c_006_replication_journey.json",
+  "artifact_type": "conformance",
+  "source_hash": "sha256:be175803fec23f97bbe399ee7109c0dc39e7219f5b3f254bfeb225a38c4e15ab",
+  "padding": 396,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    20,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 10,
+    "repair_symbols": 8,
+    "overhead_ratio": 0.8,
+    "symbol_hashes": [
+      "sha256:475ce3037b048788605ffcc7cc48aac461b79789f3f46ee5fc907f19d5b9d2e2",
+      "sha256:0e6dcc2614b0773c04b14e841e828e74b5ee97b467ef97ec0410bda773b94053",
+      "sha256:4b0092f92ed36ee0e07222806eee5f5ff3fb87084d06612b4adef83cb255fb2a",
+      "sha256:0c36b1548e6a6e1170bb72d80215ef6edd571bbc789bdf16b6ce1b3bd6d0991e",
+      "sha256:28c43caa15b7ee4ae7ea709d94b02697fd901755e2c03c96796e56b1570ca3b5",
+      "sha256:d446f82e80204cb43d1e2a14a25091730c7224930c700cbe54a858d807dacba7",
+      "sha256:134578c303cd47399a71be3f52f881e0fa4ecf1798f291822d59c1cc52757342",
+      "sha256:bb2c56bbf054295eba225883467943e9629420b97cee9405f2e72686e3019575",
+      "sha256:9bfd9a83540b4c8774f20ab83657216bd87fe0dbb70fa3503b4006086e31c044",
+      "sha256:dafbabb5092440ce99c8402250645622b25d037123357a06d66ff646ad5d70ec",
+      "sha256:f09bec3ee9b65a5e36e6cc0e92a7d122595a7f36a27ddb1bc1e3a3d5237184de",
+      "sha256:2c8e4f7dba214785a68275500f6bfdf2fac5389fe2c71996a3becd1e4ba6f0aa",
+      "sha256:d6a4a239c9fa4d66f037f560994c0ef412d41a145d2ea8814935a2b1a90752f5",
+      "sha256:6c624a7aeab17d89cb5d5f5f4eec9d419256f77a741668d5cfa4c011eac36514",
+      "sha256:24929baa3649b964162ce55269acecace6896e7f109366252b6956e09bbe9fb4",
+      "sha256:4fc835152a93c5df236ff66918b9e85a386af16e0755215d29588cbd12ab48c7",
+      "sha256:6f26ea60fa66506df70e6b28c01a5ca291dd00673598b4f0c37cbb2a835a70f0",
+      "sha256:33cb3aa188b39ca6eeb1025f53ec855fea50f19f685b724b521ab389f84dd9f9"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723568867,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}

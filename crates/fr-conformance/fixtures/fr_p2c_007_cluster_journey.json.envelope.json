@@ -1,0 +1,52 @@
+{
+  "schema_version": "frankenredis_fec_envelope/v1",
+  "artifact_id": "crates/fr-conformance/fixtures/fr_p2c_007_cluster_journey.json",
+  "artifact_type": "conformance",
+  "source_hash": "sha256:eec7499d36b94e1ee3d3aadaae5e628d575074b43b85ca24a59b1b1900cba53a",
+  "padding": 60,
+  "symbol_size": 512,
+  "oti": [
+    0,
+    0,
+    0,
+    20,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    1,
+    8
+  ],
+  "raptorq": {
+    "k": 10,
+    "repair_symbols": 8,
+    "overhead_ratio": 0.8,
+    "symbol_hashes": [
+      "sha256:4779888ed467336323adb0f17b301ee0347706fdca1ca9588d48c215f5bc0f8a",
+      "sha256:60182f664e3a01e574143d3079e139078d4271dca0ebf19440a3e652a41645e8",
+      "sha256:efa38231f9cb78979fe5decbd7ade8ba5582229492cfcc425a043ff6a765f1ef",
+      "sha256:23f95b42c67a37c8f9f94df44b90ee43aeb211a3e2cd8b0fe425b8e330125c71",
+      "sha256:02eebdc9288982df7bfe46755d8a8e6b5f07c35733e4fef8205f16033d5b0e65",
+      "sha256:6925684452bf7bb4269033597dae95da36e1f000363f96a3132f038f9bb4a334",
+      "sha256:78f37eb624a640e0f1fe7204bf8f964c1701e88d204de613cc9d4e0ca33ea6a0",
+      "sha256:c9f91bd25e72ead0144aaebd1bdce7fd31e08148c91b4bf2647be1fda93462c1",
+      "sha256:61bb4c35748328157fccd921a0740cabd03875a523c44a67af525702f7a39a3c",
+      "sha256:6d798542ba2df55a6b3f0fb2a4a3c4bc26330fb76112a00bf81d045c33814af6",
+      "sha256:826f5478cdc7ff2601dd1cb3ed6dcc22c3dc1f5375f2ecbb1f152fd0202c650e",
+      "sha256:c6c87b2b5c585a4dc25b941e2e133c4a44f7a9042623473f948a6df35cff93e0",
+      "sha256:a26af60444095155237f6cc2a116ba3e7983a26777b547aa526c77d6e7828eb0",
+      "sha256:fb53744e309e332088fd9a70c72a694da2bb8d143ef34eaa4183b90a5804b102",
+      "sha256:03104995aec346cd05f2634d37df6f8ded138b5fdf69df5ed13384ed8ba1eb60",
+      "sha256:34c0dfd3b3fb1c8fcc8dc2754cd0f9e900dc9b4f756de7a1b11894060c502c20",
+      "sha256:c49914ad1c48703dfa0a4816d20b6dfc3e0936ba6323802724db55580c60a2d7",
+      "sha256:09a5c8439fe2f9a4298c940baf95b57a36e6c29d394b946d02d14b5a62482262"
+    ]
+  },
+  "scrub": {
+    "last_ok_unix_ms": 1788723568867,
+    "status": "ok"
+  },
+  "decode_proofs": []
+}
