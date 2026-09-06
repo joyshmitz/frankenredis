@@ -6873,6 +6873,10 @@ fn preserve_store_load_context(replacement: &mut Store, original: &Store) {
     replacement.lfu_log_factor = original.lfu_log_factor;
     copy_encoding_thresholds(replacement, original);
     replacement.notify_keyspace_events = original.notify_keyspace_events;
+    // (frankenredis-rc-hash-ttl-contract-lhgr6) Boot-only opt-in: without this,
+    // every load-path store swap (RDB load, AOF replay rebuild, replica
+    // full-sync) silently reverted the family to unknown-command.
+    replacement.forward_hash_field_ttl_enabled = original.forward_hash_field_ttl_enabled;
 }
 
 /// Carry ONLY the encoding-threshold CONFIG SET state — the fields that govern
